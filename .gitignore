@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+build/
+**/dist/
+**/build/
+*.tsbuildinfo
+
+# Secrets / credentials
+.env
+.env.*
+!.env.example
+service-account.json
+**/service-account.json
+*.pem
+*.key
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Coverage / test output
+coverage/
+.nyc_output/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / IDEs
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.swp
+
+# Temp
+.tmp/
+.temp/
