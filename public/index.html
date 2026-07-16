@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Market Catalyst Backend Monitor</title>
+<style>
+  :root {
+    --bg: #080B11;
+    --panel: #10151f;
+    --border: #1d2532;
+    --text-hi: #EAEFF6;
+    --text: #A9B5C6;
+    --brand: #7C6CF5;
+    --up: #2FE6A6;
+    --down: #FF5470;
+    --warn: #F5B942;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text-hi);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 32px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--text); font-size: 13px; margin-bottom: 20px; }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .toolbar input {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text-hi);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    width: 240px;
+  }
+  .toolbar button {
+    background: var(--brand);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 14px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .toolbar button:hover { opacity: 0.9; }
+  .toolbar .status-pill {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 100px;
+    border: 1px solid var(--border);
+  }
+  .pill-ok { color: var(--up); border-color: rgba(47,230,166,0.35); }
+  .pill-down { color: var(--down); border-color: rgba(255,84,112,0.35); }
+
+  .run-all-btn {
+    background: transparent;
+    border: 1px solid var(--warn);
+    color: var(--warn);
+  }
+  .run-all-btn:hover { background: rgba(245,185,66,0.1); opacity: 1; }
+  .run-all-btn:disabled { opacity: 0.5; cursor: default; background: transparent; }
+
+  .run-all-result {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+    font-size: 13px;
+    max-width: 720px;
+  }
+  .run-all-result .line { padding: 2px 0; }
+  .run-all-result .job-ok { color: var(--up); }
+  .run-all-result .job-error { color: var(--down); }
+  .run-all-result .job-skipped { color: var(--warn); }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+    max-width: 720px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card .n { font-size: 24px; font-weight: 600; }
+  .card .l { font-size: 12px; color: var(--text); margin-top: 2px; }
+
+  .table-scroll {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  table {
+    width: 100%;
+    min-width: 1190px;
+    border-collapse: collapse;
+    background: var(--panel);
+    table-layout: fixed;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 14px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    color: var(--text);
+    font-weight: 500;
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(124,108,245,0.04); }
+
+  col.col-service   { width: 110px; }
+  col.col-state     { width: 90px; }
+  col.col-lastrun   { width: 70px; }
+  col.col-time      { width: 150px; }
+  col.col-count     { width: 60px; }
+  col.col-cols      { width: 200px; }
+  col.col-interval  { width: 130px; }
+  col.col-nextrun   { width: 150px; }
+  col.col-error     { width: 140px; }
+  col.col-action    { width: 90px; }
+
+  .coll-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .coll-tag {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 10.5px;
+    background: rgba(169,181,198,0.08);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cron-code {
+    display: inline-block;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    color: var(--text-hi);
+    background: rgba(124,108,245,0.08);
+    border-radius: 4px;
+    padding: 1px 6px;
+  }
+  .cron-tz { font-size: 10.5px; color: var(--text); margin-top: 3px; }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    padding: 3px 9px;
+    border-radius: 100px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .badge-running { background: rgba(124,108,245,0.15); color: var(--brand); }
+  .badge-running .dot { background: var(--brand); animation: pulse 1.2s infinite; }
+  .badge-idle { background: rgba(169,181,198,0.1); color: var(--text); }
+  .badge-idle .dot { background: var(--text); }
+  .badge-ok { background: rgba(47,230,166,0.12); color: var(--up); }
+  .badge-ok .dot { background: var(--up); }
+  .badge-error { background: rgba(255,84,112,0.12); color: var(--down); }
+  .badge-error .dot { background: var(--down); }
+  .badge-never { background: rgba(245,185,66,0.12); color: var(--warn); }
+  .badge-never .dot { background: var(--warn); }
+  .badge-metaerr { background: rgba(255,84,112,0.12); color: var(--down); cursor: help; }
+  .badge-metaerr .dot { background: var(--down); }
+  .meta-banner {
+    background: rgba(255,84,112,0.10); border: 1px solid rgba(255,84,112,0.35);
+    color: var(--down); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px;
+    font-size: 13px; line-height: 1.5;
+  }
+  .meta-banner code { background: rgba(0,0,0,0.35); padding: 1px 6px; border-radius: 4px; color: #fff; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .job-name { font-weight: 600; }
+  .muted { color: var(--text); }
+  .err {
+    color: var(--down);
+    max-width: 360px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-block;
+    vertical-align: bottom;
+    cursor: help;
+  }
+  .ok-time { color: var(--up); cursor: help; }
+  .fail-time { color: var(--down); cursor: help; }
+  .run-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-hi);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .run-btn:hover { border-color: var(--brand); color: var(--brand); }
+  .run-btn:disabled { opacity: 0.4; cursor: default; }
+
+  .empty { padding: 40px; text-align: center; color: var(--text); }
+</style>
+</head>
+<body>
+  <h1>Market Catalyst Backend Monitor</h1>
+  <div class="sub">Live status of every scheduled sync job in the NestJS backend</div>
+
+  <div class="toolbar">
+    <input id="baseUrl" spellcheck="false" />
+    <button onclick="refresh()">Refresh now</button>
+    <button id="runAllBtn" class="run-all-btn" onclick="runAll()">Run all now</button>
+    <span id="connStatus" class="status-pill pill-down">checking...</span>
+    <span class="muted" style="font-size:12px;">auto-refreshes every 5s</span>
+  </div>
+  <div id="runAllResult" class="run-all-result" style="display:none;"></div>
+  <div id="metaBanner" class="meta-banner" style="display:none;"></div>
+
+  <div class="cards">
+    <div class="card"><div class="n" id="cardTotal">–</div><div class="l">Services</div></div>
+    <div class="card"><div class="n" id="cardRunning">–</div><div class="l">Running now</div></div>
+    <div class="card"><div class="n" id="cardOk">–</div><div class="l">Last run OK</div></div>
+    <div class="card"><div class="n" id="cardError">–</div><div class="l">Last run errored</div></div>
+  </div>
+
+  <div id="tableWrap"></div>
+
+<script>
+let refreshing = false;
+
+// Served same-origin from the NestJS backend, so default the base URL to this
+// page's own origin — no need to hardcode localhost:4100. The input stays
+// editable so you can still point the monitor at a remote/other backend.
+document.getElementById('baseUrl').value = window.location.origin;
+
+function fmtTime(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const diffMs = Date.now() - d.getTime();
+  const mins = Math.round(diffMs / 60000);
+  let rel;
+  if (mins < 1) rel = 'just now';
+  else if (mins < 60) rel = `${mins}m ago`;
+  else if (mins < 1440) rel = `${Math.round(mins / 60)}h ago`;
+  else rel = `${Math.round(mins / 1440)}d ago`;
+  return `${d.toLocaleString()} (${rel})`;
+}
+
+// Shows the raw cron expression rather than a paraphrased guess — a
+// mis-parsed "every 30m" vs "at :30" label would be worse than no label.
+function fmtCron(expr, tz) {
+  if (!expr) return '<span class="muted">—</span>';
+  return `<span class="cron-code">${esc(expr)}</span><div class="cron-tz">${esc(tz || '')}</div>`;
+}
+
+function fmtCollections(cols) {
+  if (!cols || cols.length === 0) return '<span class="muted">—</span>';
+  return `<div class="coll-tags">${cols.map(c => `<span class="coll-tag" title="${esc(c)}">${esc(c)}</span>`).join('')}</div>`;
+}
+
+// Computed server-side from the job's actual cron expression (see
+// src/sync/sync.controller.ts's nextRunAt) — this only formats it,
+// never re-derives it, so it can't drift from what will really fire.
+function fmtNextRun(iso) {
+  if (!iso) return '<span class="muted">—</span>';
+  const d = new Date(iso);
+  const diffMs = d.getTime() - Date.now();
+  if (diffMs <= 0) return '<span class="muted">due now</span>'; // clock skew / just-fired edge case, not an error
+  const mins = Math.round(diffMs / 60000);
+  let rel;
+  if (mins < 1) rel = 'in <1m';
+  else if (mins < 60) rel = `in ${mins}m`;
+  else if (mins < 1440) rel = `in ${Math.round(mins / 60)}h`;
+  else rel = `in ${Math.round(mins / 1440)}d`;
+  return `${esc(rel)}<div class="cron-tz">${esc(d.toLocaleString())}</div>`;
+}
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function statusBadge(job) {
+  if (job.isRunning) {
+    return `<span class="badge badge-running"><span class="dot"></span>Running</span>`;
+  }
+  // metaError means sync_meta couldn't be READ (e.g. Firestore auth expired) —
+  // run history is unknown, NOT confirmed "never run". Don't conflate the two.
+  if (job.metaError) {
+    return `<span class="badge badge-metaerr" title="${esc(job.metaError)}"><span class="dot"></span>Meta unreachable</span>`;
+  }
+  if (!job.lastSyncedAt) {
+    return `<span class="badge badge-never"><span class="dot"></span>Never run</span>`;
+  }
+  return `<span class="badge badge-idle"><span class="dot"></span>Idle</span>`;
+}
+
+function lastRunBadge(job) {
+  if (!job.lastSyncedAt) return `<span class="muted">—</span>`;
+  if (job.lastStatus === 'ok') {
+    return `<span class="badge badge-ok"><span class="dot"></span>OK</span>`;
+  }
+  return `<span class="badge badge-error"><span class="dot"></span>Error</span>`;
+}
+
+async function runJob(name, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  const base = document.getElementById('baseUrl').value.replace(/\/$/, '');
+  try {
+    await fetch(`${base}/sync/${name}/run`, { method: 'POST' });
+  } catch (e) {
+    // surfaced on next refresh via lastStatus/lastError
+  }
+  setTimeout(refresh, 800);
+}
+
+// Runs every registered job sequentially on the backend (POST /sync/run-all)
+// — not one fetch per job from here, so ordering/skip-if-running logic lives
+// in one place server-side and matches what a single curl call would do.
+// This hits every configured vendor at once, so it's confirm-gated rather
+// than a single click, same spirit as any other bulk/irreversible-ish action.
+async function runAll() {
+  if (!confirm('Run every sync job now? This calls every configured vendor API back-to-back and may take a few minutes.')) return;
+
+  const btn = document.getElementById('runAllBtn');
+  const resultBox = document.getElementById('runAllResult');
+  btn.disabled = true;
+  btn.textContent = 'Running all…';
+  resultBox.style.display = 'block';
+  resultBox.innerHTML = '<div class="line muted">Running all jobs sequentially — this can take a few minutes for 17 jobs...</div>';
+
+  const base = document.getElementById('baseUrl').value.replace(/\/$/, '');
+  try {
+    const res = await fetch(`${base}/sync/run-all`, { method: 'POST' });
+    const data = await res.json();
+    const lines = (data.results || []).map(r => {
+      const cls = r.skipped ? 'job-skipped' : r.ok ? 'job-ok' : 'job-error';
+      const label = r.skipped ? 'skipped (already running)' : r.ok ? `ok${r.count != null ? ` — ${r.count} docs` : ''}` : `error — ${r.error}`;
+      return `<div class="line ${cls}"><b>${r.job}</b>: ${label}</div>`;
+    }).join('');
+    resultBox.innerHTML = `<div class="line"><b>${data.succeeded}/${data.total} succeeded</b>` +
+      (data.failed ? `, ${data.failed} failed` : '') +
+      (data.skipped ? `, ${data.skipped} skipped` : '') +
+      `</div>${lines}`;
+  } catch (e) {
+    resultBox.innerHTML = `<div class="line job-error">Run-all request failed: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Run all now';
+    refresh();
+  }
+}
+
+function render(jobs) {
+  const total = jobs.length;
+  const running = jobs.filter(j => j.isRunning).length;
+  const ok = jobs.filter(j => j.lastStatus === 'ok').length;
+  const errored = jobs.filter(j => j.lastStatus === 'error').length;
+
+  document.getElementById('cardTotal').textContent = total;
+  document.getElementById('cardRunning').textContent = running;
+  document.getElementById('cardOk').textContent = ok;
+  document.getElementById('cardError').textContent = errored;
+
+  // If sync_meta can't be read, EVERY job comes back with null run history and
+  // would otherwise all read "Never run" — which hides the real cause. Surface
+  // it as an infra banner instead (one shared error, not 17 per-job failures).
+  const metaErr = jobs.find(j => j.metaError)?.metaError;
+  const banner = document.getElementById('metaBanner');
+  if (metaErr) {
+    const isAuth = /invalid_grant|invalid_rapt|reauth|UNAUTHENTICATED|permission|credential/i.test(metaErr);
+    banner.innerHTML =
+      `<b>Firestore unreachable — run history below is unknown, not "never run".</b><br>` +
+      `<span class="muted">${esc(metaErr)}</span>` +
+      (isAuth ? `<br>Likely fix: re-authenticate the backend's credentials (<code>gcloud auth application-default login</code>) and restart it.` : '');
+    banner.style.display = 'block';
+  } else {
+    banner.style.display = 'none';
+  }
+
+  if (total === 0) {
+    document.getElementById('tableWrap').innerHTML = `<div class="empty">No sync jobs registered.</div>`;
+    return;
+  }
+
+  const rows = jobs
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(job => `
+      <tr>
+        <td class="job-name">${esc(job.name)}</td>
+        <td>${statusBadge(job)}</td>
+        <td>${lastRunBadge(job)}</td>
+        <td class="muted">${job.lastSuccessAt ? `<span class="ok-time" title="${esc(job.lastSuccessAt)}">${fmtTime(job.lastSuccessAt)}</span>` : '—'}</td>
+        <td class="muted">${job.lastFailedAt ? `<span class="fail-time" title="${esc(job.lastFailedAt)}">${fmtTime(job.lastFailedAt)}</span>` : '—'}</td>
+        <td class="muted">${(job.lastSuccessCount ?? job.lastCount) ?? '—'}</td>
+        <td>${fmtCollections(job.collections)}</td>
+        <td class="muted">${fmtCron(job.cronExpression, job.timeZone)}</td>
+        <td class="muted">${fmtNextRun(job.nextRunAt)}</td>
+        <td>${job.lastError ? `<span class="err" title="${esc(job.lastError)}">${esc(job.lastError)}</span>` : '<span class="muted">—</span>'}</td>
+        <td><button class="run-btn" ${job.isRunning ? 'disabled' : ''} onclick="runJob('${job.name}', this)">${job.isRunning ? 'Running…' : 'Run now'}</button></td>
+      </tr>
+    `).join('');
+
+  document.getElementById('tableWrap').innerHTML = `
+    <div class="table-scroll">
+      <table>
+        <colgroup>
+          <col class="col-service"><col class="col-state"><col class="col-lastrun">
+          <col class="col-time"><col class="col-time"><col class="col-count"><col class="col-cols">
+          <col class="col-interval"><col class="col-nextrun"><col class="col-error"><col class="col-action">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Service</th>
+            <th>State</th>
+            <th>Last Run</th>
+            <th>Last Success</th>
+            <th>Last Failed</th>
+            <th>Docs</th>
+            <th>Collections Affected</th>
+            <th>Interval</th>
+            <th>Next Run</th>
+            <th>Last Error</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+// Without an explicit timeout, a hung-but-listening backend (port bound,
+// never responds) leaves fetch() pending indefinitely — the connStatus pill
+// then never updates off whatever it last showed, which reads as "stuck
+// showing connected" even though nothing has actually succeeded in a while.
+// 15s (not something tighter like 5-6s): measured directly against a freshly
+// restarted backend, /sync/jobs's FIRST call after boot consistently took
+// ~7.5-7.8s (Firestore client's first gRPC channel setup) even though the
+// backend was completely healthy — a shorter timeout falsely flagged every
+// restart as "unreachable" for one poll cycle.
+const REQUEST_TIMEOUT_MS = 15000;
+async function fetchWithTimeout(url, opts) {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...opts, signal: controller.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
+  const base = document.getElementById('baseUrl').value.replace(/\/$/, '');
+  const pill = document.getElementById('connStatus');
+  try {
+    const res = await fetchWithTimeout(`${base}/sync/jobs`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const jobs = await res.json();
+    pill.textContent = `connected (${new Date().toLocaleTimeString()})`;
+    pill.className = 'status-pill pill-ok';
+    render(jobs);
+  } catch (e) {
+    const reason = e.name === 'AbortError' ? `no response in ${REQUEST_TIMEOUT_MS / 1000}s` : e.message;
+    pill.textContent = `backend unreachable (${reason})`;
+    pill.className = 'status-pill pill-down';
+    // Reset every piece of state render() would otherwise have set, not just
+    // the table — a failed check must never leave stale numbers from the
+    // last successful one sitting next to a red "unreachable" pill.
+    for (const id of ['cardTotal', 'cardRunning', 'cardOk', 'cardError']) {
+      document.getElementById(id).textContent = '–';
+    }
+    document.getElementById('tableWrap').innerHTML = `<div class="empty">Can't reach the backend at this URL. Is it running? (npm run start:dev)</div>`;
+  } finally {
+    refreshing = false;
+  }
+}
+
+refresh();
+setInterval(refresh, 5000);
+// Background-tab throttling can silently stretch setInterval to well over a
+// minute — force an immediate refresh the moment this tab is looked at again,
+// so switching back never shows a status that's actually many minutes stale.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refresh();
+});
+</script>
+</body>
+</html>

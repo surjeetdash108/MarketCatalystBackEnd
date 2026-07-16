@@ -30,7 +30,7 @@ export class SecEdgarService {
   constructor(private readonly config: ConfigService) {
     this.userAgent = this.config.get(
       'SEC_EDGAR_USER_AGENT',
-      'FinApp26 (unset-contact@example.com)',
+      'Market Catalyst Backend (unset-contact@example.com)',
     );
   }
 

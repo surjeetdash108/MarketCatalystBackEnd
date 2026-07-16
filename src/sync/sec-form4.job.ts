@@ -51,7 +51,7 @@ export class SecForm4Job implements OnModuleInit {
     try {
       const cursor = await this.meta.getCursor(JOB_NAME);
       const batch = Array.from({ length: BATCH_SIZE }, (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length]);
-      const tickerToCik = await fetchTickerToCik('FinApp26 hello@inc108.com');
+      const tickerToCik = await fetchTickerToCik('Market Catalyst Backend hello@inc108.com');
       const docs = [];
       for (const ticker of batch) {
         const cik = tickerToCik.get(ticker);

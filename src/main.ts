@@ -27,7 +27,7 @@ async function bootstrap() {
   app.enableShutdownHooks();
   const port = process.env.PORT ?? 4100;
   await app.listen(port);
-  logger.log(`finapp26-backend listening on port ${port}`);
+  logger.log(`market-catalyst-backend listening on port ${port}`);
 }
 bootstrap().catch((err) => {
   new Logger('Bootstrap').error(`Failed to start: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);

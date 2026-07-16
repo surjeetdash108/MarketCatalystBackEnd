@@ -1,0 +1,2328 @@
+openapi: 3.0.3
+info:
+  title: MarketCatalyst (FinApp26) Market Data API
+  version: 1.0.0
+  description: |
+    Canonical read API for every screen in MarketCatalyst. This documents the **data
+    contract** the frontend consumes — today implemented as direct Firestore
+    reads (via `useCollection()` in `app/iq/hooks/useCollection.ts`) rather than
+    a deployed REST gateway, so every path below maps 1:1 to a Firestore
+    collection written by a NestJS sync job in `backend/src/sync/`. The shapes
+    are copied verbatim from the actual job code (not from the earlier planning
+    doc `Doc/05_API_Vendor_Tracker.md`, which has drifted from what is really
+    implemented — e.g. `analyst_actions` was planned as a per-event
+    upgrade/downgrade feed but is actually a consensus-vote snapshot today).
+
+    **Status legend** (see `x-status` on every path):
+    - `live` — job exists, writes real data, screen(s) already read it.
+    - `planned` — no backend job exists yet; schema is a proposed shape based
+      on the named vendor's typical payload. Nothing reads/writes this today.
+
+    **Source legend** (see `x-primary-source` / `x-alternate-source` on every
+    path): the vendor actually wired in `backend/src/vendors/`, plus a faster
+    or more complete alternate and why it's faster — see each path's
+    description for specifics.
+
+    **Swapping a source never changes this document — and fallback is
+    automatic and never silent.** `Company` and `MarketMover` (the two
+    collections with a documented alternate vendor today) are populated
+    through a small adapter layer (`backend/src/adapters/`) — each sync job
+    depends only on a `CompanyProfileAdapter` / `MoversAdapter` /
+    `MoverEnrichmentAdapter` interface, never on a vendor SDK directly. Each
+    of the three has two working implementations wired behind a
+    `Composite*Adapter`: if the configured primary
+    (`COMPANY_PROFILE_SOURCE` / `MOVERS_SOURCE` / `MOVER_ENRICHMENT_SOURCE`)
+    throws or has no data, the configured fallback
+    (`COMPANY_PROFILE_FALLBACK_SOURCE` / `MOVERS_FALLBACK_SOURCE` /
+    `MOVER_ENRICHMENT_FALLBACK_SOURCE`) is tried automatically and the
+    result carries a `FALLBACK_USED` warning — the request still succeeds.
+    Only when *every* configured source fails does the request return an
+    error (502 `UPSTREAM_VENDOR_ERROR`, with `fallbackAttempted` listing
+    every source tried and why each failed) — never a silent empty/null
+    result. All of this is read once, in `adapters.module.ts`. The `source`
+    field on both schemas below records which adapter actually produced a
+    given document (which may be the fallback, not the configured primary);
+    both fields are additive, so they don't break any consumer that
+    predates them.
+
+    **Write-pattern legend** (see `x-write-pattern` on every live path): a
+    path is one of `MUTABLE / upsert-latest` (a current-state snapshot,
+    overwritten every sync — e.g. today's price), `IMMUTABLE / append-only`
+    (once a row's natural key exists, its data can never legitimately
+    change — e.g. a closed trading day's mover, a filed Form 4, a published
+    article — so writes use an insert-if-not-exists pattern and re-syncing
+    an overlapping range is a cheap no-op, never a duplicate), or `HYBRID`
+    (starts mutable, becomes immutable once a specific field settles — e.g.
+    an earnings estimate becomes a permanent actual). Three collections —
+    market-movers, sectors, market-indices — ship BOTH a mutable "latest"
+    endpoint and a paired immutable "history" endpoint written in the same
+    transaction, so neither loses data: the latest endpoint answers "what's
+    true right now," the history endpoint answers "what was true on date X"
+    and never forgets. See `Doc/schema.sql` for the equivalent relational
+    write patterns (`ON CONFLICT ... DO NOTHING` vs `DO UPDATE`) if you
+    migrate off Firestore.
+  contact:
+    name: MarketCatalyst Engineering
+    email: hello@inc108.com
+servers:
+  - url: https://api.finapp26.app/v1
+    description: >-
+      Proposed REST gateway (NOT deployed). Would front the same Firestore
+      collections listed here for non-web consumers (mobile, third parties).
+  - url: http://localhost:4100
+    description: >-
+      NestJS backend today — only the Ops endpoints below are actually
+      exposed here. All other paths are Firestore reads from the client SDK,
+      documented as REST for a portable, vendor-agnostic contract.
+
+tags:
+  - name: Ops
+    description: Sync-job control plane, actually implemented and running on the NestJS backend.
+  - name: Companies
+    description: Reference + fundamentals data. Feeds Dashboard, Themes, Watchlist, Portfolio, Screener, Stock Detail.
+  - name: MarketMovers
+    description: Daily gainers/losers. Feeds Market Movers, Dashboard, Heatmap mini.
+  - name: Sectors
+    description: Sector-level performance. Feeds Sector Heatmap, Themes.
+  - name: Indices
+    description: Market pulse indices (S&P/Nasdaq/Dow/VIX/etc, via ETF proxies). Feeds Dashboard pulse strip, Macro & VIX.
+  - name: Earnings
+    description: Earnings calendar + actuals. Feeds Earnings Hub, Dashboard.
+  - name: Analyst
+    description: Analyst ratings. Feeds Analyst Actions screen.
+  - name: Insider
+    description: Form 4 insider transactions + 13F institutional holdings. Feeds Insider & Institutional screen.
+  - name: News
+    description: Company headlines. Feeds Commentary/News, Dashboard live feed.
+  - name: IPOs
+    description: IPO calendar. Feeds IPOs screen. Not yet built.
+  - name: Macro
+    description: Economic calendar. Feeds Macro & VIX screen. Not yet built.
+  - name: Dividends
+    description: Dividend calendar. Feeds Macro screen dividend panel. Not yet built.
+  - name: Options
+    description: Options chains, unusual flow, dark pool/block trades. Feeds Options Chain screen. Not yet built, blocked on vendor keys.
+  - name: Recaps
+    description: EOD/weekly AI narrative recaps. Feeds Recap screen. Not yet built, blocked on Claude key.
+  - name: StockHistory
+    description: Historical OHLCV bars. Feeds Stock Detail chart. Not yet built.
+  - name: UserData
+    description: Per-user watchlist/portfolio/comments/settings — owned by the user, not a vendor feed.
+
+paths:
+  # ────────────────────────────────────────────────────────────────────────
+  # OPS — actually implemented today on the NestJS backend
+  # ────────────────────────────────────────────────────────────────────────
+  /health:
+    get:
+      tags: [Ops]
+      summary: Backend liveness check
+      x-status: live
+      x-consumed-by:
+        - "Not screen-facing — no MarketCatalyst screen calls this. Used for manual health checks and could back a future uptime monitor."
+      x-primary-source: none (self-check)
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: true }
+                  service: { type: string, example: finapp26-backend }
+                  time: { type: string, format: date-time }
+
+  /sync/jobs:
+    get:
+      tags: [Ops]
+      summary: List every registered sync job with running + last-run state
+      x-status: live
+      x-consumed-by:
+        - "Not a MarketCatalyst screen — consumed by backendUI (backendUI/index.html), the separate static ops dashboard, not the Next.js app."
+      operationId: listSyncJobs
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SyncJobStatus" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /sync/status:
+    get:
+      tags: [Ops]
+      summary: Last-run status for every job (no running-state)
+      x-status: live
+      x-consumed-by:
+        - "Not a MarketCatalyst screen — ops-only, same as GET /sync/jobs."
+      operationId: getAllSyncStatus
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SyncMeta" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /sync/{job}/status:
+    get:
+      tags: [Ops]
+      summary: Last-run status for one job
+      x-status: live
+      x-consumed-by:
+        - "Not a MarketCatalyst screen — ops-only, same as GET /sync/jobs."
+      operationId: getSyncStatus
+      parameters:
+        - $ref: "#/components/parameters/JobName"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncMeta" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /sync/{job}/run:
+    post:
+      tags: [Ops]
+      summary: Manually trigger a sync job (for testing)
+      x-status: live
+      x-consumed-by:
+        - "Not a MarketCatalyst screen — ops-only, same as GET /sync/jobs."
+      operationId: runSyncJob
+      parameters:
+        - $ref: "#/components/parameters/JobName"
+      responses:
+        "200":
+          description: Job ran; per-job result shape (counts vary by job)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "404":
+          description: Unknown job name
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /sync/run-all:
+    post:
+      tags: [Ops]
+      summary: Manually trigger every registered sync job (for testing)
+      x-status: live
+      x-consumed-by:
+        - "Not a MarketCatalyst screen — ops-only. \"Run all now\" button in backendUI/index.html, added 2026-07-09."
+      x-write-pattern: >-
+        Runs every job sequentially, not in parallel — several jobs already
+        rate-limit themselves internally against a single vendor (e.g.
+        news.job.ts's per-ticker delay, SEC EDGAR's 10 req/sec throttle in
+        sec-13f/sec-form4), and concurrent execution would stack unrelated
+        jobs' bursts on top of each other for no benefit. A job already
+        mid-run (its own cron fired concurrently) is skipped, not
+        double-invoked. One job's failure doesn't stop the rest. This hits
+        every configured vendor API back-to-back and can take a few minutes
+        for all 17 jobs — a real action with real vendor-quota cost, not a
+        cheap health check.
+      operationId: runAllSyncJobs
+      responses:
+        "201":
+          description: Every job attempted; per-job outcome in `results`
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  succeeded: { type: integer }
+                  failed: { type: integer }
+                  skipped: { type: integer, description: "Jobs already mid-run when run-all started" }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        job: { type: string }
+                        ok: { type: boolean }
+                        skipped: { type: boolean }
+                        count: { type: integer, nullable: true }
+                        error: { type: string, nullable: true }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # COMPANIES — live
+  # ────────────────────────────────────────────────────────────────────────
+  /companies:
+    get:
+      tags: [Companies]
+      summary: List company reference + fundamentals data
+      description: >-
+        Two independent jobs write to this collection: companies.job.ts
+        (fundamentals, daily) and rs-rating.job.ts (just the `rsRating`
+        field, also daily, pure internal computation — see that job's
+        docblock, no vendor call involved).
+      x-status: live
+      x-consumed-by:
+        - "Dashboard (app/iq/screens/dashboard.tsx) — Market Heatmap mini (per-stock market cap/%change), Portfolio Pulse mini (live price/% on holdings), Watchlist mini (live price/% on watched tickers)"
+        - "Screener (app/iq/screens/screener.tsx) — Market cap, P/E, and Relative Strength columns/filters (rsRating merged onto relativeStrength when available)"
+        - "Market Heatmap (app/iq/screens/heatmap.tsx) — Stock cells (market cap, % change)"
+        - "Themes (app/iq/screens/themes.tsx) — Per-stock price/% change on each theme's stock list"
+        - "Portfolio Pulse (app/iq/screens/portfolio.tsx) — Price/% change on demo or real holdings"
+        - "Watchlist (app/iq/screens/watchlist.tsx) — Price/% change on demo or real watched tickers"
+        - "Stock Detail (app/iq/screens/stock.tsx) — Price, % change, market cap, P/E, dividend yield, beta, sector (single-point merge, tagged \"live quote · FMP\")"
+      x-primary-source: >-
+        FMP `/stable/profile` + `/stable/ratios-ttm` + `/stable/stock-peers`
+        (backend/src/vendors/fmp), synced daily at 02:00 ET for a rotating
+        60-ticker batch of the 241-name curated universe
+        (backend/src/common/ticker-universe.ts). `rsRating` specifically is
+        computed daily at 04:00 ET by rs-rating.job.ts from `ohlcv_bars`
+        history — not from FMP at all, see /stock-history above.
+      x-alternate-source: >-
+        Polygon `/v3/reference/tickers` + `/v2/aggs/ticker/{t}/prev` for the
+        price/quote/market-cap fields ONLY — Polygon snapshots refresh faster
+        (intraday-capable vs FMP's once-daily fundamentals sync) but has no
+        equivalent for P/E, dividend yield, or peers, so it can only replace
+        the price-tier fields, not the full profile.
+      x-fallback-behavior: >-
+        Automatic. Configured via COMPANY_PROFILE_SOURCE (default fmp) and
+        COMPANY_PROFILE_FALLBACK_SOURCE (default polygon). If FMP throws
+        (network/5xx/plan-rejection) or has no profile for the ticker, the
+        composite adapter automatically retries against Polygon and tags
+        the result with a FALLBACK_USED warning — the request still returns
+        200, not an error. Only if BOTH sources fail does this return 502
+        with every attempt listed in `fallbackAttempted`. Set
+        COMPANY_PROFILE_FALLBACK_SOURCE=none to disable and fail fast on
+        the primary alone.
+      x-write-pattern: >-
+        MUTABLE / upsert-latest. `companies/{ticker}` is overwritten on
+        every sync (`INSERT ... ON CONFLICT (ticker) DO UPDATE`) — there is
+        no history table for company profiles today; only price-history
+        (see /stock-history, planned) would need append-only semantics.
+      operationId: listCompanies
+      parameters:
+        - name: tickers
+          in: query
+          description: Comma-separated tickers to filter to (omit for the full synced universe)
+          schema: { type: string, example: "AAPL,MSFT,NVDA" }
+        - name: sector
+          in: query
+          schema: { type: string, example: Technology }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100, maximum: 500 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Company" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /companies/{ticker}:
+    get:
+      tags: [Companies]
+      summary: Single company by ticker
+      x-status: live
+      x-consumed-by:
+        - "Same screens/features as GET /companies above — the frontend subscribes to the whole companies collection via useCollection() and merges client-side rather than fetching one ticker at a time, so this single-ticker path documents the equivalent Firestore doc shape, not a distinct call site."
+      x-primary-source: >-
+        Polygon (migrated 2026-07-12): `/v3/reference/tickers` (name, market cap,
+        sector, exchange), daily aggs for price/%change, and
+        `/vX/reference/financials` timeframe=ttm for diluted EPS → computed
+        P/E = price ÷ EPS.
+      x-alternate-source: >-
+        FMP `/stable/profile` + `/stable/ratios-ttm` + `/stable/stock-peers`
+        (fallback). Still the ONLY source for peers, beta, and dividend yield —
+        Polygon has no product for those, so they are null on Polygon-served docs.
+      x-fallback-behavior: >-
+        Same automatic FMP-then-Polygon fallback as `GET /companies` — see
+        that path's x-fallback-behavior for the full mechanics. A 404 here
+        means neither source has ever heard of the ticker; a 502 means both
+        sources errored (rate limit, outage, etc.) rather than simply
+        lacking the ticker.
+      operationId: getCompany
+      parameters:
+        - $ref: "#/components/parameters/Ticker"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Company" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # TICKERS — live (full US universe: reference metadata + daily price)
+  # ────────────────────────────────────────────────────────────────────────
+  /tickers:
+    get:
+      tags: [Companies]
+      summary: Full US ticker universe — reference data + daily price (no fundamentals)
+      description: >-
+        Answers "what tickers exist" (name/exchange/type/active/cik) AND
+        "what's it trading at" (price/%change/volume) for essentially the
+        entire US market, not just the 241-ticker curated universe
+        `/companies` covers. The price fields are effectively free: Polygon's
+        grouped-daily endpoint returns the whole market's EOD bars in one
+        call, already fetched daily for `/market-movers` — this just writes
+        the rest of that same response instead of discarding it. Still no
+        fundamentals (P/E, sector, dividend yield, peers, beta) for the full
+        universe — that needs one FMP call per ticker, which doesn't scale
+        here yet; use `GET /companies/{ticker}` for that on the curated
+        subset (may 404 outside it).
+      x-status: live
+      x-consumed-by:
+        - "Shell (app/iq/shell.tsx) — Cmd+K / top search bar, via app/iq/hooks/useTickerSearch.ts. NOT a useCollection() full-collection subscription (that would download all ~10,000 docs on every page load, since the shell wraps every screen) — instead a scoped, on-demand Firestore range query (where ticker >= Q AND ticker < Q+highChar, limited to 20 results), fired only when the user types, debounced 200ms. Ticker-prefix matching only; company-name search (e.g. typing \"Apple\" to find AAPL) isn't implemented — would need a normalized lowercase name field added to ticker-universe.job.ts first."
+        - "Screener (app/iq/screens/screener.tsx) does NOT read this collection — its picker is still limited to the curated 241-ticker TICKER_UNIVERSE via the companies collection. Expanding Screener itself to the full universe is a separate, not-yet-done step."
+      x-primary-source: >-
+        Reference fields: Polygon `/v3/reference/tickers`, paginated
+        (~1000/page), synced weekly (Sunday 03:00 ET) —
+        ticker-universe.job.ts. Price fields: Polygon grouped-daily EOD bars
+        diffed across the two most recent trading days (same 2-call diff
+        `/market-movers` uses, see backend/src/vendors/polygon/polygon-diff.util.ts),
+        synced daily at 18:07 ET — market-quotes.job.ts. Both merge onto the
+        same `tickers/{ticker}` doc.
+      x-alternate-source: >-
+        SEC EDGAR `company_tickers.json` — completely free, no key, no rate
+        limit, and already fetched elsewhere in this backend (Form 4 CIK
+        lookups) — but narrower coverage (SEC filers only, no ETF/type/
+        exchange/active-flag distinction, no price at all) so it's a
+        cross-reference for CIK mapping, not a replacement discovery source.
+      x-write-pattern: >-
+        MUTABLE / upsert-latest. `tickers/{ticker}` is overwritten (merged)
+        on every weekly reference-data run and every daily price run; no
+        history is kept for either.
+      operationId: listTickers
+      parameters:
+        - name: type
+          in: query
+          description: Filter by Polygon security type, e.g. CS (common stock), ETF, ADRC, WARRANT
+          schema: { type: string }
+        - name: exchange
+          in: query
+          description: Filter by primary exchange (Polygon MIC code, e.g. XNAS, XNYS)
+          schema: { type: string }
+        - name: active
+          in: query
+          schema: { type: boolean, default: true }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100, maximum: 1000 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/TickerListing" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # MARKET MOVERS — live
+  # ────────────────────────────────────────────────────────────────────────
+  /market-movers:
+    get:
+      tags: [MarketMovers]
+      summary: Top gainers/losers (EOD)
+      description: |
+        RVOL/catalyst/weekly-% columns are NOT in this feed (see mock-merge
+        note) — only price/pctChange/volume/sector/cap are real.
+      x-status: live
+      x-consumed-by:
+        - "Market Movers (app/iq/screens/movers.tsx) — Mover rows (price/%change/name/sector/cap); live-only tickers not in the mock set are appended with neutral placeholders"
+        - "Dashboard (app/iq/screens/dashboard.tsx) — Market Movers widget (Gainers/Losers/Most Active tabs)"
+      x-primary-source: >-
+        Polygon grouped-daily bars (`/v2/aggs/grouped/locale/us/market/stocks/{date}`),
+        diffed across the two most recent trading days, top/bottom 20 by
+        %change; enriched with name/sector/cap via FMP profile lookups.
+        Synced once daily at 18:00 ET (after Polygon's EOD aggregation
+        window) — this plan has no real-time gainers/losers endpoint
+        (confirmed NOT_AUTHORIZED on the current Polygon tier).
+      x-alternate-source: >-
+        Polygon real-time snapshot
+        `/v2/snapshot/locale/us/markets/stocks/{direction}` — same vendor,
+        but requires a paid plan upgrade; would give intraday-live movers
+        instead of the current once-a-day-after-close refresh.
+      x-fallback-behavior: >-
+        Automatic on two independent axes. (1) The base gainers/losers list:
+        MOVERS_SOURCE (default polygon, EOD-bar diff) falls back to
+        MOVERS_FALLBACK_SOURCE (default fmp, vendor-computed biggest-gainers/
+        biggest-losers — no volume field, declared as a FIELD_NOT_SUPPORTED
+        warning) if the primary throws; only if both fail does this return
+        502. (2) Per-ticker name/sector/cap enrichment: MOVER_ENRICHMENT_SOURCE
+        (default fmp) falls back to MOVER_ENRICHMENT_FALLBACK_SOURCE (default
+        polygon, approximate free-text sector) per ticker; if both fail for
+        one ticker, that mover is still written with name/sector/cap left
+        null and a SUB_REQUEST_FAILED warning, it does not fail the whole
+        request. Set either *_FALLBACK_SOURCE to "none" to disable.
+      x-write-pattern: >-
+        MUTABLE / upsert-latest — `market_movers/{direction_TICKER}` is
+        overwritten every sync. A sibling append-only collection,
+        `market_movers_history/{date}_{direction}_{ticker}`, is written in
+        the SAME transaction and never touched again once its date has
+        passed — see GET /market-movers/history below. Re-running today's
+        sync twice is a harmless no-op on the history side (same doc id),
+        not a duplicate.
+      operationId: listMarketMovers
+      parameters:
+        - name: direction
+          in: query
+          schema: { type: string, enum: [gainer, loser] }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 20 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MarketMover" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /market-movers/history:
+    get:
+      tags: [MarketMovers]
+      summary: Full mover history (append-only, one row per trading day)
+      description: >-
+        Firestore `market_movers_history/{date}_{direction}_{ticker}` —
+        unlike GET /market-movers (which only ever shows the latest
+        snapshot), this never loses a day: each closed trading day gets its
+        own permanent document, written once and never overwritten.
+      x-status: live
+      x-consumed-by:
+        - "Not consumed by any screen today — no screen reads market_movers_history yet, only the latest-snapshot market_movers collection. Written for a future trend/history UI."
+      x-primary-source: Same sync as GET /market-movers — see that path for vendor/fallback details.
+      x-write-pattern: IMMUTABLE / append-only. Insert with ON CONFLICT (ticker, direction, as_of_date) DO NOTHING once migrated to a relational store (see Doc/schema.sql market_movers_history).
+      operationId: listMarketMoverHistory
+      parameters:
+        - name: ticker
+          in: query
+          schema: { type: string }
+        - name: direction
+          in: query
+          schema: { type: string, enum: [gainer, loser] }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MarketMover" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # SECTORS — live
+  # ────────────────────────────────────────────────────────────────────────
+  /sectors:
+    get:
+      tags: [Sectors]
+      summary: Sector-level performance snapshot
+      x-status: live
+      x-consumed-by:
+        - "Dashboard (app/iq/screens/dashboard.tsx) — Market Heatmap mini (sector %)"
+        - "Market Heatmap (app/iq/screens/heatmap.tsx) — Sector cells (% change)"
+      x-primary-source: >-
+        Polygon (migrated 2026-07-12): the 11 SPDR sector ETFs (XLK, XLF, XLE,
+        XLV, XLI, XLP, XLY, XLU, XLB, XLRE, XLC) as proxies, day-over-day %
+        from daily aggs, mapped back to FMP's sector names so the frontend
+        merge is unchanged. Note: an ETF-proxy move, not a cap-weighted
+        constituent average. Synced daily at 18:00 ET.
+      x-alternate-source: >-
+        FMP `/stable/sector-performance-snapshot` (fallback, with up to 5 days
+        of lookback if the latest trading day has no data yet).
+      x-write-pattern: >-
+        MUTABLE / upsert-latest — `sectors/{sectorSlug}` is overwritten
+        every sync. A sibling append-only collection,
+        `sectors_history/{date}_{sectorSlug}`, is written in the same
+        transaction — see GET /sectors/history below.
+      operationId: listSectors
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Sector" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /sectors/history:
+    get:
+      tags: [Sectors]
+      summary: Full sector performance history (append-only, one row per trading day)
+      description: >-
+        Firestore `sectors_history/{date}_{sectorSlug}` — never loses a
+        day's sector performance, unlike GET /sectors which only shows the
+        latest snapshot.
+      x-status: live
+      x-consumed-by:
+        - "Not consumed by any screen today — same as market-movers/history, written for a future trend UI, not read yet."
+      x-primary-source: Same sync as GET /sectors — see that path for vendor details.
+      x-write-pattern: IMMUTABLE / append-only. Insert with ON CONFLICT (sector, as_of_date) DO NOTHING once migrated to a relational store (see Doc/schema.sql sectors_history).
+      operationId: listSectorHistory
+      parameters:
+        - name: sector
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Sector" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # INDICES — live
+  # ────────────────────────────────────────────────────────────────────────
+  /market-indices:
+    get:
+      tags: [Indices]
+      summary: Market pulse indices (ETF-proxied)
+      description: |
+        **All 9 values are ETF proxies, not real index levels** — see
+        `isProxy`/`note` fields. Neither Polygon nor Finnhub's current keys
+        allow real index/CFD quotes (both confirmed 401/403). NOT consumed
+        by Macro & VIX (screens/macro.tsx) — its VIX/market-regime cards
+        stay hardcoded deliberately; VIXY is a decaying futures ETN, not
+        the spot VIX level, and overlaying it there without heavy caveats
+        risked misrepresenting it as the real index.
+      x-status: live
+      x-consumed-by:
+        - "Dashboard (app/iq/screens/dashboard.tsx) — Market Pulse strip (6 of 9 indices shown), VIX card"
+        - "Shell (app/iq/shell.tsx) — Top ticker strip on every screen, and the index drawer it opens (both via the shared mergePulse() helper in app/iq/live-market-indices.ts)"
+      x-primary-source: >-
+        Polygon (migrated 2026-07-12): day-over-day quote from daily aggs on the
+        same liquid ETF proxies (SPY, QQQ, DIA, IWM, GLD, USO, UUP, TLT, VIXY),
+        synced daily at 18:05 ET. Near-zero marginal cost — those ETFs are
+        already in the whole-market grouped-daily pull.
+      x-alternate-source: >-
+        Finnhub `/quote` on the same ETF proxies (fallback). The Polygon
+        Indices add-on (`I:SPX`, `I:VIX`, ...) would give the real index value
+        instead of a correlated ETF (TLT is NOT the 10Y yield, VIXY is a
+        decaying futures ETN NOT the spot VIX) — not currently subscribed.
+      x-write-pattern: >-
+        MUTABLE / upsert-latest — `market_indices/{symbol}` is overwritten
+        every sync. A sibling append-only collection,
+        `market_indices_history/{date}_{symbol}`, is written in the same
+        transaction — see GET /market-indices/history below.
+      operationId: listMarketIndices
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MarketIndex" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /market-indices/history:
+    get:
+      tags: [Indices]
+      summary: Full index-proxy history (append-only, one row per trading day)
+      description: >-
+        Firestore `market_indices_history/{date}_{symbol}` — never loses a
+        day's index level, unlike GET /market-indices which only shows the
+        latest snapshot.
+      x-status: live
+      x-consumed-by:
+        - "Not consumed by any screen today — same as market-movers/history, written for a future trend UI, not read yet."
+      x-primary-source: Same sync as GET /market-indices — see that path for vendor details.
+      x-write-pattern: IMMUTABLE / append-only. Insert with ON CONFLICT (symbol, as_of_date) DO NOTHING once migrated to a relational store (see Doc/schema.sql market_indices_history).
+      operationId: listMarketIndexHistory
+      parameters:
+        - name: symbol
+          in: query
+          schema: { type: string, enum: [SPX, NDX, DJI, RUT, GOLD, WTI, DXY, US10Y, VIX] }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MarketIndex" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /market-indices/{symbol}:
+    get:
+      tags: [Indices]
+      summary: Single index/proxy by symbol
+      x-status: live
+      x-consumed-by:
+        - "Same screens as GET /market-indices above — the frontend subscribes to the whole collection and merges/looks up client-side rather than fetching one symbol at a time."
+      x-primary-source: Polygon daily aggs (ETF proxy, migrated 2026-07-12)
+      x-alternate-source: Finnhub `/quote` (ETF proxy, fallback); Polygon Indices add-on for real index values (not subscribed)
+      operationId: getMarketIndex
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema: { type: string, enum: [SPX, NDX, DJI, RUT, GOLD, WTI, DXY, US10Y, VIX] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MarketIndex" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # EARNINGS — live
+  # ────────────────────────────────────────────────────────────────────────
+  /earnings-events:
+    get:
+      tags: [Earnings]
+      summary: Earnings calendar with estimate/actual EPS + revenue
+      x-status: live
+      x-consumed-by:
+        - "Earnings Hub (app/iq/screens/earnings.tsx) — EPS estimate/actual overlaid onto the matching EARN_CAL row by ticker, tagged \"live EPS · FMP\" pill; session/guidance/reaction/implied-move/call transcripts stay illustrative (not in this feed)"
+        - "Dashboard (app/iq/screens/dashboard.tsx) — Earnings Today widget"
+      x-primary-source: >-
+        FMP `/stable/earnings-calendar`, full refresh daily at 06:00 ET
+        for a rolling forward window.
+      x-alternate-source: >-
+        Benzinga earnings calendar/actuals stream — posts actuals within
+        seconds of the release vs. FMP's ~10-15 minute vendor lag; blocked,
+        `BENZINGA_API_KEY` is empty in `backend/.env`.
+      x-write-pattern: >-
+        HYBRID. `earnings_events/{ticker}_{date}` starts mutable
+        (epsEstimate known, epsActual null pre-report) and becomes
+        permanently immutable once epsActual/revenueActual are filled in —
+        safe to unconditionally UPSERT either way, since a settled row just
+        overwrites itself with identical values on any later sync.
+      operationId: listEarningsEvents
+      parameters:
+        - name: ticker
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/EarningsEvent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # ANALYST — live (consensus snapshot only)
+  # ────────────────────────────────────────────────────────────────────────
+  /analyst-actions/{ticker}:
+    get:
+      tags: [Analyst]
+      summary: Analyst consensus snapshot for a ticker
+      description: |
+        This is a Buy/Hold/Sell **vote-count snapshot**, not an event feed —
+        it has no firm name, no action type, no price target, no date. The
+        per-firm upgrade/downgrade table on Analyst Actions stays
+        illustrative until `/analyst-actions/events` (below) is built.
+      x-status: live
+      x-consumed-by:
+        - "Analyst Actions (app/iq/screens/analyst.tsx) — \"Live analyst consensus\" card, and a live-consensus badge on matching table rows (cross-referenced by ticker)"
+        - "Dashboard (app/iq/screens/dashboard.tsx) — Analyst Actions mini-list, consensus pill shown next to matching tickers (per-firm action rows stay mock — no live per-firm feed exists)"
+      x-primary-source: >-
+        FMP `/stable/grades-consensus`, synced daily at 06:00 ET for a
+        rotating 60-ticker batch.
+      x-alternate-source: >-
+        Benzinga real-time analyst ratings stream — genuinely faster
+        AND richer (per-firm events, not just a consensus count); blocked,
+        no key configured.
+      x-write-pattern: >-
+        MUTABLE / upsert-latest. `analyst_actions/{ticker}` is a point-in-time
+        vote-count snapshot, overwritten every sync — there is no history
+        collection for this today (unlike market-movers/sectors/indices).
+      operationId: getAnalystConsensus
+      parameters:
+        - $ref: "#/components/parameters/Ticker"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AnalystConsensus" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /analyst-actions/events:
+    get:
+      tags: [Analyst]
+      summary: Per-firm upgrade/downgrade/initiation event feed
+      description: >-
+        NOT IMPLEMENTED. The Analyst Actions event table (firm, action type,
+        rating change, price target change, date) needs an event-level feed;
+        FMP's consensus endpoint above cannot reconstruct it.
+      x-status: planned
+      x-consumed-by:
+        - "Intended for Analyst Actions (app/iq/screens/analyst.tsx) — the per-firm action table (firm, rating change, PT, cluster alerts), currently 100% static (data.analyst) since no event-level feed exists yet"
+      x-primary-source: >-
+        Benzinga Ratings API — real-time per-firm upgrade/downgrade/
+        initiation/reiteration events with price targets. Blocked, no key.
+      x-alternate-source: >-
+        FMP `/stable/grades-historical` — has per-firm historical grade
+        changes (interim, non-real-time) and could be wired with the
+        existing FMP key while waiting on a Benzinga key; slower to reflect
+        same-day actions than Benzinga's stream.
+      operationId: listAnalystActionEvents
+      parameters:
+        - name: ticker
+          in: query
+          schema: { type: string }
+      responses:
+        "501": { $ref: "#/components/responses/NotImplemented" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # INSIDER / INSTITUTIONAL — live
+  # ────────────────────────────────────────────────────────────────────────
+  /insider-transactions:
+    get:
+      tags: [Insider]
+      summary: Form 4 insider buy/sell transactions
+      x-status: live
+      x-consumed-by:
+        - "Insider & Institutional (app/iq/screens/insider.tsx) — Insider transaction feed, real rows tagged \"live\", concatenated with the original mock feed"
+        - "Dashboard (app/iq/screens/dashboard.tsx) — Insider & Institutional mini (latest 5 real Form 4 filings prepended to the mock insider mini-list)"
+      x-primary-source: >-
+        SEC EDGAR Form 4 XML (`data.sec.gov/submissions/CIK{cik}.json` +
+        per-filing XML), nightly at 01:30 ET, 20 tickers per run, 3 most
+        recent Form 4 filings per ticker, cycling the curated universe.
+        Rate-limited to SEC's 10 req/sec cap; requires a User-Agent header.
+      x-alternate-source: >-
+        Benzinga or Quiver Quant insider feed — both re-publish the same SEC
+        filings within minutes vs. SEC's own filing lag (issuers have up to
+        2 business days to file); SEC EDGAR is still the source of truth,
+        these are just faster mirrors of it. Neither is currently wired.
+      x-write-pattern: >-
+        IMMUTABLE / append-only. Doc id is `{accessionNumber}_{i}` — a
+        deterministic natural key derived from the SEC filing itself, so
+        re-running the job never creates a duplicate (the same filing
+        always maps to the same doc id) and a past filing is never
+        rewritten. Already correct as-built; no change needed here.
+      operationId: listInsiderTransactions
+      parameters:
+        - name: ticker
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/InsiderTransaction" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /fund-holdings/{cik}:
+    get:
+      tags: [Insider]
+      summary: Institutional fund summary (13F)
+      x-status: live
+      x-consumed-by:
+        - "Insider & Institutional (app/iq/screens/insider.tsx) — \"Live overlap (CUSIP-matched, real)\" section, alongside the nested positions path below, cross-referencing exact CUSIPs across real 13F filings; shown additively, not replacing the original mock cross-fund cards"
+      x-primary-source: SEC EDGAR 13F-HR filings, nightly at 01:00 ET
+      x-alternate-source: >-
+        WhaleWisdom / Fintel — nicer aggregation UX over the same SEC data;
+        no speed advantage since 13F is inherently quarterly, filed up to
+        45 days after quarter-end (regulatory lag, not a vendor problem).
+      x-write-pattern: >-
+        MUTABLE / upsert-latest. `fund_holdings/{cik}` is a rolling summary
+        (latestFilingDate, totalPositions, etc.) overwritten as new filings
+        arrive — the underlying filings/positions themselves are immutable,
+        see GET .../positions below.
+      operationId: getFundHoldings
+      parameters:
+        - name: cik
+          in: path
+          required: true
+          schema: { type: string, example: "0001067983" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FundHoldings" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /fund-holdings/{cik}/filings/{accessionNumber}/positions:
+    get:
+      tags: [Insider]
+      summary: CUSIP-level positions for one 13F filing
+      description: >-
+        Keyed by CUSIP, not ticker — the SEC 13F schema has no ticker field.
+        Rows are capped at 200 per filing (largest positions by value first).
+      x-status: live
+      x-consumed-by:
+        - "Insider & Institutional (app/iq/screens/insider.tsx) — same \"Live overlap (CUSIP-matched, real)\" section as GET /fund-holdings/{cik} above"
+      x-primary-source: SEC EDGAR 13F-HR information table, nightly at 01:00 ET
+      x-alternate-source: WhaleWisdom / Fintel (same underlying data, nicer UX, no speed gain)
+      x-write-pattern: >-
+        IMMUTABLE / append-only. Keyed by (cik, accessionNumber, cusip) — a
+        specific filing's positions never change after the fact; a new
+        quarter is a new accessionNumber, not an update to this one.
+        Already correct as-built; no change needed here.
+      operationId: listFundPositions
+      parameters:
+        - name: cik
+          in: path
+          required: true
+          schema: { type: string }
+        - name: accessionNumber
+          in: path
+          required: true
+          schema: { type: string, example: "0000912057-26-012345" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/FundPosition" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # NEWS — live
+  # ────────────────────────────────────────────────────────────────────────
+  /news:
+    get:
+      tags: [News]
+      summary: Company news headlines
+      description: |
+        Polygon-primary as of 2026-07-08: adds per-ticker sentiment +
+        sentiment_reasoning and free-text keywords Finnhub structurally
+        lacks, still polled batch every 30 min (no true push either way).
+      x-status: live
+      x-consumed-by:
+        - "Commentary (app/iq/screens/commentary.tsx) — Live tab (merged ahead of mock commentary items), Premarket/After Hours/My names/Macro tabs (filtered by ET hour or ticker, appended to the corresponding mock arrays), NewsDrawer per-ticker history (shown above the mock buildNewsHistory() narrative section)"
+        - "Dashboard (app/iq/screens/dashboard.tsx) — Live Market Feed (falls back to mock feed items when none have synced for the tracked universe yet)"
+      x-primary-source: >-
+        Polygon `/v2/reference/news`, synced every 30 min during market hours,
+        80 tickers per run cycling the full universe, last 2 days lookback.
+        Adapter-selected via NEWS_SOURCE (see backend/src/adapters/adapters.module.ts);
+        falls back to Finnhub `/company-news` (NEWS_FALLBACK_SOURCE) on failure,
+        served with a FALLBACK_USED warning when that happens.
+      x-alternate-source: >-
+        Benzinga real-time newsfeed with per-firm category tagging
+        (earnings/M&A/macro classification built in) and near-instant push
+        vs. Polygon/Finnhub's 30-min poll cadence; blocked, no key. Neither
+        Polygon nor Finnhub sells this — a Benzinga key would be additive,
+        not a straight swap.
+      x-write-pattern: >-
+        IMMUTABLE / append-only. Doc id is `{ticker}_{articleId}` — a
+        published article's headline/summary never change, and the same
+        article always maps to the same doc id, so re-polling an overlapping
+        lookback window never creates a duplicate. Already correct as-built;
+        no change needed here.
+      operationId: listNews
+      parameters:
+        - name: ticker
+          in: query
+          schema: { type: string }
+        - name: category
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/NewsArticle" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # IPOs — live
+  # ────────────────────────────────────────────────────────────────────────
+  /ipos:
+    get:
+      tags: [IPOs]
+      summary: IPO calendar (recent + pipeline)
+      description: >-
+        FMP's `/stable/ipos-calendar` is still confirmed RESTRICTED on the
+        current plan, but Finnhub's IPO calendar turned out to be a separate
+        endpoint from its blocked economic calendar — verified 2026-07-07
+        with a real call, not assumed.
+      x-status: live
+      x-consumed-by:
+        - "IPOs (app/iq/screens/ipos.tsx) — new, additive \"Live IPO Calendar\" card, shown once the collection has synced data; the screen's original Stats strip / Recent IPO Performance / Upcoming Pipeline tables stay untouched — Finnhub's calendar has no current trading price or day-1 return, so it can't be merged into those return-calculation rows"
+      x-primary-source: >-
+        Polygon `/vX/reference/ipos` (migrated 2026-07-12), filtered by
+        listing_date over a [today-45d, today+90d] window, synced daily at
+        06:15 ET. Free tier, same key already in use for aggs/news/reference.
+      x-alternate-source: >-
+        Finnhub `/calendar/ipo` (fallback, free tier). FMP `/stable/ipos-calendar`
+        is confirmed RESTRICTED on the current plan. Nasdaq/NYSE public calendar scraping is
+        a further fallback if Finnhub's free tier ever changes.
+      x-write-pattern: >-
+        MUTABLE / upsert-latest — `ipos/{date}_{symbol|slug}` is overwritten
+        every sync as an IPO's status changes (filed → expected → priced/
+        withdrawn). Doc id is a point-in-time snapshot key, not a stable
+        per-company identity across its whole lifecycle — see the comment
+        above `IposJob` for why.
+      operationId: listIpos
+      parameters:
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+        - name: status
+          in: query
+          schema: { type: string, enum: [expected, priced, filed, withdrawn] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/IpoEvent" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # MACRO — live
+  # ────────────────────────────────────────────────────────────────────────
+  /macro-events:
+    get:
+      tags: [Macro]
+      summary: Latest reading per key US economic indicator
+      description: >-
+        NOT a forward-looking calendar — FRED has no consensus-estimate
+        field and no verified scheduled-release-date source, so this only
+        ever reports what has actually been published.
+      x-status: live
+      x-consumed-by:
+        - "Macro & VIX (app/iq/screens/macro.tsx) — new, additive \"Live Economic Indicators\" card, shown once the collection has synced data; the screen's Market regime/VIX cards and Last/This/Next Week economic calendar tabs stay untouched (fixed illustrative dates, so live FRED readings aren't force-fit into them)"
+      x-primary-source: >-
+        FRED (Federal Reserve Economic Data) `/series/observations`, latest 2
+        observations per curated series (see backend/src/common/macro-series.ts),
+        synced daily at 18:10 ET. Needs a free `FRED_API_KEY` from
+        fredaccount.stlouisfed.org/apikeys.
+      x-alternate-source: >-
+        Finnhub `/calendar/economic` — confirmed BLOCKED on the current plan
+        ("You don't have access to this resource"); would give true forward
+        scheduled events with consensus estimates if upgraded.
+      x-write-pattern: >-
+        MUTABLE / upsert-latest — `macro_events/{seriesId}` is overwritten
+        every sync (one doc per curated indicator, not per observation).
+      operationId: listMacroEvents
+      parameters:
+        - name: importance
+          in: query
+          schema: { type: string, enum: [low, medium, high] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MacroEvent" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # DIVIDENDS — live
+  # ────────────────────────────────────────────────────────────────────────
+  /dividends:
+    get:
+      tags: [Dividends]
+      summary: Upcoming ex-dividend calendar
+      description: >-
+        No fictional-date mismatch issue here since this is a flat list, not
+        a fixed "today"-anchored calendar grid — unlike /macro-events above.
+      x-status: live
+      x-consumed-by:
+        - "Macro & VIX (app/iq/screens/macro.tsx) — new, additive \"Live Dividend Calendar\" card, alongside the screen's existing illustrative dividend calendar (chip grid/month view, untouched)"
+      x-primary-source: >-
+        Polygon `/v3/reference/dividends` (migrated 2026-07-12), filtered by
+        ex_dividend_date over a [today, today+30d] forward window, synced daily
+        at 06:20 ET. Caveat: Polygon has no dividend YIELD, so `yieldPct` is
+        null on Polygon-served docs (present only via the FMP fallback).
+      x-alternate-source: >-
+        FMP `/stable/dividends-calendar` (fallback; adds yield). Nasdaq dividend
+        calendar is a further free but less-structured option.
+      x-write-pattern: >-
+        MUTABLE / upsert-latest — `dividends/{ticker}` is overwritten every
+        sync with that ticker's next upcoming ex-dividend event, same
+        forward-window-only shape as `/earnings` (not a full per-event
+        history).
+      operationId: listDividends
+      parameters:
+        - name: ticker
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Dividend" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # OPTIONS — options-chains live (partial), options-flow/block-trades planned
+  # ────────────────────────────────────────────────────────────────────────
+  /options-chains:
+    get:
+      tags: [Options]
+      summary: Options reference data (real strikes/expirations + delayed last price/volume) for a curated ticker list
+      description: >-
+        Options SNAPSHOT and NBBO quotes are confirmed 403 NOT_AUTHORIZED on
+        the current Polygon plan (verified 2026-07-07) — real-time bid/ask,
+        IV, greeks, and open interest genuinely aren't available without a
+        plan upgrade or a Tradier key. Covers OPTIONS_UNIVERSE only (8
+        curated liquid tickers), not every stock on the Options Chain
+        screen's picker.
+      x-status: live
+      x-consumed-by:
+        - "Options Chain (app/iq/screens/options.tsx) — new, additive \"Live Options Reference\" card for the currently-selected ticker (when it's in OPTIONS_UNIVERSE and has synced data); the screen's original simulated full chain table (bid/ask, IV, greeks, OI) stays untouched"
+      x-primary-source: >-
+        Polygon `/v3/reference/options/contracts` (nearest-expiration
+        strikes/types) + `/v2/aggs/ticker/{contract}/range/1/day/...`
+        (delayed last close/volume per contract), synced daily at 19:00 ET.
+        Same Polygon key already in use for movers/tickers.
+      x-alternate-source: >-
+        Tradier `/v1/markets/options/chains` — would give real bid/ask and
+        greeks instead of this delayed-price-only reference data; needs a
+        free `TRADIER_ACCESS_TOKEN` (not yet obtained). Backend stub already
+        exists at `backend/src/vendors/tradier/tradier.service.ts`.
+      x-write-pattern: >-
+        MUTABLE / upsert-latest — `options_chains/{underlyingTicker}` is
+        overwritten every sync with its full (small, curated) contract list
+        as one array field, not one doc per contract.
+      operationId: listOptionsChains
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/OptionsChain" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /options-flow:
+    get:
+      tags: [Options]
+      summary: Unusual options activity (sweeps, large premium, high vol/OI)
+      description: NOT IMPLEMENTED. Blocked — `UNUSUAL_WHALES_API_KEY` is empty in `backend/.env`.
+      x-status: planned
+      x-consumed-by:
+        - "No dedicated UI section exists yet anywhere in the app — not just unbuilt on the backend. Intended home is Options Chain (app/iq/screens/options.tsx), but no unusual-flow widget/table has been designed there yet either (checked: no reference to 'unusual flow', 'sweep', or similar in options.tsx)."
+      x-primary-source: Unusual Whales WebSocket flow feed
+      x-alternate-source: >-
+        FlowAlgo / Cheddar Flow — comparable tier and latency; no clear
+        speed edge over Unusual Whales, which remains the strongest
+        sweep-detection vendor for this use case.
+      operationId: listOptionsFlow
+      parameters:
+        - name: ticker
+          in: query
+          schema: { type: string }
+        - name: isUnusual
+          in: query
+          schema: { type: boolean }
+      responses:
+        "501": { $ref: "#/components/responses/NotImplemented" }
+
+  /block-trades:
+    get:
+      tags: [Options]
+      summary: Large block / dark-pool prints
+      description: NOT IMPLEMENTED. Blocked — no vendor key configured.
+      x-status: planned
+      x-consumed-by:
+        - "No dedicated UI section exists yet. The only trace of this concept in the app today is a single hardcoded illustrative headline in Commentary's mock feed (app/iq/data.ts — a \"Block Trade\" category news item), not a real block-trades table or widget on any screen."
+      x-primary-source: Unusual Whales dark-pool print feed
+      x-alternate-source: >-
+        FINRA ADF/OTC Transparency data — free, but T+1 delayed and far
+        slower than Unusual Whales' near-real-time aggregation; usable only
+        as a free fallback, not a speed improvement.
+      operationId: listBlockTrades
+      parameters:
+        - name: ticker
+          in: query
+          schema: { type: string }
+      responses:
+        "501": { $ref: "#/components/responses/NotImplemented" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # RECAPS — planned, blocked on Claude key
+  # ────────────────────────────────────────────────────────────────────────
+  /recaps/{date}:
+    get:
+      tags: [Recaps]
+      summary: EOD or weekly AI narrative recap
+      description: NOT IMPLEMENTED. Recap screen is 100% static.
+      x-status: planned
+      x-consumed-by:
+        - "Intended for Recaps (app/iq/screens/recap.tsx) — every element (index cards, news briefing, key stories, sector heatmap, movers, internals), currently 100% hardcoded"
+      x-primary-source: >-
+        Polygon EOD index/sector data (structured inputs) + Anthropic Claude
+        (narrative generation). Blocked — `ANTHROPIC_API_KEY` not set.
+      x-alternate-source: >-
+        OpenAI GPT for the narrative step — comparable quality/speed to
+        Claude for this task; no real advantage, and would fragment the AI
+        vendor choice made elsewhere in the architecture, so not recommended
+        purely for speed.
+      operationId: getRecap
+      parameters:
+        - name: date
+          in: path
+          required: true
+          description: "YYYY-MM-DD for daily, or YYYY-Www for weekly"
+          schema: { type: string, example: "2026-07-04" }
+      responses:
+        "501": { $ref: "#/components/responses/NotImplemented" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # STOCK HISTORY — live (3M/6M/1Y only)
+  # ────────────────────────────────────────────────────────────────────────
+  /stock-history/{ticker}:
+    get:
+      tags: [StockHistory]
+      summary: Historical daily OHLCV bars for the Stock Detail chart
+      description: >-
+        Powers stock.tsx's chart for the 3M/6M/1Y timeframes (real bars,
+        tagged "live · Polygon") — 1D/1W (need intraday, only daily bars are
+        stored) and 5Y (need more history than the ~300-day backfill covers)
+        still fall back to the simulated generator. Also the prerequisite
+        for Screener's RS Rating (see rs-rating.job.ts / the Company
+        schema's `rsRating` field, and GET /companies above).
+      x-status: live
+      x-consumed-by:
+        - "Stock Detail (app/iq/screens/stock.tsx) — Candle chart for 3M/6M/1Y timeframes only (both the main chart and the StockChartExpanded modal), via the useOhlcvBars() hook; tagged \"live · Polygon\" pill when in use. RSI/MACD panes are NOT computed from these real bars yet — still the seeded generator."
+        - "Indirectly, Screener (app/iq/screens/screener.tsx) — rs-rating.job.ts reads this same ohlcv_bars data to compute the Relative Strength column/filters; no screen queries /stock-history directly for that purpose, but it's the underlying dependency"
+      x-primary-source: >-
+        Polygon `/v2/aggs/ticker/{ticker}/range/1/day/{from}/{to}`, synced
+        daily at 03:00 ET for TICKER_UNIVERSE (rotating batch, same pattern
+        as `companies`). First sync per ticker backfills ~300 trading days;
+        every run after that only fetches new days since that ticker's
+        watermark (`sync_watermarks`) — never re-fetches an immutable
+        historical bar that's already stored.
+      x-alternate-source: >-
+        Finnhub `/stock/candle` — faster for recent intraday bars on some
+        plans, but shallower history depth and lower resolution than Polygon
+        on this tier; best as a supplement for the most-recent bars only.
+      x-write-pattern: >-
+        IMMUTABLE / append-only — `ohlcv_bars/{ticker}_{date}` is written
+        once per closed trading day and never overwritten. Insert with
+        ON CONFLICT (ticker, bar_date, timespan) DO NOTHING once migrated to
+        a relational store (see Doc/schema.sql).
+      operationId: getStockHistory
+      parameters:
+        - $ref: "#/components/parameters/Ticker"
+        - name: range
+          in: query
+          schema: { type: string, enum: [1D, 5D, 1M, 3M, 6M, 1Y, 5Y], default: 3M }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/OhlcvBar" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/UpstreamError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # USER DATA — live, owned by the user (Firestore client SDK, not a vendor)
+  # ────────────────────────────────────────────────────────────────────────
+  /users/{uid}/watchlist:
+    get:
+      tags: [UserData]
+      summary: Get the signed-in user's watchlist
+      x-status: live
+      x-consumed-by:
+        - "Watchlist (app/iq/screens/watchlist.tsx) — real watchlist takes over from the demo data.watch list automatically once the signed-in user has saved one"
+        - "Dashboard (app/iq/screens/dashboard.tsx) — Watchlist mini widget's real-data path (falls back to data.watch if the user has no saved watchlist)"
+      x-primary-source: Firestore `users/{uid}/watchlists/default` — written directly by the client SDK, no vendor involved.
+      operationId: getWatchlist
+      parameters:
+        - $ref: "#/components/parameters/Uid"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Watchlist" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [UserData]
+      summary: Add a ticker to the watchlist
+      x-status: live
+      x-consumed-by:
+        - "Same screens as the GET above."
+      operationId: addToWatchlist
+      parameters:
+        - $ref: "#/components/parameters/Uid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ticker]
+              properties:
+                ticker: { type: string, example: TSLA }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Watchlist" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /users/{uid}/watchlist/{ticker}:
+    delete:
+      tags: [UserData]
+      summary: Remove a ticker from the watchlist
+      x-status: live
+      x-consumed-by:
+        - "Same screens as GET /users/{uid}/watchlist above."
+      operationId: removeFromWatchlist
+      parameters:
+        - $ref: "#/components/parameters/Uid"
+        - $ref: "#/components/parameters/Ticker"
+      responses:
+        "204": { description: Removed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /users/{uid}/portfolio/holdings:
+    get:
+      tags: [UserData]
+      summary: List the signed-in user's portfolio holdings
+      x-status: live
+      x-consumed-by:
+        - "Portfolio Pulse (app/iq/screens/portfolio.tsx) — real holdings take over from the demo data.folio + DEFAULT_SHARES once the signed-in user adds any"
+        - "Dashboard (app/iq/screens/dashboard.tsx) — Portfolio Pulse mini widget's real-data path (falls back to data.folio if the user has no saved holdings)"
+      x-primary-source: >-
+        Firestore `users/{uid}/portfolios/default/holdings/{ticker}` — see
+        also the parent `Portfolio` schema/doc, which carries a materialized
+        totalValue/dayPL/dayPLPct summary written client-side (debounced) as
+        of 2026-07-08, separate from this per-ticker holdings list.
+      operationId: listHoldings
+      parameters:
+        - $ref: "#/components/parameters/Uid"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Holding" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [UserData]
+      summary: Add a holding
+      x-status: live
+      x-consumed-by:
+        - "Same screens as the GET above."
+      operationId: addHolding
+      parameters:
+        - $ref: "#/components/parameters/Uid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HoldingInput" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Holding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /users/{uid}/portfolio/holdings/{ticker}:
+    delete:
+      tags: [UserData]
+      summary: Remove a holding
+      x-status: live
+      x-consumed-by:
+        - "Same screens as GET /users/{uid}/portfolio/holdings above."
+      operationId: removeHolding
+      parameters:
+        - $ref: "#/components/parameters/Uid"
+        - $ref: "#/components/parameters/Ticker"
+      responses:
+        "204": { description: Removed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /users/{uid}/settings:
+    get:
+      tags: [UserData]
+      summary: Get user settings (alerts, font)
+      x-status: live
+      x-consumed-by:
+        - "Shell (app/iq/shell.tsx) — IQShell theme/font preference, combined with a localStorage cache"
+      x-primary-source: Firestore `settings/{uid}`
+      operationId: getSettings
+      parameters:
+        - $ref: "#/components/parameters/Uid"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    put:
+      tags: [UserData]
+      summary: Update user settings
+      x-status: live
+      x-consumed-by:
+        - "Same screen as the GET above (Shell)."
+      operationId: updateSettings
+      parameters:
+        - $ref: "#/components/parameters/Uid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserSettings" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserSettings" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /stock-comments:
+    get:
+      tags: [UserData]
+      summary: List the signed-in user's notes for a ticker
+      x-status: live
+      x-consumed-by:
+        - "Stock Detail (app/iq/screens/stock.tsx) — Chart notes (save/load/delete); the only feature on this screen that was already live before this session's work"
+      x-primary-source: Firestore `stock_comments` (client SDK, owner-scoped by security rules)
+      operationId: listStockComments
+      parameters:
+        - name: uid
+          in: query
+          required: true
+          schema: { type: string }
+        - name: sym
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/StockComment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [UserData]
+      summary: Add a note to a ticker
+      x-status: live
+      x-consumed-by:
+        - "Same screen as the GET above (Stock Detail)."
+      operationId: addStockComment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uid, sym, name, comment]
+              properties:
+                uid: { type: string }
+                sym: { type: string }
+                name: { type: string }
+                comment: { type: string, maxLength: 2000 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StockComment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /stock-comments/{id}:
+    delete:
+      tags: [UserData]
+      summary: Delete a note
+      x-status: live
+      x-consumed-by:
+        - "Same screen as GET /stock-comments above (Stock Detail)."
+      operationId: deleteStockComment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+components:
+  parameters:
+    Ticker:
+      name: ticker
+      in: path
+      required: true
+      schema: { type: string, example: NVDA }
+    Uid:
+      name: uid
+      in: path
+      required: true
+      schema: { type: string }
+    JobName:
+      name: job
+      in: path
+      required: true
+      schema:
+        type: string
+        enum:
+          - companies
+          - market-movers
+          - sectors
+          - market-indices
+          - earnings
+          - analyst-actions
+          - news
+          - sec-13f
+          - sec-form4
+          - ticker-universe
+
+  headers:
+    RetryAfter:
+      description: Seconds to wait before retrying. Present on every 429 response.
+      schema: { type: integer, example: 30 }
+
+  responses:
+    # ── Every error response below uses the SAME schema (ErrorResponse) and is
+    # never returned empty — `message` is always a complete, human-readable
+    # sentence, and `error` is always a stable machine code a client can
+    # switch on. No endpoint in this spec silently returns 200 with an empty
+    # body on failure. ──
+    BadRequest:
+      description: Invalid request — a query/path parameter failed validation
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { statusCode: 400, error: INVALID_PARAMETER, message: "Query parameter 'from' must be an ISO date (YYYY-MM-DD); got 'yesterday'.", timestamp: "2026-07-05T14:00:00Z" }
+    Unauthorized:
+      description: No valid Firebase Auth session
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { statusCode: 401, error: UNAUTHENTICATED, message: "No valid session — sign in and retry.", timestamp: "2026-07-05T14:00:00Z" }
+    Forbidden:
+      description: Authenticated, but not allowed to access this resource (Firestore security rule denial)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { statusCode: 403, error: PERMISSION_DENIED, message: "uid does not own this watchlist.", timestamp: "2026-07-05T14:00:00Z" }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { statusCode: 404, error: NOT_FOUND, message: "No company document found for ticker 'ZZZZ'.", timestamp: "2026-07-05T14:00:00Z" }
+    TooManyRequests:
+      description: >-
+        This endpoint's upstream vendor quota is exhausted (e.g. FMP's 250
+        req/day free tier, Polygon's 5 req/min free tier, SEC EDGAR's 10
+        req/sec cap). Never silent — always names which vendor throttled and
+        includes `Retry-After`.
+      headers:
+        Retry-After: { $ref: "#/components/headers/RetryAfter" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { statusCode: 429, error: VENDOR_RATE_LIMITED, message: "FMP daily quota exhausted (250 req/day on this plan) — resets at 00:00 UTC.", source: fmp, retryable: true, timestamp: "2026-07-05T14:00:00Z" }
+    UpstreamError:
+      description: >-
+        The upstream vendor returned an error, malformed data, or timed out.
+        If a fallback source is configured for this path (see
+        `x-fallback-behavior`) it was already tried and also failed —
+        `fallbackAttempted` lists every source tried and why each failed.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example:
+            statusCode: 502
+            error: UPSTREAM_VENDOR_ERROR
+            message: "All sources failed for company NVDA: fmp (HTTP 500 from FMP profile endpoint, retryable), polygon (no data returned (ticker not found on this source), not retryable)"
+            retryable: true
+            fallbackAttempted:
+              - source: fmp
+                error: "HTTP 500 from FMP profile endpoint"
+              - source: polygon
+                error: "no data returned (ticker not found on this source)"
+            timestamp: "2026-07-05T14:00:00Z"
+    ServiceUnavailable:
+      description: The backend itself (or Firestore) is unreachable — distinct from an upstream vendor failure.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { statusCode: 503, error: SERVICE_UNAVAILABLE, message: "Firestore write failed after 3 retries — see backend logs for the underlying gRPC error.", retryable: true, timestamp: "2026-07-05T14:00:00Z" }
+    NotImplemented:
+      description: "This path is documented (schema is final) but no backend job/controller exists yet — see this path's x-status extension (planned)."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { statusCode: 501, error: NOT_IMPLEMENTED, message: "No sync job exists for this collection yet — see x-primary-source/x-alternate-source on this path for what's needed to build it.", timestamp: "2026-07-05T14:00:00Z" }
+
+  schemas:
+    AdapterWarning:
+      type: object
+      description: >-
+        A non-fatal, structured degradation note attached to a document or
+        list response — the mechanism that keeps partial/degraded data from
+        being indistinguishable from "vendor genuinely has no data." Mirrors
+        `backend/src/adapters/types.ts`'s `AdapterWarning`.
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [SUB_REQUEST_FAILED, FIELD_NOT_SUPPORTED, FALLBACK_USED, STALE_DATA]
+          description: |
+            - SUB_REQUEST_FAILED: one of several parallel vendor calls failed; others succeeded (transient, likely retryable on the next scheduled sync).
+            - FIELD_NOT_SUPPORTED: this source structurally never has this field — not a failure, a permanent gap on this vendor.
+            - FALLBACK_USED: the primary source failed or returned nothing; this document was served by the configured fallback instead.
+            - STALE_DATA: returned data is older than expected (e.g. last successful sync, not this run).
+        message: { type: string, description: "Always a complete sentence — never blank." }
+        field: { type: string, nullable: true, description: "Comma-separated canonical field name(s) affected, when applicable." }
+
+    ListEnvelope:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: {}
+        meta:
+          type: object
+          required: [count, asOf]
+          properties:
+            count: { type: integer }
+            asOf: { type: string, format: date-time }
+            source: { type: string, description: "Vendor that produced this batch" }
+            warnings:
+              type: array
+              default: []
+              description: Batch-level degradation notes (e.g. partial-batch sync failures) — empty array, never omitted, when everything succeeded.
+              items: { $ref: "#/components/schemas/AdapterWarning" }
+
+    ErrorResponse:
+      type: object
+      description: >-
+        The single error shape used by every 4xx/5xx response in this API.
+        `message` is always populated with a complete, specific sentence —
+        never empty, never a generic "An error occurred."
+      required: [statusCode, error, message, timestamp]
+      properties:
+        statusCode: { type: integer }
+        error:
+          type: string
+          description: Stable machine-readable code — safe to switch on in client code.
+          enum:
+            - INVALID_PARAMETER
+            - UNAUTHENTICATED
+            - PERMISSION_DENIED
+            - NOT_FOUND
+            - VENDOR_RATE_LIMITED
+            - UPSTREAM_VENDOR_ERROR
+            - SERVICE_UNAVAILABLE
+            - NOT_IMPLEMENTED
+        message: { type: string, description: "Human-readable, specific explanation — always non-empty." }
+        source: { type: string, nullable: true, description: "Vendor/adapter that failed, when this error originated from a vendor call." }
+        retryable: { type: boolean, nullable: true, description: "True if retrying later is likely to succeed (rate limit, timeout, 5xx). False for permanent conditions (not found, bad request)." }
+        fallbackAttempted:
+          type: array
+          nullable: true
+          description: Present only on UPSTREAM_VENDOR_ERROR when a fallback source was configured and also failed — every attempt, in order.
+          items:
+            type: object
+            properties:
+              source: { type: string }
+              error: { type: string }
+        timestamp: { type: string, format: date-time }
+
+    SyncJobStatus:
+      type: object
+      description: >-
+        GET /sync/jobs's per-job entry. `collections`/`cronExpression`/
+        `timeZone` (added 2026-07-09) come from the in-process SyncRegistry
+        (declared once per job at registration time, next to its
+        @Cron(...)) — always populated even when Firestore itself is
+        unreachable (see `metaError`), unlike lastSyncedAt/lastStatus/
+        lastCount/lastError which depend on reading sync_meta.
+      properties:
+        name: { type: string, example: market-movers }
+        isRunning: { type: boolean }
+        runningSince: { type: string, format: date-time, nullable: true }
+        lastSyncedAt: { type: string, format: date-time, nullable: true, description: "Most recent attempt of any outcome (overwritten every run)." }
+        lastStatus: { type: string, enum: [ok, error], nullable: true, description: "Outcome of the most recent attempt = current health." }
+        lastCount: { type: integer, nullable: true }
+        lastError: { type: string, nullable: true, description: "Error of the last failure; persists across later successes (paired with lastFailedAt)." }
+        lastSuccessAt: { type: string, format: date-time, nullable: true, description: "Added 2026-07-12. Last successful run — written only on success, so it survives later failures (independent of lastFailedAt)." }
+        lastSuccessCount: { type: integer, nullable: true, description: "Added 2026-07-12. Doc count of the last successful run." }
+        lastFailedAt: { type: string, format: date-time, nullable: true, description: "Added 2026-07-12. Last failed run — written only on failure, so it survives later successes (its message is in lastError)." }
+        collections: { type: array, items: { type: string }, example: ["market_movers", "market_movers_history"] }
+        cronExpression: { type: string, example: "0 18 * * 1-5" }
+        timeZone: { type: string, example: "America/New_York" }
+        nextRunAt: { type: string, format: date-time, nullable: true, description: "Added 2026-07-09. Computed fresh on every call via the `cron` package's CronJob.nextDate() (the same library @nestjs/schedule's @Cron(...) uses internally, so this always agrees with when the job will actually fire) — never cached/stored, never re-derived by hand-rolled cron math. Null only if cronExpression itself fails to parse." }
+        metaError: { type: string, nullable: true, description: "Set instead of the last* fields when sync_meta itself couldn't be read (e.g. Firestore auth failure) — the job still appears with its registry-known collections/schedule." }
+
+    SyncMeta:
+      type: object
+      description: >-
+        Firestore `sync_meta/{jobName}` — persisted on every run by
+        SyncMetaService.record(). collections/cronExpression/timeZone
+        (added 2026-07-09) are looked up from SyncRegistry at record time
+        and written alongside the run result, so this doc alone answers
+        "which table did this job affect, and how often does it run"
+        without reading backend source.
+      properties:
+        job: { type: string }
+        lastSyncedAt: { type: string, format: date-time, nullable: true, description: "Most recent attempt of any outcome (overwritten every run)." }
+        lastStatus: { type: string, nullable: true, description: "Outcome of the most recent attempt = current health ('ok' | 'error')." }
+        lastCount: { type: integer, nullable: true }
+        lastError: { type: string, nullable: true, description: "Error of the last failure; persists across later successes (paired with lastFailedAt)." }
+        lastSuccessAt: { type: string, format: date-time, nullable: true, description: "Added 2026-07-12. Last successful run — written only on success, so it survives later failures." }
+        lastSuccessCount: { type: integer, nullable: true, description: "Added 2026-07-12. Doc count of the last successful run." }
+        lastFailedAt: { type: string, format: date-time, nullable: true, description: "Added 2026-07-12. Last failed run — written only on failure, so it survives later successes (its message is in lastError)." }
+        collections: { type: array, items: { type: string }, nullable: true }
+        cronExpression: { type: string, nullable: true }
+        timeZone: { type: string, nullable: true }
+
+    Company:
+      type: object
+      description: Firestore `companies/{ticker}` — written by companies.job.ts
+      properties:
+        ticker: { type: string, example: NVDA }
+        name: { type: string, example: NVIDIA Corporation }
+        price: { type: number, nullable: true }
+        pctChange: { type: number, nullable: true }
+        marketCap: { type: number, nullable: true, description: "USD, raw dollars (not billions)" }
+        beta: { type: number, nullable: true }
+        sector: { type: string, nullable: true }
+        industry: { type: string, nullable: true }
+        exchange: { type: string, nullable: true }
+        week52Range: { type: string, nullable: true }
+        volume: { type: number, nullable: true }
+        averageVolume: { type: number, nullable: true }
+        description: { type: string, nullable: true }
+        peRatio: { type: number, nullable: true, description: "null when FMP's ratios-ttm plan restriction rejects this symbol" }
+        eps: { type: number, nullable: true }
+        dividendYield: { type: number, nullable: true }
+        dividendPerShare: { type: number, nullable: true }
+        peers:
+          type: array
+          items: { type: string }
+        source: { type: string, nullable: true, example: fmp, description: "Which CompanyProfileAdapter actually served THIS document — 'fmp' or 'polygon'. Differs from the configured COMPANY_PROFILE_SOURCE when a FALLBACK_USED warning is present below." }
+        warnings:
+          type: array
+          default: []
+          description: Structured degradation notes (see AdapterWarning) — e.g. a fallback was used, or ratios-ttm failed for this symbol. Empty array, never omitted, when the fetch was fully clean.
+          items: { $ref: "#/components/schemas/AdapterWarning" }
+        updatedAt: { type: string, format: date-time }
+        rsRating:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 99
+          description: >-
+            Written by backend/src/sync/rs-rating.job.ts, NOT companies.job.ts
+            — an independent, from-scratch approximation of an IBD-style
+            relative-strength score (most-recent-quarter-weighted trailing
+            returns, ranked 1-99 within TICKER_UNIVERSE), not the literal
+            proprietary IBD formula. Null until enough real ohlcv_bars
+            history has accumulated for this ticker.
+        rsRatingUpdatedAt: { type: string, format: date-time, nullable: true }
+        # Computed indicator/score fields (added 2026-07-12) — written by the
+        # no-vendor compute jobs (technical-indicators / tech-rating /
+        # fundamentals-growth), NOT companies.job.ts. All null until enough real
+        # ohlcv_bars history (or a Polygon financials call) exists.
+        rsi14: { type: number, nullable: true, description: "RSI(14) from real ohlcv_bars (technical-indicators.job)." }
+        macd: { type: number, nullable: true, description: "MACD(12/26) line (technical-indicators.job)." }
+        macdSignal: { type: number, nullable: true, description: "MACD 9-period signal line." }
+        macdHistogram: { type: number, nullable: true, description: "MACD line minus signal." }
+        rvol: { type: number, nullable: true, description: "Relative volume: latest day's volume ÷ 20-day average." }
+        technicalsUpdatedAt: { type: string, format: date-time, nullable: true }
+        techRating: { type: integer, nullable: true, minimum: 1, maximum: 99, description: "1-99 composite technical rating (tech-rating.job): momentum 50% + price-vs-50d-MA trend 30% + RSI 20%, percentile-ranked. Approximation, not the proprietary IBD formula." }
+        sectorRank: { type: integer, nullable: true, description: "This stock's rank WITHIN its sector by techRating (tech-rating.job)." }
+        sectorRankTotal: { type: integer, nullable: true, description: "Number of ranked stocks in the sector." }
+        techRatingUpdatedAt: { type: string, format: date-time, nullable: true }
+        revenueGrowthYoY: { type: number, nullable: true, description: "YoY revenue growth as a decimal (0.064 = 6.4%), from Polygon annual financials (fundamentals-growth.job)." }
+        epsGrowthYoY: { type: number, nullable: true, description: "YoY diluted-EPS growth as a decimal." }
+        grossMargin: { type: number, nullable: true, description: "Gross margin as a decimal (0.469 = 46.9%)." }
+        fundamentalsFiscalYear: { type: string, nullable: true }
+        fundamentalsUpdatedAt: { type: string, format: date-time, nullable: true }
+
+    MarketSentiment:
+      type: object
+      description: >-
+        Firestore `market_sentiment/fear_greed` — written by
+        backend/src/sync/fear-greed.job.ts. A CNN-style 0-100 Fear & Greed index
+        (approximation, not the licensed CNN index) composed from free Polygon
+        data: SPY-vs-125d-MA momentum, market breadth, VIXY-vs-50d-MA volatility
+        (inverted), and SPY-vs-TLT safe-haven. Replaces the Dashboard's hardcoded
+        gauge. x-status: live.
+      properties:
+        value: { type: integer, minimum: 0, maximum: 100 }
+        label: { type: string, enum: [Extreme Fear, Fear, Neutral, Greed, Extreme Greed] }
+        components:
+          type: object
+          additionalProperties: { type: integer, minimum: 0, maximum: 100 }
+          description: "Per-component 0-100 sub-scores (momentum, breadth, volatility, safeHaven)."
+        asOfDate: { type: string, nullable: true }
+        source: { type: string }
+        updatedAt: { type: string, format: date-time }
+
+    TickerListing:
+      type: object
+      description: >-
+        Firestore `tickers/{ticker}` — reference fields (ticker, name,
+        market, ...) written weekly by ticker-universe.job.ts; price/
+        pctChange/volume fields written daily by market-quotes.job.ts,
+        merged onto the same doc. A ticker market-quotes.job.ts sees before
+        ticker-universe.job.ts has ever discovered it still gets a doc,
+        just missing name/exchange/etc. until the next weekly sync. Full
+        fundamentals (P/E, sector, dividend yield, peers, beta) are NOT
+        here at any tier — see Company for that, on the curated
+        TICKER_UNIVERSE subset only (241 tickers, not the whole market).
+      properties:
+        ticker: { type: string, example: NVDA }
+        name: { type: string, nullable: true, example: NVIDIA Corp }
+        nameLower: { type: string, nullable: true, description: "Added 2026-07-12. Lowercased company name for case-insensitive prefix search from the Cmd+K bar (useTickerSearch)." }
+        searchTokens: { type: array, items: { type: string }, description: "Added 2026-07-12. Name words + ticker (lowercased) for whole-word array-contains name search." }
+        market: { type: string, nullable: true, example: stocks }
+        locale: { type: string, nullable: true, example: us }
+        primaryExchange: { type: string, nullable: true, description: "Polygon MIC code, e.g. XNAS, XNYS" }
+        type: { type: string, nullable: true, description: "e.g. CS (common stock), ETF, ADRC, WARRANT" }
+        active: { type: boolean, description: "false for delisted tickers" }
+        currencyName: { type: string, nullable: true, example: usd }
+        cik: { type: string, nullable: true }
+        compositeFigi: { type: string, nullable: true }
+        shareClassFigi: { type: string, nullable: true }
+        source: { type: string, example: polygon }
+        updatedAt: { type: string, format: date-time }
+        price: { type: number, nullable: true, description: "Written by market-quotes.job.ts — null until that job has run at least once for this ticker." }
+        pctChange: { type: number, nullable: true }
+        volume: { type: number, nullable: true }
+        asOfDate: { type: string, format: date, nullable: true }
+        quoteSource: { type: string, nullable: true, example: polygon }
+        quoteUpdatedAt: { type: string, format: date-time, nullable: true }
+
+    MarketMover:
+      type: object
+      description: Firestore `market_movers/{gainer_TICKER | loser_TICKER}` — written by market-movers.job.ts
+      properties:
+        ticker: { type: string }
+        price: { type: number }
+        pctChange: { type: number }
+        volume: { type: number }
+        asOfDate: { type: string, format: date }
+        name: { type: string, nullable: true }
+        sector: { type: string, nullable: true }
+        cap: { type: string, nullable: true, enum: [Mega, Large, Mid, Small, Micro] }
+        direction: { type: string, enum: [gainer, loser] }
+        source: { type: string, nullable: true, example: polygon, description: "Which MoversAdapter actually served THIS document — 'polygon' or 'fmp'. Differs from the configured MOVERS_SOURCE when a FALLBACK_USED warning is present below." }
+        warnings:
+          type: array
+          default: []
+          description: Structured degradation notes (see AdapterWarning) — e.g. name/sector/cap enrichment failed for this ticker. Empty array, never omitted, when clean.
+          items: { $ref: "#/components/schemas/AdapterWarning" }
+        updatedAt: { type: string, format: date-time }
+
+    Sector:
+      type: object
+      description: Firestore `sectors/{sectorSlug}` — written by sectors.job.ts
+      properties:
+        sector: { type: string, example: Technology }
+        exchange: { type: string }
+        pctChange: { type: number }
+        asOfDate: { type: string, format: date }
+        updatedAt: { type: string, format: date-time }
+
+    MarketIndex:
+      type: object
+      description: Firestore `market_indices/{symbol}` — written by market-indices.job.ts
+      properties:
+        label: { type: string, example: S&P 500 }
+        proxyTicker: { type: string, example: SPY }
+        isProxy: { type: boolean, example: true }
+        note: { type: string, nullable: true }
+        value: { type: number }
+        change: { type: number }
+        pctChange: { type: number }
+        open: { type: number }
+        prevClose: { type: number }
+        updatedAt: { type: string, format: date-time }
+
+    MacroEvent:
+      type: object
+      description: >-
+        Firestore `macro_events/{seriesId}` — written by macro-events.job.ts.
+        Latest FRED observation for a curated indicator, plus the prior
+        reading. `estimate` is always null — FRED is a pure time-series API
+        with no consensus-estimate concept (unlike Finnhub's economic
+        calendar, which is confirmed blocked on the current plan).
+      properties:
+        seriesId: { type: string, example: CPIAUCSL }
+        name: { type: string, example: CPI (All Items) }
+        country: { type: string, example: US }
+        unit: { type: string, example: "%" }
+        importance: { type: string, enum: [high, medium, low] }
+        eventDate: { type: string, format: date, description: Date of the latest published observation. }
+        actual: { type: number, nullable: true }
+        previous: { type: number, nullable: true }
+        estimate: { type: number, nullable: true, description: Always null — FRED has no consensus-estimate field. }
+        source: { type: string, example: fred }
+        updatedAt: { type: string, format: date-time }
+
+    OhlcvBar:
+      type: object
+      description: >-
+        Firestore `ohlcv_bars/{ticker}_{date}` — written by
+        stock-history.job.ts. One immutable doc per (ticker, date), never
+        overwritten once a trading day closes.
+      properties:
+        ticker: { type: string }
+        barDate: { type: string, format: date }
+        timespan: { type: string, example: day }
+        open: { type: number }
+        high: { type: number }
+        low: { type: number }
+        close: { type: number }
+        volume: { type: number }
+        source: { type: string, example: polygon }
+
+    Dividend:
+      type: object
+      description: >-
+        Firestore `dividends/{ticker}` — written by dividends.job.ts. Next
+        upcoming ex-dividend event only, not a full per-event history.
+      properties:
+        ticker: { type: string }
+        exDividendDate: { type: string, format: date }
+        recordDate: { type: string, format: date, nullable: true }
+        paymentDate: { type: string, format: date, nullable: true }
+        declarationDate: { type: string, format: date, nullable: true }
+        dividendAmount: { type: number }
+        yieldPct: { type: number, nullable: true }
+        frequency: { type: string, nullable: true, example: Quarterly }
+        source: { type: string, example: fmp }
+        updatedAt: { type: string, format: date-time }
+
+    OptionsChain:
+      type: object
+      description: >-
+        Firestore `options_chains/{underlyingTicker}` — written by
+        options-chains.job.ts. Contract list is a small curated set (nearest
+        expiration, up to 20 contracts), not the full chain. No bid/ask, IV,
+        greeks, or open interest — see `note` and the job's docblock.
+      properties:
+        underlyingTicker: { type: string, example: AAPL }
+        contracts:
+          type: array
+          items:
+            type: object
+            properties:
+              contractTicker: { type: string, example: "O:AAPL260717C00225000" }
+              contractType: { type: string, enum: [call, put] }
+              strike: { type: number }
+              expirationDate: { type: string, format: date }
+              lastClose: { type: number, nullable: true }
+              lastVolume: { type: number, nullable: true }
+              lastBarDate: { type: string, format: date, nullable: true }
+        source: { type: string, example: polygon }
+        note: { type: string }
+        updatedAt: { type: string, format: date-time }
+
+    IpoEvent:
+      type: object
+      description: >-
+        Firestore `ipos/{date}_{symbol|slug}` — written by ipos.job.ts.
+        `symbol` is null for pre-ticker filings (SPACs and other early-stage
+        S-1 filers commonly file before a ticker is assigned).
+      properties:
+        date: { type: string, format: date }
+        symbol: { type: string, nullable: true }
+        name: { type: string }
+        exchange: { type: string, nullable: true }
+        priceLow: { type: number, nullable: true }
+        priceHigh: { type: number, nullable: true }
+        numberOfShares: { type: number, nullable: true }
+        totalSharesValue: { type: number, nullable: true }
+        status: { type: string, enum: [expected, priced, filed, withdrawn] }
+        source: { type: string, example: finnhub }
+        updatedAt: { type: string, format: date-time }
+
+    EarningsEvent:
+      type: object
+      description: Firestore `earnings_events/{ticker}_{date}` — written by earnings.job.ts
+      properties:
+        ticker: { type: string }
+        date: { type: string, format: date }
+        epsEstimate: { type: number, nullable: true }
+        epsActual: { type: number, nullable: true }
+        revenueEstimate: { type: number, nullable: true }
+        revenueActual: { type: number, nullable: true }
+        updatedAt: { type: string, format: date-time }
+
+    AnalystConsensus:
+      type: object
+      description: Firestore `analyst_actions/{ticker}` — written by analyst-actions.job.ts
+      properties:
+        ticker: { type: string }
+        source: { type: string, example: fmp_consensus_interim }
+        strongBuy: { type: integer }
+        buy: { type: integer }
+        hold: { type: integer }
+        sell: { type: integer }
+        strongSell: { type: integer }
+        consensus: { type: string, example: Buy }
+        updatedAt: { type: string, format: date-time }
+
+    InsiderTransaction:
+      type: object
+      description: Firestore `insider_transactions/{accessionNumber}_{i}` — written by sec-form4.job.ts
+      properties:
+        ticker: { type: string }
+        issuerName: { type: string, nullable: true }
+        ownerName: { type: string, nullable: true }
+        isOfficer: { type: boolean }
+        officerTitle: { type: string, nullable: true }
+        transactionDate: { type: string, format: date }
+        transactionCode: { type: string, example: "S" }
+        acquiredOrDisposed: { type: string, enum: [A, D] }
+        shares: { type: number }
+        pricePerShare: { type: number, nullable: true }
+        sharesOwnedAfter: { type: number, nullable: true }
+        filingDate: { type: string, format: date }
+        updatedAt: { type: string, format: date-time }
+
+    FundHoldings:
+      type: object
+      description: Firestore `fund_holdings/{cik}` — written by sec-13f.job.ts
+      properties:
+        fundName: { type: string }
+        latestFilingDate: { type: string, format: date }
+        latestAccessionNumber: { type: string }
+        totalPositions: { type: integer }
+        totalValue: { type: number, description: "USD, as reported (thousands per SEC convention)" }
+        updatedAt: { type: string, format: date-time }
+
+    FundPosition:
+      type: object
+      description: Firestore `fund_holdings/{cik}/filings/{accessionNumber}/positions/{cusip}` — written by sec-13f.job.ts
+      properties:
+        cusip: { type: string }
+        nameOfIssuer: { type: string }
+        value: { type: number }
+        shares: { type: number }
+        pctOfPortfolio: { type: number, nullable: true }
+
+    NewsArticle:
+      type: object
+      description: Firestore `news/{ticker}_{articleId}` — written by news.job.ts
+      properties:
+        ticker: { type: string }
+        headline: { type: string }
+        summary: { type: string }
+        source: { type: string }
+        url: { type: string, format: uri }
+        category: { type: string, nullable: true }
+        sentiment: { type: string, enum: [positive, negative, neutral], nullable: true, description: "Polygon-only — null when served by the Finnhub fallback (structurally absent there)." }
+        sentimentReasoning: { type: string, nullable: true, description: "Polygon-only — null when served by the Finnhub fallback." }
+        keywords: { type: array, items: { type: string }, description: "Empty when served by the Finnhub fallback." }
+        publishedAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Watchlist:
+      type: object
+      description: Firestore `users/{uid}/watchlists/default`
+      properties:
+        name: { type: string, example: My Watchlist }
+        tickers:
+          type: array
+          items: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    Portfolio:
+      type: object
+      description: >-
+        Firestore `users/{uid}/portfolios/default` — the parent doc of the
+        `holdings` subcollection. `name`/`createdAt` are written once on the
+        first holding add; `totalValue`/`dayPL`/`dayPLPct`/`holdingsCount`/
+        `updatedAt` are a materialized summary, written client-side
+        (debounced ~3s) by app/iq/screens/portfolio.tsx whenever holdings or
+        live prices change meaningfully. Display in the app never reads this
+        cached summary back — it's recomputed live from holdings + companies
+        on every render for zero-latency UI; the stored copy exists so
+        something outside the browser (future notifications, a backend job,
+        historical tracking) can read portfolio value without recomputing it.
+      properties:
+        name: { type: string, example: My Portfolio }
+        createdAt: { type: string, format: date-time }
+        totalValue: { type: number, description: "sum(shares * livePrice) across holdings" }
+        dayPL: { type: number, description: "sum(shares * livePrice * pctChange / 100) across holdings" }
+        dayPLPct: { type: number, description: "dayPL as a % of yesterday's total value" }
+        holdingsCount: { type: integer }
+        updatedAt: { type: string, format: date-time, description: "Set on every materialized-summary write, not on holding add/remove alone." }
+
+    Holding:
+      type: object
+      description: Firestore `users/{uid}/portfolios/default/holdings/{ticker}`
+      properties:
+        ticker: { type: string }
+        shares: { type: number }
+        positionSize: { type: string, enum: [Small, Medium, Large] }
+        conviction: { type: string, enum: [High, Medium, Low] }
+        addedAt: { type: string, format: date-time }
+
+    HoldingInput:
+      type: object
+      required: [ticker, shares]
+      properties:
+        ticker: { type: string }
+        shares: { type: number }
+        positionSize: { type: string, enum: [Small, Medium, Large], default: Small }
+        conviction: { type: string, enum: [High, Medium, Low], default: Medium }
+
+    UserSettings:
+      type: object
+      description: Firestore `settings/{uid}`
+      properties:
+        alert: { type: boolean }
+        font: { type: string }
+
+    StockComment:
+      type: object
+      description: Firestore `stock_comments/{id}`
+      properties:
+        id: { type: string }
+        uid: { type: string }
+        sym: { type: string }
+        name: { type: string }
+        comment: { type: string }
+        createdAt: { type: string, format: date-time }

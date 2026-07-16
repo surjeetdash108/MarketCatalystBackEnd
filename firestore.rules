@@ -1,0 +1,96 @@
+rules_version = '2';
+
+// Market Catalyst — Firestore security rules.
+//
+// Design (see Doc/06_Firestore_Security_Rules.md):
+//  - ALL market-data collections are SERVER-WRITE-ONLY (`allow write: if false`).
+//    The NestJS backend writes them via the Admin SDK, which bypasses these rules.
+//  - Market data is readable by any signed-in user. Tier-gating (Free/Pro/Premium)
+//    is NOT implemented yet — see TODO(tier-gating) below; relaxed to isAuthenticated().
+//  - User-owned data (users/*, settings/*, stock_comments) is scoped to the owner.
+//
+// NOTE: if the frontend repo also ships a firestore.rules, keep ONE source of
+// truth and deploy from a single place to avoid drift.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    // ── Market data: server-write-only, read for any authenticated user ──────
+    // TODO(tier-gating): when Stripe/subscriptions exist, restore per-collection
+    // tier checks (earnings_summaries/options_flow/block_trades/fund_holdings/
+    // recaps => Pro+, story_stocks => Premium) via a custom claim on the token.
+    match /companies/{doc}               { allow read: if isAuthenticated(); allow write: if false; }
+    match /tickers/{doc}                 { allow read: if isAuthenticated(); allow write: if false; }
+    match /earnings_events/{doc}         { allow read: if isAuthenticated(); allow write: if false; }
+    match /earnings_summaries/{doc}      { allow read: if isAuthenticated(); allow write: if false; }
+    match /news/{doc}                    { allow read: if isAuthenticated(); allow write: if false; }
+    match /analyst_actions/{doc}         { allow read: if isAuthenticated(); allow write: if false; }
+    match /macro_events/{doc}            { allow read: if isAuthenticated(); allow write: if false; }
+    match /dividends/{doc}               { allow read: if isAuthenticated(); allow write: if false; }
+    match /ipos/{doc}                    { allow read: if isAuthenticated(); allow write: if false; }
+    match /options_chains/{doc}          { allow read: if isAuthenticated(); allow write: if false; }
+    match /options_flow/{doc}            { allow read: if isAuthenticated(); allow write: if false; }
+    match /block_trades/{doc}            { allow read: if isAuthenticated(); allow write: if false; }
+    match /sectors/{doc}                 { allow read: if isAuthenticated(); allow write: if false; }
+    match /sectors_history/{doc}         { allow read: if isAuthenticated(); allow write: if false; }
+    match /market_movers/{doc}           { allow read: if isAuthenticated(); allow write: if false; }
+    match /market_movers_history/{doc}   { allow read: if isAuthenticated(); allow write: if false; }
+    match /market_indices/{doc}          { allow read: if isAuthenticated(); allow write: if false; }
+    match /market_indices_history/{doc}  { allow read: if isAuthenticated(); allow write: if false; }
+    match /market_sentiment/{doc}        { allow read: if isAuthenticated(); allow write: if false; }
+    match /ohlcv_bars/{doc}              { allow read: if isAuthenticated(); allow write: if false; }
+    match /insider_transactions/{doc}    { allow read: if isAuthenticated(); allow write: if false; }
+    match /story_stocks/{doc}            { allow read: if isAuthenticated(); allow write: if false; }
+    match /recaps/{doc}                  { allow read: if isAuthenticated(); allow write: if false; }
+
+    // fund_holdings + nested filings/positions sub-collections (13F).
+    match /fund_holdings/{cik} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+      match /{document=**} {
+        allow read: if isAuthenticated();
+        allow write: if false;
+      }
+    }
+
+    // ── Ops metadata: no client access (read via the backend only) ───────────
+    match /sync_meta/{doc}       { allow read, write: if false; }
+    match /sync_watermarks/{doc} { allow read, write: if false; }
+
+    // ── User-owned data: owner-scoped ────────────────────────────────────────
+    match /users/{uid} {
+      // Server (Admin SDK) may also write profile/tier; clients are owner-scoped.
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid);
+      allow delete: if false;
+
+      match /{document=**} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    match /settings/{uid} {
+      allow read, write: if isOwner(uid);
+    }
+
+    // User notes on stock charts — each doc carries a `uid` field.
+    match /stock_comments/{docId} {
+      allow read, delete: if isAuthenticated() && resource.data.uid == request.auth.uid;
+      allow create: if isAuthenticated()
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.comment is string
+                    && request.resource.data.comment.size() <= 2000
+                    && request.resource.data.sym is string;
+      allow update: if false; // notes are immutable — delete and re-create to edit
+    }
+
+    // Anything not explicitly matched above is denied by default.
+  }
+}

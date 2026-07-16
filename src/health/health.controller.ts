@@ -6,7 +6,7 @@ export class HealthController {
   check() {
     return {
       ok: true,
-      service: 'finapp26-backend',
+      service: 'market-catalyst-backend',
       time: new Date().toISOString(),
     };
   }

@@ -1,98 +1,131 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Market Catalyst Backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+The **data-ingestion service** for Market Catalyst. It pulls market data from
+vendor APIs on scheduled cron jobs and writes the results into **Cloud Firestore**.
+The Next.js frontend reads those Firestore collections directly via the client SDK
+— it never calls this service and never holds a vendor API key.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
-
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
-
-```bash
-$ npm install
+```
+Vendor APIs (Polygon, FMP, Finnhub, FRED, SEC EDGAR)
+        │   21 scheduled sync jobs (@nestjs/schedule)
+        ▼
+   Cloud Firestore   ← written server-side via the Firebase Admin SDK
+        │   onSnapshot() real-time reads (Firestore client SDK)
+        ▼
+   Next.js app (separate repo)  — every live screen element
 ```
 
-## Compile and run the project
+This is a NestJS app. Vendor calls go through an **adapter layer** (`src/adapters/`)
+with automatic fallback between two vendors for company profiles, movers, mover
+enrichment, and news. Client-owned data (watchlists, portfolios, notes) is written
+by the frontend directly, never through this service.
+
+> **Data contract & status:** `Doc/screen-data-sources.md` (per-screen breakdown of
+> what's live vs. mock), `Doc/openapi.yaml` (documented contract), and
+> `Doc/06_Firestore_Security_Rules.md` (collection access model).
+
+---
+
+## Quick start (local)
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+cp .env.example .env      # fill in real vendor API keys
+# keep a Firebase service-account.json at the repo root for local Firestore access
+npm install
+npm run start:dev         # http://localhost:4100
 ```
 
-## Run tests
+- **Ops monitor UI:** http://localhost:4100/ (job status dashboard, served by NestJS)
+- **Health:** `GET /health`
+- **Ops API:** `GET /sync/jobs`, `GET /sync/status`, `POST /sync/:job/run`, `POST /sync/run-all`
 
-```bash
-# unit tests
-$ npm run test
+The build/run scripts (`npm run build`, `start`, `start:dev`, `start:prod`, `test`,
+`lint`) are the standard Nest ones.
 
-# e2e tests
-$ npm run test:e2e
+---
 
-# test coverage
-$ npm run test:cov
+## Configuration
+
+All configuration is via environment variables — see [`.env.example`](.env.example)
+for the full list. Essentials:
+
+| Var | Purpose |
+|---|---|
+| `FIREBASE_PROJECT_ID` | GCP/Firebase project to write to — **must match the frontend's project** |
+| `FIREBASE_SERVICE_ACCOUNT_PATH` | Local only; on Cloud Run leave unset (uses Application Default Credentials) |
+| `POLYGON_API_KEY`, `FMP_API_KEY`, `FINNHUB_API_KEY`, `FRED_API_KEY` | Core vendor keys |
+| `SEC_EDGAR_USER_AGENT` | Required contact string for SEC EDGAR |
+| `*_SOURCE` / `*_FALLBACK_SOURCE`, `NEWS_SOURCE` | Adapter vendor routing |
+| `BENZINGA_API_KEY`, `TRADIER_ACCESS_TOKEN`, `UNUSUAL_WHALES_API_KEY`, `SENTRY_DSN` | Optional; jobs degrade gracefully when blank |
+
+Firestore access is server-only via the Admin SDK (`src/common/firebase-admin.provider.ts`),
+which bypasses security rules. Locally it uses `service-account.json`; on Cloud Run
+it uses the runtime service account's Application Default Credentials.
+
+---
+
+## Sync jobs
+
+21 jobs, each with a fixed `@Cron(...)` schedule (America/New_York) and the Firestore
+collection(s) it writes. In production these are driven by **Cloud Scheduler** (see
+Deployment); locally the in-process `@nestjs/schedule` cron fires them.
+
+| Job | Schedule (ET) | Writes collection(s) |
+|---|---|---|
+| `sec-13f` | `0 1 * * *` | `fund_holdings/{cik}/filings/{id}/positions` |
+| `sec-form4` | `30 1 * * *` | `insider_transactions` |
+| `companies` | `0 2 * * *` | `companies` |
+| `stock-history` | `0 3 * * *` | `ohlcv_bars` |
+| `ticker-universe` | `0 3 * * 0` (weekly) | `tickers` |
+| `rs-rating` | `0 4 * * *` | `companies` (RS score) |
+| `technical-indicators` | `10 4 * * *` | `companies` (RSI/MACD/RVOL) |
+| `tech-rating` | `15 4 * * *` | `companies` (tech rating + sector rank) |
+| `fundamentals-growth` | `30 4 * * *` | `companies` (growth/margin) |
+| `analyst-actions` | `0 6 * * *` | `analyst_actions` |
+| `earnings` | `0 6 * * *` | `earnings_events` |
+| `ipos` | `15 6 * * *` | `ipos` |
+| `dividends` | `20 6 * * *` | `dividends` |
+| `news` | `*/30 9-16 * * 1-5` | `news` |
+| `market-indices` | `5 18 * * 1-5` | `market_indices`, `market_indices_history` |
+| `market-quotes` | `7 18 * * 1-5` | `tickers` (price/%/vol) |
+| `sectors` | `0 18 * * 1-5` | `sectors`, `sectors_history` |
+| `market-movers` | `0 18 * * 1-5` | `market_movers`, `market_movers_history` |
+| `macro-events` | `10 18 * * 1-5` | `macro_events` |
+| `fear-greed` | `15 18 * * 1-5` | `market_sentiment/fear_greed` |
+| `options-chains` | `0 19 * * 1-5` | `options_chains` |
+
+Run-history/metadata is persisted to `sync_meta/{job}` on every run; `sync_watermarks`
+tracks incremental cursors.
+
+---
+
+## Deployment (Firebase / GCP)
+
+Runs on **Cloud Run** (scale-to-zero) with **Cloud Scheduler** triggering each job
+over HTTP. Full step-by-step runbook: **[`deploy/DEPLOY.md`](deploy/DEPLOY.md)**.
+
+Deploy artifacts in this repo:
+- [`Dockerfile`](Dockerfile) — multi-stage container (uses ADC, no baked key)
+- [`firebase.json`](firebase.json) + [`firestore.rules`](firestore.rules) + [`firestore.indexes.json`](firestore.indexes.json) — Firestore config
+- [`deploy/create-scheduler-jobs.sh`](deploy/create-scheduler-jobs.sh) — creates all 21 Cloud Scheduler jobs from the schedules above
+
+> Requires the Firebase project on the **Blaze** plan (Cloud Run + Scheduler +
+> backfill write-bursts). The project must be the **same** one the frontend reads from.
+
+---
+
+## Project structure
+
 ```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+src/
+├── main.ts                  # bootstrap (Sentry, CORS, shutdown hooks)
+├── app.module.ts            # root module (Config, Schedule, ServeStatic, Common, Sync, Wave3)
+├── health/                  # GET /health
+├── common/                  # FirebaseAdminService, SyncRegistry, SyncMetaService, utils, universes
+├── vendors/                 # Polygon, FMP, Finnhub, FRED, SEC EDGAR, Tradier, Benzinga, Unusual Whales
+├── adapters/                # canonical types + composite/fallback adapters (profiles, movers, news)
+└── sync/                    # 21 *.job.ts + sync.controller.ts + sync.module.ts
+public/                      # ops monitor UI (served at /)
+deploy/                      # Cloud Run + Cloud Scheduler deploy scripts + runbook
+Doc/                         # product/architecture docs and data contract
 ```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).

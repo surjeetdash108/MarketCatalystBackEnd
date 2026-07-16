@@ -1,0 +1,17 @@
+node_modules
+dist
+coverage
+.git
+.gitignore
+Doc
+test
+*.md
+.env
+.env.*
+!.env.example
+# Never bake credentials into the image — Cloud Run uses ADC (the runtime SA).
+service-account.json
+*.pem
+*.key
+.DS_Store
+npm-debug.log*
