@@ -31,6 +31,7 @@ export class FinnhubNewsAdapter implements NewsAdapter {
       sentimentReasoning: null,
       keywords: [],
       publishedAt: new Date(a.datetime * 1000).toISOString(),
+      imageUrl: (a as { image?: string }).image || null,
     }));
     const warnings: AdapterWarning[] =
       data.length > 0

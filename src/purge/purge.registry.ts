@@ -6,6 +6,12 @@
  * the monitor UI reads), and wiping them makes every job report "Never run".
  * Purge still *resets* the relevant entries as a side effect — see `jobs` —
  * but they can never be a target.
+ *
+ * `notifications` is also absent, for a different reason: it is no longer a
+ * top-level collection. Notifications are per-user at
+ * users/{uid}/notifications/{id}, and this registry only addresses top-level
+ * collections. They self-prune to 100 docs / 30 days per user; a manual reset
+ * would need to walk each user's subcollection.
  */
 export interface PurgeTarget {
   /** Firestore collection name. */

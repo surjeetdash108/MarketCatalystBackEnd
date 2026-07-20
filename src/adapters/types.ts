@@ -47,9 +47,15 @@ export interface CanonicalNewsArticle {
   sentimentReasoning: string | null;
   keywords: string[];
   publishedAt: string;
+  /** Article image, when the vendor supplies one. Used by the notification UI. */
+  imageUrl: string | null;
 }
 
 export interface CanonicalDividendEvent {
+  /** Vendor's stable per-event id; null when the vendor supplies none (FMP). */
+  vendorEventId?: string | null;
+  /** e.g. 'CD' regular cash, 'SC' special cash. Distinguishes same-day events. */
+  dividendType?: string | null;
   symbol: string;
   date: string;
   recordDate: string | null;

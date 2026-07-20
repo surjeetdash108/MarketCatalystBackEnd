@@ -32,6 +32,7 @@ export class PolygonNewsAdapter implements NewsAdapter {
         sentimentReasoning: insight?.sentiment_reasoning ?? null,
         keywords: a.keywords ?? [],
         publishedAt: a.published_utc,
+        imageUrl: a.image_url ?? null,
       };
     });
     return { data, source: this.sourceName, warnings: [] };

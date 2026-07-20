@@ -60,6 +60,7 @@ export interface PolygonNewsInsight {
 
 export interface PolygonNewsArticle {
   id: string;
+  image_url?: string;
   publisher: {
     name: string;
   };
@@ -270,6 +271,8 @@ export class PolygonService {
     to: string,
   ): Promise<
     Array<{
+      vendorEventId: string | null;
+      dividendType: string | null;
       symbol: string;
       date: string;
       recordDate: string | null;
@@ -294,6 +297,11 @@ export class PolygonService {
       const res = await fetchJson<any>(url);
       for (const d of res.results ?? []) {
         out.push({
+          // Vendor's stable per-event id. Required because a company can pay a
+          // regular AND a special dividend on the SAME ex-date (e.g. JBSS: CD
+          // $0.95 + SC $1.05, both ex-2026-08-17), so symbol+date is not unique.
+          vendorEventId: d.id ?? null,
+          dividendType: d.dividend_type ?? null,
           symbol: d.ticker,
           date: d.ex_dividend_date,
           recordDate: d.record_date ?? null,
