@@ -49,8 +49,16 @@ export class DividendsJob implements OnModuleInit {
       if (result.warnings.length > 0) {
         this.logger.log(`dividends: ${result.warnings.map((w) => w.code).join(', ')}`);
       }
+      // Doc ID is symbol + ex-dividend date, NOT symbol alone. A company can have
+      // more than one dividend event inside the lookahead window (a regular
+      // quarterly plus a special dividend, or two ex-dates spanning a quarter
+      // boundary). Keying on symbol alone made the second event overwrite the
+      // first — 1119 events collapsed to 1062 documents, so 57 were silently
+      // lost. Matches the scheme already used by ohlcv_bars ({ticker}_{barDate})
+      // and earnings_events ({ticker}_{date}). Events with no ex-date fall back
+      // to symbol alone rather than producing an "undefined"-suffixed key.
       await chunkedBatchSet(this.firebase.firestore, 'dividends', events.map((e) => ({
-        id: e.symbol,
+        id: e.date ? `${e.symbol}_${e.date}` : e.symbol,
         data: {
           ticker: e.symbol,
           exDividendDate: e.date,

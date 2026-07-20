@@ -1212,7 +1212,11 @@ paths:
         FMP `/stable/dividends-calendar` (fallback; adds yield). Nasdaq dividend
         calendar is a further free but less-structured option.
       x-write-pattern: >-
-        MUTABLE / upsert-latest — `dividends/{ticker}` is overwritten every
+        APPEND-ONLY per ex-date (changed 2026-07-20) — `dividends/{ticker}_{exDividendDate}`.
+        Keyed on symbol ALONE until 2026-07-20, which silently dropped any second
+        dividend event for the same symbol inside the lookahead window (1119
+        events collapsed to 1062 docs). Each ex-date now gets its own row; a row
+        is still overwritten every
         sync with that ticker's next upcoming ex-dividend event, same
         forward-window-only shape as `/earnings` (not a full per-event
         history).
@@ -2133,7 +2137,7 @@ components:
     Dividend:
       type: object
       description: >-
-        Firestore `dividends/{ticker}` — written by dividends.job.ts. Next
+        Firestore `dividends/{ticker}_{exDividendDate}` — written by dividends.job.ts. Next
         upcoming ex-dividend event only, not a full per-event history.
       properties:
         ticker: { type: string }
