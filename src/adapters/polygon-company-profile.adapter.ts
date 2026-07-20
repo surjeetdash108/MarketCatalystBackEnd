@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { sectorFromSic } from '../common/sic-sector.util';
 import { PolygonService } from '../vendors/polygon/polygon.service';
 import {
   AdapterResult,
@@ -93,7 +94,13 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       pctChange,
       marketCap: details.market_cap ?? null,
       beta: null,
-      sector: details.sic_description ?? null,
+      // sic_description is an INDUSTRY ("ELECTRONIC COMPUTERS"), not a sector.
+      // Writing it to both fields put SIC descriptions in companies.sector,
+      // which tech-rating groups by to compute sectorRank — so ranks were
+      // computed within an SIC code rather than a sector, and the field could
+      // never be joined against the `sectors` collection. Derive the sector
+      // from sic_code instead; null when unmappable, never a guess.
+      sector: sectorFromSic(details.sic_code),
       industry: details.sic_description ?? null,
       exchange: details.primary_exchange ?? null,
       week52Range: null,

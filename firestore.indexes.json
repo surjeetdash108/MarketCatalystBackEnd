@@ -1,20 +1,8 @@
 {
   "indexes": [
-    { "collectionGroup": "news",            "queryScope": "COLLECTION", "fields": [{ "fieldPath": "tickers",    "arrayConfig": "CONTAINS" }, { "fieldPath": "publishedAt", "order": "DESCENDING" }] },
-    { "collectionGroup": "news",            "queryScope": "COLLECTION", "fields": [{ "fieldPath": "categories", "arrayConfig": "CONTAINS" }, { "fieldPath": "publishedAt", "order": "DESCENDING" }] },
-    { "collectionGroup": "analyst_actions", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "ticker",     "order": "ASCENDING"  }, { "fieldPath": "publishedAt", "order": "DESCENDING" }] },
-    { "collectionGroup": "analyst_actions", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "actionType", "order": "ASCENDING"  }, { "fieldPath": "publishedAt", "order": "DESCENDING" }] },
-    { "collectionGroup": "earnings_events", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "reportDate", "order": "ASCENDING"  }, { "fieldPath": "session",     "order": "ASCENDING"  }] },
-    { "collectionGroup": "earnings_events", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "reportDate", "order": "ASCENDING"  }, { "fieldPath": "resultPosted", "order": "ASCENDING" }] },
-    { "collectionGroup": "options_flow",    "queryScope": "COLLECTION", "fields": [{ "fieldPath": "ticker",     "order": "ASCENDING"  }, { "fieldPath": "tradeTime",   "order": "DESCENDING" }] },
-    { "collectionGroup": "options_flow",    "queryScope": "COLLECTION", "fields": [{ "fieldPath": "isUnusual",  "order": "ASCENDING"  }, { "fieldPath": "tradeTime",   "order": "DESCENDING" }] },
-    { "collectionGroup": "block_trades",    "queryScope": "COLLECTION", "fields": [{ "fieldPath": "ticker",     "order": "ASCENDING"  }, { "fieldPath": "tradeTime",   "order": "DESCENDING" }] },
-    { "collectionGroup": "market_movers",   "queryScope": "COLLECTION", "fields": [{ "fieldPath": "date",       "order": "DESCENDING" }, { "fieldPath": "session",     "order": "ASCENDING"  }, { "fieldPath": "type", "order": "ASCENDING" }] },
-    { "collectionGroup": "story_stocks",    "queryScope": "COLLECTION", "fields": [{ "fieldPath": "isActive",   "order": "ASCENDING"  }, { "fieldPath": "publishedAt", "order": "DESCENDING" }] },
-    { "collectionGroup": "companies",       "queryScope": "COLLECTION", "fields": [{ "fieldPath": "sector",     "order": "ASCENDING"  }, { "fieldPath": "marketCap",   "order": "DESCENDING" }] },
-    { "collectionGroup": "companies",       "queryScope": "COLLECTION", "fields": [{ "fieldPath": "industryGroup", "order": "ASCENDING" }, { "fieldPath": "updatedAt", "order": "DESCENDING" }] },
-    { "collectionGroup": "ohlcv_bars",      "queryScope": "COLLECTION", "fields": [{ "fieldPath": "ticker",     "order": "ASCENDING"  }, { "fieldPath": "barDate",     "order": "DESCENDING" }] },
-    { "collectionGroup": "stock_comments",  "queryScope": "COLLECTION", "fields": [{ "fieldPath": "uid",        "order": "ASCENDING"  }, { "fieldPath": "sym",         "order": "ASCENDING"  }, { "fieldPath": "createdAt", "order": "ASCENDING" }] }
+    { "collectionGroup": "companies",      "queryScope": "COLLECTION", "fields": [{ "fieldPath": "sector", "order": "ASCENDING" }, { "fieldPath": "marketCap", "order": "DESCENDING" }] },
+    { "collectionGroup": "ohlcv_bars",     "queryScope": "COLLECTION", "fields": [{ "fieldPath": "ticker", "order": "ASCENDING" }, { "fieldPath": "barDate", "order": "DESCENDING" }] },
+    { "collectionGroup": "stock_comments", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "uid", "order": "ASCENDING" }, { "fieldPath": "sym", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }] }
   ],
   "fieldOverrides": []
 }

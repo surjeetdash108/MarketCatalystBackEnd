@@ -1912,6 +1912,13 @@ components:
         collections: { type: array, items: { type: string }, nullable: true }
         cronExpression: { type: string, nullable: true }
         timeZone: { type: string, nullable: true }
+        cursor: { type: integer, nullable: true, description: "Resumable pagination offset for jobs that page through the universe across runs (getCursor/setCursor)." }
+        runCount: { type: integer, nullable: true, description: "Added 2026-07-19. All-time count of recorded runs. Null on docs written before counting existed — null means unknown, NOT zero." }
+        successCount: { type: integer, nullable: true, description: "Added 2026-07-19. All-time count of runs that succeeded." }
+        errorCount: { type: integer, nullable: true, description: "Added 2026-07-19. All-time count of runs that failed." }
+        runCountDate: { type: string, nullable: true, description: "Added 2026-07-19. YYYY-MM-DD bucket that runCountToday belongs to, in the JOB'S OWN timeZone (not the server's). Consumers must treat runCountToday as 0 when this is not today." }
+        runCountToday: { type: integer, nullable: true, description: "Added 2026-07-19. Runs recorded during runCountDate; resets when the date rolls over." }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. First time this job ever recorded a run. Preserved across every later run — set inside record()'s existing transaction, so unlike other collections it costs no extra read." }
 
     Company:
       type: object
@@ -1944,6 +1951,7 @@ components:
           description: Structured degradation notes (see AdapterWarning) — e.g. a fallback was used, or ratios-ttm failed for this symbol. Empty array, never omitted, when the fetch was fully clean.
           items: { $ref: "#/components/schemas/AdapterWarning" }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
         rsRating:
           type: integer
           nullable: true
@@ -1996,6 +2004,7 @@ components:
         asOfDate: { type: string, nullable: true }
         source: { type: string }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
 
     TickerListing:
       type: object
@@ -2025,6 +2034,7 @@ components:
         shareClassFigi: { type: string, nullable: true }
         source: { type: string, example: polygon }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
         price: { type: number, nullable: true, description: "Written by market-quotes.job.ts — null until that job has run at least once for this ticker." }
         pctChange: { type: number, nullable: true }
         volume: { type: number, nullable: true }
@@ -2052,6 +2062,7 @@ components:
           description: Structured degradation notes (see AdapterWarning) — e.g. name/sector/cap enrichment failed for this ticker. Empty array, never omitted, when clean.
           items: { $ref: "#/components/schemas/AdapterWarning" }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
 
     Sector:
       type: object
@@ -2062,6 +2073,7 @@ components:
         pctChange: { type: number }
         asOfDate: { type: string, format: date }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
 
     MarketIndex:
       type: object
@@ -2077,6 +2089,7 @@ components:
         open: { type: number }
         prevClose: { type: number }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
 
     MacroEvent:
       type: object
@@ -2098,6 +2111,7 @@ components:
         estimate: { type: number, nullable: true, description: Always null — FRED has no consensus-estimate field. }
         source: { type: string, example: fred }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
 
     OhlcvBar:
       type: object
@@ -2132,6 +2146,7 @@ components:
         frequency: { type: string, nullable: true, example: Quarterly }
         source: { type: string, example: fmp }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
 
     OptionsChain:
       type: object
@@ -2157,6 +2172,7 @@ components:
         source: { type: string, example: polygon }
         note: { type: string }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
 
     IpoEvent:
       type: object
@@ -2176,6 +2192,7 @@ components:
         status: { type: string, enum: [expected, priced, filed, withdrawn] }
         source: { type: string, example: finnhub }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
 
     EarningsEvent:
       type: object
@@ -2188,6 +2205,7 @@ components:
         revenueEstimate: { type: number, nullable: true }
         revenueActual: { type: number, nullable: true }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
 
     AnalystConsensus:
       type: object
@@ -2202,6 +2220,7 @@ components:
         strongSell: { type: integer }
         consensus: { type: string, example: Buy }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
 
     InsiderTransaction:
       type: object
@@ -2220,6 +2239,7 @@ components:
         sharesOwnedAfter: { type: number, nullable: true }
         filingDate: { type: string, format: date }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
 
     FundHoldings:
       type: object
@@ -2231,6 +2251,7 @@ components:
         totalPositions: { type: integer }
         totalValue: { type: number, description: "USD, as reported (thousands per SEC convention)" }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
 
     FundPosition:
       type: object
@@ -2257,6 +2278,7 @@ components:
         keywords: { type: array, items: { type: string }, description: "Empty when served by the Finnhub fallback." }
         publishedAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: "Added 2026-07-19. Timestamp of the FIRST write of this document; preserved on every subsequent write. A document deleted and later re-synced gets a new value." }
 
     Watchlist:
       type: object

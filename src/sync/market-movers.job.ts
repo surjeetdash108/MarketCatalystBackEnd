@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { AllSourcesFailedError } from '../adapters/adapter-error';
 import { MOVERS_ADAPTER, MOVER_ENRICHMENT_ADAPTER, type MoverEnrichmentAdapter, type MoversAdapter } from '../adapters/types';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
 import { SyncRegistry } from '../common/sync-registry.service';
 
@@ -84,7 +85,7 @@ export class MarketMoversJob implements OnModuleInit {
         }
         await sleep(DELAY_MS);
       }
-      const batch = this.firebase.firestore.batch();
+      const writes: PendingWrite[] = [];
       const col = this.firebase.firestore.collection('market_movers');
       const historyCol = this.firebase.firestore.collection('market_movers_history');
       let enrichmentFailures = 0;
@@ -104,12 +105,15 @@ export class MarketMoversJob implements OnModuleInit {
           warnings,
           updatedAt: new Date().toISOString(),
         };
-        batch.set(col.doc(`${direction}_${m.ticker}`), doc);
-        batch.set(historyCol.doc(`${date}_${direction}_${m.ticker}`), doc);
+        writes.push({ ref: col.doc(`${direction}_${m.ticker}`), data: doc });
+        writes.push({
+          ref: historyCol.doc(`${date}_${direction}_${m.ticker}`),
+          data: doc,
+        });
       };
       gainers.forEach((g) => writeMover(g, 'gainer'));
       losers.forEach((l) => writeMover(l, 'loser'));
-      await batch.commit();
+      await batchSetWithCreatedAt(this.firebase.firestore, writes);
       await this.meta.record(JOB_NAME, {
         ok: true,
         count: gainers.length + losers.length,

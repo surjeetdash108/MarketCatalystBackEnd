@@ -1,14 +1,12 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
-import { candidateTradingDays } from '../common/trading-days.util';
-import { FmpService } from '../vendors/fmp/fmp.service';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { SECTORS_ADAPTER, type SectorsAdapter } from '../adapters/types';
 import { SyncRegistry } from '../common/sync-registry.service';
 
 const JOB_NAME = 'sectors';
-const MAX_LOOKBACK_DAYS = 5;
 
 function slug(sector: string): string {
   return sector
@@ -22,8 +20,7 @@ export class SectorsJob implements OnModuleInit {
   private readonly logger = new Logger(SectorsJob.name);
 
   constructor(
-    private readonly polygon: PolygonService,
-    private readonly fmp: FmpService,
+    @Inject(SECTORS_ADAPTER) private readonly sectors: SectorsAdapter,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
@@ -44,28 +41,13 @@ export class SectorsJob implements OnModuleInit {
 
   async run() {
     try {
-      let rows = [];
-      let source = 'polygon';
-      try {
-        rows = await this.polygon.getSectorPerformance();
-        if (rows.length === 0) {
-          throw new Error('Polygon returned no sector-ETF data');
-        }
-      } catch (err) {
-        this.logger.warn(`Polygon sectors failed, falling back to FMP: ${err.message}`);
-        source = 'fmp';
-        rows = [];
-        for (const date of candidateTradingDays(new Date(), MAX_LOOKBACK_DAYS)) {
-          rows = await this.fmp.getSectorPerformanceSnapshot(date);
-          if (rows.length > 0)
-            break;
-          this.logger.log(`No sector performance data for ${date} — trying prior day`);
-        }
+      const result = await this.sectors.fetchSectorPerformance();
+      const rows = result.data;
+      const source = result.source;
+      if (result.warnings.length > 0) {
+        this.logger.log(`sectors: ${result.warnings.map((w) => w.code).join(', ')}`);
       }
-      if (rows.length === 0) {
-        throw new Error(`No sector performance data found (Polygon + FMP fallback both empty)`);
-      }
-      const batch = this.firebase.firestore.batch();
+      const writes: PendingWrite[] = [];
       const col = this.firebase.firestore.collection('sectors');
       const historyCol = this.firebase.firestore.collection('sectors_history');
       for (const row of rows) {
@@ -75,12 +57,15 @@ export class SectorsJob implements OnModuleInit {
           pctChange: Math.round(row.averageChange * 100) / 100,
           asOfDate: row.date,
           source,
+          warnings: result.warnings,
           updatedAt: new Date().toISOString(),
         };
-        batch.set(col.doc(slug(row.sector)), doc, { merge: true });
-        batch.set(historyCol.doc(`${row.date}_${slug(row.sector)}`), doc);
+        writes.push({ ref: col.doc(slug(row.sector)), data: doc });
+        // merge:false preserves this call site's original plain set() — history
+        // rows are a full snapshot, not an accumulation of partial updates.
+        writes.push({ ref: historyCol.doc(`${row.date}_${slug(row.sector)}`), data: doc, merge: false });
       }
-      await batch.commit();
+      await batchSetWithCreatedAt(this.firebase.firestore, writes);
       await this.meta.record(JOB_NAME, { ok: true, count: rows.length });
       return { count: rows.length };
     } catch (err) {

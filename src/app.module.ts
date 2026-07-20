@@ -5,6 +5,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { CommonModule } from './common/common.module';
 import { HealthController } from './health/health.controller';
+import { PurgeModule } from './purge/purge.module';
 import { SyncModule } from './sync/sync.module';
 import { Wave3Module } from './vendors/wave3.module';
 
@@ -16,10 +17,11 @@ import { Wave3Module } from './vendors/wave3.module';
     // `exclude` keeps the API routes from being shadowed by the static handler.
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'public'),
-      exclude: ['/health', '/sync/{*splat}'],
+      exclude: ['/health', '/sync/{*splat}', '/purge/{*splat}'],
     }),
     CommonModule,
     SyncModule,
+    PurgeModule,
     Wave3Module,
   ],
   controllers: [HealthController],

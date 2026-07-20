@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { batchSetWithCreatedAt, setWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
 import { FUND_UNIVERSE } from '../common/fund-universe';
 import { SyncMetaService } from '../common/sync-meta.service';
 import { SecEdgarService } from '../vendors/sec-edgar/sec-edgar.service';
@@ -79,37 +80,43 @@ export class Sec13FJob implements OnModuleInit {
         }
         const positions = [...byCusip.values()].sort((a, b) => b.value - a.value);
         const totalValue = positions.reduce((sum, p) => sum + p.value, 0);
-        await fundRef.set({
+        // Written individually rather than folded into the positions batch so
+        // it keeps its original position in the sequence — this doc gates the
+        // next run via latestAccessionNumber and must land before the children.
+        await setWithCreatedAt(this.firebase.firestore, fundRef, {
           fundName: fund.displayName,
           latestFilingDate: latest13F.filingDate,
           latestAccessionNumber: latest13F.accessionNumber,
           totalPositions: positions.length,
           totalValue,
           updatedAt: new Date().toISOString(),
-        }, { merge: true });
+        });
         fundsWritten++;
         const filingRef = fundRef
           .collection('filings')
           .doc(latest13F.accessionNumber);
-        await filingRef.set({
+        await setWithCreatedAt(this.firebase.firestore, filingRef, {
           filingDate: latest13F.filingDate,
           totalPositions: positions.length,
           totalValue,
-        }, { merge: true });
-        const batch = this.firebase.firestore.batch();
+        });
+        const writes: PendingWrite[] = [];
         const positionsCol = filingRef.collection('positions');
         for (const p of positions.slice(0, 200)) {
-          batch.set(positionsCol.doc(p.cusip), {
-            cusip: p.cusip,
-            nameOfIssuer: p.nameOfIssuer,
-            value: p.value,
-            shares: p.shares,
-            pctOfPortfolio: totalValue > 0
-              ? Math.round((p.value / totalValue) * 10000) / 100
-              : null,
-          }, { merge: true });
+          writes.push({
+            ref: positionsCol.doc(p.cusip),
+            data: {
+              cusip: p.cusip,
+              nameOfIssuer: p.nameOfIssuer,
+              value: p.value,
+              shares: p.shares,
+              pctOfPortfolio: totalValue > 0
+                ? Math.round((p.value / totalValue) * 10000) / 100
+                : null,
+            },
+          });
         }
-        await batch.commit();
+        await batchSetWithCreatedAt(this.firebase.firestore, writes);
         positionsWritten += Math.min(positions.length, 200);
       } catch (err) {
         this.logger.error(`Failed syncing 13F for ${fund.displayName}: ${err.message}\n${err.stack}`);

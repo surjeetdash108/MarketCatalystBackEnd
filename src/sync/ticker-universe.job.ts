@@ -1,9 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { chunkedBatchSet } from '../common/firestore-batch.util';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
 import { SyncMetaService } from '../common/sync-meta.service';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { TICKER_UNIVERSE_ADAPTER, type TickerUniverseAdapter } from '../adapters/types';
 import { SyncRegistry } from '../common/sync-registry.service';
 
 const JOB_NAME = 'ticker-universe';
@@ -13,7 +13,7 @@ export class TickerUniverseJob implements OnModuleInit {
   private readonly logger = new Logger(TickerUniverseJob.name);
 
   constructor(
-    private readonly polygon: PolygonService,
+    @Inject(TICKER_UNIVERSE_ADAPTER) private readonly universe: TickerUniverseAdapter,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
@@ -34,17 +34,17 @@ export class TickerUniverseJob implements OnModuleInit {
 
   async run() {
     try {
-      const tickers = await this.polygon.getAllTickers(true);
+      const result = await this.universe.fetchAllTickers(true);
+      const tickers = result.data;
       if (tickers.length === 0) {
-        throw new Error('Polygon reference/tickers returned zero results — check POLYGON_API_KEY / plan access to /v3/reference/tickers');
+        throw new Error(`${result.source} returned zero tickers — check the API key / plan access to the reference-tickers endpoint`);
       }
       const docs = tickers
-        .filter((t) => t.ticker)
         .map((t) => ({
           id: t.ticker,
           data: {
             ticker: t.ticker,
-            name: t.name ?? null,
+            name: t.name,
             nameLower: t.name ? t.name.toLowerCase() : null,
             searchTokens: t.name
               ? Array.from(new Set([
@@ -52,16 +52,16 @@ export class TickerUniverseJob implements OnModuleInit {
                 t.ticker.toLowerCase(),
               ]))
               : [t.ticker.toLowerCase()],
-            market: t.market ?? null,
-            locale: t.locale ?? null,
-            primaryExchange: t.primary_exchange ?? null,
-            type: t.type ?? null,
+            market: t.market,
+            locale: t.locale,
+            primaryExchange: t.primaryExchange,
+            type: t.type,
             active: t.active,
-            currencyName: t.currency_name ?? null,
-            cik: t.cik ?? null,
-            compositeFigi: t.composite_figi ?? null,
-            shareClassFigi: t.share_class_figi ?? null,
-            source: 'polygon',
+            currencyName: t.currencyName,
+            cik: t.cik,
+            compositeFigi: t.compositeFigi,
+            shareClassFigi: t.shareClassFigi,
+            source: result.source,
             updatedAt: new Date().toISOString(),
           },
         }));

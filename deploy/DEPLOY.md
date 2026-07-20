@@ -39,6 +39,32 @@ firebase deploy --only firestore:rules,firestore:indexes --project "$PROJECT_ID"
 (If the **frontend** repo already ships `firestore.rules` / `firestore.indexes.json`,
 pick ONE repo as the source of truth to avoid overwriting each other.)
 
+### Why `firestore.indexes.json` only has 3 indexes (pruned 2026-07-20)
+
+It previously declared 15. Twelve were removed because they indexed **fields the
+jobs never write**, so no query could ever use them — they cost index storage and
+add write latency to every document for nothing:
+
+| Removed index | Why it could never match |
+|---|---|
+| `news.tickers` / `news.categories` (array-contains) | `news.job.ts` writes the **scalars** `ticker` and `category`, not arrays |
+| `analyst_actions.ticker+publishedAt`, `.actionType+publishedAt` | that job writes `updatedAt`; it has no `publishedAt` and no `actionType` |
+| `earnings_events.reportDate+session`, `.reportDate+resultPosted` | job writes `date`; `session` and `resultPosted` have no source at all |
+| `market_movers.date+session+type` | job writes `asOfDate` and `direction` — none of those three fields exist |
+| `companies.industryGroup+updatedAt` | `industryGroup` appears nowhere in the repo, openapi.yaml, or schema.sql |
+| `options_flow` ×2, `block_trades`, `story_stocks` | no job writes these collections; they are empty |
+
+**Kept**, all three verified against real writes:
+- `companies.sector+marketCap` — both fields written by `companies.job.ts`
+- `ohlcv_bars.ticker+barDate` — required by the only three composite queries in the
+  codebase (`rs-rating`, `tech-rating`, `technical-indicators`)
+- `stock_comments.uid+sym+createdAt` — **kept deliberately.** This collection is
+  written by the frontend via the client SDK, not by this backend, so its fields
+  cannot be verified from this repo. Removing it could break a live frontend query.
+
+Re-adding an index later is a one-line change plus a rebuild, so pruning is
+low-risk: an index that matches no documents cannot be load-bearing.
+
 ## 2. Store vendor API keys in Secret Manager
 
 Never bake keys into the image. Create a secret per key (values from your `.env`):
@@ -50,6 +76,25 @@ for K in POLYGON_API_KEY FMP_API_KEY FINNHUB_API_KEY FRED_API_KEY \
     || printf "%s" "PASTE_${K}_VALUE" | gcloud secrets versions add "$K" --data-file=-
 done
 ```
+
+## 2b. Grant the runtime service account its two roles — BEFORE deploying
+
+Do this first. Cloud Run resolves `--set-secrets` while *creating the revision*,
+so without `secretmanager.secretAccessor` the image builds successfully and then
+the deploy fails at the last step with `Permission denied on secret: ...` — several
+minutes wasted on a build that was never going to land.
+
+```bash
+RUNTIME_SA="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')-compute@developer.gserviceaccount.com"
+for ROLE in roles/secretmanager.secretAccessor roles/datastore.user; do
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$RUNTIME_SA" --role="$ROLE" --condition=None --quiet
+done
+```
+
+- `secretmanager.secretAccessor` — read the four API keys at revision-creation time.
+- `datastore.user` — write to Firestore at runtime. Without it the service boots
+  fine and then *every* job fails on its first write.
 
 ## 3. Deploy the service to Cloud Run
 
@@ -64,20 +109,32 @@ gcloud run deploy market-catalyst-backend \
   --max-instances=3 \
   --memory=512Mi \
   --timeout=900 \
-  --set-env-vars="NODE_ENV=production,FIREBASE_PROJECT_ID=${PROJECT_ID},COMPANY_PROFILE_SOURCE=polygon,COMPANY_PROFILE_FALLBACK_SOURCE=fmp,MOVER_ENRICHMENT_SOURCE=polygon,MOVER_ENRICHMENT_FALLBACK_SOURCE=fmp,MOVERS_SOURCE=fmp,MOVERS_FALLBACK_SOURCE=polygon,NEWS_SOURCE=aggregate,SEC_EDGAR_USER_AGENT=Market Catalyst Backend hello@inc108.com" \
+  --env-vars-file=deploy/env.production.yaml \
   --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FMP_API_KEY=FMP_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
 ```
 
+> ⚠ **`POLYGON_PAGE_DELAY_MS=0` is required, not optional.** It lives in
+> `deploy/env.production.yaml`. The code default is `12500` (the FREE tier's
+> 5-calls-per-minute budget). Deploying with that default makes
+> `options-chains` sleep 168 times per run ≈ **35 minutes**, which exceeds both
+> `--timeout=900` above and the Scheduler `--attempt-deadline=900s` — so that
+> job fails on *every* run, and `stock-history` / `fundamentals-growth` burn
+> ~12.5 min of pure sleeping before any API call. Every paid Massive tier is
+> unlimited-rate, so 0 is correct for a paid key. If you ever downgrade to the
+> free Basic plan, raise this back to `12500` **and** split those jobs into
+> smaller batches, because they will not fit in 900s at that rate.
+
+> **Env vars live in `deploy/env.production.yaml`**, not inline — including
+> `FIREBASE_PROJECT_ID`. Two reasons: `--set-env-vars` is comma-delimited, so with
+> ~25 variables a single comma inside a value silently corrupts the set; and
+> gcloud treats `--env-vars-file` and `--set-env-vars` as **mutually exclusive**,
+> failing with a bare usage dump if you pass both. If you deploy to a different
+> project, change `FIREBASE_PROJECT_ID` in the YAML.
+
 Notes:
 - **No `service-account.json`.** The app uses Application Default Credentials from
-  the Cloud Run runtime service account. Grant it Firestore access:
-  ```bash
-  RUNTIME_SA=$(gcloud run services describe market-catalyst-backend --region "$REGION" --format='value(spec.template.spec.serviceAccountName)')
-  # (falls back to the Compute Engine default SA if unset)
-  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:${RUNTIME_SA:-$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')-compute@developer.gserviceaccount.com}" \
-    --role="roles/datastore.user"
-  ```
+  the Cloud Run runtime service account — the roles it needs are granted in §2b
+  above, which must run *before* this step.
 - `--no-allow-unauthenticated` keeps `/sync/*` private — only Scheduler (below)
   can invoke it. (The ops monitor at `/` is then also private; reach it via
   `gcloud run services proxy` or make a separate authenticated path if you want it public.)

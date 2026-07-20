@@ -1,14 +1,14 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
 import { TICKER_UNIVERSE } from '../common/ticker-universe';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { FINANCIALS_ADAPTER, type FinancialsAdapter } from '../adapters/types';
 import { SyncRegistry } from '../common/sync-registry.service';
 
 const JOB_NAME = 'fundamentals-growth';
 const BATCH_SIZE = 60;
-const DELAY_MS = 12_500;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const round = (n: number, p = 4) => Math.round(n * 10 ** p) / 10 ** p;
 
@@ -17,7 +17,7 @@ export class FundamentalsGrowthJob implements OnModuleInit {
   private readonly logger = new Logger(FundamentalsGrowthJob.name);
 
   constructor(
-    private readonly polygon: PolygonService,
+    @Inject(FINANCIALS_ADAPTER) private readonly financials: FinancialsAdapter,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
@@ -44,11 +44,12 @@ export class FundamentalsGrowthJob implements OnModuleInit {
       let skipped = 0;
       for (const ticker of batch) {
         try {
-          const periods = await this.polygon.getIncomeStatements(ticker, 'annual', 2);
+          const result = await this.financials.fetchIncomeStatements(ticker, 'annual', 2);
+          const periods = result.data;
           const [latest, prior] = periods;
           if (!latest) {
             skipped++;
-            await sleep(DELAY_MS);
+            await sleep(this.financials.requestDelayMs);
             continue;
           }
           const revGrowth = prior && prior.revenue != null && prior.revenue > 0 && latest.revenue != null
@@ -78,14 +79,14 @@ export class FundamentalsGrowthJob implements OnModuleInit {
           this.logger.error(`Failed fundamentals for ${ticker}: ${err.message}`);
           skipped++;
         }
-        await sleep(DELAY_MS);
+        await sleep(this.financials.requestDelayMs);
       }
       if (writes.length > 0) {
-        const wb = this.firebase.firestore.batch();
+        const pendingWrites: PendingWrite[] = [];
         const col = this.firebase.firestore.collection('companies');
         for (const w of writes)
-          wb.set(col.doc(w.ticker), w.data, { merge: true });
-        await wb.commit();
+          pendingWrites.push({ ref: col.doc(w.ticker), data: w.data });
+        await batchSetWithCreatedAt(this.firebase.firestore, pendingWrites);
       }
       await this.meta.setCursor(JOB_NAME, (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length);
       await this.meta.record(JOB_NAME, { ok: true, count: writes.length });

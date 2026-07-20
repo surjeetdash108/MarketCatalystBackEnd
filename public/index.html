@@ -134,6 +134,9 @@
   col.col-lastrun   { width: 70px; }
   col.col-time      { width: 150px; }
   col.col-count     { width: 60px; }
+  /* Wider than col-count: the total sits above a "N today · N ok / N err"
+     sub-line that wraps to three lines at 60px. */
+  col.col-runs      { width: 130px; }
   col.col-cols      { width: 200px; }
   col.col-interval  { width: 130px; }
   col.col-nextrun   { width: 150px; }
@@ -212,6 +215,14 @@
   }
   .ok-time { color: var(--up); cursor: help; }
   .fail-time { color: var(--down); cursor: help; }
+  /* A failure the job has since recovered from: keep it readable as history,
+     but stop it competing visually with a live outage. */
+  .fail-time-recovered { color: var(--text); cursor: help; opacity: 0.65; }
+  .err-recovered {
+    color: var(--text); opacity: 0.7; cursor: help; max-width: 360px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    display: inline-block; vertical-align: bottom; font-style: italic;
+  }
   .run-btn {
     background: transparent;
     border: 1px solid var(--border);
@@ -225,6 +236,46 @@
   .run-btn:disabled { opacity: 0.4; cursor: default; }
 
   .empty { padding: 40px; text-align: center; color: var(--text); }
+
+  /* ── Purge panel ─────────────────────────────────────────────────────── */
+  /* Collapsed by default and outlined in --down: this is the only destructive
+     control on the page, and it should never be one stray click away. */
+  .purge { margin-top: 28px; border: 1px solid var(--down); border-radius: 10px; background: var(--panel); }
+  .purge > summary {
+    cursor: pointer; padding: 14px 18px; font-weight: 600; color: var(--down);
+    list-style: none; display: flex; align-items: center; gap: 8px;
+  }
+  .purge > summary::-webkit-details-marker { display: none; }
+  .purge > summary::before { content: '▸'; transition: transform .15s; }
+  .purge[open] > summary::before { transform: rotate(90deg); }
+  .purge-body { padding: 0 18px 18px; }
+  .purge-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; margin-bottom: 14px; }
+  .purge-field { display: flex; flex-direction: column; gap: 5px; }
+  .purge-field label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text); }
+  .purge-field input[type=date] {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text-hi);
+    border-radius: 6px; padding: 7px 9px; font-size: 13px; font-family: inherit;
+  }
+  .purge-cols {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 6px 14px; max-height: 260px; overflow-y: auto;
+    border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 14px;
+  }
+  .purge-cols label { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; cursor: pointer; }
+  .purge-cols input { margin-top: 2px; flex-shrink: 0; }
+  .purge-cols .cname { color: var(--text-hi); }
+  .purge-cols .cmeta { display: block; font-size: 10.5px; color: var(--text); }
+  .purge-btn {
+    background: var(--down); color: #fff; border: 0; border-radius: 7px;
+    padding: 9px 16px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
+  }
+  .purge-btn:disabled { opacity: .35; cursor: default; }
+  .purge-btn.secondary { background: var(--brand); }
+  .purge-out { margin-top: 14px; font-size: 13px; line-height: 1.65; }
+  .purge-out .warn-line { color: var(--warn); }
+  .purge-out .err-line { color: var(--down); }
+  .purge-out .ok-line { color: var(--up); }
+  .purge-note { font-size: 12px; color: var(--text); line-height: 1.6; }
 </style>
 </head>
 <body>
@@ -249,6 +300,50 @@
   </div>
 
   <div id="tableWrap"></div>
+
+  <details class="purge" id="purgePanel">
+    <summary>Danger zone — purge Firestore data</summary>
+    <div class="purge-body">
+      <div class="purge-note" style="margin-bottom:14px;">
+        Deletes documents permanently. Leave both dates blank to purge a collection in full.
+        <b>Preview is mandatory</b> — the delete button stays disabled until you have seen the
+        matching document count, and the token it issues is valid for 5 minutes, for that exact
+        selection only. <code>sync_meta</code> and <code>sync_watermarks</code> are never purgeable.
+      </div>
+
+      <div class="purge-cols" id="purgeCols">
+        <span class="muted">loading collections…</span>
+      </div>
+
+      <div class="purge-row">
+        <div class="purge-field">
+          <label for="purgeFrom">From (inclusive)</label>
+          <input type="date" id="purgeFrom" onchange="invalidatePreview()" />
+        </div>
+        <div class="purge-field">
+          <label for="purgeTo">To (inclusive)</label>
+          <input type="date" id="purgeTo" onchange="invalidatePreview()" />
+        </div>
+        <div class="purge-field">
+          <label>&nbsp;</label>
+          <label class="purge-note" style="flex-direction:row;gap:8px;align-items:center;">
+            <input type="checkbox" id="purgeResetSync" checked onchange="invalidatePreview()" />
+            Also reset sync state
+          </label>
+        </div>
+        <button class="purge-btn secondary" id="purgePreviewBtn" onclick="purgePreview()">Preview</button>
+        <button class="purge-btn" id="purgeExecBtn" onclick="purgeExecute()" disabled>Delete permanently</button>
+      </div>
+
+      <div class="purge-note">
+        “Reset sync state” clears the watermarks and cursor for the affected jobs. Without it a job
+        reads a watermark past the purged range, concludes it is already synced, and never re-fetches
+        the data you just deleted.
+      </div>
+
+      <div class="purge-out" id="purgeOut"></div>
+    </div>
+  </details>
 
 <script>
 let refreshing = false;
@@ -304,6 +399,19 @@ function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// Total runs ever, with today's count and the success/error split underneath.
+// A null runCount means the job predates counting (or sync_meta is unreadable)
+// — that's "unknown", rendered as —, not zero.
+function fmtRuns(job) {
+  if (job.runCount == null) return `<span class="muted">—</span>`;
+  const today = job.runCountToday ?? 0;
+  const parts = [];
+  if (job.successCount != null) parts.push(`${job.successCount} ok`);
+  if (job.errorCount) parts.push(`${job.errorCount} err`);
+  return `<span title="${job.successCount ?? 0} successful, ${job.errorCount ?? 0} failed">${job.runCount}</span>` +
+    `<div class="cron-tz">${today} today${parts.length ? ` · ${parts.join(' / ')}` : ''}</div>`;
+}
+
 function statusBadge(job) {
   if (job.isRunning) {
     return `<span class="badge badge-running"><span class="dot"></span>Running</span>`;
@@ -317,6 +425,22 @@ function statusBadge(job) {
     return `<span class="badge badge-never"><span class="dot"></span>Never run</span>`;
   }
   return `<span class="badge badge-idle"><span class="dot"></span>Idle</span>`;
+}
+
+// sync_meta keeps lastError/lastFailedAt forever — they are written only on
+// failure, so they survive later successes by design (that is how you answer
+// "when did this last break?"). But rendering a recovered error in the same red
+// as a live one reads as an active outage. If the job has succeeded SINCE the
+// failure, show the error greyed and labelled as recovered.
+function fmtLastError(job) {
+  if (!job.lastError) return '<span class="muted">—</span>';
+  const recovered =
+    job.lastSuccessAt && job.lastFailedAt &&
+    new Date(job.lastSuccessAt) > new Date(job.lastFailedAt);
+  const when = job.lastFailedAt ? fmtTime(job.lastFailedAt) : '';
+  return recovered
+    ? `<span class="err-recovered" title="${esc(job.lastError)}">recovered${when ? ` — failed ${esc(when)}` : ''}: ${esc(job.lastError)}</span>`
+    : `<span class="err" title="${esc(job.lastError)}">${esc(job.lastError)}</span>`;
 }
 
 function lastRunBadge(job) {
@@ -376,6 +500,169 @@ async function runAll() {
   }
 }
 
+// ── Purge ──────────────────────────────────────────────────────────────────
+// The delete button is gated on holding a token from a preview of the EXACT
+// current selection. Any change to the selection drops the token, so the button
+// can never act on criteria you haven't seen a count for.
+let purgeToken = null;
+
+function purgeBase() {
+  return document.getElementById('baseUrl').value.replace(/\/$/, '');
+}
+
+// Single place that owns the delete button's enabled state, so it can never be
+// disabled without an accompanying reason the user can actually read.
+function setExecState(enabled, reason) {
+  const btn = document.getElementById('purgeExecBtn');
+  btn.disabled = !enabled;
+  btn.title = enabled
+    ? 'Permanently delete the documents counted in the preview above'
+    : (reason || 'Press “Preview” first — this unlocks only after you have seen the matching document count.');
+}
+
+// Any change to the selection or dates voids the server-side preview token.
+// The stale counts on screen would otherwise still look like a valid preview
+// while the button sat dead with no explanation — say so explicitly instead.
+function invalidatePreview() {
+  const hadPreview = purgeToken !== null;
+  purgeToken = null;
+  setExecState(false);
+  if (hadPreview) {
+    document.getElementById('purgeOut').innerHTML =
+      `<div class="warn-line">Selection changed — the previous preview no longer applies. Press <b>Preview</b> again before deleting.</div>`;
+  }
+}
+
+function selectedCollections() {
+  return [...document.querySelectorAll('#purgeCols input:checked')].map(i => i.value);
+}
+
+function purgeCriteria() {
+  const from = document.getElementById('purgeFrom').value;
+  const to = document.getElementById('purgeTo').value;
+  return {
+    collections: selectedCollections(),
+    from: from || null,
+    to: to || null,
+    resetSyncState: document.getElementById('purgeResetSync').checked,
+  };
+}
+
+// Whether the collection list was fetched successfully. The purge panel loads
+// once at startup, so without this a page opened while the backend was down (or
+// mid-restart) would sit on a stale error forever while the rest of the page
+// recovered on its own. refresh() retries it whenever the backend is reachable
+// and this is still false.
+let purgeTargetsLoaded = false;
+
+async function loadPurgeTargets() {
+  const box = document.getElementById('purgeCols');
+  try {
+    const res = await fetchWithTimeout(`${purgeBase()}/purge/targets`);
+    const { targets } = await res.json();
+    box.innerHTML = targets.map(t => `
+      <label title="${esc(t.note || '')}">
+        <input type="checkbox" value="${esc(t.collection)}" onchange="invalidatePreview()" />
+        <span>
+          <span class="cname">${esc(t.label)}</span>
+          <span class="cmeta">${esc(t.collection)}${t.supportsDateRange ? ` · by ${esc(t.dateField)}` : ' · no date field'}${t.recursive ? ' · recursive' : ''}</span>
+        </span>
+      </label>
+    `).join('');
+    purgeTargetsLoaded = true;
+  } catch (e) {
+    purgeTargetsLoaded = false;
+    box.innerHTML =
+      `<span class="err">Could not load purge targets: ${esc(e.message)}</span>` +
+      `<span class="muted"> — retrying automatically once the backend responds.</span>`;
+  }
+}
+
+async function purgePreview() {
+  const out = document.getElementById('purgeOut');
+  const criteria = purgeCriteria();
+  if (criteria.collections.length === 0) {
+    out.innerHTML = `<div class="err-line">Select at least one collection, then press Preview.</div>`;
+    setExecState(false, 'Select at least one collection first.');
+    return;
+  }
+  invalidatePreview();
+  out.innerHTML = '<span class="muted">Counting…</span>';
+  try {
+    const res = await fetchWithTimeout(`${purgeBase()}/purge/preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(criteria),
+    }, 60000);
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.message || `HTTP ${res.status}`);
+
+    const rows = d.rows.map(r =>
+      `<div><b>${esc(r.collection)}</b>: ${r.matched} doc(s) would be deleted` +
+      (r.warning ? `<div class="warn-line">↳ ${esc(r.warning)}</div>` : '') + `</div>`
+    ).join('');
+    const reset = d.syncStateReset.length
+      ? `<div class="warn-line">Sync state will also be reset for: ${d.syncStateReset.map(esc).join(', ')}</div>`
+      : '';
+
+    out.innerHTML = rows + reset +
+      `<div style="margin-top:8px;"><b>Total: ${d.totalMatched} document(s).</b> ` +
+      (d.totalMatched === 0
+        ? 'Nothing matches — delete would be a no-op.'
+        : 'Press “Delete permanently” to proceed. This cannot be undone.') + `</div>`;
+
+    purgeToken = d.token;
+    // Still enabled at 0 matches: a no-op delete is harmless, and disabling it
+    // would look like the button is broken.
+    setExecState(true);
+  } catch (e) {
+    out.innerHTML = `<div class="err-line">Preview failed: ${esc(e.message)}</div>`;
+    setExecState(false, `Preview failed (${e.message}) — fix that, then preview again.`);
+  }
+}
+
+async function purgeExecute() {
+  const out = document.getElementById('purgeOut');
+  const criteria = purgeCriteria();
+  if (!purgeToken) {
+    out.innerHTML = `<div class="err-line">Preview first.</div>`;
+    return;
+  }
+  const what = criteria.collections.join(', ');
+  const range = criteria.from || criteria.to
+    ? `${criteria.from || 'beginning'} → ${criteria.to || 'end'}`
+    : 'ALL DATES';
+  if (!confirm(`Permanently delete from:\n\n  ${what}\n\nRange: ${range}\n\nThis cannot be undone. Continue?`)) return;
+
+  const btn = document.getElementById('purgeExecBtn');
+  btn.disabled = true;
+  btn.textContent = 'Deleting…';
+  try {
+    const res = await fetchWithTimeout(`${purgeBase()}/purge/execute`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...criteria, previewToken: purgeToken }),
+    }, 120000);
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.message || `HTTP ${res.status}`);
+
+    out.innerHTML =
+      d.results.map(r => r.error
+        ? `<div class="err-line"><b>${esc(r.collection)}</b>: FAILED — ${esc(r.error)}</div>`
+        : `<div class="ok-line"><b>${esc(r.collection)}</b>: deleted ${r.deleted}</div>`).join('') +
+      (d.syncStateCleared.length ? `<div class="warn-line">Sync state reset: ${d.syncStateCleared.map(esc).join('; ')}</div>` : '') +
+      `<div style="margin-top:8px;"><b>Total deleted: ${d.totalDeleted}</b> at ${esc(d.completedAt)}</div>`;
+    refresh();
+  } catch (e) {
+    out.innerHTML = `<div class="err-line">Purge failed: ${esc(e.message)}</div>`;
+  } finally {
+    // Token is single-use server-side, so force a fresh preview either way.
+    purgeToken = null;
+    btn.textContent = 'Delete permanently';
+    setExecState(false, 'The preview token was consumed by that delete — preview again to run another.');
+  }
+}
+
 function render(jobs) {
   const total = jobs.length;
   const running = jobs.filter(j => j.isRunning).length;
@@ -417,12 +704,15 @@ function render(jobs) {
         <td>${statusBadge(job)}</td>
         <td>${lastRunBadge(job)}</td>
         <td class="muted">${job.lastSuccessAt ? `<span class="ok-time" title="${esc(job.lastSuccessAt)}">${fmtTime(job.lastSuccessAt)}</span>` : '—'}</td>
-        <td class="muted">${job.lastFailedAt ? `<span class="fail-time" title="${esc(job.lastFailedAt)}">${fmtTime(job.lastFailedAt)}</span>` : '—'}</td>
+        <td class="muted">${job.lastFailedAt
+          ? `<span class="${job.lastSuccessAt && new Date(job.lastSuccessAt) > new Date(job.lastFailedAt) ? 'fail-time-recovered' : 'fail-time'}" title="${esc(job.lastFailedAt)}">${fmtTime(job.lastFailedAt)}</span>`
+          : '—'}</td>
         <td class="muted">${(job.lastSuccessCount ?? job.lastCount) ?? '—'}</td>
+        <td class="muted">${fmtRuns(job)}</td>
         <td>${fmtCollections(job.collections)}</td>
         <td class="muted">${fmtCron(job.cronExpression, job.timeZone)}</td>
         <td class="muted">${fmtNextRun(job.nextRunAt)}</td>
-        <td>${job.lastError ? `<span class="err" title="${esc(job.lastError)}">${esc(job.lastError)}</span>` : '<span class="muted">—</span>'}</td>
+        <td>${fmtLastError(job)}</td>
         <td><button class="run-btn" ${job.isRunning ? 'disabled' : ''} onclick="runJob('${job.name}', this)">${job.isRunning ? 'Running…' : 'Run now'}</button></td>
       </tr>
     `).join('');
@@ -432,7 +722,7 @@ function render(jobs) {
       <table>
         <colgroup>
           <col class="col-service"><col class="col-state"><col class="col-lastrun">
-          <col class="col-time"><col class="col-time"><col class="col-count"><col class="col-cols">
+          <col class="col-time"><col class="col-time"><col class="col-count"><col class="col-runs"><col class="col-cols">
           <col class="col-interval"><col class="col-nextrun"><col class="col-error"><col class="col-action">
         </colgroup>
         <thead>
@@ -443,6 +733,7 @@ function render(jobs) {
             <th>Last Success</th>
             <th>Last Failed</th>
             <th>Docs</th>
+            <th>Runs</th>
             <th>Collections Affected</th>
             <th>Interval</th>
             <th>Next Run</th>
@@ -466,9 +757,12 @@ function render(jobs) {
 // backend was completely healthy — a shorter timeout falsely flagged every
 // restart as "unreachable" for one poll cycle.
 const REQUEST_TIMEOUT_MS = 15000;
-async function fetchWithTimeout(url, opts) {
+// timeoutMs is overridable because a purge can legitimately run far longer than
+// a status poll. Aborting one mid-flight does NOT stop the server-side delete —
+// it only makes the UI report a failure for work that is still completing.
+async function fetchWithTimeout(url, opts, timeoutMs = REQUEST_TIMEOUT_MS) {
   const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const t = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...opts, signal: controller.signal });
   } finally {
@@ -488,6 +782,9 @@ async function refresh() {
     pill.textContent = `connected (${new Date().toLocaleTimeString()})`;
     pill.className = 'status-pill pill-ok';
     render(jobs);
+    // Backend is reachable — recover the purge panel if its one-shot load failed
+    // (page opened during a restart, or the base URL was corrected since).
+    if (!purgeTargetsLoaded) loadPurgeTargets();
   } catch (e) {
     const reason = e.name === 'AbortError' ? `no response in ${REQUEST_TIMEOUT_MS / 1000}s` : e.message;
     pill.textContent = `backend unreachable (${reason})`;
@@ -505,6 +802,10 @@ async function refresh() {
 }
 
 refresh();
+// Purge targets come from the backend registry rather than being hardcoded here,
+// so the two can never drift out of sync. Loaded once — the list is static.
+loadPurgeTargets();
+setExecState(false);
 setInterval(refresh, 5000);
 // Background-tab throttling can silently stretch setInterval to well over a
 // minute — force an immediate refresh the moment this tab is looked at again,

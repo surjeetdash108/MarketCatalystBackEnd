@@ -9,7 +9,6 @@ import { SyncRegistry } from '../common/sync-registry.service';
 const JOB_NAME = 'options-chains';
 const CONTRACTS_PER_TICKER = 20;
 const AGG_LOOKBACK_DAYS = 10;
-const REQUEST_DELAY_MS = 12_500;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function isoDate(d: Date): string {
@@ -49,7 +48,7 @@ export class OptionsChainsJob implements OnModuleInit {
     for (const ticker of OPTIONS_UNIVERSE) {
       try {
         const contracts = await this.polygon.getOptionContracts(ticker, today, CONTRACTS_PER_TICKER);
-        await sleep(REQUEST_DELAY_MS);
+        await sleep(this.polygon.requestDelayMs);
         const enriched = [];
         for (const c of contracts) {
           try {
@@ -66,7 +65,7 @@ export class OptionsChainsJob implements OnModuleInit {
           } catch (err) {
             this.logger.warn(`Failed fetching bar for ${c.ticker}: ${err.message}`);
           }
-          await sleep(REQUEST_DELAY_MS);
+          await sleep(this.polygon.requestDelayMs);
         }
         await this.firebase.firestore
           .collection('options_chains')

@@ -1,10 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
 import { chunkedBatchSet } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
-import { FinnhubService } from '../vendors/finnhub/finnhub.service';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { IPOS_ADAPTER, type IposAdapter } from '../adapters/types';
 import { SyncRegistry } from '../common/sync-registry.service';
 
 const JOB_NAME = 'ipos';
@@ -40,8 +39,7 @@ export class IposJob implements OnModuleInit {
   private readonly logger = new Logger(IposJob.name);
 
   constructor(
-    private readonly polygon: PolygonService,
-    private readonly finnhub: FinnhubService,
+    @Inject(IPOS_ADAPTER) private readonly ipos: IposAdapter,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
@@ -66,14 +64,11 @@ export class IposJob implements OnModuleInit {
       from.setUTCDate(from.getUTCDate() - LOOKBACK_DAYS);
       const to = new Date();
       to.setUTCDate(to.getUTCDate() + LOOKAHEAD_DAYS);
-      let events;
-      let source = 'polygon';
-      try {
-        events = await this.polygon.getIpoCalendar(isoDate(from), isoDate(to));
-      } catch (err) {
-        this.logger.warn(`Polygon IPOs failed, falling back to Finnhub: ${err.message}`);
-        events = await this.finnhub.getIpoCalendar(isoDate(from), isoDate(to));
-        source = 'finnhub';
+      const result = await this.ipos.fetchIpos(isoDate(from), isoDate(to));
+      const events = result.data;
+      const source = result.source;
+      if (result.warnings.length > 0) {
+        this.logger.log(`ipos: ${result.warnings.map((w) => w.code).join(', ')}`);
       }
       const docs = events.map((e) => {
         const { low, high } = parsePriceRange(e.price);
@@ -91,6 +86,7 @@ export class IposJob implements OnModuleInit {
             totalSharesValue: e.totalSharesValue,
             status: e.status,
             source,
+            warnings: result.warnings,
             updatedAt: new Date().toISOString(),
           },
         };

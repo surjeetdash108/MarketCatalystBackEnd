@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
 import { TICKER_UNIVERSE } from '../common/ticker-universe';
 import { SyncRegistry } from '../common/sync-registry.service';
@@ -89,16 +90,19 @@ export class RsRatingJob implements OnModuleInit {
       }
       raw.sort((a, b) => a.score - b.score);
       const n = raw.length;
-      const batch = this.firebase.firestore.batch();
+      const writes: PendingWrite[] = [];
       const col = this.firebase.firestore.collection('companies');
       raw.forEach((r, i) => {
         const percentile = n === 1 ? 99 : Math.round(1 + (i / (n - 1)) * 98);
-        batch.set(col.doc(r.ticker), {
-          rsRating: percentile,
-          rsRatingUpdatedAt: new Date().toISOString(),
-        }, { merge: true });
+        writes.push({
+          ref: col.doc(r.ticker),
+          data: {
+            rsRating: percentile,
+            rsRatingUpdatedAt: new Date().toISOString(),
+          },
+        });
       });
-      await batch.commit();
+      await batchSetWithCreatedAt(this.firebase.firestore, writes);
       await this.meta.record(JOB_NAME, { ok: true, count: raw.length });
       return { scored: raw.length, skipped };
     } catch (err) {

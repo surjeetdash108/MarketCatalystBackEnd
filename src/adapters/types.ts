@@ -49,6 +49,82 @@ export interface CanonicalNewsArticle {
   publishedAt: string;
 }
 
+export interface CanonicalDividendEvent {
+  symbol: string;
+  date: string;
+  recordDate: string | null;
+  paymentDate: string | null;
+  declarationDate: string | null;
+  dividend: number;
+  yield: number | null;
+  frequency: string | null;
+}
+
+export interface CanonicalIpoEvent {
+  date: string;
+  symbol: string;
+  name: string;
+  exchange: string;
+  /** Raw range string ("18.00-20.00"); parsed into low/high by the job. */
+  price: string | null;
+  numberOfShares: number | null;
+  totalSharesValue: number | null;
+  status: string;
+}
+
+export interface CanonicalSectorPerformance {
+  date: string;
+  sector: string;
+  /** 'ETF-proxy' when derived from a sector ETF rather than a true index. */
+  exchange: string;
+  averageChange: number;
+}
+
+/** Finnhub's quote shape, which Polygon's getDailyQuote already conforms to. */
+export interface CanonicalQuote {
+  c: number;
+  d: number;
+  dp: number;
+  o: number;
+  h: number;
+  l: number;
+  pc: number;
+  t: number;
+}
+
+/** One daily OHLCV bar, already date-normalized — no vendor epoch fields. */
+export interface CanonicalBar {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+/** Reference row for a listed symbol, camelCased away from Polygon's snake_case. */
+export interface CanonicalTickerRef {
+  ticker: string;
+  name: string | null;
+  market: string | null;
+  locale: string | null;
+  primaryExchange: string | null;
+  type: string | null;
+  active: boolean;
+  currencyName: string | null;
+  cik: string | null;
+  compositeFigi: string | null;
+  shareClassFigi: string | null;
+}
+
+export interface CanonicalIncomeStatement {
+  fiscalYear: string | null;
+  revenue: number | null;
+  costOfRevenue: number | null;
+  grossProfit: number | null;
+  dilutedEps: number | null;
+}
+
 export interface AdapterWarning {
   code: 'SUB_REQUEST_FAILED' | 'FIELD_NOT_SUPPORTED' | 'FALLBACK_USED' | 'STALE_DATA';
   message: string;
@@ -91,10 +167,74 @@ export interface NewsAdapter {
   ): Promise<AdapterResult<CanonicalNewsArticle[]>>;
 }
 
+export interface DividendsAdapter {
+  readonly sourceName: string;
+  fetchDividends(
+    from: string,
+    to: string,
+  ): Promise<AdapterResult<CanonicalDividendEvent[]>>;
+}
+
+export interface IposAdapter {
+  readonly sourceName: string;
+  fetchIpos(from: string, to: string): Promise<AdapterResult<CanonicalIpoEvent[]>>;
+}
+
+export interface SectorsAdapter {
+  readonly sourceName: string;
+  fetchSectorPerformance(): Promise<AdapterResult<CanonicalSectorPerformance[]>>;
+}
+
+export interface QuoteAdapter {
+  readonly sourceName: string;
+  /** Null when the vendor has no quote for this symbol (not an error). */
+  fetchQuote(ticker: string): Promise<AdapterResult<CanonicalQuote> | null>;
+}
+
+export interface MarketBarsAdapter {
+  readonly sourceName: string;
+  /**
+   * How long a caller should wait between per-ticker calls to this source.
+   * Pacing is a property of the vendor's rate limit, not of the job, so it
+   * travels with the adapter — a vendor with no limit reports 0.
+   */
+  readonly requestDelayMs: number;
+  fetchDailyBars(
+    ticker: string,
+    from: string,
+    to: string,
+  ): Promise<AdapterResult<CanonicalBar[]>>;
+}
+
+export interface TickerUniverseAdapter {
+  readonly sourceName: string;
+  fetchAllTickers(
+    activeOnly: boolean,
+  ): Promise<AdapterResult<CanonicalTickerRef[]>>;
+}
+
+export interface FinancialsAdapter {
+  readonly sourceName: string;
+  /** See MarketBarsAdapter.requestDelayMs. */
+  readonly requestDelayMs: number;
+  fetchIncomeStatements(
+    ticker: string,
+    timeframe: string,
+    limit: number,
+  ): Promise<AdapterResult<CanonicalIncomeStatement[]>>;
+}
+
 export const COMPANY_PROFILE_ADAPTER: unique symbol = Symbol('COMPANY_PROFILE_ADAPTER');
 export const MOVERS_ADAPTER: unique symbol = Symbol('MOVERS_ADAPTER');
 export const MOVER_ENRICHMENT_ADAPTER: unique symbol = Symbol('MOVER_ENRICHMENT_ADAPTER');
 export const NEWS_ADAPTER: unique symbol = Symbol('NEWS_ADAPTER');
+export const DIVIDENDS_ADAPTER: unique symbol = Symbol('DIVIDENDS_ADAPTER');
+export const IPOS_ADAPTER: unique symbol = Symbol('IPOS_ADAPTER');
+export const SECTORS_ADAPTER: unique symbol = Symbol('SECTORS_ADAPTER');
+export const QUOTE_ADAPTER: unique symbol = Symbol('QUOTE_ADAPTER');
+export const MARKET_BARS_ADAPTER: unique symbol = Symbol('MARKET_BARS_ADAPTER');
+export const TICKER_UNIVERSE_ADAPTER: unique symbol = Symbol('TICKER_UNIVERSE_ADAPTER');
+export const FINANCIALS_ADAPTER: unique symbol = Symbol('FINANCIALS_ADAPTER');
 
 export function capBucket(marketCap: number | null): CapBucket | null {
   if (marketCap == null) return null;

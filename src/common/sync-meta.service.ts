@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { FirebaseAdminService } from './firebase-admin.provider';
+import { setWithCreatedAt } from './firestore-batch.util';
 import { SyncRegistry } from './sync-registry.service';
 
 export interface SyncResult {
@@ -17,9 +18,26 @@ export class SyncMetaService {
     private readonly registry: SyncRegistry,
   ) {}
 
+  // Run counters are bucketed by the job's OWN timezone, not the server's, so
+  // "today" matches the cron schedule the job actually runs on. An unknown or
+  // malformed zone falls back to UTC rather than throwing away the count.
+  todayFor(timeZone: string): string {
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date());
+    } catch {
+      return new Date().toISOString().slice(0, 10);
+    }
+  }
+
   async record(jobName: string, result: SyncResult): Promise<void> {
     const jobMeta = this.registry.getMeta(jobName);
     const now = new Date().toISOString();
+    const today = this.todayFor(jobMeta?.timeZone ?? 'America/New_York');
     const doc = {
       lastSyncedAt: now,
       lastStatus: result.ok ? 'ok' : 'error',
@@ -36,11 +54,31 @@ export class SyncMetaService {
         : {}),
     };
 
+    // Counters need a read-then-write (the daily bucket resets when the date
+    // rolls over, which FieldValue.increment alone can't express), so this runs
+    // in a transaction. Jobs record at most a few times an hour, so the extra
+    // read is negligible and contention is effectively zero.
+    const ref = this.firebase.firestore.collection('sync_meta').doc(jobName);
     try {
-      await this.firebase.firestore
-        .collection('sync_meta')
-        .doc(jobName)
-        .set(doc, { merge: true });
+      await this.firebase.firestore.runTransaction(async (tx) => {
+        const prev = (await tx.get(ref)).data() ?? {};
+        const sameDay = prev.runCountDate === today;
+        tx.set(
+          ref,
+          {
+            ...doc,
+            runCount: (prev.runCount ?? 0) + 1,
+            successCount: (prev.successCount ?? 0) + (result.ok ? 1 : 0),
+            errorCount: (prev.errorCount ?? 0) + (result.ok ? 0 : 1),
+            runCountDate: today,
+            runCountToday: (sameDay ? (prev.runCountToday ?? 0) : 0) + 1,
+            // Free here: the transaction has already read the doc, so unlike
+            // the batch write paths this needs no extra read to preserve.
+            createdAt: prev.createdAt ?? now,
+          },
+          { merge: true },
+        );
+      });
     } catch (err) {
       this.logger.error(
         `Failed to record sync_meta for ${jobName}: ${(err as Error).message}`,
@@ -78,10 +116,13 @@ export class SyncMetaService {
   }
 
   async setCursor(jobName: string, cursor: number): Promise<void> {
-    await this.firebase.firestore
-      .collection('sync_meta')
-      .doc(jobName)
-      .set({ cursor }, { merge: true });
+    // setCursor can land before the job's first record(), creating the doc, so
+    // it stamps createdAt too rather than leaving a doc without one.
+    await setWithCreatedAt(
+      this.firebase.firestore,
+      this.firebase.firestore.collection('sync_meta').doc(jobName),
+      { cursor },
+    );
   }
 
   async getWatermark(jobName: string, entityKey: string): Promise<string | null> {
@@ -97,17 +138,17 @@ export class SyncMetaService {
     entityKey: string,
     lastSyncedThrough: string,
   ): Promise<void> {
-    await this.firebase.firestore
-      .collection('sync_watermarks')
-      .doc(`${jobName}__${entityKey}`)
-      .set(
-        {
-          jobName,
-          entityKey,
-          lastSyncedThrough,
-          updatedAt: new Date().toISOString(),
-        },
-        { merge: true },
-      );
+    await setWithCreatedAt(
+      this.firebase.firestore,
+      this.firebase.firestore
+        .collection('sync_watermarks')
+        .doc(`${jobName}__${entityKey}`),
+      {
+        jobName,
+        entityKey,
+        lastSyncedThrough,
+        updatedAt: new Date().toISOString(),
+      },
+    );
   }
 }

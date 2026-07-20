@@ -103,6 +103,7 @@ CREATE TABLE companies (
   dividend_per_share  DOUBLE PRECISION,
   source              TEXT,                       -- 'fmp' | 'polygon' — which CompanyProfileAdapter served THIS row (may differ from the configured primary; see warnings)
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at          TIMESTAMPTZ,  -- first write of this row; preserved on update (added 2026-07-19)
   rs_rating           SMALLINT CHECK (rs_rating BETWEEN 1 AND 99),  -- written by rs-rating.job.ts, NOT companies.job.ts — see that job's docblock. An independent from-scratch approximation of an IBD-style score, not the literal proprietary IBD formula. NULL until enough real ohlcv_bars history exists.
   rs_rating_updated_at TIMESTAMPTZ,
   -- Computed indicator/score columns (added 2026-07-12), written by the
@@ -159,6 +160,7 @@ CREATE TABLE tickers (
   share_class_figi    TEXT,
   source              TEXT,               -- 'polygon'
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at          TIMESTAMPTZ,  -- first write of this row; preserved on update (added 2026-07-19)
   price               DOUBLE PRECISION,    -- NULL until market-quotes.job.ts has run for this ticker
   pct_change          DOUBLE PRECISION,
   volume              DOUBLE PRECISION,
@@ -208,6 +210,7 @@ CREATE TABLE market_movers (
   cap         TEXT CHECK (cap IN ('Mega','Large','Mid','Small','Micro')),
   source      TEXT,                                -- 'polygon' | 'fmp' — which MoversAdapter served this row
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at  TIMESTAMPTZ,  -- first write of this row; preserved on update (added 2026-07-19)
   PRIMARY KEY (ticker, direction)
 );
 
@@ -226,6 +229,7 @@ CREATE TABLE market_movers_history (
   cap         TEXT CHECK (cap IN ('Mega','Large','Mid','Small','Micro')),
   source      TEXT,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at  TIMESTAMPTZ,  -- first write of this row; preserved on update (added 2026-07-19)
   PRIMARY KEY (ticker, direction, as_of_date)
 );
 CREATE INDEX idx_market_movers_history_date ON market_movers_history(as_of_date DESC);
@@ -243,7 +247,8 @@ CREATE TABLE sectors (
   as_of_date  DATE NOT NULL,
   exchange    TEXT,
   pct_change  DOUBLE PRECISION,
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at  TIMESTAMPTZ   -- first write of this row; preserved on update (added 2026-07-19)
 );
 
 -- IMMUTABLE/APPEND-ONLY
@@ -253,6 +258,7 @@ CREATE TABLE sectors_history (
   exchange    TEXT,
   pct_change  DOUBLE PRECISION,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at  TIMESTAMPTZ,  -- first write of this row; preserved on update (added 2026-07-19)
   PRIMARY KEY (sector, as_of_date)
 );
 CREATE INDEX idx_sectors_history_date ON sectors_history(as_of_date DESC);
@@ -277,7 +283,8 @@ CREATE TABLE market_indices (
   change        DOUBLE PRECISION,
   pct_change    DOUBLE PRECISION,
   open          DOUBLE PRECISION,
-  prev_close    DOUBLE PRECISION
+  prev_close    DOUBLE PRECISION,
+  created_at    TIMESTAMPTZ   -- first write of this row; preserved on update (added 2026-07-19)
 );
 
 -- IMMUTABLE/APPEND-ONLY
@@ -294,6 +301,7 @@ CREATE TABLE market_indices_history (
   open          DOUBLE PRECISION,
   prev_close    DOUBLE PRECISION,
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at    TIMESTAMPTZ,  -- first write of this row; preserved on update (added 2026-07-19)
   PRIMARY KEY (symbol, as_of_date)
 );
 CREATE INDEX idx_market_indices_history_date ON market_indices_history(as_of_date DESC);
@@ -313,7 +321,8 @@ CREATE TABLE market_sentiment (
   label       TEXT NOT NULL,              -- Extreme Fear | Fear | Neutral | Greed | Extreme Greed
   as_of_date  DATE,
   source      TEXT NOT NULL DEFAULT 'polygon',
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at  TIMESTAMPTZ   -- first write of this row; preserved on update (added 2026-07-19)
 );
 CREATE TABLE market_sentiment_components (
   sentiment_id  TEXT NOT NULL REFERENCES market_sentiment(id) ON DELETE CASCADE,
@@ -344,7 +353,8 @@ CREATE TABLE macro_events (
   previous      DOUBLE PRECISION,
   estimate      DOUBLE PRECISION,          -- always NULL — see note above
   source        TEXT NOT NULL DEFAULT 'fred',
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at    TIMESTAMPTZ   -- first write of this row; preserved on update (added 2026-07-19)
 );
 
 
@@ -371,7 +381,8 @@ CREATE TABLE ipos (
   total_shares_value  DOUBLE PRECISION,
   status              TEXT NOT NULL CHECK (status IN ('expected','priced','filed','withdrawn')),
   source              TEXT NOT NULL DEFAULT 'finnhub',
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at          TIMESTAMPTZ   -- first write of this row; preserved on update (added 2026-07-19)
 );
 CREATE INDEX idx_ipos_date ON ipos(event_date DESC);
 
@@ -399,7 +410,8 @@ CREATE TABLE option_contracts (
   last_volume         DOUBLE PRECISION,
   last_bar_date       DATE,
   source              TEXT NOT NULL DEFAULT 'polygon',
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at          TIMESTAMPTZ   -- first write of this row; preserved on update (added 2026-07-19)
 );
 CREATE INDEX idx_option_contracts_underlying ON option_contracts(underlying_ticker, expiration_date);
 
@@ -424,7 +436,8 @@ CREATE TABLE dividends (
   yield_pct          DOUBLE PRECISION,
   frequency          TEXT,
   source             TEXT NOT NULL DEFAULT 'fmp',
-  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at         TIMESTAMPTZ   -- first write of this row; preserved on update (added 2026-07-19)
 );
 CREATE INDEX idx_dividends_ex_date ON dividends(ex_dividend_date);
 
@@ -451,6 +464,7 @@ CREATE TABLE ohlcv_bars (
   close     DOUBLE PRECISION NOT NULL,
   volume    DOUBLE PRECISION NOT NULL,
   source    TEXT NOT NULL DEFAULT 'polygon',
+  created_at    TIMESTAMPTZ,  -- first write of this row; preserved on update (added 2026-07-19)
   PRIMARY KEY (ticker, bar_date, timespan)
 );
 CREATE INDEX idx_ohlcv_ticker_date ON ohlcv_bars(ticker, bar_date DESC);
@@ -470,6 +484,7 @@ CREATE TABLE earnings_events (
   revenue_estimate  DOUBLE PRECISION,
   revenue_actual    DOUBLE PRECISION,
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at        TIMESTAMPTZ,  -- first write of this row; preserved on update (added 2026-07-19)
   PRIMARY KEY (ticker, event_date)
 );
 CREATE INDEX idx_earnings_events_date ON earnings_events(event_date);
@@ -501,7 +516,8 @@ CREATE TABLE analyst_consensus (
   sell         INTEGER NOT NULL DEFAULT 0,
   strong_sell  INTEGER NOT NULL DEFAULT 0,
   consensus    TEXT,                    -- e.g. 'Buy'
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at   TIMESTAMPTZ   -- first write of this row; preserved on update (added 2026-07-19)
 );
 
 
@@ -528,6 +544,7 @@ CREATE TABLE insider_transactions (
   shares_owned_after    DOUBLE PRECISION,
   filing_date           DATE NOT NULL,
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at            TIMESTAMPTZ,  -- first write of this row; preserved on update (added 2026-07-19)
   UNIQUE (accession_number, seq)
 );
 CREATE INDEX idx_insider_tx_ticker ON insider_transactions(ticker, transaction_date DESC);
@@ -546,7 +563,8 @@ CREATE TABLE fund_holdings (
   latest_accession_number  TEXT,
   total_positions          INTEGER,
   total_value              DOUBLE PRECISION,        -- USD, as reported (thousands per SEC convention)
-  updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at               TIMESTAMPTZ   -- first write of this row; preserved on update (added 2026-07-19)
 );
 
 CREATE TABLE fund_filings (
@@ -555,6 +573,7 @@ CREATE TABLE fund_filings (
   filing_date       DATE NOT NULL,
   total_positions   INTEGER,
   total_value       DOUBLE PRECISION,
+  created_at    TIMESTAMPTZ,  -- first write of this row; preserved on update (added 2026-07-19)
   PRIMARY KEY (cik, accession_number)
 );
 
@@ -568,6 +587,7 @@ CREATE TABLE fund_positions (
   value             DOUBLE PRECISION NOT NULL,
   shares            DOUBLE PRECISION NOT NULL,
   pct_of_portfolio  DOUBLE PRECISION,
+  created_at    TIMESTAMPTZ,  -- first write of this row; preserved on update (added 2026-07-19)
   PRIMARY KEY (cik, accession_number, cusip),
   FOREIGN KEY (cik, accession_number) REFERENCES fund_filings(cik, accession_number) ON DELETE CASCADE
 );
@@ -596,7 +616,8 @@ CREATE TABLE news_articles (
   sentiment_reasoning TEXT,   -- Polygon-only; null when served via Finnhub fallback
   keywords            TEXT[] NOT NULL DEFAULT '{}', -- empty when served via Finnhub fallback
   published_at  TIMESTAMPTZ NOT NULL,
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at    TIMESTAMPTZ   -- first write of this row; preserved on update (added 2026-07-19)
 );
 CREATE INDEX idx_news_ticker_published ON news_articles(ticker, published_at DESC);
 CREATE INDEX idx_news_published ON news_articles(published_at DESC);
@@ -631,7 +652,19 @@ CREATE TABLE sync_meta (
   cursor           INTEGER,              -- rotating ticker-universe cursor for batched jobs (companies, analyst-actions, sec-form4, news)
   collections      TEXT[],               -- Firestore collection path(s) this job writes to, e.g. {'market_movers','market_movers_history'}
   cron_expression  TEXT,                 -- raw cron string, e.g. '*/30 9-16 * * 1-5'
-  time_zone        TEXT                  -- e.g. 'America/New_York' — every job schedules in market-local time
+  time_zone        TEXT,                 -- e.g. 'America/New_York' — every job schedules in market-local time
+  -- Run counters (added 2026-07-19; see SyncMetaService.record). These are
+  -- cumulative across runs, unlike last_count which is per-run. NULL means
+  -- "predates counting", NOT zero — the monitor UI renders it as unknown.
+  run_count        INTEGER,              -- all-time recorded runs
+  success_count    INTEGER,              -- all-time runs that succeeded
+  error_count      INTEGER,              -- all-time runs that failed
+  -- run_count_today is bucketed by run_count_date, computed in the JOB'S OWN
+  -- time_zone (not the server's) so the boundary matches its cron schedule.
+  -- Readers must treat run_count_today as 0 when run_count_date is not today.
+  run_count_date   DATE,                 -- YYYY-MM-DD bucket run_count_today belongs to
+  run_count_today  INTEGER,              -- runs during run_count_date; resets on rollover
+  created_at       TIMESTAMPTZ            -- first run this job ever recorded; set in record()'s existing transaction, so no extra read
 );
 
 -- High-water mark for incremental time-series ingestion (Firestore:
@@ -647,6 +680,7 @@ CREATE TABLE sync_watermarks (
   entity_key           TEXT NOT NULL,     -- e.g. a ticker for ohlcv_bars, a CIK for fund filings
   last_synced_through  TEXT NOT NULL,     -- typically an ISO date/timestamp string; kept TEXT since the "unit" varies by job
   updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at           TIMESTAMPTZ,  -- first write of this row; preserved on update (added 2026-07-19)
   PRIMARY KEY (job_name, entity_key)
 );
 

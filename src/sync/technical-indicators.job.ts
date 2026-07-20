@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
 import { TICKER_UNIVERSE } from '../common/ticker-universe';
 import { SyncRegistry } from '../common/sync-registry.service';
@@ -143,12 +144,12 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
         await this.meta.record(JOB_NAME, { ok: true, count: 0 });
         return { computed: 0, skipped };
       }
-      const batch = this.firebase.firestore.batch();
+      const writes: PendingWrite[] = [];
       const col = this.firebase.firestore.collection('companies');
       for (const r of results) {
-        batch.set(col.doc(r.ticker), r.data, { merge: true });
+        writes.push({ ref: col.doc(r.ticker), data: r.data });
       }
-      await batch.commit();
+      await batchSetWithCreatedAt(this.firebase.firestore, writes);
       await this.meta.record(JOB_NAME, { ok: true, count: results.length });
       return { computed: results.length, skipped };
     } catch (err) {

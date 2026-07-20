@@ -70,6 +70,15 @@ export class SyncController {
         lastSuccessAt: m?.lastSuccessAt ?? null,
         lastSuccessCount: m?.lastSuccessCount ?? null,
         lastFailedAt: m?.lastFailedAt ?? null,
+        runCount: m?.runCount ?? null,
+        successCount: m?.successCount ?? null,
+        errorCount: m?.errorCount ?? null,
+        // Only meaningful if it's still the same day the counter was written —
+        // a stale bucket from yesterday would otherwise read as today's count.
+        runCountToday:
+          m?.runCountDate === this.meta.todayFor(job.timeZone)
+            ? (m?.runCountToday ?? 0)
+            : 0,
         collections: job.collections,
         cronExpression: job.cronExpression,
         timeZone: job.timeZone,

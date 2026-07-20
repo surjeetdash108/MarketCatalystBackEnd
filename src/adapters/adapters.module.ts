@@ -20,13 +20,52 @@ import { PolygonMoverEnrichmentAdapter } from './polygon-mover-enrichment.adapte
 import { PolygonMoversAdapter } from './polygon-movers.adapter';
 import { PolygonNewsAdapter } from './polygon-news.adapter';
 import {
+  CompositeDividendsAdapter,
+  FmpDividendsAdapter,
+  PolygonDividendsAdapter,
+} from './dividends.adapters';
+import {
+  CompositeIposAdapter,
+  FinnhubIposAdapter,
+  PolygonIposAdapter,
+} from './ipos.adapters';
+import {
+  CompositeSectorsAdapter,
+  FmpSectorsAdapter,
+  PolygonSectorsAdapter,
+} from './sectors.adapters';
+import {
+  CompositeFinancialsAdapter,
+  CompositeMarketBarsAdapter,
+  CompositeTickerUniverseAdapter,
+  PolygonFinancialsAdapter,
+  PolygonMarketBarsAdapter,
+  PolygonTickerUniverseAdapter,
+} from './market-data.adapters';
+import {
+  CompositeQuoteAdapter,
+  FinnhubQuoteAdapter,
+  PolygonQuoteAdapter,
+} from './quote.adapters';
+import {
   COMPANY_PROFILE_ADAPTER,
+  DIVIDENDS_ADAPTER,
+  FINANCIALS_ADAPTER,
+  MARKET_BARS_ADAPTER,
+  TICKER_UNIVERSE_ADAPTER,
+  IPOS_ADAPTER,
   MOVERS_ADAPTER,
   MOVER_ENRICHMENT_ADAPTER,
   NEWS_ADAPTER,
+  QUOTE_ADAPTER,
+  SECTORS_ADAPTER,
 } from './types';
 
 const FMP_POLYGON_SOURCES = ['fmp', 'polygon', 'none'];
+const POLYGON_FINNHUB_SOURCES = ['polygon', 'finnhub', 'none'];
+// Only Polygon implements these three today. The list is where a second vendor
+// becomes selectable — add its name here and one entry to the bySource map.
+const POLYGON_ONLY_SOURCES = ['polygon', 'none'];
 const NEWS_SOURCES = ['polygon', 'finnhub', 'aggregate', 'none'];
 const NEWS_SINGLE_SOURCES = ['polygon', 'finnhub', 'none'];
 
@@ -38,6 +77,46 @@ function parseSource(config, key, validSources, fallbackDefault) {
     );
   }
   return raw;
+}
+
+/**
+ * Resolves a `<NAME>_SOURCE` / `<NAME>_FALLBACK_SOURCE` pair into a composite.
+ *
+ * Setting the fallback to "none" (or to the same vendor as the primary) yields a
+ * single-source composite — which is how you run one vendor exclusively WITHOUT
+ * losing the ability to switch vendors later, since every implementation stays
+ * registered and selectable by env var.
+ */
+function buildComposite(
+  config,
+  name: string,
+  validSources: string[],
+  defaults: { primary: string; fallback: string },
+  bySource: Record<string, () => unknown>,
+  Composite: new (primary: any, secondary: any) => unknown,
+) {
+  const primarySource = parseSource(
+    config,
+    `${name}_SOURCE`,
+    validSources,
+    defaults.primary,
+  );
+  if (primarySource === 'none') {
+    throw new Error(
+      `${name}_SOURCE cannot be "none" — a primary source is required`,
+    );
+  }
+  const fallbackSource = parseSource(
+    config,
+    `${name}_FALLBACK_SOURCE`,
+    validSources,
+    defaults.fallback,
+  );
+  const fallback =
+    fallbackSource === 'none' || fallbackSource === primarySource
+      ? null
+      : bySource[fallbackSource]();
+  return new Composite(bySource[primarySource](), fallback);
 }
 
 @Module({
@@ -187,12 +266,135 @@ function parseSource(config, key, validSources, fallbackDefault) {
         return new CompositeNewsAdapter(primary, fallback);
       },
     },
+    {
+      provide: DIVIDENDS_ADAPTER,
+      inject: [ConfigService, FmpService, PolygonService],
+      useFactory: (config, fmp, polygon) =>
+        buildComposite(
+          config,
+          'DIVIDENDS',
+          FMP_POLYGON_SOURCES,
+          { primary: 'polygon', fallback: 'fmp' },
+          {
+            polygon: () => new PolygonDividendsAdapter(polygon),
+            fmp: () => new FmpDividendsAdapter(fmp),
+            none: () => null,
+          },
+          CompositeDividendsAdapter,
+        ),
+    },
+    {
+      provide: IPOS_ADAPTER,
+      inject: [ConfigService, FinnhubService, PolygonService],
+      useFactory: (config, finnhub, polygon) =>
+        buildComposite(
+          config,
+          'IPOS',
+          POLYGON_FINNHUB_SOURCES,
+          { primary: 'polygon', fallback: 'finnhub' },
+          {
+            polygon: () => new PolygonIposAdapter(polygon),
+            finnhub: () => new FinnhubIposAdapter(finnhub),
+            none: () => null,
+          },
+          CompositeIposAdapter,
+        ),
+    },
+    {
+      provide: SECTORS_ADAPTER,
+      inject: [ConfigService, FmpService, PolygonService],
+      useFactory: (config, fmp, polygon) =>
+        buildComposite(
+          config,
+          'SECTORS',
+          FMP_POLYGON_SOURCES,
+          { primary: 'polygon', fallback: 'fmp' },
+          {
+            polygon: () => new PolygonSectorsAdapter(polygon),
+            fmp: () => new FmpSectorsAdapter(fmp),
+            none: () => null,
+          },
+          CompositeSectorsAdapter,
+        ),
+    },
+    {
+      provide: QUOTE_ADAPTER,
+      inject: [ConfigService, FinnhubService, PolygonService],
+      useFactory: (config, finnhub, polygon) =>
+        buildComposite(
+          config,
+          'QUOTE',
+          POLYGON_FINNHUB_SOURCES,
+          { primary: 'polygon', fallback: 'finnhub' },
+          {
+            polygon: () => new PolygonQuoteAdapter(polygon),
+            finnhub: () => new FinnhubQuoteAdapter(finnhub),
+            none: () => null,
+          },
+          CompositeQuoteAdapter,
+        ),
+    },
+    {
+      provide: MARKET_BARS_ADAPTER,
+      inject: [ConfigService, PolygonService],
+      useFactory: (config, polygon) =>
+        buildComposite(
+          config,
+          'MARKET_BARS',
+          POLYGON_ONLY_SOURCES,
+          { primary: 'polygon', fallback: 'none' },
+          {
+            polygon: () => new PolygonMarketBarsAdapter(polygon),
+            none: () => null,
+          },
+          CompositeMarketBarsAdapter,
+        ),
+    },
+    {
+      provide: TICKER_UNIVERSE_ADAPTER,
+      inject: [ConfigService, PolygonService],
+      useFactory: (config, polygon) =>
+        buildComposite(
+          config,
+          'TICKER_UNIVERSE',
+          POLYGON_ONLY_SOURCES,
+          { primary: 'polygon', fallback: 'none' },
+          {
+            polygon: () => new PolygonTickerUniverseAdapter(polygon),
+            none: () => null,
+          },
+          CompositeTickerUniverseAdapter,
+        ),
+    },
+    {
+      provide: FINANCIALS_ADAPTER,
+      inject: [ConfigService, PolygonService],
+      useFactory: (config, polygon) =>
+        buildComposite(
+          config,
+          'FINANCIALS',
+          POLYGON_ONLY_SOURCES,
+          { primary: 'polygon', fallback: 'none' },
+          {
+            polygon: () => new PolygonFinancialsAdapter(polygon),
+            none: () => null,
+          },
+          CompositeFinancialsAdapter,
+        ),
+    },
   ],
   exports: [
     COMPANY_PROFILE_ADAPTER,
     MOVERS_ADAPTER,
     MOVER_ENRICHMENT_ADAPTER,
     NEWS_ADAPTER,
+    DIVIDENDS_ADAPTER,
+    IPOS_ADAPTER,
+    SECTORS_ADAPTER,
+    QUOTE_ADAPTER,
+    MARKET_BARS_ADAPTER,
+    TICKER_UNIVERSE_ADAPTER,
+    FINANCIALS_ADAPTER,
   ],
 })
 export class AdaptersModule {}

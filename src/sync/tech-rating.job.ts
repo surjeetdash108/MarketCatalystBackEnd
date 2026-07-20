@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
 import { TICKER_UNIVERSE } from '../common/ticker-universe';
 import { SyncRegistry } from '../common/sync-registry.service';
@@ -153,18 +154,21 @@ export class TechRatingJob implements OnModuleInit {
         const ordered = tickers.sort((a, b) => (rating.get(b) ?? 0) - (rating.get(a) ?? 0));
         ordered.forEach((t, i) => sectorRank.set(t, { rank: i + 1, total: ordered.length }));
       }
-      const batch = this.firebase.firestore.batch();
+      const writes: PendingWrite[] = [];
       const col = this.firebase.firestore.collection('companies');
       for (const r of rows) {
         const sr = sectorRank.get(r.ticker);
-        batch.set(col.doc(r.ticker), {
-          techRating: rating.get(r.ticker),
-          sectorRank: sr?.rank ?? null,
-          sectorRankTotal: sr?.total ?? null,
-          techRatingUpdatedAt: new Date().toISOString(),
-        }, { merge: true });
+        writes.push({
+          ref: col.doc(r.ticker),
+          data: {
+            techRating: rating.get(r.ticker),
+            sectorRank: sr?.rank ?? null,
+            sectorRankTotal: sr?.total ?? null,
+            techRatingUpdatedAt: new Date().toISOString(),
+          },
+        });
       }
-      await batch.commit();
+      await batchSetWithCreatedAt(this.firebase.firestore, writes);
       await this.meta.record(JOB_NAME, { ok: true, count: rows.length });
       return { rated: rows.length, skipped };
     } catch (err) {

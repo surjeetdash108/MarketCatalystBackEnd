@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { setWithCreatedAt } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
 import { TICKER_UNIVERSE } from '../common/ticker-universe';
 import { FmpService } from '../vendors/fmp/fmp.service';
@@ -46,7 +47,7 @@ export class AnalystActionsJob implements OnModuleInit {
           const consensus = await this.fmp.getGradesConsensus(symbol);
           if (!consensus)
             continue;
-          await col.doc(symbol).set({
+          await setWithCreatedAt(this.firebase.firestore, col.doc(symbol), {
             ticker: symbol,
             source: 'fmp_consensus_interim',
             strongBuy: consensus.strongBuy,
@@ -56,7 +57,7 @@ export class AnalystActionsJob implements OnModuleInit {
             strongSell: consensus.strongSell,
             consensus: consensus.consensus,
             updatedAt: new Date().toISOString(),
-          }, { merge: true });
+          });
           written++;
         } catch (err) {
           this.logger.error(`Failed syncing analyst grades for ${symbol}: ${err.message}`);

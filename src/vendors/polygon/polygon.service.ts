@@ -2,9 +2,19 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { fetchJson } from '../../common/http.util';
 
-const BASE_URL = 'https://api.polygon.io';
+// Polygon rebranded to Massive (Oct 2025); api.polygon.io still resolves but is
+// being phased out in favour of api.massive.com. Kept configurable so the host
+// can be cut over via env once a key is confirmed working on the new one,
+// without a redeploy of changed code.
+const DEFAULT_BASE_URL = 'https://api.polygon.io';
+
+// Delay between pages of a paginated endpoint. 12.5s is the free Basic tier's
+// 5-calls-per-minute budget; EVERY paid tier is unlimited, so on a paid key
+// this should be 0 — it otherwise adds minutes per run to getAllTickers,
+// getDividendsCalendar and getIpoCalendar for no reason.
+const DEFAULT_PAGE_DELAY_MS = 12_500;
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const PAGE_DELAY_MS = 12_500;
 
 interface PolygonAggBar {
   T: string;
@@ -67,17 +77,50 @@ export interface PolygonNewsArticle {
 export class PolygonService {
   private readonly logger = new Logger(PolygonService.name);
   private readonly apiKey: string;
+  private readonly baseUrl: string;
+  private readonly pageDelayMs: number;
 
   constructor(private readonly config: ConfigService) {
     this.apiKey = this.config.get('POLYGON_API_KEY', '');
     if (!this.apiKey) {
       this.logger.warn('POLYGON_API_KEY not set — Polygon-backed jobs will fail.');
     }
+
+    this.baseUrl = this.config
+      .get('POLYGON_API_BASE_URL', DEFAULT_BASE_URL)
+      .replace(/\/$/, '');
+
+    // Parsed defensively: a typo or a negative value must fall back to the safe
+    // free-tier delay rather than silently hammering the API. Blank is treated
+    // as unset too — `POLYGON_PAGE_DELAY_MS=` is a natural way to leave the var
+    // empty, and Number('') is 0, which would disable the throttle entirely.
+    const rawDelay = String(
+      this.config.get('POLYGON_PAGE_DELAY_MS', ''),
+    ).trim();
+    const parsedDelay = rawDelay === '' ? NaN : Number(rawDelay);
+    this.pageDelayMs =
+      Number.isFinite(parsedDelay) && parsedDelay >= 0
+        ? parsedDelay
+        : DEFAULT_PAGE_DELAY_MS;
+
+    this.logger.log(
+      `Polygon client: ${this.baseUrl}, page delay ${this.pageDelayMs}ms`,
+    );
+  }
+
+  /**
+   * The configured inter-request delay, exposed so per-ticker loops in the sync
+   * jobs throttle on the same knob as this service's own pagination. Previously
+   * three jobs hardcoded 12_500 independently, so setting POLYGON_PAGE_DELAY_MS=0
+   * on a paid plan left them sleeping ~12.5 minutes per run regardless.
+   */
+  get requestDelayMs(): number {
+    return this.pageDelayMs;
   }
 
   async getGroupedDaily(date: string): Promise<PolygonAggBar[]> {
     const res = await fetchJson<{ results?: PolygonAggBar[] }>(
-      `${BASE_URL}/v2/aggs/grouped/locale/us/market/stocks/${date}?apiKey=${this.apiKey}`,
+      `${this.baseUrl}/v2/aggs/grouped/locale/us/market/stocks/${date}?apiKey=${this.apiKey}`,
     );
     return res.results ?? [];
   }
@@ -103,21 +146,21 @@ export class PolygonService {
     multiplier = 1,
   ): Promise<PolygonAggBar[]> {
     const res = await fetchJson<{ results?: PolygonAggBar[] }>(
-      `${BASE_URL}/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${from}/${to}?adjusted=true&sort=asc&apiKey=${this.apiKey}`,
+      `${this.baseUrl}/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${from}/${to}?adjusted=true&sort=asc&apiKey=${this.apiKey}`,
     );
     return res.results ?? [];
   }
 
   async getTickerDetails(ticker: string): Promise<any> {
     const res = await fetchJson<{ results: Record<string, unknown> }>(
-      `${BASE_URL}/v3/reference/tickers/${ticker}?apiKey=${this.apiKey}`,
+      `${this.baseUrl}/v3/reference/tickers/${ticker}?apiKey=${this.apiKey}`,
     );
     return res.results;
   }
 
   async getTtmEps(ticker: string): Promise<number | null> {
     const res = await fetchJson<any>(
-      `${BASE_URL}/vX/reference/financials?ticker=${ticker}` +
+      `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
         `&timeframe=ttm&limit=1&apiKey=${this.apiKey}`,
     );
     const inc = res.results?.[0]?.financials?.income_statement;
@@ -140,7 +183,7 @@ export class PolygonService {
     }>
   > {
     const res = await fetchJson<any>(
-      `${BASE_URL}/vX/reference/financials?ticker=${ticker}` +
+      `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
         `&timeframe=${timeframe}&limit=${limit}&apiKey=${this.apiKey}`,
     );
     return (res.results ?? []).map((p: any) => {
@@ -245,7 +288,7 @@ export class PolygonService {
       12: 'Monthly',
     };
     const out = [];
-    let url = `${BASE_URL}/v3/reference/dividends?ex_dividend_date.gte=${from}` +
+    let url = `${this.baseUrl}/v3/reference/dividends?ex_dividend_date.gte=${from}` +
       `&ex_dividend_date.lte=${to}&limit=1000&apiKey=${this.apiKey}`;
     while (url) {
       const res = await fetchJson<any>(url);
@@ -262,7 +305,7 @@ export class PolygonService {
         });
       }
       url = res.next_url ? `${res.next_url}&apiKey=${this.apiKey}` : null;
-      if (url) await sleep(PAGE_DELAY_MS);
+      if (url) await sleep(this.pageDelayMs);
     }
     return out;
   }
@@ -283,7 +326,7 @@ export class PolygonService {
     }>
   > {
     const out = [];
-    let url = `${BASE_URL}/vX/reference/ipos?listing_date.gte=${from}` +
+    let url = `${this.baseUrl}/vX/reference/ipos?listing_date.gte=${from}` +
       `&listing_date.lte=${to}&limit=1000&apiKey=${this.apiKey}`;
     while (url) {
       const res = await fetchJson<any>(url);
@@ -310,19 +353,19 @@ export class PolygonService {
         });
       }
       url = res.next_url ? `${res.next_url}&apiKey=${this.apiKey}` : null;
-      if (url) await sleep(PAGE_DELAY_MS);
+      if (url) await sleep(this.pageDelayMs);
     }
     return out;
   }
 
   async getAllTickers(active = true): Promise<PolygonTickerRef[]> {
     const all: PolygonTickerRef[] = [];
-    let url = `${BASE_URL}/v3/reference/tickers?market=stocks&active=${active}&limit=1000&apiKey=${this.apiKey}`;
+    let url = `${this.baseUrl}/v3/reference/tickers?market=stocks&active=${active}&limit=1000&apiKey=${this.apiKey}`;
     while (url) {
       const res = await fetchJson<{ results?: PolygonTickerRef[]; next_url?: string }>(url);
       all.push(...(res.results ?? []));
       url = res.next_url ? `${res.next_url}&apiKey=${this.apiKey}` : null;
-      if (url) await sleep(PAGE_DELAY_MS);
+      if (url) await sleep(this.pageDelayMs);
     }
     return all;
   }
@@ -333,7 +376,7 @@ export class PolygonService {
     limit = 20,
   ): Promise<PolygonOptionContract[]> {
     const res = await fetchJson<{ results?: PolygonOptionContract[] }>(
-      `${BASE_URL}/v3/reference/options/contracts?underlying_ticker=${underlyingTicker}` +
+      `${this.baseUrl}/v3/reference/options/contracts?underlying_ticker=${underlyingTicker}` +
         `&expiration_date.gte=${fromDate}&sort=expiration_date&order=asc&limit=${limit}&apiKey=${this.apiKey}`,
     );
     return res.results ?? [];
@@ -345,7 +388,7 @@ export class PolygonService {
     toDate: string,
   ): Promise<PolygonAggBar | null> {
     const res = await fetchJson<{ results?: PolygonAggBar[] }>(
-      `${BASE_URL}/v2/aggs/ticker/${optionTicker}/range/1/day/${fromDate}/${toDate}?sort=desc&limit=1&apiKey=${this.apiKey}`,
+      `${this.baseUrl}/v2/aggs/ticker/${optionTicker}/range/1/day/${fromDate}/${toDate}?sort=desc&limit=1&apiKey=${this.apiKey}`,
     );
     return res.results?.[0] ?? null;
   }
@@ -357,7 +400,7 @@ export class PolygonService {
     limit = 10,
   ): Promise<PolygonNewsArticle[]> {
     const res = await fetchJson<{ results?: PolygonNewsArticle[] }>(
-      `${BASE_URL}/v2/reference/news?ticker=${ticker}` +
+      `${this.baseUrl}/v2/reference/news?ticker=${ticker}` +
         `&published_utc.gte=${from}&published_utc.lte=${to}` +
         `&order=desc&sort=published_utc&limit=${limit}&apiKey=${this.apiKey}`,
     );

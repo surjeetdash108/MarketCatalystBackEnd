@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { AllSourcesFailedError } from '../adapters/adapter-error';
 import { COMPANY_PROFILE_ADAPTER, type CompanyProfileAdapter } from '../adapters/types';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { setWithCreatedAt } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
 import { TICKER_UNIVERSE } from '../common/ticker-universe';
 import { SyncRegistry } from '../common/sync-registry.service';
@@ -56,12 +57,12 @@ export class CompaniesJob implements OnModuleInit {
           if (warnings.length > 0) {
             this.logger.log(`${symbol}: ${warnings.length} warning(s) from ${source} — ${warnings.map((w) => w.code).join(', ')}`);
           }
-          await col.doc(symbol).set({
+          await setWithCreatedAt(this.firebase.firestore, col.doc(symbol), {
             ...data,
             source,
             warnings,
             updatedAt: new Date().toISOString(),
-          }, { merge: true });
+          });
           written++;
         } catch (err) {
           if (err instanceof AllSourcesFailedError) {
