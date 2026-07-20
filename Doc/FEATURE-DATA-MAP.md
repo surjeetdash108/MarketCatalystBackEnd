@@ -46,108 +46,739 @@ Everything in Parts A and B is ✅ unless marked. Free-tier claims in Part C are
 
 ## Part A — Vendor & API reference
 
+Every request below uses **real parameter names** and a **real example value** (`AAPL`, a real date). Every response block is an **actual captured payload from the live endpoint on 2026-07-20**, trimmed to one array element and abbreviated with `…` where long — not a hand-written example. API keys are shown as `***`.
+
 ### A.1 Polygon / Massive — primary market-data vendor
 
-- **Base URL:** `https://api.massive.com` (env `POLYGON_API_BASE_URL`; code default is still `https://api.polygon.io`, which resolves but is being phased out after the Oct 2025 rebrand)
-- **Auth:** `?apiKey=***` query parameter
-- **Plan:** Stocks Starter — unlimited request rate, 5 years history, 15-minute delayed, **no** trades/quotes tick data, **no** Options or Indices entitlement
-- **Throttle:** `POLYGON_PAGE_DELAY_MS`, set to `0` in production (paid tiers are unlimited; verified empirically 2026-07-20 — 12 parallel requests, zero 429s). Code default is `12500` for the free tier.
+| | |
+|---|---|
+| **Base URL** | `https://api.massive.com` (env `POLYGON_API_BASE_URL`; code default `https://api.polygon.io` still resolves, being phased out after the Oct 2025 rebrand) |
+| **Auth** | `?apiKey=***` query parameter |
+| **Plan** | Stocks Starter — unlimited rate, 5yr history, 15-min delayed, no tick data, no Options/Indices entitlement |
+| **Throttle** | `POLYGON_PAGE_DELAY_MS` = `0` in production (paid tiers unlimited, verified 2026-07-20) |
+| **Pagination** | Cursor-based via `next_url`; the code re-appends `&apiKey=` to each follow-up URL |
 
-| Endpoint | Purpose | Key request params | Response fields read | Feeds collection |
-|---|---|---|---|---|
-| `GET /v3/reference/tickers` | Ticker universe | `market=stocks`, `active`, `limit=1000`, paginated via `next_url` | `ticker, name, market, locale, primary_exchange, type, active, currency_name, cik, composite_figi, share_class_figi` | `tickers` |
-| `GET /v3/reference/tickers/{ticker}` | Company profile | — | `name, market_cap, sic_code, sic_description, primary_exchange, description` | `companies` |
-| `GET /v2/aggs/ticker/{t}/range/1/day/{from}/{to}` | Daily OHLCV | `adjusted=true`, `sort=asc` | `t, o, h, l, c, v` | `ohlcv_bars`, `market_indices`, `sectors` |
-| `GET /v2/aggs/grouped/locale/us/market/stocks/{date}` | Whole-market daily snapshot | — | `T, o, c, v` | `tickers` (quotes), `market_movers`, `market_sentiment` |
-| `GET /v3/reference/dividends` | Dividend calendar | `ex_dividend_date.gte/.lte`, `limit=1000` | `id, dividend_type, ticker, ex_dividend_date, record_date, pay_date, declaration_date, cash_amount, frequency` | `dividends` |
-| `GET /vX/reference/ipos` | IPO calendar | `listing_date.gte/.lte`, `limit=1000` | `ticker, issuer_name, primary_exchange, listing_date, lowest_offer_price, highest_offer_price, final_issue_price, max_shares_offered, total_offer_size, ipo_status` | `ipos` |
-| `GET /v2/reference/news` | Company news | `ticker`, `published_utc.gte/.lte`, `order=desc`, `limit=10` | `id, title, description, publisher.name, article_url, keywords, published_utc, image_url, insights[].{ticker,sentiment,sentiment_reasoning}` | `news` |
-| `GET /v3/reference/options/contracts` | Options contracts | `underlying_ticker`, `expiration_date.gte`, `limit=20` | `ticker, contract_type, strike_price, expiration_date` | `options_chains` |
-| `GET /vX/reference/financials` | Income statements | `timeframe=annual\|ttm`, `limit` | `fiscal_year`, `financials.income_statement.{revenues, cost_of_revenue, gross_profit, diluted_earnings_per_share}.value` | `companies` |
+---
 
-**Documented limitations (from code comments):**
-- No dividend yield, no peer lists — structurally `null` on this source.
-- No sector taxonomy — sector is derived from `sic_code` via `sectorFromSic()`, approximate.
-- **No sector endpoint on any tier** — `sectors` is derived from 11 SPDR sector ETFs, not true cap-weighted aggregates.
-- Options: strikes/expirations and last close/volume are real (delayed); **bid/ask, IV, greeks, open interest are not available on this plan**.
-- `/vX/reference/financials` is Polygon's **experimental** namespace. The replacement `/stocks/financials/v1/*` requires Advanced or the Financials add-on, so it cannot be upgraded on Starter and may break without deprecation notice.
+#### A.1.1 Ticker universe → `tickers`
+
+**Used by:** `ticker-universe` job (weekly, Sun 03:00 ET)
+
+```http
+GET https://api.massive.com/v3/reference/tickers
+      ?market=stocks&active=true&limit=1000&apiKey=***
+```
+
+```jsonc
+{
+  "results": [{
+    "ticker": "A",
+    "name": "Agilent Technologies Inc.",
+    "market": "stocks",
+    "locale": "us",
+    "primary_exchange": "XNYS",
+    "type": "CS",
+    "active": true,
+    "currency_name": "usd",
+    "cik": "0001090872",
+    "composite_figi": "BBG000C2V3D6",
+    "share_class_figi": "BBG001SCTQY4",
+    "last_updated_utc": "2026-07-20T06:09:26.144Z"
+  }],
+  "status": "OK", "count": 1,
+  "next_url": "https://api.massive.com/v3/reference/tickers?cursor=YWN0aXZl…"
+}
+```
+
+| Vendor field | → Firestore field |
+|---|---|
+| `ticker` | `ticker` (also doc id) |
+| `name` | `name`, `nameLower`, `searchTokens[]` |
+| `market`, `locale`, `type`, `active`, `currency_name` | same names, camelCased |
+| `primary_exchange` | `primaryExchange` |
+| `cik`, `composite_figi`, `share_class_figi` | `cik`, `compositeFigi`, `shareClassFigi` |
+
+**Free alternative:** SEC `company_tickers.json` (no key, authoritative for US listings) · Finnhub `/stock/symbol` · Nasdaq symbol directory
+
+---
+
+#### A.1.2 Company profile → `companies`
+
+**Used by:** `companies` job (daily 02:00 ET) · `market-movers` enrichment
+
+```http
+GET https://api.massive.com/v3/reference/tickers/AAPL?apiKey=***
+```
+
+```jsonc
+{
+  "results": {
+    "ticker": "AAPL",
+    "name": "Apple Inc.",
+    "market_cap": 4901758191440.0,
+    "primary_exchange": "XNAS",
+    "cik": "0000320193",
+    "sic_code": "3571",
+    "sic_description": "ELECTRONIC COMPUTERS",
+    "description": "Apple is among the largest companies in the world, with a broad portfolio of hardware and software products…",
+    "address": { "address1": "ONE APPLE PARK WAY", "city": "CUPERTINO", "state": "CA" },
+    "phone_number": "(408) 996-1010"
+  }
+}
+```
+
+| Vendor field | → Firestore field |
+|---|---|
+| `name` | `name` |
+| `market_cap` | `marketCap` |
+| `sic_code` | → `sector` **via `sectorFromSic()`**, not vendor-supplied |
+| `sic_description` | `industry` |
+| `primary_exchange` | `exchange` |
+| `description` | `description` |
+
+⚠️ **Structurally null on this source:** `dividendYield`, `dividendPerShare`, `peers` — Polygon has no such product. Flagged `FIELD_NOT_SUPPORTED`.
+
+**Free alternative:** Finnhub `/stock/profile2` · SEC XBRL `companyfacts` · Alpha Vantage `OVERVIEW`
+
+---
+
+#### A.1.3 Daily OHLCV bars → `ohlcv_bars`, `market_indices`, `sectors`
+
+**Used by:** `stock-history` (03:00 ET) · `market-indices` · `sectors` · `fear-greed` · company-profile price derivation
+
+```http
+GET https://api.massive.com/v2/aggs/ticker/AAPL/range/1/day/2026-07-13/2026-07-17
+      ?adjusted=true&sort=asc&apiKey=***
+```
+
+```jsonc
+{
+  "ticker": "AAPL", "queryCount": 5, "resultsCount": 5, "adjusted": true,
+  "results": [{
+    "v": 43257804.46,      // volume
+    "vw": 318.1536,        // volume-weighted avg price (not read)
+    "o": 317.015,          // open
+    "c": 317.31,           // close
+    "h": 323.45,           // high
+    "l": 315.78,           // low
+    "t": 1783915200000,    // epoch ms
+    "n": 884512            // trade count (not read)
+  }],
+  "status": "OK", "count": 5
+}
+```
+
+| Vendor field | → Firestore field |
+|---|---|
+| `t` | `barDate` (epoch ms → `YYYY-MM-DD`) |
+| `o`, `h`, `l`, `c`, `v` | `open`, `high`, `low`, `close`, `volume` |
+
+**Note:** written with `merge:false` and re-fetched with `adjusted=true`, so a stock split rewrites history rather than blending adjustment bases.
+
+**Free alternative:** Stooq (free CSV, no key) · Tiingo · Twelve Data · Alpha Vantage. ⚠️ Yahoo's chart endpoint is common but **unofficial and against ToS** — unsuitable for a paid product.
+
+---
+
+#### A.1.4 Whole-market grouped daily → `tickers` quotes, `market_movers`, `market_sentiment`
+
+**Used by:** `market-quotes` (18:07 ET) · `market-movers` · `fear-greed` breadth
+
+```http
+GET https://api.massive.com/v2/aggs/grouped/locale/us/market/stocks/2026-07-17?apiKey=***
+```
+
+```jsonc
+{
+  "queryCount": 12411, "resultsCount": 12411, "adjusted": true,
+  "results": [{
+    "T": "FMDE",          // ticker
+    "v": 677964.01,       // volume
+    "o": 40.28, "c": 40.42, "h": 40.66, "l": 40.28,
+    "t": 1784318400000, "n": 4605
+  }],
+  "status": "OK", "count": 12411
+}
+```
+
+One call returns **12,411 tickers** — the job calls it twice (latest + prior trading day, walking back over holidays via `candidateTradingDays`) and diffs closes to derive `pctChange`. Mover eligibility: price ≥ $3, volume ≥ 500,000.
+
+| Vendor field | → Firestore field |
+|---|---|
+| `T` | `ticker` |
+| `c` | `price` |
+| `v` | `volume` |
+| computed | `pctChange = (todayClose − priorClose) / priorClose × 100` |
+
+**Free alternative:** no direct equivalent at this breadth on a free tier — this endpoint is a genuine Polygon strength.
+
+---
+
+#### A.1.5 Dividends → `dividends`
+
+**Used by:** `dividends` job (06:20 ET)
+
+```http
+GET https://api.massive.com/v3/reference/dividends
+      ?ex_dividend_date.gte=2026-07-01&ex_dividend_date.lte=2026-08-01&limit=1000&apiKey=***
+```
+
+```jsonc
+{
+  "results": [{
+    "id": "E396fbae341a40e1373ea57ce984c386f06778209996e5ef713783aa9455588bc",
+    "ticker": "GECCG",
+    "cash_amount": 0.48975694,
+    "currency": "USD",
+    "dividend_type": "CD",          // CD = regular, SC = special
+    "ex_dividend_date": "2030-12-13",
+    "pay_date": "2030-12-31",
+    "record_date": "2030-12-15",
+    "frequency": 4
+  }],
+  "status": "OK", "next_url": "…"
+}
+```
+
+| Vendor field | → Firestore field |
+|---|---|
+| `ticker` | `ticker` |
+| `ex_dividend_date` | `exDividendDate` |
+| `record_date`, `pay_date`, `declaration_date` | `recordDate`, `paymentDate`, `declarationDate` |
+| `cash_amount` | `dividendAmount` |
+| `frequency` (int) | `frequency` — mapped `0:One-Time, 1:Annual, 2:Semi-Annual, 4:Quarterly, 12:Monthly` |
+| `id` | appended to the doc id to disambiguate same-day regular vs special dividends |
+
+⚠️ **No dividend yield** on this source (`yieldPct: null`). FMP supplies it — that's why FMP is the fallback.
+
+**Free alternative:** FMP `/stable/dividends-calendar` ✅ (already the fallback, includes `yield`) · Finnhub `/stock/dividend`
+
+---
+
+#### A.1.6 IPO calendar → `ipos`
+
+**Used by:** `ipos` job (06:15 ET)
+
+```http
+GET https://api.massive.com/vX/reference/ipos
+      ?listing_date.gte=2026-07-01&listing_date.lte=2026-08-01&limit=1000&apiKey=***
+```
+
+```jsonc
+{
+  "results": [{
+    "ticker": "PHAXU",
+    "issuer_name": "Phalanx Acquisition Corp. I",
+    "primary_exchange": "XNAS",
+    "announced_date": "2026-07-16",
+    "lowest_offer_price": 10.0,
+    "highest_offer_price": 10.0,
+    "final_issue_price": 10.0,
+    "max_shares_offered": 17500000,
+    "shares_outstanding": 17500000,
+    "total_offer_size": 175000000.0,
+    "security_type": "SP",
+    "ipo_status": "pending",
+    "currency_code": "USD"
+  }],
+  "status": "OK", "next_url": "…"
+}
+```
+
+| Vendor field | → Firestore field |
+|---|---|
+| `ticker`, `issuer_name`, `primary_exchange` | `symbol`, `name`, `exchange` |
+| `lowest_offer_price` / `highest_offer_price` | `priceLow` / `priceHigh` |
+| `max_shares_offered`, `total_offer_size` | `numberOfShares`, `totalSharesValue` |
+| `listing_date` | `date` |
+| `ipo_status` | `status` |
+
+⚠️ **No aftermarket price.** This is why the IPOs screen's performance stats (current price, day-1 return) only populate from mock data — neither this nor Finnhub carries it. Join `ohlcv_bars` to fix.
+
+**Free alternative:** Finnhub `/calendar/ipo` ✅ (already the fallback) · SEC S-1/424B filings for the pipeline
+
+---
+
+#### A.1.7 Company news → `news`
+
+**Used by:** `news` job (every 30 min, 09:00–16:00 ET), aggregated concurrently with Finnhub
+
+```http
+GET https://api.massive.com/v2/reference/news
+      ?ticker=AAPL&published_utc.gte=2026-07-18&published_utc.lte=2026-07-20
+      &order=desc&sort=published_utc&limit=10&apiKey=***
+```
+
+```jsonc
+{
+  "results": [{
+    "id": "7d6ea2b0a2adc8be71427f32b3c4dade31187b80a9c4c771c07b227e40f2040d",
+    "title": "Here's How Much Apple Stock Has to Gain to Overtake Nvidia…",
+    "author": "Jennifer Saibil",
+    "published_utc": "2026-07-20T10:21:00Z",
+    "article_url": "https://www.fool.com/investing/2026/07/20/…",
+    "image_url": "https://g.foolcdn.com/image/?url=…",
+    "tickers": ["AAPL"],
+    "publisher": { "name": "The Motley Fool", "homepage_url": "https://www.fool.com/" },
+    "insights": [{ "ticker": "AAPL", "sentiment": "positive", "sentiment_reasoning": "…" }]
+  }]
+}
+```
+
+| Vendor field | → Firestore field |
+|---|---|
+| `id` | doc id component (`{symbol}_{id}`) |
+| `title`, `description` | `headline`, `summary` |
+| `publisher.name` | `source` |
+| `article_url`, `image_url` | `url`, `imageUrl` |
+| `published_utc` | `publishedAt` |
+| `insights[].sentiment` / `.sentiment_reasoning` | `sentiment`, `sentimentReasoning` |
+| `keywords` | `keywords` |
+
+⚠️ **Known defect:** the job stamps `ticker` with the **queried** symbol rather than reading `tickers[]` from the article — so a story mentioning several companies is attributed only to the one being polled. This now also decides notification recipients.
+
+**Free alternative:** Marketaux · GDELT (no key) · publisher RSS. ⚠️ NewsAPI's free tier is **non-commercial only**.
+
+---
+
+#### A.1.8 Options contracts → `options_chains`
+
+**Used by:** `options-chains` job (19:00 ET)
+
+```http
+GET https://api.massive.com/v3/reference/options/contracts
+      ?underlying_ticker=AAPL&expiration_date.gte=2026-07-20
+      &sort=expiration_date&order=asc&limit=20&apiKey=***
+```
+
+```jsonc
+{
+  "results": [{
+    "ticker": "O:AAPL260720C00205000",
+    "underlying_ticker": "AAPL",
+    "contract_type": "call",
+    "strike_price": 205,
+    "expiration_date": "2026-07-20",
+    "exercise_style": "american",
+    "shares_per_contract": 100,
+    "primary_exchange": "BATO",
+    "cfi": "OCASPS"
+  }]
+}
+```
+
+A second call per contract fetches the last bar:
+`GET /v2/aggs/ticker/O:AAPL260720C00205000/range/1/day/{from}/{today}?sort=desc&limit=1&apiKey=***` → `c` (last close), `v` (volume), `t` (date).
+
+⚠️ **Not available on this plan:** bid/ask, implied volatility, greeks, open interest. The stored doc carries this note verbatim. This is precisely the gap the Options screen fills with `buildChain()` fabrication.
+
+**Free alternative:** **Tradier** (`TRADIER_ACCESS_TOKEN` already provisioned, unwired — sandbox returns delayed chains *with* greeks and OI) · CBOE delayed quotes · Alpaca options
+
+---
+
+#### A.1.9 Financials → `companies` (merge)
+
+**Used by:** `fundamentals-growth` job (04:30 ET) · company-profile EPS derivation
+
+```http
+GET https://api.massive.com/vX/reference/financials
+      ?ticker=AAPL&timeframe=annual&limit=2&apiKey=***
+```
+
+Response shape (per `results[]`): `fiscal_year`, then
+`financials.income_statement.{revenues, cost_of_revenue, gross_profit, diluted_earnings_per_share}.value`
+
+| Derived | Formula |
+|---|---|
+| `revenueGrowthYoY` | `(rev[0] − rev[1]) / rev[1]` |
+| `epsGrowthYoY` | `(eps[0] − eps[1]) / eps[1]` |
+| `grossMargin` | `gross_profit / revenues` |
+
+🔴 **`/vX/` is Polygon's EXPERIMENTAL namespace.** Code comment verbatim: *"The replacement (/stocks/financials/v1/*) needs Advanced or the Financials add-on, so this path cannot be upgraded on Starter and may break without deprecation notice."* Tagged `STALE_DATA`.
+
+**Free alternative:** **SEC XBRL `companyconcept` / `frames` — free, no key, authoritative, and immune to vendor deprecation.** Strongly recommended migration. Also Alpha Vantage `INCOME_STATEMENT`.
+
+---
 
 ### A.2 FMP (Financial Modeling Prep)
 
-- **Base URL:** `https://financialmodelingprep.com/stable` — **hardcoded**, no env override
-- **Auth:** `?apikey=***`
+| | |
+|---|---|
+| **Base URL** | `https://financialmodelingprep.com/stable` — **hardcoded**, no env override |
+| **Auth** | `?apikey=***` |
 
-| Endpoint | Purpose | Response fields read | Feeds |
-|---|---|---|---|
-| `GET /earnings-calendar` | Earnings calendar | `symbol, date, epsActual, epsEstimated, revenueActual, revenueEstimated` | `earnings_events` |
-| `GET /grades-consensus` | Analyst consensus | `strongBuy, buy, hold, sell, strongSell, consensus` | `analyst_actions` |
-| `GET /profile` | Company profile | `companyName, price, changePercentage, marketCap, beta, sector, industry, exchange, range, volume, averageVolume, description` | `companies` |
-| `GET /ratios-ttm` | Valuation ratios | `priceToEarningsRatioTTM, netIncomePerShareTTM, dividendYieldTTM, dividendPerShareTTM` | `companies` |
-| `GET /stock-peers` | Peer list | `symbol[]` | `companies` |
-| `GET /biggest-gainers`, `/biggest-losers` | Movers | `symbol, price, changesPercentage` | `market_movers` |
-| `GET /dividends-calendar` | Dividends | `symbol, date, recordDate, paymentDate, declarationDate, dividend, yield, frequency` | `dividends` |
-| `GET /sector-performance-snapshot` | Sector performance | `date, sector, exchange, averageChange` | `sectors` |
+---
 
-**Limitations:**
-- Movers endpoints **do not report volume** — no minimum-volume filter possible on this source; `volume` is written as `0`.
-- `ratios-ttm` failures are logged as "likely this plan's undocumented per-symbol restriction."
-- ⚠️ **Earnings calendar coverage is severely limited on the current plan.** Probed live 2026-07-20: `from=2026-07-20&to=2026-07-24` returned **10 rows**; `limit=1000` changed nothing; a single day (Jul 22) returned **2 rows**. See §C.3 — this is the single biggest data-quality gap in the app.
-- **No session field.** The response contains only `symbol, date, epsActual, epsEstimated, revenueActual, revenueEstimated, lastUpdated`. Before Open / After Close cannot be sourced here.
+#### A.2.1 Earnings calendar → `earnings_events`
+
+**Used by:** `earnings` job (06:00 ET) — injected directly, no adapter, no fallback
+
+```http
+GET https://financialmodelingprep.com/stable/earnings-calendar
+      ?from=2026-07-20&to=2026-07-24&apikey=***
+```
+
+```jsonc
+[{
+  "symbol": "HCA",
+  "date": "2026-07-24",
+  "epsActual": null,
+  "epsEstimated": 7.52,
+  "revenueActual": null,
+  "revenueEstimated": 19675520000,
+  "lastUpdated": "2026-07-20"
+}]
+```
+
+| Vendor field | → Firestore field |
+|---|---|
+| `symbol`, `date` | `ticker`, `date` (also doc id `{symbol}_{date}`) |
+| `epsEstimated`, `epsActual` | `epsEstimate`, `epsActual` |
+| `revenueEstimated`, `revenueActual` | `revenueEstimate`, `revenueActual` |
+
+🔴 **Two hard limitations, both measured live on 2026-07-20:**
+1. **Coverage: 10 rows for Jul 20–24.** `limit=1000` changes nothing; a single day returned 2 rows. Finnhub returns **488** for the same window.
+2. **No session field.** The seven fields above are the entire response — Before Open / After Close cannot be sourced here at all.
+
+**Free alternative:** **Finnhub `/calendar/earnings` ✅ — 488 rows + `hour` (bmo/amc) + `quarter`/`year`, on the key you already hold.** See §C.3.
+
+---
+
+#### A.2.2 Company profile → `companies`
+
+```http
+GET https://financialmodelingprep.com/stable/profile?symbol=AAPL&apikey=***
+```
+
+```jsonc
+[{
+  "symbol": "AAPL", "companyName": "Apple Inc.",
+  "price": 333.74, "change": 0.48, "changePercentage": 0.14403,
+  "marketCap": 4901758191440, "beta": 1.097,
+  "volume": 63407059, "averageVolume": 54830800,
+  "range": "201.5-334.99",
+  "exchange": "NASDAQ", "exchangeFullName": "NASDAQ Global Select",
+  "industry": "Consumer Electronics", "sector": "Technology",
+  "cik": "0000320193", "isin": "US0378331005", "cusip": "037833100",
+  "lastDividend": 1.05, "website": "https://www.apple.com",
+  "description": "Apple Inc. is a global technology corporation…"
+}]
+```
+
+| Vendor field | → Firestore field |
+|---|---|
+| `companyName` | `name` |
+| `changePercentage` | `pctChange` |
+| `range` | `week52Range` |
+| `averageVolume` | `averageVolume` |
+| `price`, `marketCap`, `beta`, `sector`, `industry`, `exchange`, `volume`, `description` | same |
+
+**Note:** FMP gives a real `sector` taxonomy; Polygon only gives SIC codes. That is why FMP is preferred for enrichment despite Polygon being primary.
+
+---
+
+#### A.2.3 Valuation ratios → `companies`
+
+```http
+GET https://financialmodelingprep.com/stable/ratios-ttm?symbol=AAPL&apikey=***
+```
+
+Returns ~40 TTM ratio fields. Only four are read:
+
+```jsonc
+[{
+  "symbol": "AAPL",
+  "priceToEarningsRatioTTM": …,
+  "netIncomePerShareTTM": …,
+  "dividendYieldTTM": …,
+  "dividendPerShareTTM": …,
+  "grossProfitMarginTTM": 0.4786,   // present but unused
+  "netProfitMarginTTM": 0.2715      // present but unused
+}]
+```
+
+→ `peRatio`, `eps`, `dividendYield`, `dividendPerShare`
+
+⚠️ Failures here are logged as *"likely this plan's undocumented per-symbol restriction, not a genuine absence of data"* (`SUB_REQUEST_FAILED`).
+
+---
+
+#### A.2.4 Analyst consensus → `analyst_actions`
+
+```http
+GET https://financialmodelingprep.com/stable/grades-consensus?symbol=AAPL&apikey=***
+```
+
+```jsonc
+[{ "symbol": "AAPL", "strongBuy": 1, "buy": 70, "hold": 32, "sell": 8, "strongSell": 0, "consensus": "Buy" }]
+```
+
+→ written verbatim, plus `source: 'fmp_consensus_interim'`
+
+⚠️ **A single snapshot with no history and no per-firm detail** — no firm name, no action type, no price target, no date. The Analyst screen's per-firm table is therefore entirely static mock data.
+
+**Free alternative:** **Finnhub `/stock/recommendation` ✅ — same vote buckets but as a monthly time series**, enabling real trend display.
+
+---
+
+#### A.2.5 Market movers → `market_movers`
+
+```http
+GET https://financialmodelingprep.com/stable/biggest-gainers?apikey=***
+GET https://financialmodelingprep.com/stable/biggest-losers?apikey=***
+```
+
+```jsonc
+[{
+  "symbol": "PRPL", "name": "Purple Innovation, Inc.",
+  "price": 7.2425, "change": 6.9324,
+  "changesPercentage": 2235.53691,
+  "exchange": "NASDAQ"
+}]
+```
+
+⚠️ **Two issues visible in this single captured row:**
+1. **No `volume` field** — this source cannot apply a minimum-volume filter; `volume` is written as `0` (`FIELD_NOT_SUPPORTED`).
+2. `changesPercentage: 2235%` is almost certainly a reverse-split artifact, not a real move. With no volume filter available, corporate-action noise reaches the Movers screen unfiltered.
+
+**Free alternative:** Polygon grouped-daily ✅ (already the fallback) — **has volume**, so it can filter properly. Consider making Polygon primary here.
+
+---
+
+#### A.2.6 Sector performance → `sectors`
+
+```http
+GET https://financialmodelingprep.com/stable/sector-performance-snapshot?date=2026-07-17&apikey=***
+```
+
+```jsonc
+[{ "date": "2026-07-17", "sector": "Basic Materials", "exchange": "NASDAQ", "averageChange": -1.3644 }]
+```
+
+→ `sector`, `exchange`, `pctChange`, `asOfDate`. Walks back up to 5 candidate trading days when a date returns empty (holidays).
+
+**Note:** this is the *fallback*. The primary path derives sectors from 11 SPDR ETF quotes because **Polygon has no sector endpoint on any tier** — so the primary is arguably the weaker source here.
+
+---
+
+#### A.2.7 Dividends calendar → `dividends` (fallback)
+
+```http
+GET https://financialmodelingprep.com/stable/dividends-calendar?from=2026-07-01&to=2026-08-01&apikey=***
+```
+
+Fields read: `symbol, date, recordDate, paymentDate, declarationDate, dividend, yield, frequency` — already camelCase, mapped near-directly. **Includes `yield`, which Polygon lacks.**
+
+---
+
+#### A.2.8 Stock peers → `companies`
+
+```http
+GET https://financialmodelingprep.com/stable/stock-peers?symbol=AAPL&apikey=***
+```
+
+Returns an array of `{ symbol }` → `peers[]`.
+
+---
 
 ### A.3 Finnhub
 
-- **Base URL:** `https://finnhub.io/api/v1` — hardcoded
-- **Auth:** `?token=***`
-- **Currently used for:** news (aggregated with Polygon), IPO fallback, quote fallback
+| | |
+|---|---|
+| **Base URL** | `https://finnhub.io/api/v1` — hardcoded |
+| **Auth** | `?token=***` |
+| **Currently used for** | news (aggregated with Polygon), IPO fallback, quote fallback |
 
-| Endpoint | Purpose | Response fields read | Feeds |
-|---|---|---|---|
-| `GET /company-news` | Company news | `id, headline, summary, source, url, datetime, category, image` | `news` |
-| `GET /calendar/ipo` | IPO calendar | `ipoCalendar[].{date, symbol, name, exchange, price, numberOfShares, totalSharesValue, status}` | `ipos` (fallback) |
-| `GET /quote` | Real-time quote | `c, d, dp, o, h, l, pc, t` | `market_indices` (fallback) |
+---
 
-**Limitation:** `/company-news` has no sentiment or keyword fields — structurally null on this source.
+#### A.3.1 Quote → `market_indices` (fallback)
 
-**Two endpoints available on the existing key but NOT currently wired** (both probed live 2026-07-20):
+```http
+GET https://finnhub.io/api/v1/quote?symbol=AAPL&token=***
+```
 
-| Endpoint | Probe result | What it would unlock |
+```jsonc
+{
+  "c": 333.74,      // current
+  "d": 0.48,        // change
+  "dp": 0.144,      // change %
+  "h": 334.99,      // high
+  "l": 329.0006,    // low
+  "o": 331.98,      // open
+  "pc": 333.26,     // prev close
+  "t": 1784318400   // epoch seconds
+}
+```
+
+**This shape *is* the canonical `CanonicalQuote`** — the adapter layer was modelled on it, so mapping is 1:1. A zero `c` is treated as "no quote" rather than a real price of $0.
+
+---
+
+#### A.3.2 Company news → `news`
+
+```http
+GET https://finnhub.io/api/v1/company-news?symbol=AAPL&from=2026-07-18&to=2026-07-20&token=***
+```
+
+```jsonc
+[{
+  "id": 140958639,
+  "category": "company",
+  "datetime": 1784544060,
+  "headline": "Here's How Much Apple Stock Has to Gain to Overtake Nvidia…",
+  "summary": "Apple is likely to reclaim the lead again…",
+  "source": "Yahoo",
+  "related": "AAPL",
+  "image": "https://s.yimg.com/rz/stage/p/yahoo_finance_en-US_h_p_finance_2.png",
+  "url": "https://finnhub.io/api/news?id=85c89d49…"
+}]
+```
+
+| Vendor field | → Firestore field |
+|---|---|
+| `headline`, `summary`, `source`, `url`, `category` | same names |
+| `datetime` (unix **seconds**) | `publishedAt` (→ ISO) |
+| `image` | `imageUrl` |
+
+⚠️ **No sentiment or keyword fields** — structurally null on this source, not a transient failure (`FIELD_NOT_SUPPORTED`).
+
+---
+
+#### A.3.3 IPO calendar → `ipos` (fallback)
+
+```http
+GET https://finnhub.io/api/v1/calendar/ipo?from=2026-07-01&to=2026-08-01&token=***
+```
+
+Response: `{ "ipoCalendar": [{ date, symbol, name, exchange, price, numberOfShares, totalSharesValue, status }] }`
+
+---
+
+#### A.3.4 ⭐ Earnings calendar — **available but NOT wired**
+
+```http
+GET https://finnhub.io/api/v1/calendar/earnings?from=2026-07-20&to=2026-07-24&token=***
+```
+
+```jsonc
+{
+  "earningsCalendar": [{
+    "symbol": "ABR",
+    "date": "2026-07-24",
+    "hour": "",              // "bmo" | "amc" | "dmh" | ""
+    "quarter": 2,
+    "year": 2026,
+    "epsEstimate": 0.0545,
+    "epsActual": null,
+    "revenueEstimate": 50702000,
+    "revenueActual": null
+  }]
+}
+```
+
+**Live probe, 2026-07-20, same date window as FMP:**
+
+| | FMP (in use) | Finnhub (available) |
 |---|---|---|
-| `GET /calendar/earnings` | **488 rows** for Jul 20–24 vs FMP's 10. Fields: `symbol, date, hour, quarter, year, epsEstimate, epsActual, revenueEstimate, revenueActual`. `hour` values across the sample: `bmo`=138, `amc`=169, blank=181. | **~49× the earnings coverage**, plus the **Before Open / After Close session field** and fiscal quarter/year. |
-| `GET /stock/recommendation` | Returns a **monthly time series** per symbol: `{symbol, period, strongBuy, buy, hold, sell, strongSell}` | Analyst-rating **history** — FMP's `grades-consensus` is a single snapshot with no history. |
+| Rows Jul 20–24 | **10** | **488** |
+| `hour` (session) | absent | `bmo`=138, `amc`=169, blank=181 |
+| `quarter` / `year` | absent | present |
+
+**This is the single highest-value change available** — see §C.3. Caveat: ~37% of rows have blank `hour`; the UI must render that as "unspecified", never default it to a session.
+
+---
+
+#### A.3.5 ⭐ Analyst recommendation trends — **available but NOT wired**
+
+```http
+GET https://finnhub.io/api/v1/stock/recommendation?symbol=AAPL&token=***
+```
+
+```jsonc
+[
+  { "symbol": "AAPL", "period": "2026-07-01", "strongBuy": 13, "buy": 23, "hold": 16, "sell": 2, "strongSell": 0 },
+  { "symbol": "AAPL", "period": "2026-06-01", "strongBuy": 14, "buy": 24, "hold": 15, "sell": 2, "strongSell": 0 },
+  { "symbol": "AAPL", "period": "2026-05-01", "strongBuy": 15, "buy": 24, "hold": 13, "sell": 2, "strongSell": 0 }
+]
+```
+
+A **monthly time series** where FMP gives one snapshot — enough to render a real ratings trend on the Analyst screen.
+
+---
 
 ### A.4 FRED (St. Louis Fed) — macro
 
-- **Base URL:** `https://api.stlouisfed.org/fred` — hardcoded · **Auth:** `?api_key=***`
-- `GET /series/observations?series_id={id}&file_type=json&sort_order=desc&limit=2` → `observations[].{date, value}` (`.` sentinel → `null`) → `macro_events`
-- **Note:** FRED has no consensus/estimate concept, so `estimate` is always written `null`.
-- **Free and authoritative. No alternative needed** — this is the correct source.
+| | |
+|---|---|
+| **Base URL** | `https://api.stlouisfed.org/fred` — hardcoded · **Auth:** `?api_key=***` |
+
+```http
+GET https://api.stlouisfed.org/fred/series/observations
+      ?series_id=CPIAUCSL&api_key=***&file_type=json&sort_order=desc&limit=2
+```
+
+```jsonc
+{
+  "realtime_start": "2026-07-14", "realtime_end": "2026-07-14",
+  "units": "lin", "count": 954, "offset": 0, "limit": 2,
+  "observations": [
+    { "realtime_start": "2026-07-14", "realtime_end": "2026-07-14",
+      "date": "2026-06-01", "value": "332.568" }
+  ]
+}
+```
+
+| Vendor field | → Firestore field |
+|---|---|
+| `observations[0].date` | `eventDate` |
+| `observations[0].value` | `actual` (string; `"."` sentinel → `null`) |
+| `observations[1].value` | `previous` |
+| — | `estimate` — **always `null`**; FRED has no consensus concept |
+
+✅ **Free, authoritative, no rate concern. Already the right choice — no alternative needed.**
+
+---
 
 ### A.5 SEC EDGAR — insider & institutional
 
-- **Base URLs:** `https://data.sec.gov/submissions`, `https://www.sec.gov/Archives/edgar/data` — hardcoded
-- **Auth:** none. Requires a `User-Agent` header identifying the caller (SEC policy) — env `SEC_EDGAR_USER_AGENT`. Throttled to ≥150ms between requests.
+| | |
+|---|---|
+| **Base URLs** | `https://data.sec.gov/submissions` · `https://www.sec.gov/Archives/edgar/data` — hardcoded |
+| **Auth** | None. Requires a `User-Agent` identifying the caller (SEC policy) — env `SEC_EDGAR_USER_AGENT`. Throttled ≥150 ms between requests. |
 
-| Endpoint | Purpose | Feeds |
+```http
+GET https://data.sec.gov/submissions/CIK0000320193.json
+User-Agent: Market Catalyst Backend hello@inc108.com
+```
+
+Response: `filings.recent.{form[], filingDate[], accessionNumber[], primaryDocument[]}` — **parallel arrays**, filtered for `form === "13F-HR"` or `"4"`.
+
+Then, per filing:
+```http
+GET https://www.sec.gov/Archives/edgar/data/320193/{accessionNoDashes}/index.json   → locate the XML
+GET https://www.sec.gov/Archives/edgar/data/320193/{accessionNoDashes}/{infoTable}.xml
+```
+
+| Filing | XML path read | → Firestore |
 |---|---|---|
-| `GET /submissions/CIK{10-digit}.json` | Filing index per company | `fund_holdings`, `insider_transactions` |
-| `GET /Archives/edgar/data/{cik}/{accession}/index.json` | Locate filing documents | both |
-| `GET /Archives/.../{infoTable}.xml` | 13F holdings (parsed) | `fund_holdings/{cik}/filings/{acc}/positions` |
-| `GET /Archives/.../{form4}.xml` | Form 4 insider transactions | `insider_transactions` |
-| `GET https://www.sec.gov/files/company_tickers.json` | Ticker→CIK map | (in-memory) |
+| 13F-HR | `informationTable.infoTable[].{cusip, nameOfIssuer, value, shrsOrPrnAmt.sshPrnamt}` | `fund_holdings/{cik}/filings/{accession}/positions/{cusip}` (top 200 by value) |
+| Form 4 | `ownershipDocument.{issuer.*, reportingOwner.*, nonDerivativeTable.nonDerivativeTransaction[].*}` | `insider_transactions/{accession}_{index}` |
 
-**Free and authoritative. No alternative needed.**
-⚠️ **Code-quality note:** the last endpoint is called by a raw `fetch()` **inside `sec-form4.job.ts` itself**, bypassing `SecEdgarService` and `fetchJson()` — so it gets no retry/backoff and no URL redaction on error. Worth routing through the vendor service.
+⚠️ **Code-quality issue:** `https://www.sec.gov/files/company_tickers.json` (the ticker→CIK map) is fetched by a **raw `fetch()` inside `sec-form4.job.ts` itself**, bypassing both `SecEdgarService` and `fetchJson()` — so it has no retry/backoff and no URL redaction on error.
+
+✅ **Free and authoritative. Already the right choice.**
+
+---
 
 ### A.6 Adapter fallback chains
 
-Configured per domain via `<NAME>_SOURCE` / `<NAME>_FALLBACK_SOURCE`:
+Configured per domain via `<NAME>_SOURCE` / `<NAME>_FALLBACK_SOURCE`.
 
-| Adapter | Chain (`.env.example`) |
+| Adapter token | Chain (`.env.example`) |
 |---|---|
 | `COMPANY_PROFILE_ADAPTER` | polygon → fmp |
 | `MOVERS_ADAPTER` | fmp → polygon |
 | `MOVER_ENRICHMENT_ADAPTER` | polygon → fmp |
-| `NEWS_ADAPTER` | **aggregate** — polygon + finnhub called concurrently, merged, deduped by URL/headline |
+| `NEWS_ADAPTER` | **aggregate** — polygon + finnhub called **concurrently**, merged, deduped by URL/headline |
 | `DIVIDENDS_ADAPTER` | polygon → fmp |
 | `IPOS_ADAPTER` | polygon → finnhub |
 | `SECTORS_ADAPTER` | polygon → fmp |
@@ -156,7 +787,11 @@ Configured per domain via `<NAME>_SOURCE` / `<NAME>_FALLBACK_SOURCE`:
 | `TICKER_UNIVERSE_ADAPTER` | polygon only |
 | `FINANCIALS_ADAPTER` | polygon only |
 
-**Not behind adapters** (single-vendor, no fallback, by design): FMP for earnings + analyst-actions, Polygon for fear-greed/market-quotes/options-chains, FRED for macro, SEC EDGAR for 13F/Form 4.
+⚠️ Code defaults differ from `.env.example` for `COMPANY_PROFILE` and `MOVERS` (reversed). Production values live in Cloud Run / Secret Manager and are **not knowable from this repo**.
+
+**Not behind adapters** (single-vendor, no fallback): FMP for earnings + analyst-actions · Polygon for fear-greed, market-quotes, options-chains · FRED for macro · SEC EDGAR for 13F/Form 4.
+
+---
 
 ### A.7 Sync job → collection map
 
@@ -169,7 +804,7 @@ Configured per domain via `<NAME>_SOURCE` / `<NAME>_FALLBACK_SOURCE`:
 | `rs-rating` | `0 4 * * *` | `companies` (merge) | **none — computed from `ohlcv_bars`** |
 | `technical-indicators` | `10 4 * * *` | `companies` (merge) | **none — computed** |
 | `tech-rating` | `15 4 * * *` | `companies` (merge) | **none — computed** |
-| `fundamentals-growth` | `30 4 * * *` | `companies` (merge) | Polygon (experimental namespace) |
+| `fundamentals-growth` | `30 4 * * *` | `companies` (merge) | Polygon (experimental `/vX/`) |
 | `market-indices` | `5 18 * * 1-5` | `market_indices`, `market_indices_history` | Polygon → Finnhub |
 | `market-movers` | `0 18 * * 1-5` | `market_movers`, `market_movers_history` | FMP → Polygon |
 | `sectors` | `0 18 * * 1-5` | `sectors`, `sectors_history` | Polygon (ETF proxy) → FMP |
@@ -204,17 +839,17 @@ Mission-control landing screen: summary cards, hover popovers, slide-in drawers.
 
 | # | Feature | Type | Source | Provider | Endpoint | Free alternative |
 |---|---|---|---|---|---|---|
-| 1 | Market Pulse strip | HYBRID | `market_indices` over static `pulse` | Polygon → Finnhub | `/v2/aggs/ticker/{t}/range/1/day/…` | Finnhub `/quote` ✅ (already wired) · Twelve Data |
+| 1 | Market Pulse strip | HYBRID | `market_indices` over static `pulse` | Polygon → Finnhub | `/v2/aggs/ticker/{ticker}/range/1/day/…` | Finnhub `/quote` ✅ (already wired) · Twelve Data |
 | 2 | "What Matters Now" AI feed | STATIC | `wmn` array | — | — | Anthropic API (`ANTHROPIC_API_KEY` already provisioned, unused) |
 | 3 | 30-sec audio button | NONE | no handler | — | — | Any TTS (ElevenLabs, Google TTS) |
 | 4 | Earnings Today | HYBRID | `earnings_events` (EPS only) | FMP | `/stable/earnings-calendar` | **Finnhub `/calendar/earnings` ✅ 488 vs 10 rows** |
 | 5 | Movers card (3 tabs) | HYBRID | `market_movers` | FMP → Polygon | `/stable/biggest-gainers`, `/losers` | Polygon grouped-daily ✅ (already the fallback) |
-| 6 | Heatmap mini-grid | HYBRID | `companies` + `sectors` | Polygon | `/v3/reference/tickers/{t}` | FMP `/sector-performance-snapshot` ✅ |
+| 6 | Heatmap mini-grid | HYBRID | `companies` + `sectors` | Polygon | `/v3/reference/tickers/{ticker}` | FMP `/sector-performance-snapshot` ✅ |
 | 7 | Analyst Actions | HYBRID | static `analyst` + live consensus pill | FMP | `/stable/grades-consensus` | **Finnhub `/stock/recommendation` ✅ (adds history)** |
 | 8 | Screener leaders/laggards | STATIC | `screenerStocks` | — | — | Derive from `companies` (already synced) |
 | 9 | Portfolio Pulse | HYBRID/USER | `users/{uid}/portfolios/default/holdings` | — | — | — (user data; prices from `companies`) |
 | 10 | Watchlist card | HYBRID/USER | `users/{uid}/watchlists/default` | — | — | — |
-| 11 | Insider & Institutional | HYBRID | `insider_transactions` + `INSIDER_MINI_MOCK` | SEC EDGAR | `/submissions/CIK{n}.json` | — already optimal (free, authoritative) |
+| 11 | Insider & Institutional | HYBRID | `insider_transactions` + `INSIDER_MINI_MOCK` | SEC EDGAR | `/submissions/CIK{10-digit-CIK}.json` | — already optimal (free, authoritative) |
 | 12 | Live Market Feed | HYBRID | `news`, falls back `MOCK_LIVE_FEED` | Polygon + Finnhub | `/v2/reference/news`, `/company-news` | Marketaux · GDELT · publisher RSS |
 | 13 | Recaps card | GENERATED | one-line `.txt` blob labeled "PDF" | — | — | Anthropic API + a real PDF lib |
 | 14 | VIX card | HYBRID | `market_indices` VIX; falls back `14.18` | Polygon | `/v2/aggs/ticker/VIXY/…` | CBOE delayed · Finnhub `/quote` |
@@ -231,13 +866,13 @@ Full single-stock page: chart, ratings, financials, peers, dividends, notes.
 | # | Feature | Type | Source | Provider | Endpoint | Free alternative |
 |---|---|---|---|---|---|---|
 | 1 | Symbol search + watchlist star | STATIC/USER | `SYMBOLS`; star → **`localStorage`** | — | — | Migrate star to Firestore |
-| 2 | Header price/name/sector | HYBRID | `companies` | Polygon → FMP | `/v3/reference/tickers/{t}` | Finnhub `/stock/profile2` |
-| 3 | Price chart | HYBRID | `ohlcv_bars` **3M/6M/1Y only**; else `genOHLC()` | Polygon | `/v2/aggs/ticker/{t}/range/1/day/…` | Stooq (free CSV) · Tiingo · Twelve Data |
+| 2 | Header price/name/sector | HYBRID | `companies` | Polygon → FMP | `/v3/reference/tickers/{ticker}` | Finnhub `/stock/profile2` |
+| 3 | Price chart | HYBRID | `ohlcv_bars` **3M/6M/1Y only**; else `genOHLC()` | Polygon | `/v2/aggs/ticker/{ticker}/range/1/day/…` | Stooq (free CSV) · Tiingo · Twelve Data |
 | 4 | RSI pane | GENERATED | `RsiPane` sine wave | — | — | Compute from `ohlcv_bars` (already synced) |
 | 5 | EPS surprise pane | GENERATED | `earnHistory()` hash | — | — | Finnhub `/calendar/earnings` ✅ history |
 | 6 | Chart pattern callout | GENERATED | canned phrase on `isUp` | — | — | Anthropic API |
 | 7 | Chart notes | USER | `stock_comments` | — | — | — |
-| 8 | Keystats grid | HYBRID | `companies` + formulas; Short Int. static | Polygon | `/v3/reference/tickers/{t}` | FINRA short-interest files (free) |
+| 8 | Keystats grid | HYBRID | `companies` + formulas; Short Int. static | Polygon | `/v3/reference/tickers/{ticker}` | FINRA short-interest files (free) |
 | 9 | AI Technical Analysis | GENERATED | template string | — | — | Anthropic API |
 | 10 | Financials chart | GENERATED | `earnIncome()` invented ratios | — | — | **SEC XBRL `companyconcept` (free, authoritative)** |
 | 11 | Earnings Growth chart | GENERATED | `earnHistory()` | — | — | SEC XBRL · Finnhub |
@@ -246,7 +881,7 @@ Full single-stock page: chart, ratings, financials, peers, dividends, notes.
 | 14 | Industry Group rank | STATIC | `sectorList` | — | — | Derive from `companies.sector` |
 | 15 | Dividend history | GENERATED | formulas; ex-div from `charCodeAt(0)` | — | — | Polygon `/v3/reference/dividends` ✅ (already synced!) |
 | 16 | Earnings history | GENERATED | `BEAT_STREAK` + `earnHistory()` | — | — | Finnhub `/calendar/earnings` ✅ |
-| 17 | Insider & institutional | HYBRID | `insider_transactions`; ownership static | SEC EDGAR | `/submissions/CIK{n}.json` | Derive ownership from `fund_holdings` (already synced) |
+| 17 | Insider & institutional | HYBRID | `insider_transactions`; ownership static | SEC EDGAR | `/submissions/CIK{10-digit-CIK}.json` | Derive ownership from `fund_holdings` (already synced) |
 | 18 | Key levels (pivots) | GENERATED | fixed multiples `p*1.03` | — | — | Compute from `ohlcv_bars` high/low |
 
 ---
@@ -306,7 +941,7 @@ Full single-stock page: chart, ratings, financials, peers, dividends, notes.
 | 2 | Manual filter groups | NONE | client filter; **some checkboxes are disabled no-ops** | — | — | — |
 | 3 | Save screen | USER | **`localStorage`** | — | — | Migrate to Firestore |
 | 4 | Match count + "N live" | HYBRID | aggregate of #5 | — | — | — |
-| 5 | Results list | HYBRID | `companies` overlays cap/PE/RS/tech/rvol/growth | Polygon + computed | `/v3/reference/tickers/{t}`, `/vX/reference/financials` | SEC XBRL for fundamentals |
+| 5 | Results list | HYBRID | `companies` overlays cap/PE/RS/tech/rvol/growth | Polygon + computed | `/v3/reference/tickers/{ticker}`, `/vX/reference/financials` | SEC XBRL for fundamentals |
 | 6 | Chart + detail panel | GENERATED | `stock-panel.tsx` — **never passes real bars** | — | — | Thread `useOhlcvBars` through (data already synced) |
 
 ---
@@ -317,7 +952,7 @@ Full single-stock page: chart, ratings, financials, peers, dividends, notes.
 |---|---|---|---|---|---|---|
 | 1 | Add stock + modal | USER | `users/{uid}/watchlists/default` (`arrayUnion`); **local-only when signed out, no warning** | — | — | — |
 | 2 | AI watchlist summary | GENERATED | template + hardcoded "Nasdaq +1.02%, S&P 500 +0.73%" | — | — | Anthropic API; index values from `market_indices` ✅ |
-| 3 | Watchlist rows | HYBRID/USER | watchlist doc ⋈ `companies` | Polygon | `/v3/reference/tickers/{t}` | Finnhub `/quote` |
+| 3 | Watchlist rows | HYBRID/USER | watchlist doc ⋈ `companies` | Polygon | `/v3/reference/tickers/{ticker}` | Finnhub `/quote` |
 | 4 | Remove-stock modal | USER | `arrayRemove` | — | — | — |
 | 5 | Chart + detail panel | GENERATED | `stock-panel.tsx` synthetic | — | — | Thread real bars |
 
@@ -330,7 +965,7 @@ Full single-stock page: chart, ratings, financials, peers, dividends, notes.
 | 1 | **Import from photo** | **FAKE** | `setTimeout` → hardcoded `NVDA 15 / AAPL 120 / MSFT 60`; **no image is read** while UI says "Scanning image with AI…" | — | — | Anthropic API vision (key already provisioned) |
 | 2 | Add holding + modal | USER | `users/{uid}/portfolios/default/holdings/{ticker}` | — | — | — |
 | 3 | AI portfolio summary | GENERATED | template | — | — | Anthropic API |
-| 4 | Holdings list + total | HYBRID/USER | holdings ⋈ `companies` | Polygon | `/v3/reference/tickers/{t}` | Finnhub `/quote` |
+| 4 | Holdings list + total | HYBRID/USER | holdings ⋈ `companies` | Polygon | `/v3/reference/tickers/{ticker}` | Finnhub `/quote` |
 | 5 | Shares input | STATIC/USER | `DEFAULT_SHARES` merged with user `shares` | — | — | — |
 | 6 | Totals write-back | USER | writes `totalValue/dayPL/dayPLPct` | — | — | — |
 | 7 | Remove-holding modal | USER | `deleteDoc` | — | — | — |
@@ -344,7 +979,7 @@ Full single-stock page: chart, ratings, financials, peers, dividends, notes.
 |---|---|---|---|---|---|---|
 | 1 | Stocks / S&P 500 tabs | NONE | **dead control** — state set, never read | — | — | — |
 | 2 | Color legend | NONE | static legend | — | — | — |
-| 3 | Treemap | HYBRID | `companies` + `sectors` over static `sectorList` universe | Polygon | `/v3/reference/tickers/{t}` | FMP `/sector-performance-snapshot` ✅ |
+| 3 | Treemap | HYBRID | `companies` + `sectors` over static `sectorList` universe | Polygon | `/v3/reference/tickers/{ticker}` | FMP `/sector-performance-snapshot` ✅ |
 | 4 | Hover tooltip | HYBRID/STATIC | Price/RVOL/MA from **static `movers`**, not the live-merged list | — | — | Use the live-merged list already on-screen |
 
 ---
@@ -355,7 +990,7 @@ Full single-stock page: chart, ratings, financials, peers, dividends, notes.
 |---|---|---|---|---|---|---|
 | 1 | Theme filter pills | STATIC | `THEMES` — frozen prices (NVDA pinned `$1181.75`) | — | — | — (basket definitions are legitimate config) |
 | 2 | AI theme summary | GENERATED | template despite "◆ AI theme summary" | — | — | Anthropic API |
-| 3 | Constituents list | HYBRID | `companies` overlays frozen prices | Polygon | `/v3/reference/tickers/{t}` | Finnhub `/quote` |
+| 3 | Constituents list | HYBRID | `companies` overlays frozen prices | Polygon | `/v3/reference/tickers/{ticker}` | Finnhub `/quote` |
 | 4 | Chart + detail panel | GENERATED | `stock-panel.tsx` synthetic | — | — | Thread real bars |
 
 ---
@@ -381,7 +1016,7 @@ Full single-stock page: chart, ratings, financials, peers, dividends, notes.
 
 | # | Feature | Type | Source | Provider | Endpoint | Free alternative |
 |---|---|---|---|---|---|---|
-| 1 | Most-active-by-$ chips | HYBRID | `insider_transactions` + `BUYERS`/`SELLERS` | SEC EDGAR | `/submissions/CIK{n}.json` | — already optimal |
+| 1 | Most-active-by-$ chips | HYBRID | `insider_transactions` + `BUYERS`/`SELLERS` | SEC EDGAR | `/submissions/CIK{10-digit-CIK}.json` | — already optimal |
 | 2 | Insider activity table ✅labeled | HYBRID | merged feed; live rows pilled | SEC EDGAR | Form 4 XML | — |
 | 3 | Insider stock drawer | HYBRID | live filings + `insiderHistory()` **generated, unlabeled** | SEC EDGAR | Form 4 XML | Widen the EDGAR lookback instead of generating |
 | 4 | Most-active institutional chips | GENERATED | `instMeta()` hash-fabricated | — | — | Derive from `fund_holdings` ✅ (already synced) |
