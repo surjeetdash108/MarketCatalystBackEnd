@@ -53,6 +53,7 @@ export class PolygonMarketBarsAdapter implements MarketBarsAdapter {
         low: b.l,
         close: b.c,
         volume: b.v,
+        vwap: b.vw ?? null,
       })),
       source: this.sourceName,
       warnings: [],

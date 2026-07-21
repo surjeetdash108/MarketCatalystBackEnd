@@ -345,6 +345,23 @@
     </div>
   </details>
 
+  <details class="purge" id="flagsPanel">
+    <summary>Feature Flags — release toggles</summary>
+    <div class="purge-body">
+      <p class="purge-note">
+        Each FF_* flag gates one release. Toggling writes the
+        <code>feature_flags/default</code> Firestore doc; the app reacts live
+        (a disabled screen drops from the nav and shows "Coming soon"). ON =
+        released. Source: <code>default → env → Firestore</code>.
+      </p>
+      <div style="margin:10px 0;display:flex;gap:8px;align-items:center">
+        <button class="purge-btn secondary" id="flagsReloadBtn" onclick="loadFlags()">Reload</button>
+        <span id="flagsStatus" style="font-size:.8rem;opacity:.7"></span>
+      </div>
+      <div id="flagsList"></div>
+    </div>
+  </details>
+
 <script>
 let refreshing = false;
 
@@ -352,6 +369,53 @@ let refreshing = false;
 // page's own origin — no need to hardcode localhost:4100. The input stays
 // editable so you can still point the monitor at a remote/other backend.
 document.getElementById('baseUrl').value = window.location.origin;
+
+// ── Feature Flags ──────────────────────────────────────────────────────────
+async function loadFlags() {
+  const status = document.getElementById('flagsStatus');
+  const list = document.getElementById('flagsList');
+  status.textContent = 'loading…';
+  try {
+    const res = await fetchWithTimeout(`${purgeBase()}/feature-flags`);
+    const { flags } = await res.json();
+    list.innerHTML = flags.map(f => `
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border-soft,#22303f)">
+        <button onclick="toggleFlag('${f.key}', ${!f.enabled})"
+          title="Click to turn ${f.enabled ? 'OFF' : 'ON'}"
+          style="width:44px;height:22px;border-radius:11px;border:none;cursor:pointer;flex:none;
+                 background:${f.enabled ? '#1caa70' : '#3a4658'};position:relative;transition:.15s">
+          <span style="position:absolute;top:2px;left:${f.enabled ? '24px' : '2px'};width:18px;height:18px;
+                       border-radius:50%;background:#fff;transition:.15s"></span>
+        </button>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:.82rem">${f.label}
+            <span style="opacity:.5;font-family:monospace;font-size:.72rem">${f.key}</span></div>
+          <div style="font-size:.7rem;opacity:.6">${f.row} · source: ${f.source}</div>
+        </div>
+        <span style="font-size:.72rem;font-weight:700;color:${f.enabled ? '#1caa70' : '#8892a0'}">
+          ${f.enabled ? 'ON' : 'OFF'}</span>
+      </div>`).join('');
+    status.textContent = `${flags.length} flags · ${flags.filter(f => f.enabled).length} on`;
+  } catch (e) {
+    status.textContent = 'load failed: ' + e.message;
+  }
+}
+async function toggleFlag(key, value) {
+  const status = document.getElementById('flagsStatus');
+  status.textContent = `setting ${key}=${value}…`;
+  try {
+    await fetchWithTimeout(`${purgeBase()}/feature-flags/${key}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    });
+    await loadFlags();
+  } catch (e) {
+    status.textContent = 'toggle failed: ' + e.message;
+  }
+}
+document.getElementById('flagsPanel').addEventListener('toggle', function () {
+  if (this.open) loadFlags();
+});
 
 function fmtTime(iso) {
   if (!iso) return null;

@@ -133,6 +133,51 @@ export class SyncMetaService {
     return snap.data()?.lastSyncedThrough ?? null;
   }
 
+  /**
+   * Both edges of what has been synced for an entity.
+   *
+   * `lastSyncedThrough` alone only ever moves FORWARD, so a job that raises its
+   * backfill depth can never reach the newly-available older history — the next
+   * run just asks for `watermark + 1 day` as usual and the deeper window is
+   * silently never fetched. `earliestSyncedFrom` records the other edge so a job
+   * can detect the gap and fill backwards. Null means "unknown", which callers
+   * should treat as "the deep backfill has not run yet".
+   */
+  async getSyncedRange(
+    jobName: string,
+    entityKey: string,
+  ): Promise<{ lastSyncedThrough: string | null; earliestSyncedFrom: string | null }> {
+    const snap = await this.firebase.firestore
+      .collection('sync_watermarks')
+      .doc(`${jobName}__${entityKey}`)
+      .get();
+    const d = snap.data();
+    return {
+      lastSyncedThrough: d?.lastSyncedThrough ?? null,
+      earliestSyncedFrom: d?.earliestSyncedFrom ?? null,
+    };
+  }
+
+  /** Records how far back history has been fetched for an entity. */
+  async setEarliestSynced(
+    jobName: string,
+    entityKey: string,
+    earliestSyncedFrom: string,
+  ): Promise<void> {
+    await setWithCreatedAt(
+      this.firebase.firestore,
+      this.firebase.firestore
+        .collection('sync_watermarks')
+        .doc(`${jobName}__${entityKey}`),
+      {
+        jobName,
+        entityKey,
+        earliestSyncedFrom,
+        updatedAt: new Date().toISOString(),
+      },
+    );
+  }
+
   async setWatermark(
     jobName: string,
     entityKey: string,

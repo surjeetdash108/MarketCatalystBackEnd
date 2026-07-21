@@ -106,6 +106,9 @@ export interface CanonicalBar {
   low: number;
   close: number;
   volume: number;
+  /** Volume-weighted average price for the bar. Optional because a future
+   *  vendor may not supply one; Polygon has always returned it as `vw`. */
+  vwap?: number | null;
 }
 
 /** Reference row for a listed symbol, camelCased away from Polygon's snake_case. */

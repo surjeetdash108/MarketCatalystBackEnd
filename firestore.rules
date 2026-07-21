@@ -9,8 +9,21 @@ rules_version = '2';
 //    is NOT implemented yet — see TODO(tier-gating) below; relaxed to isAuthenticated().
 //  - User-owned data (users/*, settings/*, stock_comments) is scoped to the owner.
 //
-// NOTE: if the frontend repo also ships a firestore.rules, keep ONE source of
-// truth and deploy from a single place to avoid drift.
+// ⚠ DO NOT DEPLOY THIS FILE. It is NOT what production runs.
+//
+// The live ruleset is deployed from MarketCatalystUI/firestore.rules (verified
+// 2026-07-21 against the Firebase Rules API). The two files have drifted in BOTH
+// directions, so neither is a superset and copying either one over the other
+// loses rules:
+//
+//   only here          market_sentiment, stock_comments, sync_meta, sync_watermarks
+//   only in the UI     financials, market_breadth, intraday_bars, dividend_history,
+//                      splits, feature_flags, alerts, notifications, watchlists,
+//                      portfolios, holdings, positions, filings
+//
+// Deploying this file would remove read access to financials and market_breadth
+// and break Stock Detail and the Dashboard internals. Edit the UI copy instead;
+// this one is kept only because the backend's firebase.json still references it.
 
 service cloud.firestore {
   match /databases/{database}/documents {

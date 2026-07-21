@@ -16,7 +16,7 @@ const DEFAULT_PAGE_DELAY_MS = 12_500;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-interface PolygonAggBar {
+export interface PolygonAggBar {
   T: string;
   v: number;
   o: number;
@@ -25,6 +25,28 @@ interface PolygonAggBar {
   l: number;
   t: number;
   n?: number;
+  /** Volume-weighted average price for the bar. Always present on aggs; used as
+   *  the session VWAP source instead of the fabricated value the UI showed. */
+  vw?: number;
+}
+
+/**
+ * Oldest date the plan will serve. Probed 2026-07-21: a daily-aggs request
+ * starting 2021-07-22 returned 200 while 2021-07-01 returned
+ * `NOT_AUTHORIZED / "Your plan doesn't include this data timeframe"` — i.e. a
+ * five-year rolling window. Requests that cross the edge fail as a whole rather
+ * than being truncated, so callers must clamp `from` instead of asking for more
+ * and taking what arrives.
+ */
+export const PLAN_HISTORY_YEARS = 5;
+
+/** The earliest `from` date the plan accepts today, with a few days of slack so
+ *  a job scheduled near midnight cannot drift over the edge mid-run. */
+export function planHistoryFloor(now: Date = new Date()): string {
+  const floor = new Date(now);
+  floor.setUTCFullYear(floor.getUTCFullYear() - PLAN_HISTORY_YEARS);
+  floor.setUTCDate(floor.getUTCDate() + 3);
+  return floor.toISOString().slice(0, 10);
 }
 
 export interface PolygonTickerRef {
@@ -145,11 +167,211 @@ export class PolygonService {
     to: string,
     timespan = 'day',
     multiplier = 1,
+    limit = 5000,
   ): Promise<PolygonAggBar[]> {
     const res = await fetchJson<{ results?: PolygonAggBar[] }>(
-      `${this.baseUrl}/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${from}/${to}?adjusted=true&sort=asc&apiKey=${this.apiKey}`,
+      `${this.baseUrl}/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${from}/${to}` +
+        `?adjusted=true&sort=asc&limit=${limit}&apiKey=${this.apiKey}`,
     );
     return res.results ?? [];
+  }
+
+  /**
+   * Intraday aggregate bars. Verified authorized on this plan (2026-07-21):
+   * `/range/1/minute` returned 1553 bars and still resolves a year back — the
+   * intraday timeframes were never plan-blocked, only unsynced.
+   *
+   * `limit` is raised well above the 5000 default because a multi-day 1-minute
+   * pull exceeds it silently, and a truncated series plots as a chart that just
+   * stops mid-window.
+   */
+  async getIntradayBars(
+    ticker: string,
+    multiplier: number,
+    timespan: 'minute' | 'hour',
+    from: string,
+    to: string,
+  ): Promise<PolygonAggBar[]> {
+    return this.getAggsRange(ticker, from, to, timespan, multiplier, 50_000);
+  }
+
+  /**
+   * Peer tickers. Polygon DOES have a peers product — earlier notes in this repo
+   * recorded `peers` as "structurally null on this source", which was wrong: the
+   * companies job simply never called this endpoint. Verified on the paid plan,
+   * AAPL returns MSFT, AMZN, GOOGL, GOOG, NVDA.
+   */
+  async getRelatedCompanies(ticker: string): Promise<string[]> {
+    const res = await fetchJson<{ results?: Array<{ ticker: string }> }>(
+      `${this.baseUrl}/v1/related-companies/${ticker}?apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []).map((r) => r.ticker).filter(Boolean);
+  }
+
+  /**
+   * Full dividend history for one ticker, newest first. Distinct from
+   * getDividendsCalendar, which sweeps every ticker over a forward ex-date
+   * window; this walks one ticker backwards to build the history chart and the
+   * trailing-twelve-month figure the yield is derived from.
+   */
+  async getDividendHistory(
+    ticker: string,
+    limit = 200,
+  ): Promise<
+    Array<{
+      exDividendDate: string | null;
+      paymentDate: string | null;
+      declarationDate: string | null;
+      recordDate: string | null;
+      cashAmount: number;
+      dividendType: string | null;
+      frequency: number | null;
+    }>
+  > {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v3/reference/dividends?ticker=${ticker}` +
+        `&order=desc&sort=ex_dividend_date&limit=${limit}&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []).map((d: any) => ({
+      exDividendDate: d.ex_dividend_date ?? null,
+      paymentDate: d.pay_date ?? null,
+      declarationDate: d.declaration_date ?? null,
+      recordDate: d.record_date ?? null,
+      cashAmount: d.cash_amount,
+      dividendType: d.dividend_type ?? null,
+      frequency: d.frequency ?? null,
+    }));
+  }
+
+  /** Split history for one ticker, newest first. */
+  async getSplits(
+    ticker: string,
+    limit = 50,
+  ): Promise<
+    Array<{ executionDate: string; splitFrom: number; splitTo: number }>
+  > {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v3/reference/splits?ticker=${ticker}` +
+        `&order=desc&sort=execution_date&limit=${limit}&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []).map((s: any) => ({
+      executionDate: s.execution_date,
+      splitFrom: s.split_from,
+      splitTo: s.split_to,
+    }));
+  }
+
+  /**
+   * Live session state straight from the exchange feed, replacing the
+   * hand-maintained holiday set the header pill computed from a local clock.
+   */
+  async getMarketStatus(): Promise<{
+    market: string;
+    earlyHours: boolean;
+    afterHours: boolean;
+    exchanges: Record<string, string>;
+    serverTime: string;
+  }> {
+    return fetchJson(`${this.baseUrl}/v1/marketstatus/now?apiKey=${this.apiKey}`);
+  }
+
+  /** Upcoming market holidays and early closes. */
+  async getUpcomingMarketHolidays(): Promise<
+    Array<{
+      date: string;
+      exchange: string;
+      name: string;
+      status: string;
+      open?: string;
+      close?: string;
+    }>
+  > {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v1/marketstatus/upcoming?apiKey=${this.apiKey}`,
+    );
+    return Array.isArray(res) ? res : [];
+  }
+
+  /**
+   * US Treasury yield curve. Authorized on this plan and previously unused —
+   * the "10Y Yield" tile was showing TLT, a long-treasury ETF that moves
+   * INVERSELY to the yield it was labelled as.
+   */
+  async getTreasuryYields(limit = 2): Promise<
+    Array<{
+      date: string;
+      yield1Month: number | null;
+      yield3Month: number | null;
+      yield1Year: number | null;
+      yield2Year: number | null;
+      yield5Year: number | null;
+      yield10Year: number | null;
+      yield30Year: number | null;
+    }>
+  > {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/fed/v1/treasury-yields?limit=${limit}&sort=date.desc&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []).map((r: any) => ({
+      date: r.date,
+      yield1Month: r.yield_1_month ?? null,
+      yield3Month: r.yield_3_month ?? null,
+      yield1Year: r.yield_1_year ?? null,
+      yield2Year: r.yield_2_year ?? null,
+      yield5Year: r.yield_5_year ?? null,
+      yield10Year: r.yield_10_year ?? null,
+      yield30Year: r.yield_30_year ?? null,
+    }));
+  }
+
+  /**
+   * Universal snapshot. Carries the extended-hours fields the delayed
+   * per-ticker snapshot does not: `early_trading_change_percent` and
+   * `late_trading_change_percent`, which are what the Premarket / After-Hours
+   * feeds need. Still 15-minute delayed like everything else on this plan.
+   */
+  async getUniversalSnapshot(tickers: string[]): Promise<
+    Array<{
+      ticker: string;
+      name: string | null;
+      marketStatus: string | null;
+      price: number | null;
+      change: number | null;
+      changePercent: number | null;
+      earlyTradingChangePercent: number | null;
+      lateTradingChangePercent: number | null;
+      open: number | null;
+      high: number | null;
+      low: number | null;
+      previousClose: number | null;
+      volume: number | null;
+      vwap: number | null;
+    }>
+  > {
+    if (tickers.length === 0) return [];
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v3/snapshot?ticker.any_of=${tickers.join(',')}` +
+        `&limit=250&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []).map((r: any) => {
+      const s = r.session ?? {};
+      return {
+        ticker: r.ticker,
+        name: r.name ?? null,
+        marketStatus: r.market_status ?? null,
+        price: s.price ?? null,
+        change: s.change ?? null,
+        changePercent: s.change_percent ?? null,
+        earlyTradingChangePercent: s.early_trading_change_percent ?? null,
+        lateTradingChangePercent: s.late_trading_change_percent ?? null,
+        open: s.open ?? null,
+        high: s.high ?? null,
+        low: s.low ?? null,
+        previousClose: s.previous_close ?? null,
+        volume: s.volume ?? null,
+        vwap: s.vwap ?? null,
+      };
+    });
   }
 
   async getTickerDetails(ticker: string): Promise<any> {
@@ -177,9 +399,13 @@ export class PolygonService {
   ): Promise<
     Array<{
       fiscalYear: string | null;
+      fiscalPeriod: string | null;
+      endDate: string | null;
       revenue: number | null;
       costOfRevenue: number | null;
       grossProfit: number | null;
+      netIncome: number | null;
+      operatingIncome: number | null;
       dilutedEps: number | null;
     }>
   > {
@@ -192,12 +418,63 @@ export class PolygonService {
       const v = (k: string) => inc[k]?.value ?? null;
       return {
         fiscalYear: p.fiscal_year ?? null,
+        fiscalPeriod: p.fiscal_period ?? null,
+        endDate: p.end_date ?? null,
         revenue: v('revenues'),
         costOfRevenue: v('cost_of_revenue'),
         grossProfit: v('gross_profit'),
+        netIncome: v('net_income_loss'),
+        operatingIncome: v('operating_income_loss'),
         dilutedEps: v('diluted_earnings_per_share'),
       };
     });
+  }
+
+  /**
+   * All three statements for one ticker. `getIncomeStatements` above reads only
+   * the income statement because that is all the growth job needs; the same
+   * response has always carried `balance_sheet` and `cash_flow_statement`
+   * alongside it, so the balance-sheet and cash-flow panels were being
+   * fabricated from data already on the wire.
+   */
+  async getFinancialStatements(
+    ticker: string,
+    timeframe = 'quarterly',
+    limit = 10,
+  ): Promise<
+    Array<{
+      fiscalYear: string | null;
+      fiscalPeriod: string | null;
+      endDate: string | null;
+      filingDate: string | null;
+      income: Record<string, number | null>;
+      balanceSheet: Record<string, number | null>;
+      cashFlow: Record<string, number | null>;
+    }>
+  > {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
+        `&timeframe=${timeframe}&limit=${limit}&apiKey=${this.apiKey}`,
+    );
+    // Every statement node is `{ value, unit, label, order }`; only `value` is
+    // read. Statements are flattened wholesale rather than field-by-field so a
+    // new panel needs no vendor-layer change.
+    const values = (node: Record<string, any> | undefined) =>
+      Object.fromEntries(
+        Object.entries(node ?? {}).map(([k, v]) => [
+          k,
+          typeof v?.value === 'number' ? v.value : null,
+        ]),
+      );
+    return (res.results ?? []).map((p: any) => ({
+      fiscalYear: p.fiscal_year ?? null,
+      fiscalPeriod: p.fiscal_period ?? null,
+      endDate: p.end_date ?? null,
+      filingDate: p.filing_date ?? null,
+      income: values(p.financials?.income_statement),
+      balanceSheet: values(p.financials?.balance_sheet),
+      cashFlow: values(p.financials?.cash_flow_statement),
+    }));
   }
 
   async getSectorPerformance(): Promise<

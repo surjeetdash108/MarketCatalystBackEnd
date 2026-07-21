@@ -5,6 +5,7 @@ import { chunkedBatchSet } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
 import { IPOS_ADAPTER, type IposAdapter } from '../adapters/types';
 import { SyncRegistry } from '../common/sync-registry.service';
+import { PolygonService } from '../vendors/polygon/polygon.service';
 
 const JOB_NAME = 'ipos';
 const LOOKBACK_DAYS = 45;
@@ -40,6 +41,7 @@ export class IposJob implements OnModuleInit {
 
   constructor(
     @Inject(IPOS_ADAPTER) private readonly ipos: IposAdapter,
+    private readonly polygon: PolygonService,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
@@ -70,10 +72,38 @@ export class IposJob implements OnModuleInit {
       if (result.warnings.length > 0) {
         this.logger.log(`ipos: ${result.warnings.map((w) => w.code).join(', ')}`);
       }
-      const docs = events.map((e) => {
+      const today = isoDate(new Date());
+      // Aftermarket enrichment: for IPOs that have ALREADY listed, fetch daily
+      // bars and compute real current price + day-1 pop + return-since-offer.
+      // Was mock-only because the IPO feed carries no post-listing price.
+      const docs = [];
+      for (const e of events) {
         const { low, high } = parsePriceRange(e.price);
         const id = `${e.date}_${e.symbol || slugify(e.name)}`;
-        return {
+        const offer = low != null && high != null ? (low + high) / 2 : (low ?? high);
+
+        let currentPrice: number | null = null;
+        let day1Close: number | null = null;
+        let day1Pop: number | null = null;
+        let returnSinceIpo: number | null = null;
+        // Only for listed names with a past listing date and a real ticker.
+        if (e.symbol && e.date && e.date <= today) {
+          try {
+            const bars = await this.polygon.getAggsRange(e.symbol, e.date, today);
+            if (bars.length > 0) {
+              day1Close = bars[0].c ?? null;
+              currentPrice = bars[bars.length - 1].c ?? null;
+              if (offer && offer > 0) {
+                if (day1Close != null) day1Pop = ((day1Close - offer) / offer) * 100;
+                if (currentPrice != null) returnSinceIpo = ((currentPrice - offer) / offer) * 100;
+              }
+            }
+          } catch {
+            // Best-effort; a missing series just leaves the aftermarket fields null.
+          }
+        }
+
+        docs.push({
           id,
           data: {
             date: e.date,
@@ -82,6 +112,11 @@ export class IposJob implements OnModuleInit {
             exchange: e.exchange,
             priceLow: low,
             priceHigh: high,
+            offerPrice: offer ?? null,
+            currentPrice,
+            day1Close,
+            day1PopPct: day1Pop == null ? null : Math.round(day1Pop * 100) / 100,
+            returnSinceIpoPct: returnSinceIpo == null ? null : Math.round(returnSinceIpo * 100) / 100,
             numberOfShares: e.numberOfShares,
             totalSharesValue: e.totalSharesValue,
             status: e.status,
@@ -89,8 +124,8 @@ export class IposJob implements OnModuleInit {
             warnings: result.warnings,
             updatedAt: new Date().toISOString(),
           },
-        };
-      });
+        });
+      }
       await chunkedBatchSet(this.firebase.firestore, 'ipos', docs);
       await this.meta.record(JOB_NAME, { ok: true, count: docs.length });
       return { count: docs.length };

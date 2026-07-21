@@ -9,6 +9,7 @@ import {
   App,
 } from 'firebase-admin/app';
 import { Firestore, getFirestore } from 'firebase-admin/firestore';
+import { Auth, getAuth } from 'firebase-admin/auth';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 
@@ -61,4 +62,12 @@ export class FirebaseAdminService implements OnModuleInit {
     }
     return getFirestore(this.app);
   }
+  /** Admin SDK Auth — used by AdminGuard to verify caller ID tokens. */
+  get auth(): Auth {
+    if (!this.app) {
+      throw new Error('FirebaseAdminService used before initialisation');
+    }
+    return getAuth(this.app);
+  }
+
 }

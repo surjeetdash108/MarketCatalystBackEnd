@@ -53,14 +53,32 @@ export class OptionsChainsJob implements OnModuleInit {
         for (const c of contracts) {
           try {
             const bar = await this.polygon.getOptionLatestBar(c.ticker, from, today);
+            // Per-contract OHLCV is authorized on this plan even though the
+            // options SNAPSHOT (greeks/IV/OI/bid-ask) returns NOT_AUTHORIZED —
+            // verified 2026-07-21. Only close and volume were being read, so the
+            // chain table showed two of the six real columns available to it.
             enriched.push({
               contractTicker: c.ticker,
               contractType: c.contract_type,
               strike: c.strike_price,
               expirationDate: c.expiration_date,
+              exerciseStyle: c.exercise_style ?? null,
+              sharesPerContract: c.shares_per_contract ?? null,
+              lastOpen: bar?.o ?? null,
+              lastHigh: bar?.h ?? null,
+              lastLow: bar?.l ?? null,
               lastClose: bar?.c ?? null,
+              lastVwap: bar?.vw ?? null,
               lastVolume: bar?.v ?? null,
+              lastTradeCount: bar?.n ?? null,
               lastBarDate: bar ? isoDate(new Date(bar.t)) : null,
+              // Intraday range on the contract's own last session. Not a
+              // substitute for a bid-ask spread, but it is a real traded range
+              // where the table previously had nothing.
+              lastRangePct:
+                bar && bar.o > 0
+                  ? Math.round(((bar.h - bar.l) / bar.o) * 10000) / 100
+                  : null,
             });
           } catch (err) {
             this.logger.warn(`Failed fetching bar for ${c.ticker}: ${err.message}`);
@@ -74,7 +92,7 @@ export class OptionsChainsJob implements OnModuleInit {
             underlyingTicker: ticker,
             contracts: enriched,
             source: 'polygon',
-            note: 'Strikes/expirations and last close/volume are real (delayed). Bid/ask, IV, greeks, and open interest are not available on the current Polygon plan.',
+            note: 'Strikes, expirations and per-contract OHLCV/VWAP/volume are real (delayed). Bid/ask, IV, greeks and open interest return NOT_AUTHORIZED on the current Polygon plan — they need the Options add-on or Tradier.',
             updatedAt: new Date().toISOString(),
           }, { merge: true });
         tickersWritten++;

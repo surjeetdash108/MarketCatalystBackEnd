@@ -24,14 +24,14 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
   ): Promise<AdapterResult<CanonicalCompany> | null> {
     const details = await this.polygon.getTickerDetails(ticker);
     if (!details) return null;
-    const warnings: AdapterWarning[] = [
-      {
-        code: 'FIELD_NOT_SUPPORTED',
-        field: 'dividendYield,dividendPerShare,peers',
-        message:
-          'Polygon has no dividend-yield or peer-list product — these fields are structurally null on this source, not a transient failure. (eps/peRatio ARE populated below from /vX/reference/financials.)',
-      },
-    ];
+    // These three used to be declared FIELD_NOT_SUPPORTED here, on the belief
+    // that Polygon sells neither a peer list nor a dividend yield. Both were
+    // wrong in different ways, verified against the live plan on 2026-07-21:
+    //   peers  — /v1/related-companies is authorized and returns real tickers.
+    //   yield  — there is indeed no yield PRODUCT, but the dividend history that
+    //            derives it is right there; a trailing-12-month sum over price
+    //            is the same number a vendor would sell back.
+    const warnings: AdapterWarning[] = [];
     let price = null;
     let pctChange = null;
     try {
@@ -87,6 +87,56 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
         message: `TTM financials request failed: ${reason}`,
       });
     }
+    let peers: string[] = [];
+    try {
+      // Self is excluded — the endpoint does not return it today, but a peer
+      // list that contains the company itself renders as a nonsense row.
+      peers = (await this.polygon.getRelatedCompanies(ticker)).filter(
+        (p) => p !== ticker,
+      );
+    } catch (err) {
+      const reason = err.message;
+      this.logger.warn(`Failed fetching peers for ${ticker}: ${reason}`);
+      warnings.push({
+        code: 'SUB_REQUEST_FAILED',
+        field: 'peers',
+        message: `Related-companies request failed: ${reason}`,
+      });
+    }
+
+    let dividendPerShare: number | null = null;
+    let dividendYield: number | null = null;
+    try {
+      const history = await this.polygon.getDividendHistory(ticker, 40);
+      const cutoff = new Date();
+      cutoff.setUTCFullYear(cutoff.getUTCFullYear() - 1);
+      const cutoffIso = isoDate(cutoff);
+      // Trailing twelve months by ex-date. Special/one-off distributions are
+      // included deliberately: TTM yield is what was actually paid out, not
+      // what the regular schedule implies.
+      const ttm = history.filter(
+        (d) => d.exDividendDate != null && d.exDividendDate >= cutoffIso,
+      );
+      if (ttm.length > 0) {
+        const total = ttm.reduce((sum, d) => sum + (d.cashAmount ?? 0), 0);
+        dividendPerShare = Math.round(total * 10000) / 10000;
+        if (price != null && price > 0) {
+          dividendYield = Math.round((total / price) * 10000) / 100;
+        }
+      } else if (history.length === 0) {
+        // A non-payer is a real answer, not a gap — leave both null silently.
+        dividendPerShare = null;
+      }
+    } catch (err) {
+      const reason = err.message;
+      this.logger.warn(`Failed fetching dividend history for ${ticker}: ${reason}`);
+      warnings.push({
+        code: 'SUB_REQUEST_FAILED',
+        field: 'dividendYield,dividendPerShare',
+        message: `Dividend-history request failed: ${reason}`,
+      });
+    }
+
     const data: CanonicalCompany = {
       ticker,
       name: details.name ?? null,
@@ -109,9 +159,9 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       description: details.description ?? null,
       peRatio,
       eps,
-      dividendYield: null,
-      dividendPerShare: null,
-      peers: [],
+      dividendYield,
+      dividendPerShare,
+      peers,
     };
     return { data, source: this.sourceName, warnings };
   }

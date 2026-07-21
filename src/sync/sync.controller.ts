@@ -7,6 +7,7 @@ import {
   NotFoundException,
   Param,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import { CronJob } from 'cron';
 import { AllSourcesFailedError } from '../adapters/adapter-error';
@@ -36,6 +37,8 @@ function nextRunAt(cronExpression: string, timeZone: string): string | null {
     return null;
   }
 }
+
+import { AdminGuard } from '../common/admin.guard';
 
 @Controller('sync')
 export class SyncController {
@@ -106,6 +109,7 @@ export class SyncController {
     }
   }
 
+  @UseGuards(AdminGuard)
   @Post(':job/run')
   async run(@Param('job') job: string) {
     const runner = this.registry.get(job);
@@ -128,6 +132,7 @@ export class SyncController {
     }
   }
 
+  @UseGuards(AdminGuard)
   @Post('run-all')
   async runAll() {
     const results = [];

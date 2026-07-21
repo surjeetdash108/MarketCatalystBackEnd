@@ -18,6 +18,10 @@ import { NewsJob } from './news.job';
 import { OptionsChainsJob } from './options-chains.job';
 import { FearGreedJob } from './fear-greed.job';
 import { FundamentalsGrowthJob } from './fundamentals-growth.job';
+import { FinancialsJob } from './financials.job';
+import { IntradayBarsJob } from './intraday-bars.job';
+import { CorporateActionsJob } from './corporate-actions.job';
+import { MarketBreadthJob } from './market-breadth.job';
 import { RsRatingJob } from './rs-rating.job';
 import { TechRatingJob } from './tech-rating.job';
 import { TechnicalIndicatorsJob } from './technical-indicators.job';
@@ -54,11 +58,15 @@ import { TickerUniverseJob } from './ticker-universe.job';
     OptionsChainsJob,
     DividendsJob,
     StockHistoryJob,
+    IntradayBarsJob,
+    CorporateActionsJob,
     MarketQuotesJob,
     RsRatingJob,
     TechnicalIndicatorsJob,
     TechRatingJob,
     FundamentalsGrowthJob,
+    FinancialsJob,
+    MarketBreadthJob,
     FearGreedJob,
   ],
 })

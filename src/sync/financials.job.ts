@@ -1,0 +1,268 @@
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
+import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { chunkedBatchSet } from '../common/firestore-batch.util';
+import { SyncMetaService } from '../common/sync-meta.service';
+import { SyncRegistry } from '../common/sync-registry.service';
+import { TICKER_UNIVERSE } from '../common/ticker-universe';
+import { PolygonService } from '../vendors/polygon/polygon.service';
+import { FinnhubService } from '../vendors/finnhub/finnhub.service';
+
+/**
+ * 10-quarter quarterly financials → `financials/{ticker}` (delivery-plan R29).
+ *
+ * Replaces the fabricated income-statement / EPS-history that Stock Detail and
+ * the Earnings Hub rendered via earnHistory()/earnIncome(). Source is Polygon's
+ * /vX/reference/financials (quarterly) — verified 10 real quarters available on
+ * the current plan. Where a synced earnings_events estimate exists for the same
+ * quarter, it is joined so the EPS chart can show estimate-vs-actual instead of
+ * an invented surprise.
+ *
+ * A separate collection (not merged onto `companies`) because it is an ARRAY of
+ * quarters per ticker, not a flat field set, and only Stock Detail / Earnings
+ * read it — keeping it out of the hot `companies` doc avoids bloating every
+ * screen's company read.
+ */
+
+const JOB_NAME = 'financials';
+const BATCH_SIZE = 40;
+const QUARTERS = 10;
+const DELAY_MS = 120;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export interface QuarterFinancials {
+  fiscalPeriod: string | null;
+  fiscalYear: string | null;
+  endDate: string | null;
+  revenue: number | null;
+  grossProfit: number | null;
+  operatingIncome: number | null;
+  netIncome: number | null;
+  epsActual: number | null;
+  /** From earnings_events when a same-quarter estimate exists, else null. */
+  epsEstimate: number | null;
+
+  // ── Fields below come from the SAME vendor response that already served the
+  // income statement. The balance-sheet and cash-flow panels were fabricated
+  // while these were being fetched and discarded on every run. ──
+  costOfRevenue: number | null;
+  operatingExpenses: number | null;
+  researchAndDevelopment: number | null;
+  sellingGeneralAndAdministrative: number | null;
+  incomeTaxExpense: number | null;
+  dilutedAverageShares: number | null;
+
+  totalAssets: number | null;
+  currentAssets: number | null;
+  totalLiabilities: number | null;
+  currentLiabilities: number | null;
+  equity: number | null;
+  inventory: number | null;
+  longTermDebt: number | null;
+
+  netCashFlow: number | null;
+  operatingCashFlow: number | null;
+  investingCashFlow: number | null;
+  financingCashFlow: number | null;
+
+  /** Derived, because every consumer computed them differently or not at all. */
+  grossMarginPct: number | null;
+  operatingMarginPct: number | null;
+  netMarginPct: number | null;
+  currentRatio: number | null;
+  filingDate: string | null;
+}
+
+@Injectable()
+export class FinancialsJob implements OnModuleInit {
+  private readonly logger = new Logger(FinancialsJob.name);
+
+  constructor(
+    private readonly polygon: PolygonService,
+    private readonly finnhub: FinnhubService,
+    private readonly firebase: FirebaseAdminService,
+    private readonly meta: SyncMetaService,
+    private readonly registry: SyncRegistry,
+  ) {}
+
+  onModuleInit() {
+    this.registry.register(JOB_NAME, () => this.run(), {
+      collections: ['financials'],
+      cronExpression: '45 4 * * *',
+      timeZone: 'America/New_York',
+    });
+  }
+
+  @Cron('45 4 * * *', { timeZone: 'America/New_York' })
+  async scheduled() {
+    await this.registry.get(JOB_NAME)();
+  }
+
+  /**
+   * epsEstimate keyed by `TICKER_YYYY-MM-DD` (report date). Merges two sources:
+   *   1. synced earnings_events (FMP) — sparse
+   *   2. Finnhub /calendar/earnings over the trailing ~3y — far better coverage,
+   *      which is what fills the EPS-history estimate line that was mostly blank.
+   */
+  private async estimatesFor(tickers: string[]): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+
+    // Source 1: FMP-derived earnings_events already in Firestore.
+    const snaps = await Promise.all(
+      tickers.map((t) =>
+        this.firebase.firestore
+          .collection('earnings_events')
+          .where('ticker', '==', t)
+          .get(),
+      ),
+    );
+    for (const snap of snaps) {
+      for (const d of snap.docs) {
+        const data = d.data();
+        if (data.epsEstimate != null && data.ticker && data.date) {
+          out.set(`${data.ticker}_${data.date}`, data.epsEstimate);
+        }
+      }
+    }
+
+    // Source 2: Finnhub earnings estimates over the trailing ~3 years. A blank
+    // `from` end is set well back so all 10 quarters can find a match.
+    const to = new Date().toISOString().slice(0, 10);
+    const fromD = new Date(Date.now() - 1150 * 86400_000).toISOString().slice(0, 10);
+    for (const t of tickers) {
+      try {
+        const rows = await this.finnhub.getEarningsCalendar(fromD, to, t);
+        for (const r of rows) {
+          if (r.epsEstimate != null && r.date) {
+            // FMP wins when both exist (source 1 set first); only fill gaps.
+            const key = `${t}_${r.date}`;
+            if (!out.has(key)) out.set(key, r.epsEstimate);
+          }
+        }
+      } catch {
+        // Finnhub is best-effort enrichment; a failure leaves FMP estimates intact.
+      }
+    }
+    return out;
+  }
+
+  /** Nearest estimate to a quarter's period-end date, within a ~90-day window. */
+  private matchEstimate(
+    estimates: Map<string, number>,
+    ticker: string,
+    endDate: string | null,
+  ): number | null {
+    if (!endDate) return null;
+    const target = new Date(`${endDate}T00:00:00Z`).getTime();
+    let best: { v: number; gap: number } | null = null;
+    for (const [key, v] of estimates) {
+      if (!key.startsWith(`${ticker}_`)) continue;
+      const dateStr = key.slice(ticker.length + 1);
+      const gap = Math.abs(new Date(`${dateStr}T00:00:00Z`).getTime() - target) / 86_400_000;
+      // Report date follows the fiscal period end by weeks; 90d is generous.
+      if (gap <= 90 && (!best || gap < best.gap)) best = { v, gap };
+    }
+    return best?.v ?? null;
+  }
+
+  async run() {
+    try {
+      const cursor = await this.meta.getCursor(JOB_NAME);
+      const batch = Array.from(
+        { length: BATCH_SIZE },
+        (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
+      );
+      const estimates = await this.estimatesFor(batch);
+
+      const docs: { id: string; data: Record<string, unknown> }[] = [];
+      let failed = 0;
+      for (const ticker of batch) {
+        try {
+          const rows = await this.polygon.getFinancialStatements(
+            ticker,
+            'quarterly',
+            QUARTERS,
+          );
+          if (rows.length === 0) {
+            failed++;
+            continue;
+          }
+          const quarters: QuarterFinancials[] = rows.map((r) => {
+            const inc = r.income;
+            const bs = r.balanceSheet;
+            const cf = r.cashFlow;
+            const revenue = inc.revenues ?? null;
+            const operatingIncome = inc.operating_income_loss ?? null;
+            const netIncome = inc.net_income_loss ?? null;
+            const grossProfit = inc.gross_profit ?? null;
+            const currentAssets = bs.current_assets ?? null;
+            const currentLiabilities = bs.current_liabilities ?? null;
+            // Margins guard on revenue > 0 rather than just non-null: a quarter
+            // with zero reported revenue would otherwise divide to Infinity.
+            const pct = (num: number | null) =>
+              num != null && revenue != null && revenue > 0
+                ? Math.round((num / revenue) * 10000) / 100
+                : null;
+            return {
+              fiscalPeriod: r.fiscalPeriod,
+              fiscalYear: r.fiscalYear,
+              endDate: r.endDate,
+              filingDate: r.filingDate,
+              revenue,
+              grossProfit,
+              operatingIncome,
+              netIncome,
+              epsActual: inc.diluted_earnings_per_share ?? null,
+              epsEstimate: this.matchEstimate(estimates, ticker, r.endDate),
+
+              costOfRevenue: inc.cost_of_revenue ?? null,
+              operatingExpenses: inc.operating_expenses ?? null,
+              researchAndDevelopment: inc.research_and_development ?? null,
+              sellingGeneralAndAdministrative:
+                inc.selling_general_and_administrative_expenses ?? null,
+              incomeTaxExpense: inc.income_tax_expense_benefit ?? null,
+              dilutedAverageShares: inc.diluted_average_shares ?? null,
+
+              totalAssets: bs.assets ?? null,
+              currentAssets,
+              totalLiabilities: bs.liabilities ?? null,
+              currentLiabilities,
+              equity: bs.equity ?? null,
+              inventory: bs.inventory ?? null,
+              longTermDebt: bs.long_term_debt ?? null,
+
+              netCashFlow: cf.net_cash_flow ?? null,
+              operatingCashFlow: cf.net_cash_flow_from_operating_activities ?? null,
+              investingCashFlow: cf.net_cash_flow_from_investing_activities ?? null,
+              financingCashFlow: cf.net_cash_flow_from_financing_activities ?? null,
+
+              grossMarginPct: pct(grossProfit),
+              operatingMarginPct: pct(operatingIncome),
+              netMarginPct: pct(netIncome),
+              currentRatio:
+                currentAssets != null && currentLiabilities != null && currentLiabilities > 0
+                  ? Math.round((currentAssets / currentLiabilities) * 100) / 100
+                  : null,
+            };
+          });
+          docs.push({
+            id: ticker,
+            data: { ticker, quarters, updatedAt: new Date().toISOString() },
+          });
+        } catch (err) {
+          this.logger.error(`financials failed for ${ticker}: ${err.message}`);
+          failed++;
+        }
+        await sleep(DELAY_MS);
+      }
+
+      await chunkedBatchSet(this.firebase.firestore, 'financials', docs);
+      await this.meta.setCursor(JOB_NAME, (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length);
+      await this.meta.record(JOB_NAME, { ok: true, count: docs.length });
+      return { written: docs.length, failed };
+    } catch (err) {
+      await this.meta.record(JOB_NAME, { ok: false, error: err.message });
+      throw err;
+    }
+  }
+}

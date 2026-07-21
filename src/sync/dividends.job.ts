@@ -70,6 +70,38 @@ export class DividendsJob implements OnModuleInit {
       if (result.warnings.length > 0) {
         this.logger.log(`dividends: ${result.warnings.map((w) => w.code).join(', ')}`);
       }
+      // Annualized yield per row. Polygon has no yield field (it arrives null),
+      // which left the Macro screen's high-yield vs growth buckets unable to
+      // bucket anything and every row rendering "n/a". amount x payments-per-year
+      // over the last close is the same figure a vendor would supply, and the
+      // price is already synced on the company doc.
+      const symbols = [...new Set(events.map((e) => e.symbol).filter(Boolean))];
+      const priceByTicker = new Map<string, number>();
+      for (let i = 0; i < symbols.length; i += 300) {
+        const refs = symbols
+          .slice(i, i + 300)
+          .map((s) => this.firebase.firestore.collection('companies').doc(s));
+        const docs = await this.firebase.firestore.getAll(...refs).catch(() => []);
+        for (const d of docs) {
+          const price = d.data()?.price;
+          if (typeof price === 'number' && price > 0) priceByTicker.set(d.id, price);
+        }
+      }
+      const PAYMENTS_PER_YEAR: Record<string, number> = {
+        Annual: 1,
+        'Semi-Annual': 2,
+        Quarterly: 4,
+        Monthly: 12,
+      };
+      const annualizedYield = (e: (typeof events)[number]): number | null => {
+        const price = priceByTicker.get(e.symbol);
+        // A one-time/special dividend has no annual cadence to project, so it
+        // gets no yield rather than a fabricated 4x annualization.
+        const perYear = e.frequency ? PAYMENTS_PER_YEAR[e.frequency] : undefined;
+        if (!price || !perYear || !e.dividend) return null;
+        return Math.round(((e.dividend * perYear) / price) * 10000) / 100;
+      };
+
       // Doc ID is symbol + ex-dividend date, NOT symbol alone. A company can have
       // more than one dividend event inside the lookahead window (a regular
       // quarterly plus a special dividend, or two ex-dates spanning a quarter
@@ -87,7 +119,8 @@ export class DividendsJob implements OnModuleInit {
           paymentDate: e.paymentDate,
           declarationDate: e.declarationDate,
           dividendAmount: e.dividend,
-          yieldPct: e.yield,
+          yieldPct: e.yield ?? annualizedYield(e),
+          yieldIsDerived: e.yield == null,
           frequency: e.frequency,
           source,
           warnings: result.warnings,

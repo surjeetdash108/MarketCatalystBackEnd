@@ -5,6 +5,7 @@ import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-ba
 import { SyncMetaService } from '../common/sync-meta.service';
 import { QUOTE_ADAPTER, type QuoteAdapter } from '../adapters/types';
 import { SyncRegistry } from '../common/sync-registry.service';
+import { PolygonService } from '../vendors/polygon/polygon.service';
 
 const JOB_NAME = 'market-indices';
 
@@ -63,13 +64,6 @@ const INDEX_PROXIES = [
     note: 'ETF proxy for the US Dollar Index',
   },
   {
-    symbol: 'US10Y',
-    label: '10Y Yield',
-    proxyTicker: 'TLT',
-    isProxy: true,
-    note: 'Long-treasury ETF, inverse-correlated with the 10Y yield — NOT the yield itself',
-  },
-  {
     symbol: 'VIX',
     label: 'VIX',
     proxyTicker: 'VIXY',
@@ -84,6 +78,7 @@ export class MarketIndicesJob implements OnModuleInit {
 
   constructor(
     @Inject(QUOTE_ADAPTER) private readonly quotes: QuoteAdapter,
+    private readonly polygon: PolygonService,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
@@ -147,6 +142,56 @@ export class MarketIndicesJob implements OnModuleInit {
           this.logger.error(`Failed fetching proxy quote for ${idx.symbol} (${idx.proxyTicker}): ${err.message}`);
         }
       }
+      // US10Y is NOT an ETF proxy any more. It used to be TLT — a long-treasury
+      // fund that moves INVERSELY to the yield it was labelled as, so a falling
+      // 10Y rendered as a falling "10Y Yield" tile when the yield was rising.
+      // Polygon's /fed/v1/treasury-yields is authorized on this plan and gives
+      // the actual constant-maturity yield, plus the rest of the curve for the
+      // Macro screen.
+      try {
+        const curve = await this.polygon.getTreasuryYields(2);
+        const latest = curve[0];
+        const prior = curve[1];
+        if (latest?.yield10Year != null) {
+          const value = latest.yield10Year;
+          const pc = prior?.yield10Year ?? null;
+          // Yields are quoted in percentage POINTS, so `change` is a basis-point
+          // move and `pctChange` is its relative size — not the same number.
+          const change = pc == null ? null : Math.round((value - pc) * 1000) / 1000;
+          const doc = {
+            label: '10Y Yield',
+            proxyTicker: null,
+            isProxy: false,
+            note: 'US Treasury 10-year constant-maturity yield, in percent',
+            unit: 'percent',
+            value,
+            change,
+            pctChange:
+              pc && pc !== 0 && change != null
+                ? Math.round(((value - pc) / pc) * 10000) / 100
+                : null,
+            open: null,
+            prevClose: pc,
+            asOfDate: latest.date,
+            curve: latest,
+            source: 'polygon-fed',
+            updatedAt: new Date().toISOString(),
+          };
+          const curveWrites: PendingWrite[] = [
+            { ref: col.doc('US10Y'), data: doc },
+            {
+              ref: historyCol.doc(`${today}_US10Y`),
+              data: { ...doc, asOfDate: today },
+              merge: false,
+            },
+          ];
+          await batchSetWithCreatedAt(this.firebase.firestore, curveWrites);
+          written++;
+        }
+      } catch (err) {
+        this.logger.error(`Failed fetching treasury yields for US10Y: ${err.message}`);
+      }
+
       await batchSetWithCreatedAt(this.firebase.firestore, writes);
       await this.meta.record(JOB_NAME, { ok: true, count: written });
       return { written };

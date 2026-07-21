@@ -72,4 +72,34 @@ export class FinnhubService {
     );
     return res.ipoCalendar ?? [];
   }
+
+  /**
+   * Earnings calendar for a date range. Far richer than the FMP calendar the
+   * `earnings` job uses (verified 488 rows/week vs FMP's 10) and — crucially for
+   * the EPS-history estimate line — carries `epsEstimate` per report date plus
+   * the BMO/AMC session `hour`.
+   */
+  async getEarningsCalendar(
+    from: string,
+    to: string,
+    symbol?: string,
+  ): Promise<
+    Array<{
+      symbol: string;
+      date: string;
+      hour: string;
+      quarter: number;
+      year: number;
+      epsEstimate: number | null;
+      epsActual: number | null;
+      revenueEstimate: number | null;
+      revenueActual: number | null;
+    }>
+  > {
+    const sym = symbol ? `&symbol=${symbol}` : '';
+    const res = await fetchJson<{ earningsCalendar?: any[] }>(
+      `${BASE_URL}/calendar/earnings?from=${from}&to=${to}${sym}&token=${this.apiKey}`,
+    );
+    return res.earningsCalendar ?? [];
+  }
 }

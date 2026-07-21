@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { PurgeService } from './purge.service';
 import type { PurgeCriteria } from './purge.service';
 
@@ -6,7 +6,10 @@ interface ExecuteBody extends PurgeCriteria {
   previewToken?: string;
 }
 
+import { AdminGuard } from '../common/admin.guard';
+
 @Controller('purge')
+@UseGuards(AdminGuard)
 export class PurgeController {
   constructor(private readonly purge: PurgeService) {}
 
