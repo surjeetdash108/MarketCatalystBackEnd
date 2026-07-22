@@ -98,6 +98,27 @@ done
 
 ## 3. Deploy the service to Cloud Run
 
+**There are two services, built from one image**, selected by `APP_ROLE`:
+
+| | `market-catalyst-backend` (worker) | `market-catalyst-live` (live) |
+|---|---|---|
+| `APP_ROLE` | `worker` (in `env.production.yaml`) | `live` |
+| Reachable by | Cloud Scheduler / `gcloud proxy` only | **the public internet** |
+| Mounts | everything: sync, purge, retention, flags, plans, ops UI at `/` | `LiveModule` + `/health` **only** |
+| `--timeout` | `900` (batch jobs) | `3600` (long-lived SSE) |
+| Workload | 25 cron jobs, one 35-min run | ticker-tape SSE fan-out |
+
+**Why two and not one.** The browser has to hold an open connection to
+`/live/tape/stream`, so that service must be `--allow-unauthenticated`. On the
+worker, `AdminGuard` treats *no* `Authorization` header as authorised whenever
+`ADMIN_GUARD_TRUST_IAM=true` — correct there, because `--no-allow-unauthenticated`
+means Cloud Run IAM vetted the caller first. Making that same service public
+would turn the shortcut into anonymous `/purge` and `/sync`. `APP_ROLE=live`
+never registers those modules, so the public service has no admin routes to
+guard rather than a guard that must stay configured correctly forever. Verified
+locally: with `APP_ROLE=live`, `/admin/revenue` returns **404** where the worker
+returns **200** to the same unauthenticated request.
+
 Uses the `Dockerfile` at the repo root (source deploy builds it via Cloud Build):
 
 ```bash
@@ -123,6 +144,72 @@ gcloud run deploy market-catalyst-backend \
 > unlimited-rate, so 0 is correct for a paid key. If you ever downgrade to the
 > free Basic plan, raise this back to `12500` **and** split those jobs into
 > smaller batches, because they will not fit in 900s at that rate.
+
+### 3b. Deploy the public live service (ticker tape)
+
+Same image, different role and *very* different Cloud Run settings:
+
+```bash
+# Reuse the image the deploy above built, so both services run identical code.
+IMAGE=$(gcloud run services describe market-catalyst-backend --region "$REGION" \
+          --format='value(spec.template.spec.containers[0].image)')
+
+gcloud run deploy market-catalyst-live \
+  --image "$IMAGE" \
+  --region "$REGION" \
+  --allow-unauthenticated \
+  --min-instances=0 \
+  --max-instances=5 \
+  --concurrency=200 \
+  --memory=1Gi \
+  --timeout=3600 \
+  --set-env-vars="APP_ROLE=live,NODE_ENV=production,FIREBASE_PROJECT_ID=market-catalyst-502415,POLYGON_API_BASE_URL=https://api.massive.com,CORS_ORIGINS=https://marketcatalyst.web.app" \
+  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest"
+```
+
+> ⚠ **`--set-env-vars`, NOT `--env-vars-file`.** `deploy/env.production.yaml` is
+> the *worker's* env and carries `APP_ROLE=worker` plus
+> `ADMIN_GUARD_TRUST_IAM=true`. Pointing the public service at it would both
+> re-mount the admin modules and re-enable the trust-IAM shortcut on an
+> `--allow-unauthenticated` service — the exact combination that grants
+> anonymous `/purge`. The list above is short precisely because the live role
+> needs almost nothing.
+
+Three of these settings are load-bearing; the defaults silently break SSE:
+
+- **`--timeout=3600`.** The worker's `900` would sever every stream at 15
+  minutes. 3600s is Cloud Run's ceiling; `EventSource` reconnects on its own
+  when it is hit, so the user sees nothing.
+- **`--concurrency=200`.** SSE connections are long-lived, so concurrency is a
+  hard ceiling on **simultaneous viewers**, not a throughput knob: the default
+  80 caps the service at `80 x max-instances`. Measured cost is ~156 KB RSS per
+  connected client, so 200 ≈ 31 MB — comfortable in 1Gi, and 200 x 5 instances
+  = 1,000 concurrent viewers.
+- **`--min-instances=0` is deliberate.** An open SSE connection keeps an
+  instance warm by itself, and `TapeService`'s poller is ref-counted against
+  connected clients, so an app nobody has open makes zero vendor calls and costs
+  nothing. Only the first viewer after an idle period pays a cold start.
+
+**No Cloud Scheduler entry is needed for the tape** — the 60s poller lives in
+the process and starts on the first viewer. Do not add one to
+`create-scheduler-jobs.sh`.
+
+Point the frontend at it (this is the `NEXT_PUBLIC_BACKEND_URL` gap that also
+keeps the market-status pill and the extended-hours cards localhost-only):
+
+```bash
+gcloud run services describe market-catalyst-live --region "$REGION" --format='value(status.url)'
+# -> set NEXT_PUBLIC_BACKEND_URL to that URL in the UI production build
+```
+
+Verify after deploying:
+
+```bash
+LIVE=$(gcloud run services describe market-catalyst-live --region "$REGION" --format='value(status.url)')
+curl -s "$LIVE/live/tape" | jq '.items | length'      # -> 21
+curl -s -o /dev/null -w '%{http_code}\n' "$LIVE/admin/revenue"   # -> 404, NOT 200
+curl -s "$LIVE/live/tape/stats"   # upstreamCalls must stay ~1/min as clients grows
+```
 
 > **Env vars live in `deploy/env.production.yaml`**, not inline — including
 > `FIREBASE_PROJECT_ID`. Two reasons: `--set-env-vars` is comma-delimited, so with

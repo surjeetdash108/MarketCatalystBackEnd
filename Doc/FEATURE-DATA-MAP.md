@@ -1373,7 +1373,7 @@ The Stock screen carried the highest concentration of fabrication in the app. Fo
 
 | # | Feature | Type | Source | Provider | Endpoint | Free alternative |
 |---|---|---|---|---|---|---|
-| 1 | Ticker marquee | HYBRID | `market_indices` over static `pulse` | Polygon | `/v2/aggs/…` | Finnhub `/quote` |
+| 1 | Ticker marquee 🆕 | **API (streamed)** | SSE `/live/tape/stream` over `market_indices` over static `pulse` | Polygon | `/v3/snapshot?ticker.any_of=` | Finnhub `/quote` |
 | 2 | Nav rail | STATIC | `menuItems` | — | — | — (legitimate config) |
 | 3 | Command ⌘K search | HYBRID | live `tickers` query + `SEARCHABLE_STOCKS` | Polygon | `/v3/reference/tickers` | SEC `company_tickers.json` (free) |
 | 4 | Notification bell | API | `users/{uid}/notifications` | Polygon + Finnhub (via news job) | `/v2/reference/news` | — |
@@ -1386,13 +1386,23 @@ The Stock screen carried the highest concentration of fabrication in the app. Fo
 | 11 | Earnings drawer | STATIC | `earningsData`; "◆ AI Summary · conf. 91%" is a template | — | — | `earnings_events` ✅ + Anthropic |
 | 12 | Sector drawer | STATIC | `sectorByName` + 3 hardcoded news items | — | — | `sectors` + `news` ✅ |
 | 13 | Fund drawer | STATIC | `funds`/`fundDetail` | — | — | `fund_holdings` ✅ |
-| 14 | Index drawer | HYBRID | day/52wk ranges **fabricated** as `×0.997`/`×1.06` of live price | Polygon | `/v2/aggs/…` | Compute from `ohlcv_bars` ✅ |
+| 14 | Index drawer | HYBRID | now fed by the streamed tape (`applyTape`), so it agrees with the tile that opened it; 52wk range still **fabricated** as `×1.06` | Polygon | `/v3/snapshot` | Compute from `ohlcv_bars` ✅ |
 | 15 | Fear & Greed drawer | STATIC | hardcoded 62 + 7 component scores — **the drawer is still static even though the gauge (B.1 #15) is now live** | — | — | `market_sentiment` ✅ (rule now exists) |
 | 16 | Mover detail drawer | — | embeds B.2 | — | — | — |
 
 🆕 **#8 vs #9 — the shell got half a timezone fix.** `market-status.ts` computes the session correctly: DST-aware ET extraction, a holiday table through 2027, and pre/regular/after boundaries. The nav clock two lines away (#9) still formats the **browser's** local time and appends the literal "ET". Both were listed as one bug (D.1 #4) in the first pass; **only the pill was fixed.**
 
 ⚠️ The pill's holiday table is **hardcoded through 2027** and will silently go stale after that, and it cannot know about an unscheduled halt or an early close. The vendor endpoint that would fix both is wired but unreachable in production (§D.4 gap 1).
+
+---
+
+🆕 **2026-07-22 — the ticker marquee is live and streamed (#1).** It was `mergePulse(pulse, market_indices)`, and `market_indices` is written by a job on cron `5 18 * * 1-5` — so between the opening bell and 18:05 ET the header showed **yesterday's closes**, over a static mock. It now renders `GET /live/tape/stream` (SSE): 8 index ETF proxies + the 10Y yield + 12 mega-caps, refreshed every 60 s.
+
+The fan-out property is the point. **One** `/v3/snapshot?ticker.any_of=` call per minute covers all 21 instruments and is broadcast to every connected browser, so upstream cost is independent of how many people have the app open — measured at 25 concurrent clients / ~3 min / **3** vendor calls, not 75. The poller is ref-counted against connected clients, so an app nobody has open makes zero calls. Firestore/mock remain as ordered fallbacks, so a backend outage degrades the strip to yesterday's real closes rather than blanking it.
+
+⚠️ Index tiles remain **ETF proxies** (SPY/QQQ/DIA/IWM/VIXY/USO/GLD/UUP), so "S&P 500" reads ~750, not ~5,300 — the current plan does not include index data. That is pre-existing behaviour inherited from `market-indices.job.ts`, now merely visible intraday; `isProxy` and `note` travel on every item.
+
+🆕 **#8 and the extended-hours cards (§B.7) unblock with this.** All three read the backend through `NEXT_PUBLIC_BACKEND_URL`, which was unset in the production build — §D.4 gap 1. Shipping the public `market-catalyst-live` service (deploy/DEPLOY.md §3b) sets that variable and closes the gap for all of them at once.
 
 ---
 

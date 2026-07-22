@@ -1911,6 +1911,110 @@ paths:
         "200": { description: OK }
         "304": { description: Unchanged since the caller's ETag }
 
+  /live/tape/stream:
+    get:
+      tags: [Live]
+      summary: Header ticker tape — Server-Sent Events, broadcast to all viewers
+      description: |
+        The scrolling strip in the app-shell header. **One** upstream
+        `/v3/snapshot?ticker.any_of=` call per 60 s covers all 21 instruments
+        (8 index ETF proxies + 12 mega-caps + the 10Y yield) and the identical
+        frame is fanned out to every connected browser — user count does not
+        appear in the upstream path at all. Verified: 25 concurrent clients over
+        ~3 minutes produced **3** vendor calls, not 75.
+
+        The poller is ref-counted against connected clients: the first
+        subscriber starts it, the last one stops it, so zero viewers means zero
+        vendor calls. Frames are suppressed when the payload is unchanged, so a
+        closed market streams heartbeats only.
+
+        Feed is ~15 minutes delayed on the current plan (measured: 903 s), which
+        is why 60 s is the refresh interval — polling harder would move
+        staleness from 900 s to 960 s and buy nothing perceivable.
+
+        Served by the PUBLIC `market-catalyst-live` Cloud Run service
+        (`APP_ROLE=live`), which mounts no admin routes. See deploy/DEPLOY.md §3b.
+      x-status: live
+      operationId: streamTape
+      responses:
+        "200":
+          description: |
+            `text/event-stream`. Event types:
+              * `tape`      — full frame; the first arrives immediately from the
+                              replay buffer, then one per actual change
+              * `heartbeat` — every 20 s, so a silent market is distinguishable
+                              from a dead connection
+          content:
+            text/event-stream:
+              schema: { type: string }
+
+  /live/tape:
+    get:
+      tags: [Live]
+      summary: The same tape frame as plain JSON
+      description: |
+        Non-streaming fallback for callers that cannot hold a connection (curl,
+        health probes). ETagged and edge-cacheable; `TapeService` refuses to
+        refetch inside a refresh window, so a burst of these still collapses to
+        one upstream call.
+      x-status: live
+      operationId: getTape
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, example: SPX }
+                        kind: { type: string, enum: [index, stock, rate] }
+                        label: { type: string, example: S&P 500 }
+                        name: { type: string, nullable: true }
+                        proxyTicker: { type: string, nullable: true, example: SPY }
+                        isProxy: { type: boolean }
+                        note: { type: string, nullable: true }
+                        unit:
+                          type: string
+                          enum: [percent]
+                          description: |
+                            Present on the 10Y tile ONLY. Its `change` is a
+                            basis-point move (4.55 -> 4.53 is -0.02), not a
+                            percentage — rendering it with a % suffix restates a
+                            2 bp move as a 0.44 % one.
+                        value: { type: number, nullable: true }
+                        change: { type: number, nullable: true }
+                        pctChange: { type: number, nullable: true }
+                        open: { type: number, nullable: true }
+                        dayHigh: { type: number, nullable: true }
+                        dayLow: { type: number, nullable: true }
+                        prevClose: { type: number, nullable: true }
+                  asOf: { type: string, format: date-time }
+                  vendorDelayNote: { type: string }
+                  marketPhase: { type: string, enum: [open, pre, after, closed, unknown] }
+                  stale:
+                    type: boolean
+                    description: Last refresh failed; these are the last good values.
+        "304": { description: Unchanged since the caller's ETag }
+
+  /live/tape/stats:
+    get:
+      tags: [Live]
+      summary: Scaling assertion — upstreamCalls must stay flat as clients grows
+      description: |
+        Exists to make the fan-out property checkable rather than assumed. If
+        `upstreamCalls` ever tracks `clients`, the broadcast has broken and every
+        viewer is costing a vendor request.
+      x-status: live
+      operationId: getTapeStats
+      responses:
+        "200": { description: OK }
+
   # ───────────────────────────────────────────────────────────────────────────
   # Firestore-backed collections added 2026-07-22
   # ───────────────────────────────────────────────────────────────────────────

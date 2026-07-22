@@ -1,5 +1,22 @@
 # Live price: our pipeline vs TradingView widget
 
+> 🆕 **2026-07-22 — the conclusion at the bottom of this page was acted on.**
+> The closing recommendation here ("polling the REST snapshot every 15–30 s is
+> materially simpler and needs no warm instance — the data is equally stale
+> either way") is now what the **header ticker tape** does, in
+> `src/live/tape.service.ts`: one `/v3/snapshot?ticker.any_of=` call per 60 s
+> for all 21 instruments, broadcast over SSE to every connected browser.
+>
+> The distinction against the per-ticker WebSocket documented below matters:
+> that path opens **one upstream subscription per symbol a user is watching**
+> and is capped at a single socket per API key, so it cannot scale past one
+> instance. The tape path has no per-user or per-symbol upstream work at all —
+> measured at 25 concurrent clients over ~3 minutes producing **3** vendor
+> calls. The WebSocket demo below remains the right shape for a *single-symbol*
+> deep view on a real-time plan; it is not what the tape uses.
+>
+> See `Doc/openapi.yaml` → `/live/tape/stream` and `deploy/DEPLOY.md` §3b.
+
 An evaluation surface on the **Search** screen (`/menu/stock`) rendering both approaches side by side, so the choice can be made from observed behaviour rather than documentation.
 
 ## How to run it
