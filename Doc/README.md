@@ -28,6 +28,44 @@ Reliability & hardening (2026-07-12):
 - **Profile image control** — the raw file input is now a styled **Upload/Change image button** (hidden native input), and the "Stored as profile_image" hint string was removed.
 - **Dev-server note** — the recurring Turbopack `FATAL /shot-helper/page` panic is caused by the screenshot tooling injecting/removing a transient route, leaving orphaned `.next` output; `rm -rf .next` + restart clears it. It does not affect production (static export) or normal Turbopack dev.
 
+Changes (2026-07-22) — Polygon data wiring:
+- **Two new sync jobs.** `intraday-bars.job.ts` writes 5-min and 30-min bars to `intraday_bars/{ticker}_{5min|30min}` — one document per ticker+resolution holding an *array* of bars, not a document per bar (`25 16 * * 1-5` ET). `corporate-actions.job.ts` writes `dividend_history/{ticker}` (full payment history, annual totals, TTM total, derived yield, 5-yr CAGR, increase streak) and `splits/{ticker}` (`40 6 * * *` ET). 25 sync jobs total, up from 17.
+- **5 years of history, filling both directions.** `stock-history.job` backfills 5 years instead of 300 days, clamped to the Polygon plan's rolling 5-year edge. Raising the constant alone did nothing, because `lastSyncedThrough` only ever advances — a new `earliestSyncedFrom` watermark is what lets history fill *backwards*. `vwap` is persisted per bar.
+- **Every chart timeframe is now real.** `useChartBars` replaces the daily-only `useOhlcvBars`: 1D/1W from 5-min bars, 1M from 30-min bars, 3M–5Y from `ohlcv_bars`. Previously 1D/1W/1M/5Y all fell through to `genOHLC`, a seeded random walk.
+- **US10Y was wrong and is now right.** `market-indices.job` sourced it from the TLT ETF, which moves *inversely* to the yield it was labelled as; it now reads Polygon's `/fed/v1/treasury-yields` (`isProxy:false`, `unit:"percent"`).
+- **Richer derived data** — `technical-indicators` adds `rsi14Series` (90-point rolling RSI), SMA/EMA ladders (10/20/30/50/100/200), `vwap`, `high52`/`low52` and the distances from them, `avgVolume20`/`avgVolume50`. `financials.job` now stores the balance sheet, cash flow, margins and current ratio it was already fetching and discarding. `options-chains` adds per-contract OHLC, VWAP and trade count. `polygon-company-profile.adapter` now populates `peers`, `dividendYield` and `dividendPerShare`, previously declared unsupported — that was wrong.
+- **Real dividend/split history in the UI** — `useDividendHistory` and `useSplits` replace client-side extrapolation that derived quarterly amounts as `annual / 4` decayed 6.5%/yr and reported a literal constant "+6.5% 5-yr growth" for every company. Splits are shown, not just stored, because `stock-history` refetches with `adjusted=true`, so a split silently rewrites price history.
+- **Market status from the vendor** — `src/live/market-status.service.ts` + `GET /live/market-status` (60s cache) replace the browser's local clock plus a hand-maintained holiday list that had to be extended every year and treated early-close half-days as full sessions. The snapshot cache moved to Polygon's **v3 universal snapshot**, adding early/late/regular trading change percentages, which `useExtendedHours` uses to replace hardcoded `PREMARKET`/`AFTERHOURS` arrays.
+- **Plan limits, probed live (Polygon Stocks Starter)** — exactly **900 s (15 min)** delay, exactly **5-year** rolling history. Still 403: options snapshot (greeks/IV/OI/bid-ask), index values (I:SPX, I:VIX), trades/quotes, Benzinga. So Options Chain's greeks table stays simulated.
+
+Changes (2026-07-22) — subscriptions, entitlements, admin analytics:
+- **New backend module `src/plans/`** — `GET /plans` (public pricing), `POST /plans/seed` (admin), `GET /users/:uid/entitlements` (admin), and admin read-models `GET /admin/users|subscriptions|revenue`. Three plans live in Firestore: Free (0), Plus (2999), Pro (4999) — **minor units, i.e. cents; 4999 is $49.99**, matching Stripe's convention. The registry is a merge-based *seed*, so pricing and packaging change without a redeploy and operator edits survive a re-seed.
+- **The tier ladder is cumulative and composed, not hand-written three times**: Free grants marketCatalyst/news/scanner/heatmap/macro/ipos/chartsDaily/watchlist; Plus adds chartsIntraday/chartsHistory/chartIndicators/chartNotes/technicalRatings/dividendHistory/peers/earningsDetail/portfolio/screener/themes/alerts; Pro adds fundamentalRatings/ownership/optionsChain/exportData/apiAccess/aiAssistant/backtesting/paperTrading. `adminDashboard` and `userManagement` are forced **false on every plan** — they are staff capabilities, and selling them would be privilege escalation, which is why Pro is 28 of 30 rather than 30 of 30.
+- **Gating is TWO layers, ANDed — deliberately not merged.** `FF_*` release flags answer "is it built and shipped?"; plan entitlements answer "may this tier use it?". A feature renders only when both are true, and the two failures need different UI: **"coming soon"** vs **"upgrade to unlock"**. Collapsing them would make an unbuilt feature look like a paywall. `backtesting` and `paperTrading` prove the point — granted on Pro, not implemented, so they report `released:false` and say "coming soon" instead of taking money.
+- **Expiry is computed, never trusted.** Nothing rewrites a user document when a subscription lapses, so a stored `ACTIVE` would grant paid access forever; the stored status is treated as intent and the date as truth, on both the backend (`SubscriptionsService`) and the client. A lapsed subscription falls back to **Free, never to no access**.
+- **New frontend gating** — `app/iq/entitlements.tsx` (`EntitlementProvider`, `useSubscription`, `useEntitlement`, `EntitlementGate`, `formatAmount`) and `app/iq/entitlement-gate.tsx` (`PlanGate`, `useSlugEntitled`, `SLUG_ENTITLEMENT`). Live `onSnapshot` listeners on `plans` and `users/{uid}`, so a pricing change reaches users with no redeploy and no reload.
+- **Feature-adoption tracking** — `app/iq/feature-adoption.ts` + `track-feature.tsx`, 48 tracked surfaces: screens derived from `menuItems` (so nav and catalog cannot drift) plus in-app actions (8 Stock Detail drawers, chart timeframes/indicators/expand, watchlist add/remove, search, screener, news). One doc per (feature, user), 30-second dedupe, failures swallowed — analytics must never break the screen it measures.
+- **Admin console at `/admin`** — the original static `public/admin/console.html` embedded verbatim in an iframe by `app/admin/page.tsx`, which owns the Firebase session and admits only the admin account. Real data is built by `app/admin/admin-data.ts` and staged in `sessionStorage` **before the iframe mounts**, because the console renders once at module scope — `postMessage` would arrive too late. The iframe has no Firebase SDK, so entitlement toggles are delegated back to the React parent over `postMessage` and written with a dotted field path (`featureFlags.<key>`) so a concurrent edit to another flag is not clobbered. Fabricated trend deltas and the fake MRR chart are suppressed whenever real data is present. A **Monitor** tab lazily embeds the backend ops UI.
+- **Staff accounts are excluded from every admin metric.** The admin is not a customer: counting it adds a phantom user, shifts the plan mix, drags ARPU down and changes the churn denominator — at this user count that is a 20%+ distortion, not a rounding error. `excludedStaff` is returned so the exclusion is auditable.
+- **Firestore rules** — `isAdmin()` = `token.admin == true` OR `token.email == ADMIN_EMAIL`, deliberately *without* an `email_verified` check (the admin is a password account with `emailVerified=false`; requiring it locked the admin out of Firestore while the backend guard still let the same account in). Admins may update **only** `featureFlags` + `updatedAt` on `plans` — price and currency stay server-only, since a client that could rewrite `amount` could set a plan to $0. `feature_adoption` is the only client-writable analytics collection (the browser cannot reach the backend), constrained so a row must belong to the caller and `openCount` may only increase. Also fixed two pre-existing bugs: `market_sentiment` and `stock_comments` had **no rule at all**, so default-deny silently broke the Dashboard Fear & Greed gauge (it fell back to a hardcoded 62/"Greed") and chart notes.
+- ⚠ **Both repos ship a `firestore.rules` and they have drifted.** The live ruleset is deployed from `MarketCatalystUI/firestore.rules`; the backend copy is stale and now carries a DO-NOT-DEPLOY header.
+- **New collections**: `intraday_bars`, `dividend_history`, `splits`, `plans`, `payments`, `subscriptions`, `feature_adoption`, `api_usage`, `audit_logs`, `revenue_summary`, `system_metrics`. Populated today: `intraday_bars` (474), `dividend_history` (241), `splits` (241), `plans` (3), `feature_adoption` (~12 seeded). Empty: the rest.
+
+---
+
+## Deployment & Known Gaps (2026-07-22)
+
+**Deployed:** frontend at `https://marketcatalyst.web.app` (Firebase Hosting, static export, project `fin-app26`); backend on Cloud Run revision `market-catalyst-backend-00031-wvc` (us-central1, `--no-allow-unauthenticated`, `min-instances=0`); Firestore rules released.
+
+Stated plainly, because each one limits what the deployed system can do:
+
+1. **The browser cannot reach the backend.** `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4100` is baked into the production bundle and blocked as mixed content. Dead in production: the Monitor tab, extended-hours moves, the vendor market-status pill, and any future Stripe checkout/webhook. Everything else works because it reads Firestore directly. The fix is a Firebase Hosting rewrite to Cloud Run — which **requires** setting `ADMIN_GUARD_TRUST_IAM=false` first, or `/sync/:job/run`, `/purge` and `/retention` become world-callable the moment that route opens.
+2. **No Cloud Scheduler jobs exist in any region**, and there is no `scheduler-invoker` service account — `create-scheduler-jobs.sh` was never run. With `min-instances=0` the in-process `@Cron` decorators never fire, so **no sync job has ever run automatically in production**; every row currently in Firestore came from a manual run.
+3. **`POLYGON_API_KEY` is un-rotated** (exposed in chat). Secret Manager version 4 is enabled; `deploy/rotate-polygon-key.sh` automates everything except generating the replacement key.
+4. **Stripe is not implemented.** No Stripe code exists in either repo, `stripePriceId` is `null` on every plan (which keeps them non-purchasable), and `payments`/`subscriptions` are empty. Checkout and webhooks are blocked on gap 1.
+5. **`api_usage` is specified but not implemented** — no middleware records API calls, so the admin console's "Usage & API" KPIs read 0.
+6. **Per-user engagement columns read 0** (watchlists/holdings/apiCalls/alerts) — there is no collection behind them yet. Reported as 0 rather than estimated: the console's own PRNG-invented figures would look authoritative next to real users.
+
 ---
 
 ## Backend (`backend/`)
@@ -38,17 +76,22 @@ A separate NestJS service, not part of this Next.js app, syncs vendor data (Poly
 
 ```
 Vendor APIs (Polygon, FMP, Finnhub, FRED, SEC EDGAR)
-        │  17 NestJS cron jobs, each on its own periodic interval
+        │  25 NestJS cron jobs, each on its own periodic interval
         │  (daily/weekly/every-30-min — see backend/README.md's job table)
         ▼
    Cloud Firestore  (backend/src/common/firebase-admin.provider.ts — Admin SDK, server-only)
-        │  onSnapshot() real-time listeners (app/iq/hooks/useCollection.ts, useOhlcvBars.ts)
+        │  onSnapshot() real-time listeners (app/iq/hooks/*)
         ▼
    Next.js app (this repo) — every live screen element
 ```
 
+The backend also exposes real REST routes (`/plans`, `/users/:uid/entitlements`,
+`/admin/*`, `/live/*`), but **the browser cannot reach them in production** — see
+Deployment & Known Gaps above. Everything the app renders today still arrives via
+the Firestore client SDK.
+
 Confirmed end-to-end, not assumed:
-- Every one of the 17 sync jobs in `backend/src/sync/*.job.ts` has a real `@Cron(...)` schedule — none are one-off or manually-triggered-only.
+- Every one of the 25 sync jobs in `backend/src/sync/*.job.ts` has a real `@Cron(...)` schedule — none are one-off or manually-triggered-only. (They do not currently *fire* in production; see gap 2.)
 - Zero vendor API domains or vendor API keys are referenced anywhere in `app/` (grepped for Polygon/FMP/Finnhub/FRED/SEC EDGAR URLs and every `NEXT_PUBLIC_*_API_KEY` var name — no matches).
 - `.env.local` (frontend env) had 3 live, populated `NEXT_PUBLIC_*` vendor keys left over from before the backend migration, unused by any code — blanked out 2026-07-08 as a security cleanup (was gitignored, never committed, so not a git-history leak, but no reason for a live credential to sit there once the frontend stopped calling vendors directly).
 
@@ -70,15 +113,28 @@ app/
 │   ├── signup/           # /auth/signup — signup page (AuthLayout + SignupForm)
 │   └── forgot-password/  # /auth/forgot-password — password reset page
 ├── dashboard/            # /dashboard — main app shell (IQShell)
+├── admin/                # /admin — admin console gate (session + postMessage bridge)
+│   ├── page.tsx          #   auth gate, sessionStorage staging, plan-flag/logout/password bridge
+│   └── admin-data.ts     #   buildAdminDataset() — Firestore → console row shape; ADMIN_EMAIL
 ├── iq/
 │   ├── shell.tsx         # IQShell — sidebar nav, topbar, drawer system, Cmd+K, Copilot panel
 │   ├── stock-panel.tsx   # Shared components: StockScreenEmbed, StockRow, StockListCard, ChartCard, StockPanelLayout
 │   ├── utils.tsx         # Shared chart + utility components: CandleChart, RsiPane, TrGauge, SemiGauge, Spark, hashStr, earnHistory
+│   ├── feature-flags.tsx # RELEASE layer — FF_* flags: "is it built and shipped?"
+│   ├── entitlements.tsx  # COMMERCIAL layer — plan entitlements; useEntitlement() ANDs the two
+│   ├── entitlement-gate.tsx # PlanGate (upgrade panel), useSlugEntitled, SLUG_ENTITLEMENT
+│   ├── feature-adoption.ts  # 48 tracked features (screens + in-app actions), 30s dedupe
+│   ├── track-feature.tsx # <TrackFeature> — records an open on mount, renders nothing
+│   ├── hooks/            # useChartBars, useCompany, useDividendHistory, useSplits, useExtendedHours, useCollection, …
 │   ├── data.ts           # Static mock data: pulse, earnings, movers, analyst, folio, watch, screener, funds, etc.
 │   └── screens/          # One file per workspace screen (watchlist, portfolio, themes, screener, analyst, commentary, etc.)
 ├── menu/[slug]/          # /menu/:slug — 15 workspace screens
 ├── profile/edit/         # /profile/edit — investor profile setup
 └── settings/             # /settings — preferences (dark mode, etc.)
+
+public/
+└── admin/console.html    # The admin console itself — standalone static page,
+                          # iframed by app/admin/page.tsx (no Firebase SDK inside)
 ```
 
 ---
@@ -168,4 +224,7 @@ Runs on Next.js 16.2.9 with `output: 'export'`. All 24 routes are pre-rendered a
 | Data — live | Polygon.io, FMP, Finnhub, FRED, SEC EDGAR (via `backend/`, synced to Firestore) |
 | Data — blocked (no key / plan restriction) | Benzinga, Tradier, Unusual Whales |
 | AI (planned) | Claude API — needs `ANTHROPIC_API_KEY`, not yet obtained |
-| Payments (planned) | Stripe — not yet implemented; Firestore tier-gating is currently relaxed to any authenticated user |
+| Feature gating | Two layers, ANDed: `FF_*` release flags (`app/iq/feature-flags.tsx`) + plan entitlements (`app/iq/entitlements.tsx`), resolved server-side by `backend/src/plans/` |
+| Plans & billing data | 3 plans in Firestore `plans` (Free / Plus 2999 / Pro 4999, minor units); `payments` + `subscriptions` collections exist but are empty |
+| Payments (planned) | Stripe — **not implemented**; no Stripe code in either repo, `stripePriceId` is `null` on every plan, and checkout is blocked on the browser→backend gap |
+| Admin console | Static `public/admin/console.html` in an iframe; React parent owns the session, stages data via `sessionStorage`, and services writes over `postMessage` |

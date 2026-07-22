@@ -1,7 +1,33 @@
 **MarketCatalyst — Market Intelligence Terminal**
 
-Project Plan \| v1.1 \| June 2026
+Project Plan \| v1.2 \| July 2026
 
+> **⚠ Implementation status (updated 2026-07-22):**
+> A new workstream has since landed that this plan did not anticipate as a
+> separate epic — **Subscriptions, Entitlements & Admin Analytics** (see §2.4).
+> It delivered the *entitlement* half of "Subscription & Billing" without the
+> *payment* half: a `plans` registry with 30 entitlement keys, three plans live
+> in Firestore (`free` / `plus` / `pro` — **not** the Free/Pro/Premium naming in
+> §7), an admin-guarded analytics API, a real-data admin console with a per-plan
+> feature editor, and 48-feature adoption tracking. **Stripe remains entirely
+> unimplemented — there is no Stripe code in either repo**, and the `payments`
+> and `subscriptions` collections are empty. In parallel, the Polygon data
+> wiring was substantially completed (5-year history backfill, intraday bars,
+> dividends/splits, balance sheet + cash flow, real RSI/MA/EMA/VWAP/52-week,
+> real US10Y Treasury yield replacing a TLT-ETF proxy that moved *inversely* to
+> the yield it was labelled as).
+>
+> **Two deployment facts materially qualify every "done" claim below.**
+> (1) `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4100` is baked
+> into the production bundle and blocked as mixed content — **the browser cannot
+> reach the backend at all** in production. (2) **No Cloud Scheduler jobs exist
+> in any region** and there is no `scheduler-invoker` service account
+> (`create-scheduler-jobs.sh` was never run); with `min-instances=0` the
+> in-process `@Cron` decorators never fire, so **no sync job has ever run
+> automatically in production** — all Firestore data came from manual runs.
+> Everything Firestore-backed is genuinely live; everything backend-backed is
+> built but unreachable. See §9 for the full gap list.
+>
 > **⚠ Implementation status (updated 2026-07-09, first noted 2026-07-05):**
 > This plan describes the original proposed stack — AWS ECS, Redis,
 > ClickHouse, BullMQ, Fastify, Stripe billing. What was actually built is
@@ -59,6 +85,13 @@ The project (branded **MarketCatalyst**) is structured in two phases: MVP (18 we
   Subscription & Billing   Stripe integration, Free/Pro/Premium tier gates, upgrade flow                                                                                                                                                                                                                 2 weeks        Full Stack     P1
   ------------------------ ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- -------------- -------------- --------------
 
+**Note (2026-07-22):** the *Subscription & Billing* epic above has been split.
+Its tier-gating half shipped and is tracked separately in §2.4; its Stripe half
+is not started and is blocked on infrastructure (§9, gap 1). The *Data Layer*
+epic's \"WebSocket real-time quotes\" was never built and is not planned ---
+data reaches the frontend through Firestore sync jobs, at a measured 15-minute
+vendor delay.
+
 2.3 Phase 2 --- Expansion Epics (Weeks 19--38)
 
   -------------------------- ------------------------------------------------------------------------------------------------------------------------------------- -------------- ----------------- --------------
@@ -73,6 +106,63 @@ The project (branded **MarketCatalyst**) is structured in two phases: MVP (18 we
   Social Sharing             Recap card image generation, share to Twitter/LinkedIn                                                                                1 week         Full Stack        P2
   **Story Stocks Section**   AI-tagged + manually curated story cards (what/why/catalyst date/peer impact), news cluster density trigger, story feed integration   2 weeks        AI + Full Stack   P1
   -------------------------- ------------------------------------------------------------------------------------------------------------------------------------- -------------- ----------------- --------------
+
+2.4 Workstream --- Subscriptions, Entitlements & Admin Analytics (added
+2026-07-22, not in the original plan)
+
+This work was carved out of the \"Subscription & Billing\" epic in §2.2 once it
+became clear that entitlement modelling and payment collection are independent
+problems with different blockers. Entitlements are done; payments are not
+started and are blocked on infrastructure, not on product decisions.
+
+  ------------------------------ --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- ------------------------------- --------------
+  **Deliverable**                **What shipped**                                                                                                                                                                                            **Status**                      **Owner**
+  Plans registry                 `src/plans/plans.registry.ts` --- 30 entitlement keys, 3 plans, `formatAmount()`. `plans.service.ts` seeds/reads the `plans` collection **merge-based, so operator edits survive re-seeding**.                **Done --- live in Firestore**  Backend
+  Subscription resolution        `subscriptions.service.ts` --- resolves the effective subscription. **Expiry is computed, never trusted**, because nothing rewrites a user doc when a subscription lapses. Falls back to FREE, never to no-access.  **Done**                   Backend
+  Entitlements API               `GET /plans`, `POST /plans/seed` (admin), `GET /users/:uid/entitlements`.                                                                                                                                    **Done --- backend only**       Backend
+  Admin analytics API            `GET /admin/users`, `GET /admin/subscriptions`, `GET /admin/revenue`. All admin-guarded. **Staff accounts excluded from every metric.**                                                                      **Done --- backend only**       Backend
+  Two-layer gating model         FF\_\* release flags (\"is it built?\") kept **separate** from plan entitlements (\"may this tier use it?\"). Both must be true. They render different UI: \"coming soon\" vs \"upgrade to unlock\".          **Done**                        Full Stack
+  Frontend entitlement layer     `app/iq/entitlements.tsx` (`EntitlementProvider`, `useSubscription`, `useEntitlement`, `EntitlementGate`) + `entitlement-gate.tsx` (`PlanGate` upgrade panel, `useSlugEntitled` nav hiding).                  **Done --- live**               Frontend
+  Admin console on real data     `app/admin/admin-data.ts` builds the dataset from Firestore and stages it in `sessionStorage` before the iframe mounts; `public/admin/console.html` renders it. Fabricated trend deltas and the fake MRR history chart are **suppressed** on real data.  **Done --- live**  Full Stack
+  Per-plan feature editor        30 toggles per plan writing to `plans/{id}.featureFlags` (optimistic, reverts on failure). The 2 staff-only keys are shown but **locked**.                                                                    **Done --- live**               Full Stack
+  Feature adoption tracking      48 tracked features (screens + in-app actions), 30-second dedupe, failures swallowed so analytics never breaks a screen. Writes client→Firestore directly.                                                    **Done --- live (\~12 rows)**   Full Stack
+  Admin Monitor tab              Embeds the backend ops UI, lazily on first visit to the tab.                                                                                                                                                 **Built --- unreachable in prod**  Full Stack
+  API usage metering             Specified with rules and a collection; **no middleware records anything**. Admin \"Usage & API\" KPIs read 0.                                                                                                **Not started**                 Backend
+  Stripe checkout + webhooks     ---                                                                                                                                                                                                         **Not started --- blocked**     Full Stack
+  ------------------------------ --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- ------------------------------- --------------
+
+Plans as they exist in Firestore today. **Amounts are minor units (cents)** ---
+4999 = \$49.99. The ladder is cumulative.
+
+  ---------- ----------- ------------ ----------- ------------------ ------------------------------------------------------------------------------------
+  **id**     **Name**    **Amount**   **Cycle**   **Entitlements**   **Adds over previous tier**
+  free       Free        0            none        8 / 30             marketCatalyst, news, scanner, heatmap, macro, ipos, chartsDaily, watchlist
+  plus       Plus        2999 USD     monthly     20 / 30             chartsIntraday, chartsHistory, chartIndicators, chartNotes, technicalRatings, dividendHistory, peers, earningsDetail, portfolio, screener, themes, alerts
+  pro        Pro         4999 USD     monthly     28 / 30            fundamentalRatings, ownership, optionsChain, exportData, apiAccess, aiAssistant, backtesting, paperTrading
+  ---------- ----------- ------------ ----------- ------------------ ------------------------------------------------------------------------------------
+
+`adminDashboard` and `userManagement` are **staff-only and false on every
+plan** --- selling them would be privilege escalation. That is why Pro is
+28/30 and not 16/16. `backtesting` and `paperTrading` are granted on Pro but
+**not built**, so the two-layer model correctly shows them as \"coming soon\"
+rather than as a paywall.
+
+Access control is enforced in the live Firestore ruleset, which is deployed
+from **`MarketCatalystUI/firestore.rules`** --- the backend repo\'s copy has
+drifted and now carries a DO-NOT-DEPLOY header. `isAdmin()` is
+`token.admin == true` **or** `token.email == ADMIN_EMAIL`, and deliberately
+does **not** require `email_verified`: the admin is a password account with
+`emailVerified=false`, and requiring it locked the admin out of Firestore while
+the backend guard still admitted the same account. An admin may update a plan\'s
+`featureFlags` + `updatedAt` **only** --- price, currency and cycle are
+server-only, and plan create/delete is denied. `feature_adoption` is the only
+client-writable analytics collection (necessarily, since the browser cannot
+reach the backend) and is constrained so the row must belong to the caller,
+`openCount` may only increase, ownership cannot change, and delete is denied.
+The same pass fixed two pre-existing bugs: `market_sentiment` and
+`stock_comments` had **no rule at all**, so default-deny had been silently
+breaking the Dashboard Fear & Greed gauge (it fell back to a hardcoded
+62/\"Greed\") and the chart-notes feature.
 
 3\. Milestones
 
@@ -115,6 +205,16 @@ Frontend (Current)
 -   **Firebase Authentication** — email/password + Google OAuth
 
 -   **Cloud Firestore** — user profiles (`users/{uid}`), settings (`settings/{uid}`)
+
+-   **Firestore collections added 2026-07-22** — `intraday_bars` (474 docs),
+    `dividend_history` (241), `splits` (241), `plans` (3),
+    `feature_adoption` (\~12). Created with rules but **empty**: `payments`,
+    `subscriptions`, `api_usage`, `audit_logs`, `revenue_summary`,
+    `system_metrics`.
+
+-   **Google Cloud Run** (not AWS ECS) — where the NestJS backend actually
+    runs: `us-central1`, `--no-allow-unauthenticated`, `min-instances=0`,
+    current revision `market-catalyst-backend-00031-wvc`.
 
 Backend (Planned — Phase 1/2)
 
@@ -163,6 +263,16 @@ Data Vendors
 
 7\. Subscription Model
 
+> **⚠ Superseded 2026-07-22.** The Free/Pro/Premium table below is the
+> *original* proposal and is no longer what exists. The shipped model is
+> **free / plus / pro** with concrete prices (\$0 / \$29.99 / \$49.99 per month,
+> stored as minor units) and 16 named entitlement keys --- see §2.4 for the
+> authoritative table. Prices are no longer TBD. Two further corrections to the
+> table below: \"Real-time data\" is **not** achievable on the current Polygon
+> plan (measured delay is exactly 900 s / 15 minutes), and every AI feature
+> listed as included is **not built** --- no Claude API call exists in either
+> repo. The table is kept for historical context only.
+
 Tier Structure
 
   ---------- ----------- ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -189,3 +299,65 @@ Tier Structure
 -   No P0/P1 bugs open at launch
 
 -   Stripe billing live with Free and Pro tiers gated
+
+Status against these criteria as of 2026-07-22: tier **gating** is met (§2.4);
+Stripe **billing** is not started. \"Real-time data latency \< 1 second\" is
+unreachable on the current vendor plan (900 s delay, measured) and needs
+restating or a plan upgrade. The AI-summary and email-alert criteria have no
+implementation behind them at all.
+
+9\. Known Gaps (verified 2026-07-22)
+
+These are stated plainly rather than folded into status percentages. Items 1
+and 2 are infrastructure and gate several \"finished\" features.
+
+1.  **The browser cannot reach the backend.** `NEXT_PUBLIC_BACKEND_URL` is
+    unset, so `http://localhost:4100` is compiled into the production bundle
+    and blocked as mixed content. This disables in production: the admin
+    Monitor tab, extended-hours moves, the vendor market-status pill, and any
+    future Stripe checkout/webhook. The fix is a Firebase Hosting rewrite →
+    Cloud Run, which **requires** setting `ADMIN_GUARD_TRUST_IAM=false` first
+    --- otherwise `/sync/:job/run`, `/purge` and `/retention` become
+    world-callable.
+
+2.  **No scheduled data refresh exists.** No Cloud Scheduler jobs in any
+    region, no `scheduler-invoker` service account; `create-scheduler-jobs.sh`
+    was never run. With `min-instances=0` the in-process `@Cron` decorators
+    never fire, so **no sync job has ever run automatically in production** ---
+    every row in Firestore came from a manual run.
+
+3.  **`POLYGON_API_KEY` is un-rotated.** It was exposed in chat. Secret Manager
+    version 4 is enabled. `deploy/rotate-polygon-key.sh` automates the whole
+    rotation except generating the replacement key.
+
+4.  **Stripe is not implemented.** No Stripe code in either repo; `payments`
+    and `subscriptions` are empty collections. Blocked additionally on gap 1.
+
+5.  **`api_usage` is specified but not implemented.** No middleware records API
+    calls, so the admin \"Usage & API\" KPIs read 0. Those tiles mean \"not
+    instrumented\", not \"no traffic\".
+
+6.  **Per-user engagement columns are empty.** watchlists / holdings /
+    apiCalls / alerts in the admin Users view render 0 --- there is no
+    collection behind them yet.
+
+7.  **AI features are all unbuilt.** Every AI surface in the product (earnings
+    summaries, technical analysis, portfolio pulse, Copilot, story stocks,
+    analyst notes) renders hand-written static prose. Backtesting and paper
+    trading are likewise granted as Pro entitlements but not implemented.
+
+8.  **Options greeks, IV, open interest and bid/ask are vendor-blocked.** The
+    Polygon options snapshot endpoint returns 403 `NOT_AUTHORIZED` on the
+    current plan; those columns are seeded pseudo-random values. Also
+    unavailable: index values (I:SPX, I:VIX), trades/quotes/last-trade,
+    Benzinga endpoints, `/v1/summaries`; 404 on short-interest and futures.
+
+9.  **The two repos\' `firestore.rules` have drifted.** The **live** ruleset is
+    deployed from `MarketCatalystUI/firestore.rules`; the backend copy is stale
+    and now carries a DO-NOT-DEPLOY header.
+
+Current deployment: backend on Cloud Run revision
+`market-catalyst-backend-00031-wvc` (us-central1,
+`--no-allow-unauthenticated`, `min-instances=0`); frontend at
+<https://marketcatalyst.web.app> (Firebase Hosting, static export); Firestore
+rules released.

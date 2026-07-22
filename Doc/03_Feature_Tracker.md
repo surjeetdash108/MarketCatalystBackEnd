@@ -1,6 +1,28 @@
 # MarketCatalyst — Feature Tracker
-v1.3 | June 2026
+v1.4 | July 2026
 
+> **⚠ Implementation status (updated 2026-07-22):**
+> Two bodies of work landed since v1.3: **(A) Polygon data wiring** and
+> **(B) subscriptions / entitlements / admin analytics**.
+> (A) replaced synthetic data on Stock Detail (real 52-week range, SMA/EMA
+> ladders, VWAP, peers, dividend history, balance sheet + cash flow, real RSI),
+> made **all 7 chart timeframes real** (1D/1W/1M from the new `intraday_bars`
+> collection, 3M–5Y from a 5-year `ohlcv_bars` backfill), gave Options real
+> per-contract OHLC/VWAP, and fixed US10Y (was the TLT ETF, which moves
+> *inversely* to the yield it was labelled as). (B) added a `plans` registry with
+> 30 entitlement keys, three plans in Firestore, an admin analytics API, a
+> per-plan feature editor, and 48-feature adoption tracking.
+> **Deployment reality — read before trusting any "Complete" below:** backend is
+> Cloud Run revision `market-catalyst-backend-00031-wvc` with
+> `--no-allow-unauthenticated`, and `NEXT_PUBLIC_BACKEND_URL` is unset, so the
+> production bundle points at `http://localhost:4100` and **the browser cannot
+> reach the backend at all**. Anything requiring a backend call is
+> BUILT-BUT-NOT-DEPLOYED, not live. Separately, **no Cloud Scheduler jobs exist
+> in any region** — with `min-instances=0` the in-process `@Cron` decorators
+> never fire, so no sync job has ever run automatically in production; all
+> Firestore data came from manual runs. Notes below are annotated
+> **LIVE** / **BUILT — NOT REACHABLE IN PROD** / **NOT BUILT** where it matters.
+>
 > **⚠ Implementation status (updated 2026-07-09, first noted 2026-07-05):**
 > The frontend UI completion notes below are accurate. However, "real-time
 > WebSocket data" / backend integration notes scattered throughout
@@ -99,7 +121,8 @@ v1.3 | June 2026
 
 | ID | Feature | Phase | Tier | Status | % | Owner | Notes |
 |---|---|---|---|---|---|---|---|
-| F-17 | Stock Detail Page | MVP | Free+ | **In Progress** | 75% | Full Stack | UI complete: sym selector bar (fbar), sd-head (logo/name/price/actions), sd-grid (chart col + ratings col). CandleChart SVG + RsiPane. Key stats grid. AI Technical Analysis. Financials bar chart. TrGauge (5-segment Technical Rating) + indicator table, Peers minirows, Industry Group rank, Earnings history, Insider/Institutional section. Remaining: real API data, interactive zoom, options/block trades sections. |
+| F-17 | Stock Detail Page | MVP | Free+ | **In Progress** | 85% | Full Stack | UI complete: sym selector bar (fbar), sd-head (logo/name/price/actions), sd-grid (chart col + ratings col). CandleChart SVG + RsiPane. Key stats grid. AI Technical Analysis. Financials bar chart. TrGauge (5-segment Technical Rating) + indicator table, Peers minirows, Industry Group rank, Earnings history, Insider/Institutional section. **Real data as of 2026-07-22 (LIVE, Firestore-read — no backend call needed):** 52-week high/low + `pctFromHigh52`/`pctFromLow52` (`has52w` guard, falls back to ±2% band when absent); SMA and EMA ladders at 10/20/30/50/100/200 (`smaLadder`/`emaLadder`); VWAP (key-levels row shows Above/Below VWAP from the real value); real peers from Polygon `/v1/related-companies` (`liveCompany.peers`, sector-filter fallback for untracked tickers); dividend history card + drawer from `dividend_history/{ticker}` via `useDividendHistory` (annual totals, TTM, derived yield, 5-yr CAGR, payout, ex-div countdown, explicit "Dividend suspended" state for lapsed payers); balance sheet + cash flow in the financials drawer (`fin.hasBalanceSheet`) from `financials.job.ts`, which previously fetched and discarded them; split-adjusted disclosure note backed by `splits/{ticker}`; **RSI pane is now real** — `RsiPane` receives `company.rsi14Series` (90-point rolling RSI-14) instead of a seeded walk. Files: `app/iq/screens/stock.tsx`, `app/iq/hooks/useCompany.ts`, `useDividendHistory.ts`, `useSplits.ts`, `useFinancials.ts`. Remaining: interactive zoom, options/block-trades sections, AI narrative (F-31, still NOT BUILT — all "AI Technical Analysis" copy on this screen is fabricated static text). |
+| F-65 | Extended-Hours / Market-Status Strip | MVP | Free+ | **In Progress** | 60% | Full Stack | Snapshot cache upgraded v2 → **v3 universal snapshot**, adding `earlyTradingChangePct`, `lateTradingChangePct`, `regularTradingChangePct`, `marketStatus`. New `src/live/market-status.service.ts` + `GET /live/market-status`. Frontend `useExtendedHours` hook consumes it. **BUILT — NOT REACHABLE IN PROD:** both the extended-hours moves and the vendor market-status pill go through the backend HTTP API, which the browser cannot reach (see header note). Works locally against `localhost:4100`. |
 | F-50 | Stock Chart Right-Click Notes (Firebase) | MVP | Pro+ | **Complete** | 100% | Full Stack | Right-click context menu on chart div. Opens centered modal with textarea. Saves to Firestore `stock_comments` collection: `{uid, sym, name, comment, createdAt: Timestamp}`. Notes card below chart shows history with datetime + ✕ delete per note. `loadNotes()` / `saveNote()` / `deleteNote()` async helpers using `collection, addDoc, getDocs, query, where, orderBy, Timestamp, deleteDoc, doc`. `useCallback` + `useEffect` refreshes notes on symbol change. File: `screens/stock.tsx`. |
 | F-18 | Peer View | MVP | Pro+ | **Not Started** | 0% | Full Stack | 5–10 closest peers by sector/industry group/business model. Table: ticker, 1D/1W/1M perf, market cap, next earnings date, analyst rating consensus, valuation snapshot. |
 | F-19 | Group View (MarketSurge-style) | MVP | Pro+ | **Not Started** | 0% | Full Stack | Industry group rank vs all groups, trend, strongest/weakest names in group, group-level news + analyst activity. |
@@ -110,7 +133,7 @@ v1.3 | June 2026
 
 | ID | Feature | Phase | Tier | Status | % | Owner | Notes |
 |---|---|---|---|---|---|---|---|
-| F-57 | Options Chain Screen | MVP | Pro+ | **In Progress** | 40% | Full Stack | Left stock search sidebar + main chain table (calls left / puts right) with strike, bid, ask, IV%, OI, volume columns. Expiry date tab selector (horizontal scroll on mobile). Filter: calls/puts/both. Click row → opens stock detail. File: `screens/options.tsx`. Static data; prod source: Polygon.io Options API. |
+| F-57 | Options Chain Screen | MVP | Pro+ | **In Progress** | 55% | Full Stack | Left stock search sidebar + main chain table (calls left / puts right) with strike, bid, ask, IV%, OI, volume columns. Expiry date tab selector (horizontal scroll on mobile). Filter: calls/puts/both. Click row → opens stock detail. File: `app/iq/screens/options.tsx`. **Partly real as of 2026-07-22 (LIVE):** `options-chains.job.ts` now stores per-contract full **OHLC, VWAP, trade count and range %** (`lastOpen`/`lastHigh`/`lastLow`/`lastClose`/`lastVwap`/`lastTradeCount`/`lastRangePct`), read from the `options_chains` docs via `useCollection`. Contract-level aggregates are authorized on the current Polygon plan. **Still fabricated and NOT obtainable on this plan (hard 403 `NOT_AUTHORIZED` on the options snapshot endpoint): greeks, implied volatility, open interest, and bid/ask.** Those columns are seeded pseudo-random values (`optRand`) and cannot be made real without a Polygon options add-on — this is a vendor-plan block, not a build gap. |
 
 ### Insider & Institutional — `/menu/insider`
 
@@ -191,7 +214,8 @@ v1.3 | June 2026
 | ID | Feature | Phase | Tier | Status | % | Owner | Notes |
 |---|---|---|---|---|---|---|---|
 | F-42 | MarketCatalyst Shell & Design System | MVP | All | **Complete** | 100% | Full Stack | IQShell wrapping each page; sidebar nav (3 groups: Intelligence / Context / My Money; 15 screens — Intelligence: Dashboard, Earnings, Market Movers, Heatmap, Analyst, Screener, IPOs, Stock Detail, Options, Insider & Institutional; Context: Commentary, Recap, Macro; My Money: Portfolio Pulse, Watchlist, Themes). Topbar (MarketCatalyst logo gradient + wordmark b=ai color), drawer system (stock/earnings/sector/fund/index/feargreed), AI Copilot panel, Cmd+K palette, profile dropdown. IQActionsContext: openStock/openStockFull/openEarnings/openSector/openFund/openIndex/openFearGreed/setCopilot/theme/setTheme. **Modal pattern (iq.css)**: all overlay UIs use `position:fixed; inset:0; margin:auto` centered modal with `iq-popIn` scale+translateY animation, replacing the prior right-side sliding drawer. Mobile responsive: `@media (max-width: 767px)` breakpoint. Hamburger (`.mob-ham`), slide-in rail (`.rail.mob-open`), scrim inside `.app` (critical stacking context fix — scrim z-100, rail z-200). Bottom-sheet drawers on mobile. Options page: horizontal tab scroll, header meta wraps. Nav items `var(--text-hi)` in rail. Tablet `@media (max-width: 860px)` stacks options sidebar. Profile dropdown: `iq-dropdownIn` animation (no translateX), `pd-avatar` 52px image in popup header. |
-| F-58 | Shared Stock Panel Components (`stock-panel.tsx`) | MVP | All | **Complete** | 100% | Full Stack | Central shared component file at `app/iq/stock-panel.tsx`. Eliminates duplication of `StockScreenEmbed`, trash icon, row, card, chart, and layout components across 4 screens (watchlist, portfolio, themes, screener). Exports: `StockScreenEmbed` (dynamic import — one definition for all screens; shell.tsx keeps its own local copy to break its own circular chain), `StockRow` (pf-li grid row — 4-col with delete, 3-col without), `StockListCard` (340px flex column card with scrollable pf-list + headerRight slot), `ChartCard` (flex-1 card with TF toolbar ["1D","1W","1M","3M","6M","1Y","5Y"] + CandleChart), `StockPanelLayout` (top flex row with alignItems:stretch + StockScreenEmbed below). Atomic subtasks: see T-133a through T-133e in task tracker. |
+| F-58 | Shared Stock Panel Components (`stock-panel.tsx`) | MVP | All | **Complete** | 100% | Full Stack | Central shared component file at `app/iq/stock-panel.tsx`. Eliminates duplication of `StockScreenEmbed`, trash icon, row, card, chart, and layout components across 4 screens (watchlist, portfolio, themes, screener). Exports: `StockScreenEmbed` (dynamic import — one definition for all screens; shell.tsx keeps its own local copy to break its own circular chain), `StockRow` (pf-li grid row — 4-col with delete, 3-col without), `StockListCard` (340px flex column card with scrollable pf-list + headerRight slot), `ChartCard` (flex-1 card with TF toolbar ["1D","1W","1M","3M","6M","1Y","5Y"] + CandleChart), `StockPanelLayout` (top flex row with alignItems:stretch + StockScreenEmbed below). Atomic subtasks: see T-133a through T-133e in task tracker. **2026-07-22 fix:** `ChartCard` (and the embedded chart in `StockScreenEmbed`) called `CandleChart` **without** `realBars`, so every chart on **Watchlist, Portfolio, Themes and Screener was 100% synthetic** — a seeded random walk — even though real bars existed in Firestore. Both call sites now pass `realBars={useChartBars(sym, tf)}`. See F-66. |
+| F-66 | Real Chart Bars — All 7 Timeframes | MVP | Free+ | **Complete** | 100% | Full Stack | `app/iq/hooks/useChartBars.ts` supersedes the daily-only `useOhlcvBars`, which served only 3M/6M/1Y and returned `null` for 1D/1W/1M/5Y (the chart then fell back to a seeded random walk). Routing: **1D** → `intraday_bars/{ticker}_5min` (1 session), **1W** → `_5min` (5 sessions), **1M** → `intraday_bars/{ticker}_30min` (22 sessions), **3M/6M/1Y/5Y** → `ohlcv_bars` daily, limited to 64/128/252/1300 bars. Two enablers: the new `intraday-bars.job.ts` (one doc per ticker/resolution holding an array of bars — not a doc per bar), and `stock-history.job.ts` backfill raised 300 days → **5 years**. The constant raise alone did nothing: `lastSyncedThrough` only ever advances, so an `earliestSyncedFrom` watermark was added to let history fill **backwards** as well as forwards, clamped to the Polygon plan's rolling 5-year edge. Bars now also persist `vwap`. **LIVE** — pure Firestore reads, no backend call. Populated: `intraday_bars` 474 docs. Caveat: data is refreshed only by manual job runs (no Cloud Scheduler — see header note). |
 | F-44 | User Preferences & Dark Mode | MVP | All | **Complete** | 100% | Full Stack | Dark mode toggle in Settings wired to Firestore `settings/{uid}` (darkMode: boolean). Custom in-app confirmation modal. Theme applied via `data-theme` on `.iq-root`. localStorage fast cache (no flicker on nav). Firestore read on shell mount syncs across devices. |
 | F-40 | Cmd+K Command Bar | Phase 2 | Pro+ | **In Progress** | 65% | Full Stack | Cmd+K / Ctrl+K global overlay. `SEARCHABLE_STOCKS` constant (20 tickers with name/sector). Stock ticker results surface above page-nav results. Per-stock ☆/★ star toggle with `starred: Set<string>` state and `toggleStar(sym)`. Starred stocks listed in palette footer section. Keyboard navigation (↑↓ arrows, Enter, Escape). Phase 2: fuzzy search via API, contextual suggestions by current page. File: `shell.tsx`. |
 | F-32 | AI Market Copilot (Chat) | Phase 2 | Premium | **Not Started** | 0% | AI + Full Stack | Chat panel in shell. Access to: live market data, earnings, analyst actions, 13F, macro, portfolio, watchlist. Streaming SSE. Labeled informational, not investment advice. |
@@ -201,7 +225,9 @@ v1.3 | June 2026
 
 | ID | Feature | Phase | Tier | Status | % | Owner | Notes |
 |---|---|---|---|---|---|---|---|
-| F-25 | Subscription & Billing (Stripe) | MVP | N/A | **In Progress** | 15% | Full Stack | Stripe integration. Free/Pro/Premium tier gates. Upgrade flow: tier comparison page, Stripe checkout, feature gating at API middleware. |
+| F-25 | Subscription & Billing (Stripe) | MVP | N/A | **In Progress** | 35% | Full Stack | Split into two halves. **Entitlement half — DONE (see F-67/F-68):** plans, tiers, entitlement keys, gates and upgrade panels all exist. **Payment half — NOT BUILT:** there is **no Stripe code in either repo** — no SDK dependency, no checkout session, no webhook handler, no customer/price IDs. The `payments` and `subscriptions` Firestore collections exist with rules but are **empty**. Checkout and webhooks are additionally blocked on the browser→backend gap (header note): a Stripe webhook needs a publicly reachable backend endpoint, and Firebase Hosting rewrite → Cloud Run **requires** setting `ADMIN_GUARD_TRUST_IAM=false` first or `/sync/:job/run`, `/purge` and `/retention` become world-callable. Note the tier names in this doc predate the shipped plans: shipped ids are **free / plus / pro**, not Free/Pro/Premium. |
+| F-67 | Plans & Entitlements Registry | MVP | All | **Complete** | 100% | Full Stack | New backend module `src/plans/`. `plans.registry.ts` defines **30 entitlement keys** and 3 plans; `plans.service.ts` seeds/reads the `plans` collection **merge-based so operator edits survive re-seeding**; `subscriptions.service.ts` resolves the effective subscription — **expiry is computed, never trusted**, because nothing rewrites a user doc when a subscription lapses — and falls back to FREE, never to no-access. `plans.controller.ts`: `GET /plans`, `POST /plans/seed` (admin), `GET /users/:uid/entitlements`. Plans live in Firestore: `free` $0 no cycle 8/30 · `plus` 2999 USD monthly 20/30 · `pro` 4999 USD monthly 28/30. **Amounts are minor units (cents)** — 4999 = $49.99. Cumulative ladder — Free: marketCatalyst, news, scanner, heatmap, macro, ipos, chartsDaily, watchlist; Plus adds chartsIntraday, chartsHistory, chartIndicators, chartNotes, technicalRatings, dividendHistory, peers, earningsDetail, portfolio, screener, themes, alerts; Pro adds fundamentalRatings, ownership, optionsChain, exportData, apiAccess, aiAssistant, backtesting, paperTrading. `adminDashboard` + `userManagement` are **staff-only and false on every plan** (selling them would be privilege escalation) — which is why Pro is 28/30, not 30/30. Frontend: `app/iq/entitlements.tsx` (`EntitlementProvider`, `useSubscription`, `useEntitlement`, `EntitlementGate`, `formatAmount`) and `app/iq/entitlement-gate.tsx` (`PlanGate` upgrade panel, `useSlugEntitled` to hide nav items, `SLUG_ENTITLEMENT` map). |
+| F-68 | Two-Layer Gating — Release Flags × Plan Entitlements | MVP | All | **Complete** | 100% | Full Stack | Deliberately **two** independent layers that must not be merged. **FF_\* release flags** (`feature-flags.registry.ts`) answer *"is it built and shipped?"*; **plan entitlements** (`plans.registry.ts`) answer *"may this tier use it?"*. A feature is usable only when both are true, and they render **different** UI — "coming soon" vs "upgrade to unlock". Merging them would make an unbuilt feature look like a paywall. Concrete case: `backtesting` and `paperTrading` are **granted on Pro but NOT BUILT**, so they correctly show "coming soon", not an upsell. |
 
 ### Mobile & Platform Expansion
 
@@ -212,13 +238,77 @@ v1.3 | June 2026
 
 ---
 
+## Admin & Operations
+
+> Staff-only surfaces. Reached at `/admin` (`app/admin/page.tsx`), which builds
+> the console dataset from Firestore in `app/admin/admin-data.ts` and stages it
+> in `sessionStorage` **before** the iframe mounts, then embeds
+> `public/admin/console.html`. The iframe has no Firebase SDK of its own — it
+> reads the staged dataset and posts writes back to the host page.
+> Access control: Firestore `isAdmin()` = `token.admin == true` **OR**
+> `token.email == ADMIN_EMAIL`. It deliberately does **not** require
+> `email_verified` — the admin is a password account with `emailVerified=false`,
+> and requiring it locked the admin out of Firestore while the backend guard
+> still admitted the same account.
+> **Staff accounts are excluded from every metric** in every view below.
+
+### Admin Console — `/admin`
+
+| ID | Feature | Phase | Tier | Status | % | Owner | Notes |
+|---|---|---|---|---|---|---|---|
+| F-69 | Admin Console — Real Data Pipeline | MVP | Staff | **Complete** | 100% | Full Stack | `public/admin/console.html` previously rendered entirely mock data. It now renders **real** Firestore data staged by `app/admin/admin-data.ts`. Fabricated affordances are **suppressed whenever real data is present**: the trend delta chips ("+12% vs last month") and the fake MRR history chart no longer render, because there is no historical series behind them (`revenue_summary` is empty). Views: Overview, Users, Subscriptions, Revenue, Usage & API, Monitor, Social Studio. **LIVE** for everything Firestore-backed; see F-73 for the one view that is not. |
+| F-70 | Admin — Users | MVP | Staff | **Complete** | 100% | Full Stack | `data-view="users"`. Backed by `GET /admin/users` (`admin-analytics.service.ts` / `admin-analytics.controller.ts`, admin-guarded) and by direct Firestore reads of `users` (rule: owner **or** admin read). Lists accounts with plan, signup date and status. **⚠ Engagement columns — watchlists / holdings / apiCalls / alerts per user — display 0.** There is no collection behind them yet; the columns are wired but unpopulated, not broken. |
+| F-71 | Admin — Subscriptions (reordered layout) | MVP | Staff | **Complete** | 100% | Full Stack | `data-view="subs"`. Layout was **reordered so operational urgency comes first**: (1) **Needs attention · failed payments** (dunning queue; count mirrored into the `dunBadge` nav badge), then (2) **Renewing soon** (next 15 days — a subscription appears once its expiry date enters the horizon), then (3) the **plan cards**. Rationale: plan cards are reference data and never need acting on, whereas the first two rows are work queues. Backed by `GET /admin/subscriptions`. **Currently both queues are empty** — the `subscriptions` and `payments` collections have no documents because Stripe is not implemented (F-25). |
+| F-72 | Admin — Per-Plan Feature Editor | MVP | Staff | **Complete** | 100% | Full Stack | Inside the Subscriptions view. Renders all **30 entitlement keys** from the `CATALOG` for each plan with an on/off toggle and an "N of 30 enabled" count. Toggles write optimistically to `plans/{id}.featureFlags` and **revert on failure**. The 2 **staff-only** keys (`adminDashboard`, `userManagement`) render with a `staff only` badge and are **locked — not togglable** on any plan. Firestore rule enforces the same boundary server-side: an admin may update **`featureFlags` + `updatedAt` only**; `amount`, `currency` and `cycle` are server-only (a client that could rewrite `amount` could set a plan to $0), and plan create/delete is denied outright. |
+| F-73 | Admin — Revenue | MVP | Staff | **In Progress** | 50% | Full Stack | `data-view="revenue"`. Backed by `GET /admin/revenue`. The view and aggregation are built and correct, but every figure resolves to **0 / empty**: `payments`, `subscriptions` and `revenue_summary` are all empty collections, and the MRR history chart is suppressed rather than faked. **Becomes meaningful only once F-25 (Stripe) lands.** |
+| F-74 | Admin — Usage & API (feature adoption) | MVP | Staff | **In Progress** | 55% | Full Stack | `data-view="usage"`. Two halves with **different** statuses. **Feature adoption — LIVE:** reads the `feature_adoption` collection (~12 rows seeded) written by F-75. **API usage — NOT BUILT:** `api_usage` is specified, has Firestore rules, and has a collection, but **no middleware records API calls anywhere in the backend**, so every API KPI on this view reads 0. Do not read those tiles as "no traffic"; read them as "not instrumented". |
+| F-75 | Admin — Monitor (backend ops UI) | MVP | Staff | **In Progress** | 70% | Full Stack | `data-view="monitor"`. New nav item that embeds the existing backend ops dashboard (per-job Firestore collection / cron schedule / next-run tracking, manual "run all jobs" trigger). Loaded **lazily on first visit** to the tab (`renderMonitor()`), so the console does not pay for it on every load. **BUILT — NOT REACHABLE IN PROD:** the ops UI is served by the backend, which the browser cannot reach (`NEXT_PUBLIC_BACKEND_URL` unset → `http://localhost:4100` baked into the production bundle → blocked as mixed content). Works locally. This is the single largest visible casualty of that gap. |
+
+### Cross-Cutting Capabilities
+
+| ID | Feature | Phase | Tier | Status | % | Owner | Notes |
+|---|---|---|---|---|---|---|---|
+| F-76 | Feature Adoption Tracking | MVP | All | **Complete** | 100% | Full Stack | `app/iq/feature-adoption.ts` + `app/iq/track-feature.tsx`. **48 tracked features**: every screen in `menuItems` plus in-app actions — the 8 Stock Detail drawers, chart timeframe / indicator / expand interactions, watchlist add & remove, search, screener, news, and others. **30-second dedupe** per feature so a user toggling a tab does not inflate counts. **Failures are swallowed** — analytics can never break a screen. Writes go **client → Firestore directly**, deliberately: `feature_adoption` is the **only client-writable analytics collection**, precisely because the browser cannot reach the backend. Rules constrain it tightly: the row must belong to the caller, `openCount` may only **increase**, ownership cannot change, delete denied. Feeds F-74. |
+| F-77 | Firestore Rules — Analytics & Billing Collections | MVP | All | **Complete** | 100% | Backend | New collections: `intraday_bars`, `dividend_history`, `splits`, `plans`, `payments`, `subscriptions`, `feature_adoption`, `api_usage`, `audit_logs`, `revenue_summary`, `system_metrics`. Populated: intraday_bars 474, dividend_history 241, splits 241, plans 3, feature_adoption ~12. **Empty:** payments, subscriptions, api_usage, audit_logs, revenue_summary, system_metrics. Access: `payments`/`subscriptions` — admin reads all, a user reads only their own; `api_usage`/`feature_adoption`/`audit_logs`/`revenue_summary`/`system_metrics` — admin read only (plus the constrained client write on `feature_adoption`, F-76). **Two pre-existing bugs fixed:** `market_sentiment` and `stock_comments` had **no rule at all**, so default-deny silently blocked the Dashboard Fear & Greed gauge (which fell back to a hardcoded 62 / "Greed") and the chart-notes feature (F-50). **⚠ Both repos ship a `firestore.rules`; they have DRIFTED.** The **live** ruleset is deployed from `MarketCatalystUI/firestore.rules`. The backend copy is stale and now carries a DO-NOT-DEPLOY header. |
+
+---
+
+## Known Gaps — Fabricated or Unbuilt
+
+Explicit inventory of what is still **not real**, so no reader mistakes UI polish
+for a working feature.
+
+| Area | State | Detail |
+|---|---|---|
+| AI narratives | **NOT BUILT** | Every AI surface renders hand-written static prose: AI Technical Analysis (F-31), AI Earnings Summary (F-06), Portfolio Pulse card (F-14), AI Market Copilot (F-32), Story Stocks (F-33), AI note per analyst action (F-12), the AI "read" in the earnings inline panel (F-49), and the AI Pulse bullets in F-52. **No Claude API call exists in either repo.** |
+| Backtesting | **NOT BUILT** | Entitlement key granted on Pro; no implementation. Renders "coming soon" via F-68, not an upsell. |
+| Paper trading | **NOT BUILT** | Same as above — Pro entitlement, no implementation, "coming soon". |
+| Alerts engine | **NOT BUILT** | `alerts` is a Plus entitlement and F-16 lists 12 alert types, but there is no rules engine, no evaluation job, and no delivery path (in-app, email, SMS or push). The per-stock alert toggle in F-51 is UI state only. |
+| Stripe / payments | **NOT BUILT** | No Stripe code in either repo. `payments` and `subscriptions` empty. Blocked additionally on the browser→backend gap. See F-25. |
+| `api_usage` | **SPECIFIED, NOT IMPLEMENTED** | Collection + rules exist; no middleware records anything. Admin "Usage & API" KPIs read 0. See F-74. |
+| Per-user engagement counts | **NO SOURCE** | watchlists / holdings / apiCalls / alerts columns in Admin → Users render 0; no backing collection. See F-70. |
+| Options greeks / IV / OI / bid-ask | **VENDOR-BLOCKED** | Hard 403 `NOT_AUTHORIZED` on the Polygon options snapshot endpoint. Values shown are seeded pseudo-random. Also unavailable on this plan: index values (I:SPX, I:VIX), trades/quotes/last-trade, Benzinga endpoints, `/v1/summaries`; 404 on short-interest and futures. Measured plan limits: **exactly 900 s (15 min) delay**, **exactly 5-year rolling history**. |
+| Automated data refresh | **NOT DEPLOYED** | No Cloud Scheduler jobs in any region and no `scheduler-invoker` service account — `create-scheduler-jobs.sh` was never run. With `min-instances=0` the in-process `@Cron` decorators never fire. **No sync job has ever run automatically in production.** |
+| Backend reachable from browser | **NOT DEPLOYED** | `NEXT_PUBLIC_BACKEND_URL` unset → `http://localhost:4100` in the production bundle, blocked as mixed content. Disables Monitor (F-75), extended-hours moves and the vendor market-status pill (F-65), and any future Stripe checkout/webhook. Fix = Firebase Hosting rewrite → Cloud Run, which **requires** `ADMIN_GUARD_TRUST_IAM=false` first, or `/sync/:job/run`, `/purge` and `/retention` become world-callable. |
+| `POLYGON_API_KEY` | **UN-ROTATED** | Key was exposed in chat and has not been rotated. Secret Manager version 4 is enabled. `deploy/rotate-polygon-key.sh` automates everything except generating the replacement key. |
+
+---
+
 ## Phase Summary
 
-| Phase | Total Features | Complete | In Progress | Target |
-|---|---|---|---|---|
-| MVP (Phase 1) | 42 | 20 (F-42, F-43, F-44, F-46, F-47, F-48, F-49, F-50, F-51, F-52, F-53, F-55, F-56, F-58, F-61, F-62, F-63, F-64, F-13-layout, F-15-layout) | 8 (F-01, F-02, F-07, F-10, F-12, F-13, F-15, F-21, F-22, F-25, F-45) | Week 18 |
-| Phase 2 | 17 (+F-26 UI) | 0 | 1 (F-40) | Week 38 |
-| **Total** | **51** | **12** | **11** | — |
+Recounted from the tables above on 2026-07-22 (the previous version of this
+table did not reconcile with its own rows). Counts include the 13 features
+added in v1.4 (F-65 – F-77) and the `*(F-01)*` Heatmap sub-row.
+
+| Phase | Total Features | Complete | In Progress | Not Started | Target |
+|---|---|---|---|---|---|
+| MVP (Phase 1) | 59 | 27 | 19 | 13 | Week 18 |
+| Phase 2 | 16 | 0 | 3 | 13 | Week 38 |
+| **Total** | **75** | **27** | **22** | **26** | — |
+
+New in v1.4: F-65 (extended hours/market status), F-66 (real chart bars),
+F-67 (plans & entitlements), F-68 (two-layer gating), F-69 – F-75 (admin
+console + its six views), F-76 (feature adoption), F-77 (Firestore rules).
 
 ## Status Legend
 
@@ -228,3 +318,15 @@ v1.3 | June 2026
 | In Progress | Actively in development (UI built with static data counts) |
 | In Review | Dev complete; in QA or stakeholder review |
 | Complete | Deployed and accepted |
+
+### Deployment annotation (added 2026-07-22)
+
+Because a feature can be finished and still be unusable in production, Notes
+carry an explicit deployment marker. **Status ≠ reachability.**
+
+| Marker | Meaning |
+|---|---|
+| **LIVE** | Works in production today. In practice this means "reads Firestore directly" — those paths need no backend call. |
+| **BUILT — NOT REACHABLE IN PROD** | Code is complete and works locally, but the production bundle cannot reach the backend (`NEXT_PUBLIC_BACKEND_URL` unset). Affects F-65 and F-75. |
+| **NOT BUILT** | No implementation exists, regardless of how finished the UI looks. See *Known Gaps — Fabricated or Unbuilt*. |
+| **VENDOR-BLOCKED** | Implementation exists but the data is not obtainable on the current Polygon plan (403/404). Not a build gap. |

@@ -1,6 +1,6 @@
 # Polygon Paid Plan → Feature Cross-Check
 
-**Generated:** 2026-07-21 · **Updated:** 2026-07-21 (§2.1 and §2.2 merged; all 18 implementation items now in one table)
+**Generated:** 2026-07-21 · **Updated:** 2026-07-22 (backfill complete; statuses verified against production data)
 
 **Method:** every row below was probed live against the app's own Polygon key (`api.massive.com`) on 2026-07-21. Nothing here is quoted from vendor documentation — `✅` means the endpoint returned `200` with real data, `❌` means it returned `403 NOT_AUTHORIZED` or `404`. Status values in §2.1 were read from production Firestore, not inferred from the code.
 
@@ -82,13 +82,13 @@ Plan: **Polygon Stocks Starter** (via Massive). Unlimited rate, 15-minute delaye
 
 Everything in this section is achievable with the current subscription — no new vendor, no upgrade.
 
-> **Read the Status column as "is it real *right now*", not "is it built".** All 18 new items below are code-complete — both repos typecheck and build, 15 unit tests pass — but code shipping only means the *next* run of that job produces real values. Until a job has run over the whole ticker universe, the UI still renders its fallback. Conflating "implemented" with "live" is how a feature gets reported as done while every user still sees fabricated numbers.
+> **Status means "is it real *right now*", not "is it built".** Shipping code only means the *next* run of a job produces real values; until that job has covered the ticker universe the UI still renders its fallback, silently. Conflating the two is how a feature gets reported as done while every user still sees fabricated numbers — so every ✅ below was read back out of production Firestore, not inferred from the code. The 2026-07-22 backfill closed all of them except items 12 and 13, which are blocked on §2.2.
 
 ### 2.1 Every feature this plan serves
 
-One table, grouped by domain, covering both what already worked and the 18 items wired on 2026-07-21. The **#** column carries the implementation item number (referenced from §5 and §7); a dash means it predates this pass. Every fabricated path is retained as a fallback for tickers a job has not yet reached, so nothing goes blank mid-backfill.
+One table, grouped by domain, covering both what already worked and the 18 items wired on 2026-07-21. The **#** column carries the implementation item number (referenced from §5 and §7); a dash means it predates this pass. Every fabricated path is retained as a fallback for tickers a job has not reached, so nothing goes blank for a symbol outside the synced universe.
 
-**Status:** ✅ live in production · 🔄 filling (job mid-run; some tickers real) · ⏳ queued (code deployed, job not yet run — fallback still showing) · ➖ no stored data involved
+**Status:** ✅ live in production (counts are tickers covered, of 241) · ⚠ works locally but not in production · ➖ no stored data involved
 
 | # | Feature | Screen | Served by | Status |
 |---|---|---|---|---|
@@ -96,46 +96,62 @@ One table, grouped by domain, covering both what already worked and the 18 items
 | — | Live price ticker / quote header | Shell, Stock | `/v2/snapshot/…/tickers` | ✅ |
 | — | Delayed live stream (SSE) | Stock (Search) | `wss://delayed…` channel `A`/`AM` | ✅ |
 | — | Price chart 3M / 6M / 1Y | Stock | `/v2/aggs/…/1/day` → `ohlcv_bars` | ✅ |
-| 1 | 1D / 1W / 1M charts *(were `genOHLC` synthetic)* | Stock + 4 panels | `intraday-bars.job.ts` → `useChartBars.ts` | ⏳ `intraday_bars` = 0 docs |
-| 2 | 5Y chart *(was synthetic)* | Stock + 4 panels | `stock-history.job.ts`, backfill 300 d → 5 y | 🔄 in progress |
+| 1 | 1D / 1W / 1M charts *(were `genOHLC` synthetic)* | Stock + 4 panels | `intraday-bars.job.ts` → `useChartBars.ts` | ✅ 474 docs, ~395k bars |
+| 2 | 5Y chart *(was synthetic)* | Stock + 4 panels | `stock-history.job.ts`, backfill 300 d → 5 y | ✅ 299,552 bars |
 | 11 | Charts on Watchlist / Portfolio / Themes / Screener *(100% synthetic — `ChartCard` never passed `realBars`)* | those 4 screens | `stock-panel.tsx` | ➖ reads item 2's bars |
-| 5 | VWAP *(was `p * 0.994`)* | Stock | vendor `vw` persisted per bar | 🔄 with item 2 |
-| 12 | Premarket / After-hours moves *(were hardcoded lines)* | Commentary | `/v3/snapshot` → `useExtendedHours.ts` | ✅ via endpoint |
+| 5 | VWAP *(was `p * 0.994`)* | Stock | vendor `vw` persisted per bar | ✅ 241/241 |
+| 12 | Premarket / After-hours moves *(were hardcoded lines)* | Commentary | `/v3/snapshot` → `useExtendedHours.ts` | ⚠ local only — see §2.2 |
 | **Indicators & rankings** |||||
 | — | RS Rating, Tech Rating, RSI/MACD/SMA scalars | Screener, Stock | computed from `ohlcv_bars` | ✅ |
-| 3 | RSI pane series *(was a seeded sine walk)* | Stock + panels | `technical-indicators.job.ts` → `RsiPane series=` | ⏳ |
-| 4 | MA/EMA ladder, 10/20/30/50/100/200 *(were price multiples)* | Stock | `technical-indicators.job.ts` → `MA_LADDER_ROWS` | ⏳ |
-| 9 | 52-week high/low *(were `p * 0.58` … `p * 1.02`)* | Stock | `technical-indicators.job.ts` | ⏳ |
-| 10 | Avg volume *(was market cap ÷ price × constant)* | Stock | `technical-indicators.job.ts` | ⏳ |
+| 3 | RSI pane series *(was a seeded sine walk)* | Stock + panels | `technical-indicators.job.ts` → `RsiPane series=` | ✅ 241/241 |
+| 4 | MA/EMA ladder, 10/20/30/50/100/200 *(were price multiples)* | Stock | `technical-indicators.job.ts` → `MA_LADDER_ROWS` | ✅ 241/241 |
+| 9 | 52-week high/low *(were `p * 0.58` … `p * 1.02`)* | Stock | `technical-indicators.job.ts` | ✅ 241/241 |
+| 10 | Avg volume *(was market cap ÷ price × constant)* | Stock | `technical-indicators.job.ts` | ✅ 241/241 |
 | **Company & fundamentals** |||||
 | — | Company header, profile, market cap, sector | Stock, Screener | `/v3/reference/tickers/{sym}` | ✅ |
 | — | Quarterly financials (10 quarters) | Stock, Earnings | `/vX/reference/financials` | ✅ |
-| 6 | Peers list *(was a sector-filtered mock)* | Stock | `/v1/related-companies/{sym}` | ⏳ 4/241 non-empty |
-| 18 | Balance sheet + cash flow *(were fabricated)* | Stock, Earnings | `financials.job.ts` — same call, fields were discarded | ⏳ |
+| 6 | Peers list *(was a sector-filtered mock)* | Stock | `/v1/related-companies/{sym}` | ✅ 225/241 — see §2.4 |
+| 18 | Balance sheet + cash flow *(were fabricated)* | Stock, Earnings | `financials.job.ts` — same call, fields were discarded | ✅ 226 tickers |
 | **Dividends & corporate actions** |||||
 | — | Dividends calendar (ex / pay / amount) | Macro | `/v3/reference/dividends` | ✅ |
-| 7 | Dividend history card + drawer *(10 yr extrapolated)* | Stock, Macro | `corporate-actions.job.ts` → `useDividendHistory.ts` | ⏳ `dividend_history` = 0 docs |
-| 8 | Dividend yield *(null → "n/a")* | Stock, Macro | TTM sum ÷ price; annualized per calendar row | ⏳ 1/241 |
-| 16 | Splits *(never synced)* | *data only — no UI consumer yet* | `corporate-actions.job.ts` | ⏳ `splits` = 0 docs |
+| 7 | Dividend history card + drawer *(10 yr extrapolated)* | Stock, Macro | `corporate-actions.job.ts` → `useDividendHistory.ts` | ✅ 241/241 |
+| 8 | Dividend yield *(null → "n/a")* | Stock, Macro | TTM sum ÷ price; annualized per calendar row | ✅ 176/241 — see §2.4 |
+| 16 | Splits *(never synced)* | *data only — no UI consumer yet* | `corporate-actions.job.ts` | ✅ 241/241 |
 | **Market-wide** |||||
 | — | Market Movers (gainers / losers) | Movers, Dashboard | `/v2/snapshot/…/gainers`,`/losers` | ✅ |
 | — | Sector heatmap (11 SPDR ETFs) | Heatmap | ETF daily aggs | ✅ |
 | — | Market indices strip *(ETF proxies — see §3.1)* | Shell, Dashboard | ETF daily aggs | ✅ |
 | — | Fear & Greed + Market Internals | Dashboard | `/v2/aggs/grouped/…` | ✅ |
-| 13 | Market-status pill *(was a local clock + hand-kept holiday list)* | Shell (all screens) | `GET /live/market-status` | ✅ via endpoint |
-| 14 | US 10Y tile *(was **TLT — an ETF that moves inversely to the yield it was labelled as**)* | Shell, Dashboard, Macro | `/fed/v1/treasury-yields` | ⏳ still `isProxy:true`, TLT @ 83.7 |
+| 13 | Market-status pill *(was a local clock + hand-kept holiday list)* | Shell (all screens) | `GET /live/market-status` | ⚠ local only — see §2.2 |
+| 14 | US 10Y tile *(was **TLT — an ETF that moves inversely to the yield it was labelled as**)* | Shell, Dashboard, Macro | `/fed/v1/treasury-yields` | ✅ real yield 4.60%, `isProxy:false` |
 | **News, IPOs & options** |||||
 | — | News feed + bell | Commentary, Dashboard | `/v2/reference/news` | ✅ |
 | — | IPO calendar | IPOs | `/vX/reference/ipos` | ✅ |
 | — | Options **reference** chain (strike / expiry) | Options | `/v3/reference/options/contracts` | ✅ |
 | 15 | IPO aftermarket performance | IPOs | `ipos.job.ts` — *already implemented before this pass* | ✅ |
-| 17 | Options per-contract OHLCV *(close + volume only)* | Options | `options-chains.job.ts` — O/H/L/C, VWAP, trade count | ⏳ |
+| 17 | Options per-contract OHLCV *(close + volume only)* | Options | `options-chains.job.ts` — O/H/L/C, VWAP, trade count | ✅ 8 underlyings |
 
 **New Firestore collections:** `intraday_bars`, `dividend_history`, `splits`.
 **New jobs:** `intraday-bars` (16:25 ET weekdays), `corporate-actions` (06:40 ET daily).
 **New endpoint:** `GET /live/market-status`.
 
-### 2.2 Backfill state and how to check it
+**Deployed 2026-07-21:** Cloud Run revision `market-catalyst-backend-00030-8p5`; Hosting release to `marketcatalyst.web.app`; Firestore rules released. Health, job registry (26) and `/live/market-status` verified on the live revision.
+
+### 2.2 The browser cannot reach the backend in production ⚠
+
+Items 12 and 13 are the only two features here served by an HTTP endpoint rather than Firestore, and **neither works in production today.**
+
+`NEXT_PUBLIC_BACKEND_URL` is unset, so all four backend callers — `market-status.ts`, `useSnapshotQuote`, `useLiveQuote`, `useExtendedHours` — fall back to their `http://localhost:4100` default, and that literal is baked into the exported static bundle. On an HTTPS Hosting origin a plain-HTTP `localhost` request is blocked as mixed content before it leaves the browser. Both call sites catch the failure and degrade quietly — the pill falls back to the local-clock computation, the extended-hours strip renders nothing — so there is no visible error, which is exactly why this needed checking rather than assuming.
+
+This predates the current work (`useSnapshotQuote` and `useLiveQuote` have always had it); items 12 and 13 simply inherit it.
+
+**Closing it is a security decision, not a config tweak.** Cloud Run runs `--no-allow-unauthenticated`, and `AdminGuard` relies on that: with `ADMIN_GUARD_TRUST_IAM=true`, a request with no `Authorization` header is treated as pre-vetted by Cloud Run IAM. Making the service browser-reachable **must** be paired with `ADMIN_GUARD_TRUST_IAM=false`, or `/sync/:job/run`, `/purge` and `/retention` become world-callable. The guard's own docblock says so. Options, in rough order of preference:
+
+1. **Firebase Hosting rewrite → Cloud Run.** Keeps one origin (no CORS), but the rewrite invokes the service as the Hosting service account, so the guard must stop trusting header-less requests.
+2. **Make the service public + flip `ADMIN_GUARD_TRUST_IAM=false`** so only a verified Firebase admin token passes, and add CORS for the Hosting origin.
+3. **Leave it.** Items 12 and 13 stay on their fallbacks; everything else in §2.1 reads Firestore directly and is unaffected.
+
+### 2.3 Backfill state and how to check it
 
 Raising the backfill depth was not sufficient on its own. `sync_watermarks.lastSyncedThrough` only ever moves **forward**, so an already-synced ticker asks for `watermark + 1 day` and never reaches newly-available older history — the 5Y chart would have stayed synthetic while every build and test passed. `stock-history.job.ts` now also tracks `earliestSyncedFrom` and fills **backwards** to the plan edge; see §6.
 
@@ -146,9 +162,32 @@ MSFT   bars=1252   2021-07-26 → 2026-07-21   vwap on 1252/1252   ← deep-fill
 AAPL   bars= 205   2025-09-23 → 2026-07-17   vwap on 0/205       ← cursor not yet reached
 ```
 
-Cursor-batched jobs cover 241 tickers at 40–60 per run, so full coverage needs 4–7 runs each. To check progress, count documents per collection and confirm a ticker's oldest bar is near `planHistoryFloor()` (today − 5 years). A row in §2.1 flips from ⏳ to ✅ only once its job has run over the whole universe.
+Cursor-batched jobs cover 241 tickers at 40–60 per run, so full coverage needed 4–7 runs each. **The full sequence completed 2026-07-22 in ~2h20m**, run in dependency order (bars → intraday → companies → corporate-actions → indicators → statements), because the later jobs derive from the earlier ones' output.
 
-**Verification performed:** every new vendor method probed against the live key; 15 unit tests cover the RSI series and dividend year-boundary math (`sync-derivations.spec.ts`), including the invariant that `rsiSeries` ends exactly where the scalar `rsi()` lands; session slicing checked against real bars from four viewer timezones.
+| Phase | Result |
+|---|---|
+| stock-history × 4 | 224,905 bars → `ohlcv_bars` now **299,552 docs** |
+| intraday-bars × 7 | 474 docs, ~395,000 bars |
+| companies × 5 | 294 written; 4 failed on an **FMP 429 rate limit** (fallback path only — Polygon is primary) |
+| corporate-actions × 7 | 280 dividend docs + 280 split docs |
+| technical-indicators / rs-rating / tech-rating | 241 each, 0 skipped |
+| financials × 7 | 262 written, 18 failed |
+| dividends / market-indices / options-chains | 1,067 · 9 · 8 |
+
+To re-check later: count documents per collection and confirm a ticker's oldest bar sits near `planHistoryFloor()` (today − 5 years).
+
+**Verification performed:** every new vendor method probed against the live key; 15 unit tests cover the RSI series and dividend year-boundary math (`sync-derivations.spec.ts`), including the invariant that `rsiSeries` ends exactly where the scalar `rsi()` lands; session slicing checked against real bars from four viewer timezones. Post-sync spot check on MSFT: price 398.64 inside a 52-week range of 349.20–555.45, VWAP 399.30, SMA-200 438.16, 90-point RSI series, 300 bars analysed, 1,263 five-minute bars.
+
+### 2.4 Two coverage gaps that are correct, not failures
+
+**Peers: 225/241.** The 16 empty ones are ALNY, ANGI, BABA, BIDU, GEN, GL, GOOS, JD, LIN, NIO, PDD, SAP, TM, TSM, YELP, ZIM — predominantly foreign issuers and ADRs, for which `/v1/related-companies` simply returns nothing. A vendor coverage limit, not a sync error. The UI falls back to the sector-filtered list for these.
+
+**Dividend yield: 176/241.** The 65 nulls split into two legitimate groups:
+
+- **57 genuine non-payers** — no dividend history at all.
+- **8 lapsed payers** — real history, but zero payments in the trailing twelve months: ADBE (last ex-date 2005-03-24), ADSK (2005-03-22), INTC (2024-08-07, suspended), MELI (2017-12-28), PARA (2025-06-16), PDD (2010-08-16), S (2005-03-02), STLA (2025-04-23). A trailing-twelve-month yield for these is correctly null, not zero-filled.
+
+That second group exposed a bug in the first cut of the UI, since fixed: `isPayer` means "has any dividend history", **not** "pays today". Gating the card on it left `yieldPct` null, which then fell through to the static mock — so Adobe rendered a fabricated current yield beside its genuine but twenty-year-old payment rows. Once real dividend data exists it is now treated as authoritative *including when the answer is "nothing"*, and a lapsed payer shows "Dividend suspended" with its last payment date rather than borrowing the mock's number.
 
 ---
 
@@ -224,7 +263,7 @@ All **AI narrative** surfaces: *What Matters Now*, every "◆ AI …" block (tec
 | Bucket | Count | Examples |
 |---|---|---|
 | ✅ **Working on Polygon paid before this pass** | ~14 feature areas | charts 3M–1Y, movers, heatmap, news, dividends, IPOs, financials, F&G |
-| ✅ **Newly wired 2026-07-21** (code complete; data backfilling — §2.1) | **18 items** | intraday + 5Y charts, real RSI, peers, dividend history & yield, VWAP, 52W, premarket/AH moves, market status, 10Y |
+| ✅ **Newly wired 2026-07-21, backfilled 2026-07-22** (§2.1) | **18 items** | intraday + 5Y charts, real RSI, peers, dividend history & yield, VWAP, 52W, premarket/AH moves, market status, 10Y |
 | 🔴 **Plan-blocked** (Polygon sells it, tier excludes it) | 9 | options IV/OI/bid-ask/greeks, SPX/VIX spot, real-time, ticks, per-firm analyst, earnings session/guidance |
 | 🔴 **Polygon has no product** | 13 | earnings estimates, short interest, inst. ownership, transcripts, macro consensus, TICK/McClellan/put-call |
 | 🔴 **Needs an LLM, not a data vendor** | all AI surfaces | What Matters Now, every ◆ AI block, recaps, audio |
@@ -255,7 +294,7 @@ All **AI narrative** surfaces: *What Matters Now*, every "◆ AI …" block (tec
 
 1. ~~**No-purchase, high-yield (do first):** §2.1 items 11 → 1 → 2 → 3 → 6 → 7.~~ **Done 2026-07-21** — code complete, backfill running.
 2. ~~**No-purchase, cheap:** items 5, 8, 9, 10, 12, 13, 15.~~ **Done 2026-07-21.**
-3. **Finish the backfill and confirm §2.1 flips ⏳ → ✅.** Nothing above is user-visible until the jobs have run over all 241 tickers; run order matters (bars → companies → corporate-actions → technical-indicators), because the later jobs derive from the earlier ones' output.
+3. ~~**Finish the backfill.**~~ **Done 2026-07-22** — see §2.3.
 4. **Then decide on purchases**, in descending value:
    - **Finnhub earnings** (free, key held) → session BMO/AMC, 49× calendar coverage.
    - **Tradier** (token held, unwired) → options IV/OI/bid-ask, closes R32.

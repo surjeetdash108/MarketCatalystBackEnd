@@ -6,6 +6,7 @@ import { join } from 'path';
 import { CommonModule } from './common/common.module';
 import { HealthController } from './health/health.controller';
 import { FeatureFlagsModule } from './feature-flags/feature-flags.module';
+import { PlansModule } from './plans/plans.module';
 import { RetentionModule } from './retention/retention.module';
 import { AutoPurgeModule } from './auto-purge/auto-purge.module';
 import { LiveModule } from './live/live.module';
@@ -28,6 +29,7 @@ import { Wave3Module } from './vendors/wave3.module';
     PurgeModule,
     LiveModule,
     FeatureFlagsModule,
+    PlansModule,
     RetentionModule,
     AutoPurgeModule,
     Wave3Module,

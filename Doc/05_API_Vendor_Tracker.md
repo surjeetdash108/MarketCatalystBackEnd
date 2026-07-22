@@ -16,6 +16,18 @@ v1.0 | June 2026
 > vendor is really wired per collection today, see `Doc/openapi.yaml`
 > (authoritative, kept in sync with `backend/src/sync/*.job.ts` and
 > `backend/src/adapters/`) and `Doc/schema.sql`.
+>
+> **Addendum 2026-07-22.** The Polygon plan's actual entitlements have now been
+> probed endpoint-by-endpoint against the live key — see the new §2.1 below and
+> [POLYGON-FEATURE-CROSSCHECK.md](./POLYGON-FEATURE-CROSSCHECK.md), which is
+> **authoritative on what Polygon does and does not serve** and supersedes the
+> vendor-capability guesses in §1–§3. Several assumptions in this file were
+> wrong in the app's favour (intraday aggregates, 5-year history, peers,
+> dividends/splits history and the `/fed/v1/*` macro namespace are all
+> authorized and were simply never called) and one was wrong against it
+> (Polygon serves no index spot values, so the SPX/VIX tiles are ETF proxies).
+> **Stripe has also been added to §1 as a PLANNED vendor — it is not
+> integrated; no Stripe code exists in either repo.**
 
 ---
 
@@ -36,6 +48,18 @@ v1.0 | June 2026
 | **Motley Fool Transcripts API** | None | $2,000+/year (enterprise) | Earnings Transcripts | ❌ Not startup-friendly |
 | **Refinitiv (LSEG)** | None | Enterprise contract only ($5k+/mo) | Full market data | ❌ Enterprise only |
 | **Market Chameleon** | Website research tool only | No public API | Options research | ❌ No usable API |
+| **Stripe** *(PLANNED — not integrated)* | No monthly fee | 2.9% + 30¢ per successful card charge (standard US pricing) | Payments, Subscriptions, Billing | ✅ Yes — pay-per-transaction |
+
+### 1.1 Stripe — planned, NOT integrated
+
+Listed here so the intent is recorded, **not** because anything is wired. State as of 2026-07-22, verified by searching both repos:
+
+- **No Stripe code exists in either repo.** No SDK dependency, no API key, no checkout session, no webhook handler, no customer or price objects.
+- The `payments` and `subscriptions` Firestore collections exist and are **empty**, because nothing writes to them.
+- `users.stripeCustomerId` / `stripeSubId` appear in the §5.16 schema below as forward-looking fields only; they are null on every document.
+- The `plans` collection (3 plans, seeded from `plans.registry.ts`) is real and live, and the entitlement layer that reads it works — but plan assignment is currently manual. Amounts are stored in **minor units** (`4999` = $49.99), which is Stripe's own convention, so the data is shaped for an eventual integration.
+- **Integration is blocked on a prerequisite**, not just on effort: the browser cannot reach the backend in production (`NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4100` is baked into the static bundle and blocked as mixed content). Checkout redirects and webhook confirmation both require a reachable backend origin.
+- Consequently the admin console's Revenue and Subscriptions views read zero. The console's fabricated MRR history chart and trend deltas are **suppressed** when running against real data rather than carried forward, since invented revenue figures shown beside real users would read as authoritative.
 
 ---
 
@@ -59,6 +83,50 @@ v1.0 | June 2026
 | Sector and industry group data | **Polygon** (migrated 2026-07-12) | FMP (Paid) | ✅ Polygon free tier | 11 SPDR sector-ETF proxies, day-over-day % (proxy, not cap-weighted). FMP snapshot as fallback. |
 | Dividends calendar | **Polygon** (migrated 2026-07-12) | FMP (Paid) | ✅ Polygon free tier | Polygon `/v3/reference/dividends`. No yield field on Polygon (null; present only via FMP fallback). |
 | IPO calendar | **Polygon** (migrated 2026-07-12) | Finnhub (Free) | ✅ Polygon free tier | Polygon `/vX/reference/ipos` by listing_date. FMP's ipos-calendar restricted. |
+| Intraday bars (1D/1W/1M charts) | **Polygon** (wired 2026-07-22) | — | ❌ paid plan | `/v2/aggs/ticker/{sym}/range/{5,30}/minute/…`. Previously assumed plan-blocked; it is not. ≥4 years of intraday depth measured. |
+| Dividend payment history + yield | **Polygon** (wired 2026-07-22) | FMP (Paid) | ❌ paid plan | `/v3/reference/dividends`. **Corrects the row above:** Polygon has no yield *field*, but yield is *derivable* (TTM sum ÷ price) — it is not vendor-blocked. |
+| Split history | **Polygon** (wired 2026-07-22) | — | ❌ paid plan | `/v3/reference/splits`. Never synced before this pass. |
+| Peers / related companies | **Polygon** (wired 2026-07-22) | FMP (Paid) | ❌ paid plan | `/v1/related-companies/{sym}`. **Corrects the "peers" note on the Company reference row above** — Polygon does have this product; it was simply never called. 225/241 covered; blanks are foreign issuers and ADRs. |
+| Treasury yields / CPI / inflation expectations | **Polygon** (wired 2026-07-22) | FRED (Free) | ✅ FRED free | `/fed/v1/treasury-yields` powers the real US10Y tile, replacing a **TLT ETF proxy that moved inversely to the yield it was labelled as**. `/fed/v1/inflation*` authorized but unused. |
+| Market open/closed state + holiday calendar | **Polygon** (wired 2026-07-22) | — | ❌ paid plan | `/v1/marketstatus/{now,upcoming}`, replacing a local clock and a hand-maintained holiday list. |
+| Extended-hours (pre/post) change % | **Polygon** (wired 2026-07-22) | — | ❌ paid plan | `/v3/snapshot` — the v2 snapshot carries no extended-hours fields, which is why the cache moved v2 → v3. |
+| Index spot values (SPX/NDX/DJI/RUT/VIX) | **none — ETF proxies** | Polygon Indices add-on | ❌ | `/v2/aggs/I:SPX`, `I:VIX` → **403**. Contradicts the "Indices" row above: Polygon Starter does **not** serve index values. SPY/QQQ/DIA/IWM/VIXY are used as proxies and flagged `isProxy:true`. |
+| Payments / subscription billing | **Stripe (PLANNED — not integrated)** | — | ✅ no monthly fee | See §1.1. No code exists; `payments`/`subscriptions` are empty. |
+
+### 2.1 Polygon endpoint authorization — verified, not assumed
+
+Plan: **Polygon Stocks Starter** (via Massive, `api.massive.com`). Every row was probed with the app's own key on 2026-07-21. `✅` = returned `200` with real data; `❌` = returned `403 NOT_AUTHORIZED` or `404`. Nothing here is quoted from vendor documentation — which matters, because the vendor-capability guesses in §1–§3 above were wrong in both directions.
+
+**Measured limits:** delay is **exactly 900 s (15 min)**; daily history is **exactly 5 years rolling**; intraday depth ≥ 4 years; no rate limit reached.
+
+| Endpoint | Status | Used by |
+|---|---|---|
+| `/v2/aggs/ticker/{sym}/range/1/day/…` | ✅ 200 | `stock-history.job.ts` → `ohlcv_bars` |
+| `/v2/aggs/ticker/{sym}/range/{1,5,30}/minute/…` | ✅ 200 | `intraday-bars.job.ts` → `intraday_bars` |
+| `/v2/aggs/grouped/locale/us/market/stocks/{date}` | ✅ 200 | movers, quotes, Fear & Greed |
+| `/v2/snapshot/…/{tickers,gainers,losers}` | ✅ 200 | live quote, movers |
+| `/v3/snapshot?ticker.any_of=` | ✅ 200 | `snapshot-cache.service.ts` — extended hours |
+| `/v3/reference/tickers` · `/tickers/{sym}` | ✅ 200 | `ticker-universe`, `companies` |
+| `/vX/reference/financials` | ✅ 200 | `financials.job.ts` — income + balance sheet + cash flow |
+| `/v1/related-companies/{sym}` | ✅ 200 | `companies.job.ts` — peers |
+| `/v3/reference/dividends` · `/splits` | ✅ 200 | `dividends.job.ts`, `corporate-actions.job.ts` |
+| `/vX/reference/ipos` | ✅ 200 | `ipos.job.ts` |
+| `/v2/reference/news` | ✅ 200 | `news.job.ts` |
+| `/v1/indicators/{rsi,macd,sma,ema}/{sym}` | ✅ 200 | **authorized, unused** — computed in-house from bars instead |
+| `/v1/marketstatus/{now,upcoming}` | ✅ 200 | `market-status.service.ts` → `GET /live/market-status` |
+| `/v3/reference/options/contracts` | ✅ 200 | `options-chains.job.ts` — contract **reference only** |
+| `/v2/aggs/ticker/O:{contract}/range/1/day/…` | ✅ 200 | `options-chains.job.ts` — per-contract OHLCV, VWAP, trade count |
+| `/fed/v1/treasury-yields` | ✅ 200 | `market-indices.job.ts` — real US10Y |
+| `/fed/v1/inflation` · `/inflation-expectations` | ✅ 200 | **authorized, unused** |
+| `/v3/snapshot/options/{underlying}` | ❌ 403 | **no greeks, IV, open interest or bid/ask** |
+| `/v3/snapshot/indices` · `/v2/aggs/ticker/I:SPX` · `I:VIX` | ❌ 403 | **no index spot values** — ETF proxies used instead |
+| `/v2/last/trade/…` · `/v3/trades` · `/v3/quotes` | ❌ 403 | no tick data, no NBBO |
+| `/benzinga/v1/{ratings,firms,earnings,guidance,news,analyst-insights}` | ❌ 403 | no per-firm analyst actions, no earnings session/guidance |
+| `/v1/summaries` | ❌ 403 | — |
+| `/stocks/vX/short-interest` · `/short-volume` | ❌ 404 | not served on this host at all — use FINRA files |
+| `/futures/vX/products` | ❌ 404 | no WTI/GOLD futures — use commodity ETFs |
+
+**WebSocket** (probed 2026-07-20): real-time cluster ❌ "no access"; `wss://delayed.polygon.io/stocks` channels `A` and `AM` ✅ authorized; `T` (trades) and `Q` (quotes) ❌ not authorized.
 
 ---
 
@@ -77,6 +145,10 @@ v1.0 | June 2026
 
 > **Phase 2 additions**: Intrinio for deeper transcript/options coverage if Benzinga proves insufficient (~$250/mo add).  
 > **Not recommended**: Motley Fool Transcripts API (too expensive), Refinitiv (enterprise only), Market Chameleon (no API).
+
+> **⚠ Correction to the "Polygon.io Starter" row (2026-07-22).** The plan actually held does **not** deliver everything that row claims. Verified against the live key: **no real-time WebSocket quotes** (the real-time cluster refuses the key; only the *delayed* cluster's `A`/`AM` aggregate channels are authorized, and REST delay measures exactly 900 s), **no block trades** (the Trades API 403s, so the `block_trades` collection in §5.8 has no source), and **no index values** (SPX/NDX/DJI/RUT/VIX all 403 — the app uses ETF proxies and labels them). What it *does* deliver, beyond what the row credits it with, is 5 years of daily history, intraday aggregates, peers, dividends/splits history, full financial statements and the `/fed/v1/*` macro namespace. See §2.1.
+
+> **Stripe (planned, ~$0/mo fixed + 2.9% + 30¢ per charge)** would slot in as a billing vendor alongside these data vendors. It is **not** included in the MVP total above because it is not integrated — see §1.1.
 
 ---
 
@@ -702,8 +774,8 @@ Document ID: {firebase_uid}
   displayName:     string | null,
   photoUrl:        string | null,
   tier:            "free" | "pro" | "premium",
-  stripeCustomerId: string | null,
-  stripeSubId:     string | null,
+  stripeCustomerId: string | null,   // ⚠ always null — Stripe is not integrated (§1.1)
+  stripeSubId:     string | null,    // ⚠ always null — Stripe is not integrated (§1.1)
   onboardedAt:     timestamp | null,
   createdAt:       timestamp,
   updatedAt:       timestamp
@@ -791,6 +863,10 @@ Sub-collection: users/{uid}/notifications/{notificationId}
 | Story Stocks Worker | BullMQ (triggered) | Event-driven | Firestore `story_stocks` | AI tagging via Claude API |
 | EOD Recap Worker | BullMQ cron | 4:30pm ET | Firestore `recaps` | Claude summarizes from structured data |
 | Weekly Recap Worker | BullMQ cron | Friday 6pm ET | Firestore `recaps` | Separate Claude call for portfolio tab |
+| **Intraday Bars** *(new 2026-07-22)* | Polygon REST | `25 16 * * 1-5` ET | Firestore `intraday_bars` | One doc per `{ticker}_{5min\|30min}` holding an **array** of bars, not a doc per bar |
+| **Corporate Actions** *(new 2026-07-22)* | Polygon REST | `40 6 * * *` ET | Firestore `dividend_history`, `splits` | Full payment history, annual totals, TTM, derived yield, 5y CAGR, increase streak |
+
+> **⚠ None of this schedule is running.** As of 2026-07-22 there are **no Cloud Scheduler jobs in any region** and no `scheduler-invoker` service account — `create-scheduler-jobs.sh` was never run. Cloud Run is deployed with `min-instances=0`, so the in-process `@Cron` decorators never fire. **No sync job has ever executed automatically in production**; all current data was produced by manual `POST /sync/{job}/run` invocations. Every frequency in the table above is therefore aspirational, not observed.
 
 ---
 

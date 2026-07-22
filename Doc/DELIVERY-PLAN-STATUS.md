@@ -1,10 +1,12 @@
 # Weekly Delivery Plan — Completion Status
 
-**Assessed:** 2026-07-21 · **Source:** `MarketCatalyst.ai_weekly_deliverables_Plan.xlsx` (36 deliverables, 97 person-days, 06 Jul–11 Sep 2026).
+**Assessed:** 2026-07-22 (was 2026-07-21) · **Source:** `MarketCatalyst.ai_weekly_deliverables_Plan.xlsx` (36 deliverables, 97 person-days, 06 Jul–11 Sep 2026).
 
-Completion is judged against the **actual codebase**, not the calendar — verified through the data-source audits in [FEATURE-DATA-MAP.md](./FEATURE-DATA-MAP.md) and [WIDGET-PROVIDERS.md](./WIDGET-PROVIDERS.md) and direct code checks.
+Completion is judged against the **actual codebase and live production state**, not the calendar — verified through the data-source audits in [FEATURE-DATA-MAP.md](./FEATURE-DATA-MAP.md) and [WIDGET-PROVIDERS.md](./WIDGET-PROVIDERS.md), direct code checks, and direct reads of production Firestore, the live Cloud Run revision, and the released Firestore ruleset.
 
-> **Read the "When due" column first.** Today is **21 Jul = Week 3**. Weeks 1–3 are due now; **Weeks 4–10 are future-dated**, so a low % there is *on schedule*, not behind. Two future items (R23, R47) are already largely done — ahead of plan.
+> **Read the "When due" column first.** Today is **22 Jul = Week 3**. Weeks 1–3 are due now; **Weeks 4–10 are future-dated**, so a low % there is *on schedule*, not behind. Three future items (R23, R24, R47) are already largely done — ahead of plan.
+
+> **Scoring vocabulary used below.** A row is only scored on what is **LIVE** — deployed and reachable by a real user in production. Work that exists in the repo and passes locally but cannot run in production (no scheduler, no reachable backend) is scored as **BUILT-NOT-DEPLOYED** and does *not* earn full credit. **NOT BUILT** means no code exists.
 
 ---
 
@@ -12,13 +14,16 @@ Completion is judged against the **actual codebase**, not the calendar — verif
 
 | Basis | Figure |
 |---|---|
-| **Weighted by person-days (all 36 rows)** | **≈ 46%** |
-| Weeks 1–3 only (what's *due* now, 26.5 p-days) | **≈ 82%** |
-| Weeks 4–10 (future, 70.5 p-days) | **≈ 33%** (work pulled forward) |
+| **Weighted by person-days (all 36 rows)** | **≈ 48%** (was 46%) |
+| Weeks 1–3 only (what's *due* now, 26.5 p-days) | **≈ 79%** (was 82% — lowered, see R5) |
+| Weeks 4–10 (future, 70.5 p-days) | **≈ 37%** (was 33% — work pulled forward) |
 | Rows fully complete (100%) | 7 of 36 |
 | Rows blocked by data-plan limits (not effort) | 4 (options greeks, analyst events, earnings depth, options flow) |
+| **Additional scope delivered outside the 36-row plan** | Subscriptions / entitlements / admin analytics (see [below](#additional-workstream--subscriptions-entitlements-admin-analytics)) |
 
-**Plain reading:** the platform and market-data screens (W1–W3) are largely delivered. The remaining ~54% is dominated by AI features (no Anthropic wiring yet), options depth (plan-gated), and the launch-hardening weeks — all scheduled for Aug–Sep.
+**Plain reading:** the market-data screens (W1–W3) are largely delivered and the Polygon data layer went materially deeper on 2026-07-22 (intraday bars, 5-year history, corporate actions, real statements, real 10Y yield). The remaining ~52% is dominated by AI features (no Anthropic wiring yet), options depth (plan-gated), and the launch-hardening weeks — all scheduled for Aug–Sep.
+
+**The honest caveat that cuts across every row below:** there are **no Cloud Scheduler jobs in any region**, and Cloud Run runs at `min-instances=0`, so the in-process `@Cron` decorators never fire. **No sync job has ever run automatically in production** — every populated collection got there by a manual run. Every "live" data row in this table is therefore live *as of the last manual sync*, not continuously fresh. This is the single largest gap in the delivery and it is scored against R5.
 
 ---
 
@@ -28,14 +33,14 @@ Legend — **Due:** ✅ due now · 🔵 future (not yet scheduled). **%:** compl
 
 | Row | Wk | Due | Deliverable | % | What's NOT done | Reason |
 |---|---|---|---|---|---|---|
-| R5 | W1 | ✅ | FOUNDATION: deploy FE+BE 24/7, Blaze, service-account, indexes+TTL | **95%** | FE Hosting deploy unverified only | ✅ Runtime SA least-privilege (`datastore.user`+`secretAccessor`, NOT editor). ✅ Scale-to-zero deliberate & correct for polling architecture. ✅ Retention: TTL not possible (ISO-string dates, not Timestamps) → built in-code retention module (rev 00018), weekly prune of history/news/bars, DRY-RUN default, verified against prod (0 eligible — data not yet old enough) |
-| R6 | W1 | ✅ | Feature-flag system (`feature_flags` doc, per-release FF_* toggles) | **100%** | — | Built 2026-07-21: registry + service + API + UI provider/Gate + nav & screen gating. Deployed rev 00017; `feature_flags/default` auto-seeded 25 flags in prod; resolver verified (default→env→Firestore, fail-open) |
+| R5 | W1 | ✅ | FOUNDATION: deploy FE+BE 24/7, Blaze, service-account, indexes+TTL | **75%** ⬇ | **"24/7" is not met.** No Cloud Scheduler jobs exist in any region and no `scheduler-invoker` SA exists — `create-scheduler-jobs.sh` was never run. With `min-instances=0` the in-process `@Cron` decorators never fire. Also: the browser cannot reach the backend at all (`NEXT_PUBLIC_BACKEND_URL` unset → `http://localhost:4100` baked into the prod bundle, blocked as mixed content) | ⬇ **Lowered from 95% on 2026-07-22 — this was previously over-scored.** ✅ FE live at `marketcatalyst.web.app`; BE live at Cloud Run rev **00031-wvc** (us-central1, `--no-allow-unauthenticated`). ✅ Runtime SA least-privilege (`datastore.user`+`secretAccessor`, NOT editor). ✅ Retention: TTL not possible (ISO-string dates, not Timestamps) → in-code retention module (rev 00018), weekly prune, DRY-RUN default. ❌ But **nothing is scheduled and nothing is browser-reachable** — both deployments are BUILT-AND-DEPLOYED yet not *operating*. See the blocked table |
+| R6 | W1 | ✅ | Feature-flag system (`feature_flags` doc, per-release FF_* toggles) | **100%** | — | Built 2026-07-21: registry + service + API + UI provider/Gate + nav & screen gating. Deployed rev 00017; `feature_flags/default` auto-seeded 25 flags in prod; resolver verified (default→env→Firestore, fail-open). **Extended 2026-07-22 with a SECOND, independent gating layer — per-plan entitlements** (`src/plans/plans.registry.ts`, 16 keys × 3 plans) plus an **admin UI to edit them per plan** (`public/admin/console.html` feature editor, writing `plans/{id}.featureFlags` under a rules constraint that permits only `featureFlags`+`updatedAt`). The two layers are deliberately NOT merged: FF_* answers *"is it built and shipped?"* → "coming soon"; entitlements answer *"may this tier use it?"* → "upgrade to unlock". Merging them would make an unbuilt feature masquerade as a paywall. Scope exceeded, not just met |
 | R7 | W1 | ✅ | Project setup: Firebase, Polygon sub + keys, data-source verification | **100%** | — | Complete — all keys present and verified |
 | R8 | W1 | ✅ | Run all sync jobs once; verify sync_meta + ops dashboard | **100%** | — | 21/21 jobs run, sync_meta populated, monitor UI live |
 | R9 | W1 | ✅ | Market Movers live (gainers/losers/unusual-vol/RVol/filter) | **93%** | Catalyst is a news-presence heuristic, not true event attribution | ✅ 2026-07-21: MA-posture (real SMA50/200), week% (real 5-session change), tech-context (RSI/MACD/RS/RVOL) now live — added SMA/week fields to technical-indicators.job (rev 00019, ran for 238 tickers); catalyst now flags tickers with recent synced news |
 | R10 | W1 | ✅ | Market Heatmap live (sector %, tiles, summary) | **97%** | — | ✅ 2026-07-21: hover tooltip now reads live `companies` (price/RVOL/RS/MA-status); dead Stocks/S&P-500 tab repurposed to a real **Day%/Week%** heat toggle (5-session change from technical-indicators.job, cap-weighted sector avg). S&P-500 filter dropped — no constituent list available |
 | R11 | W1 | ✅ | Dashboard core widgets live (AI card → R19) | **92%** | Recaps card → R28 (M3); 'What Matters Now' AI card is a labeled placeholder (per your call) | ✅ 2026-07-21: Market Internals + F&G history now live from new `market-breadth.job` (176 days backfilled); VIX/Portfolio fake fallbacks removed (show — when absent) |
-| R13 | W2 | ✅ | Macro & VIX live (econ calendar + dividends + VIX/yields) | **95%** | VIX is a VIXY ETN proxy (plan has no spot VIX) — labeled as such | ✅ 2026-07-21: Macro VIX card now live via `market_indices` VIXY; dividend Month tab now built from live `dividends` |
+| R13 | W2 | ✅ | Macro & VIX live (econ calendar + dividends + VIX/yields) | **97%** ⬆ | VIX is still a VIXY ETN proxy (plan has no spot VIX; index values `I:SPX`/`I:VIX` return 403) — labeled as such, `isProxy:true` | ✅ 2026-07-21: Macro VIX card live via `market_indices` VIXY; dividend Month tab from live `dividends`. ⚠️ **Correctness fix 2026-07-22 — the 10-year yield was previously WRONG, not merely proxied.** `market-indices.job.ts` was publishing the **TLT ETF price** under the label "US10Y". TLT moves *inversely* to the yield it was labelled as, so the card showed the yield falling when it was rising. Now sourced from Polygon `/fed/v1/treasury-yields` — the **real** Treasury yield, `isProxy:false`, `unit:"percent"`. Also new: `dividend_history/{ticker}` (241 docs) carrying full payment history, annual totals, TTM, derived yield, 5y CAGR and increase streak; and `splits/{ticker}` (241 docs) |
 | R14 | W2 | ✅ | IPOs live (calendar + offer price) | **90%** | Recent-performance stats fall back to mock | Vendor IPO feed carries no aftermarket price |
 | R15 | W2 | ✅ | Commentary/News live (aggregated feed + tags + drawer) | **80%** | Premarket/After-hours cards + parts of drawer are static | Those sub-feeds have no live source; main feed is live |
 | R16 | W2 | ✅ | Sector Themes live (per-stock prices + theme perf) | **80%** | Frozen prices show for any ticker not matched in `companies` | Theme baskets are static config (fine); prices live when matched |
@@ -43,14 +48,14 @@ Legend — **Due:** ✅ due now · 🔵 future (not yet scheduled). **%:** compl
 | R19 | W3 | ✅ | Portfolio Pulse live (holdings + prices + P&L + totals) | **90%** | Hardcoded `$128,430` fallback before sign-in | Real holdings + live prices + P&L all work; fallback is cosmetic |
 | R20 | W3 | ✅ | Watchlist live (persistence + prices + AI summary) | **85%** | "AI summary" is a template, not real AI | AI intentionally deferred to R34/R39; persistence + prices done |
 | R21 | W3 | ✅ | Empty-states + graceful fallback polish (cross-screen) | **50%** | Most screens silently fall back to mock with no "sample" label | Only IPOs/Options/Insider label mock data; pattern not applied app-wide |
-| R23 | W4 | 🔵 | ENABLER: backfill ohlcv_bars + compute jobs | **100%** | — | **Ahead of schedule** — bars backfilled, all 5 compute jobs green |
-| R24 | W4 | 🔵→ | Stock Detail live (charts/RSI-MACD/fundamentals/52-wk/consensus/news/insider) | **80%** | 1D/1W charts need intraday bars; 5Y needs 5yr history (only ~300d synced) — those timeframes still synthetic | ✅ 2026-07-21: financials now REAL (Polygon /vX quarters), EPS history real, pivots real (last bar H/L/C), SMA-50/200 rows real. Remaining gap is intraday/5Y chart data, not fabrication |
+| R23 | W4 | 🔵 | ENABLER: backfill ohlcv_bars + compute jobs | **100%** | — | **Ahead of schedule** — all 5 compute jobs green. **Deepened 2026-07-22:** `ohlcv_bars` now holds **~299,552 documents spanning the full 5-year window** (was ~300 days). Raising the backfill constant alone did nothing — `lastSyncedThrough` only ever advances — so `stock-history.job.ts` gained an `earliestSyncedFrom` watermark that fills history **backwards** as well as forwards, clamped to the plan's rolling 5-year edge. `vwap` now persisted per bar. Also new: `intraday_bars` (474 docs, 5-min + 30-min, one doc per ticker/resolution holding an array of bars) |
+| R24 | W4 | 🔵→ | Stock Detail live (charts/RSI-MACD/fundamentals/52-wk/consensus/news/insider) | **95%** ⬆ | Analyst consensus is a snapshot, not per-firm (that's R41, vendor-blocked); the AI thesis/risk block is a labeled placeholder (that's R38, deferred by decision) | ⬆ **Raised from 80% on 2026-07-22 — the previous entry mis-diagnosed the gap.** The old note said 1D/1W needed intraday bars and 5Y needed 5-year history, implying a **data-plan** block. That was wrong: **both were authorized on the existing Polygon Stocks Starter plan all along** (intraday aggregates ✅, 5-year rolling history ✅ — re-probed live). It was a **sync gap, not a plan gap** — we simply had not pulled them. Now synced: `intraday-bars.job.ts` (new) feeds 1D/1W, and the 5-year backfill (R23) feeds 5Y. **All 7 chart timeframes now read real bars** via `useChartBars`. Also real: full financial statements, 52-wk high/low + %-from, SMA/EMA ladders (10/20/30/50/100/200), 90-point `rsi14Series`, VWAP, peers (`/v1/related-companies`), dividend yield + DPS. No synthetic timeframes remain |
 | R25 | W4 | 🔵 | Screener live (filters + Tech Rating + RVOL + growth/margin) | **75%** | Some filter checkboxes are disabled no-ops | Core overlay from `companies` live; a few filters never implemented |
-| R26 | W4 | 🔵→ | Dashboard Fear & Greed gauge live | **95%** | History is a breadth-derived proxy, not the 4-component composite (no long history for SPY/TLT/VIXY) | ✅ 2026-07-21: F&G history sparkline + previous-close now live from `market-breadth` (176 real days); labeled breadth-derived |
+| R26 | W4 | 🔵→ | Dashboard Fear & Greed gauge live | **98%** ⬆ | History is a breadth-derived proxy, not the 4-component composite (no long history for SPY/TLT/VIXY) | ⬆ **Raised from 95% on 2026-07-22, and the earlier 95% was misleading.** The data was there since 07-21, but the gauge **was silently rendering a hardcoded 62 / "Greed"** to every user: `market_sentiment` had **no Firestore rule at all**, so default-deny blocked the read and the UI fell through to its fallback. That is a **bug, not a data gap** — and it means the row was scored on data that no user could actually see. Rule added and released; the gauge now reads live `market_sentiment`. (The same missing-rule bug also silently killed `stock_comments` / chart notes — likewise fixed.) Remaining 2% is the composite methodology, unchanged |
 | R28 | W5 | 🔵 | Recaps EOD data job | **0%** | Entire job | No recap job exists; `recap.tsx` is 100% static ("Tuesday May 21") |
-| R29 | W5 | 🔵→ | 10-quarter EPS history (quarterly financials + wire) | **95%** | Estimates sparse (only where earnings_events overlaps) | ✅ 2026-07-21: new `financials.job` fetches 10 real quarters from Polygon /vX (rev 00020, ran ~228 tickers); EPS chart + Earnings Growth now real actual-vs-estimate via `useFinancials` |
+| R29 | W5 | 🔵→ | 10-quarter EPS history (quarterly financials + wire) | **98%** ⬆ | Estimates remain sparse (only where `earnings_events` overlaps) — actuals are complete, the *estimate* side depends on a separate feed | ⬆ **Raised from 95% on 2026-07-22 — scope now exceeded.** 07-21 delivered 10 real quarters of EPS from Polygon `/vX/reference/financials` (rev 00020, ~228 tickers); EPS chart + Earnings Growth real actual-vs-estimate via `useFinancials`. 07-22 added the rest of the statement set the job had been **fetching and then discarding**: full **balance sheet** and **cash flow statement**, plus derived **margins** and **current ratio**. The row asked only for EPS history; it now backs a full fundamentals panel |
 | R30 | W5 | 🔵 | Screener sector/cap class + IPO recent perf + Macro regime label | **30%** | IPO aftermarket perf; Macro regime label (static) | Sector/cap classification exists; other two lack sources |
-| R32 | W6 | 🔵 | Options Chain live (bid/ask/IV/OI/Greeks) | **25%** | Greeks / IV / OI / bid-ask | 🔴 **Blocked** — Polygon paid returns `NOT_AUTHORIZED`; needs Tradier (token held, unwired) |
+| R32 | W6 | 🔵 | Options Chain live (bid/ask/IV/OI/Greeks) | **45%** ⬆ | **Greeks, IV, open interest and bid/ask are still 🔴 hard-blocked** — Polygon's options *snapshot* endpoint returns `NOT_AUTHORIZED` on the current plan (re-probed live 2026-07-22, still 403). Those four columns cannot be made real without a vendor purchase | ⬆ **Raised from 25%, but read the nuance — the block has NOT lifted.** What changed is a different endpoint: option **contract aggregates** *are* authorized, so `options-chains.job.ts` now writes **real per-contract OHLC, VWAP, trade count and range %**. So the chain is no longer wholly synthetic — traded price/volume history per contract is genuine market data. But the quote-side surface a user actually reads an options chain for (bid/ask spread, IV, OI, greeks) is still fabricated. Unblock = **Tradier** (token already held, unwired) or Polygon Options Advanced |
 | R34 | W7 | 🔵 | ENABLER: AI service + ANTHROPIC key + prompt infra | **0%** | AI service | ⏸️ **Deferred by decision (2026-07-21)** — you chose labeled placeholders over wiring Anthropic this phase. Not blocked: `ANTHROPIC_API_KEY` is provisioned; this is a scope choice to avoid per-request LLM cost until later |
 | R35 | W7 | 🔵 | Dashboard 'What Matters Now' AI card | **0%** | Real AI narrative | ⏸️ **Deferred by decision** — card ships as a labeled placeholder; becomes real once R34 (Anthropic) is switched on |
 | R36 | W7 | 🔵 | Recaps AI narrative | **0%** | Real AI narrative | ⏸️ **Deferred by decision** (AI) + depends on R28 recap job (Milestone 3, in progress). Data layer will exist; only the LLM narrative is held back |
@@ -63,7 +68,7 @@ Legend — **Due:** ✅ due now · 🔵 future (not yet scheduled). **%:** compl
 | R46 | W10 | 🔵 | Editorial + dropped-feature decisions | **0%** | Product decisions | 🗓️ **W10 by design** — a decision/curation task (which themes, presets, sections to keep or cut), correctly sequenced for launch week; not an engineering gap |
 | R47 | W10 | 🔵 | Earnings + Macro calendars on real date ranges (structural) | **80%** | Earnings coverage thin | **Ahead of schedule** — date-anchored calendar built (`earnings-calendar.tsx`, `calendar-range.ts`); FMP's 10-row coverage limits it |
 | R48 | W10 | 🔵 | Full regression + empty-states + mobile + performance | **0%** | QA gate | 🗓️ **W10 by design** — final QA/regression gate, only meaningful once features stop changing. Partially advanced by R21 empty-state work |
-| R49 | W10 | 🔵 | Security review + launch checklist | **10%** | Full review + checklist | 🗓️ **W10 by design.** Already done ahead: runtime SA is least-privilege, Firestore rules server-write-only, retention added. ⚠️ Still outstanding: **rotate the exposed Polygon key** (pasted in chat earlier, never rotated) |
+| R49 | W10 | 🔵 | Security review + launch checklist | **15%** | Full review + checklist | 🗓️ **W10 by design.** Already done ahead: runtime SA least-privilege; Firestore rules server-write-only; retention module; 2026-07-22 rules hardening — `plans` writable by admin on **`featureFlags`+`updatedAt` only** (a client that could rewrite `amount` could set a plan to $0), create/delete denied; `feature_adoption` is the only client-writable analytics collection and is constrained (row must belong to caller, `openCount` may only increase, ownership immutable, delete denied); `adminDashboard`/`userManagement` are staff-only on **every** plan so they can never be sold (privilege escalation). ⚠️ Still outstanding, all three real: **(1) `POLYGON_API_KEY` is still un-rotated** (exposed in chat; Secret Manager version 4 enabled; `deploy/rotate-polygon-key.sh` automates all of it except generating the replacement). **(2)** The Hosting→Cloud Run rewrite needed to make the backend browser-reachable **requires `ADMIN_GUARD_TRUST_IAM=false` first**, or `/sync/:job/run`, `/purge` and `/retention` become world-callable. **(3)** Both repos ship a `firestore.rules` and they have **drifted** — the live ruleset deploys from `MarketCatalystUI/firestore.rules`; the backend copy is stale and now carries a DO-NOT-DEPLOY header |
 
 ---
 
@@ -74,35 +79,83 @@ The "Reason" column now tags each incomplete row by *why*, not just *what*:
 | Marker | Meaning | Rows |
 |---|---|---|
 | ⏸️ **Deferred by decision** | You chose (2026-07-21) to keep AI as labeled placeholders rather than wire Anthropic this phase. Not blocked — `ANTHROPIC_API_KEY` is provisioned; a scope/cost choice. | R34, R35, R36, R38, R39 |
-| 🔴 **Vendor-blocked** | Needs a data source the current plans don't include. No amount of coding closes it without a purchase. | R41 (Benzinga), R43 (UnusualWhales), R32 greeks (Tradier/Polygon-Advanced) |
+| 🔴 **Vendor-blocked** | Needs a data source the current plans don't include. No amount of coding closes it without a purchase. | R41 (Benzinga), R43 (UnusualWhales), R32 **greeks/IV/OI/bid-ask only** (Tradier/Polygon-Advanced) — note R32's *contract OHLCV* is no longer blocked |
+| 🚧 **Built but not operating** | Code exists and is deployed, but production cannot execute or reach it. Not a vendor problem and not a coding problem — an ops problem. | R5 (no Cloud Scheduler → nothing auto-refreshes; browser cannot reach the backend) |
 | 🟠 **Partially unblockable now** | Some of the row is reachable with keys already held; the rest needs a paid vendor. | R42 (session via Finnhub; guidance via Benzinga) |
 | 🔨 **Not built — no blocker** | Net-new work with all input data available. Buildable now, just scheduled later. | R44 (alerts engine) |
 | 🗓️ **W10 by design** | Launch-week decision/QA/security tasks, correctly sequenced last — only meaningful once features stop changing. | R46, R48, R49 |
 
-**So of everything past R32:** 5 rows are a deliberate AI deferral, 3 are hard vendor blocks, 1 is buildable-but-unscheduled (alerts), and 3 are launch-week gates. Only the alerts engine (R44) is "just not built yet" with no external constraint.
+**So of everything past R32:** 5 rows are a deliberate AI deferral, 3 are hard vendor blocks, 1 is buildable-but-unscheduled (alerts), and 3 are launch-week gates. Only the alerts engine (R44) is "just not built yet" with no external constraint. **Separately, R5 is now the most serious row in the table** — not because code is missing, but because none of it runs on a schedule and none of it is reachable from a browser.
+
+---
+
+## Additional workstream — subscriptions, entitlements, admin analytics
+
+> **This is NOT one of the 36 planned rows.** It is *additional scope* delivered on 2026-07-22 alongside the plan. It does not appear in `MarketCatalyst.ai_weekly_deliverables_Plan.xlsx`, it carries no person-day budget there, and **it is excluded from every percentage above** — counting it would inflate plan completion with work the plan never asked for.
+
+| Item | State | Detail |
+|---|---|---|
+| Plan registry + 3 plans | 🟢 **LIVE** | `src/plans/plans.registry.ts` — 30 entitlement keys, 3 plans, seeded into Firestore `plans` (3 docs, verified). Free 0 / Plus 2999 / Pro 4999 — **amounts are minor units (cents)**, so 4999 = $49.99. Cumulative ladder: Free 8/30 (marketCatalyst, news, scanner, heatmap, macro, ipos, chartsDaily, watchlist) → Plus +12 = 20/30 (chartsIntraday, chartsHistory, chartIndicators, chartNotes, technicalRatings, dividendHistory, peers, earningsDetail, portfolio, screener, themes, alerts) → Pro +8 = 28/30 (fundamentalRatings, ownership, optionsChain, exportData, apiAccess, aiAssistant, backtesting, paperTrading). Pro is 28/30 **not** 16/16 because `adminDashboard` + `userManagement` are staff-only on every plan by design |
+| Entitlement resolution | 🟢 **LIVE** | `subscriptions.service.ts` — **expiry is computed at read time, never trusted from the stored doc**, because nothing currently rewrites a user doc when a subscription lapses. Falls back to FREE, never to no-access |
+| Plans/entitlements API | 🟡 **BUILT-NOT-REACHABLE** | `GET /plans`, `POST /plans/seed` (admin), `GET /users/:uid/entitlements`. Deployed on Cloud Run rev 00031-wvc — but the browser cannot reach the backend, so the frontend resolves entitlements straight from Firestore instead |
+| Admin analytics API | 🟡 **BUILT-NOT-REACHABLE** | `GET /admin/users`, `/admin/subscriptions`, `/admin/revenue`, all admin-guarded, **staff accounts excluded from every metric**. Same reachability caveat |
+| Frontend gating | 🟢 **LIVE** | `app/iq/entitlements.tsx` (`EntitlementProvider`, `useSubscription`, `useEntitlement`, `EntitlementGate`) + `app/iq/entitlement-gate.tsx` (`PlanGate` upgrade panel, `useSlugEntitled` to hide nav items, `SLUG_ENTITLEMENT` map) |
+| Feature-adoption analytics | 🟢 **LIVE (thin data)** | `feature-adoption.ts` + `track-feature.tsx` — **48 tracked features** (all `menuItems` screens plus in-app actions: 8 stock drawers, chart timeframes/indicators/expand, watchlist add/remove, search, screener, news…). 30-second dedupe; failures swallowed so analytics can never break a screen. Only ~12 seeded rows so far. This is the **only** client-writable analytics collection — because the browser cannot reach the backend — and its rule is correspondingly tight |
+| Admin console | 🟢 **LIVE (partly)** | `app/admin/admin-data.ts` builds the dataset from Firestore and stages it in `sessionStorage` **before** the iframe mounts; `public/admin/console.html` renders real data and hosts the per-plan feature editor. Fabricated trend deltas and the fake MRR history chart are now **suppressed** when real data is present |
+| Monitor tab in console | 🔴 **DEAD IN PRODUCTION** | Embeds the backend ops UI — which the browser cannot reach. Works locally only |
+| Stripe / billing | ⛔ **NOT BUILT** | No Stripe code exists in either repo. `payments` and `subscriptions` collections exist and are **empty**. Checkout + webhooks are additionally blocked on backend reachability |
+| `api_usage` metering | ⛔ **NOT BUILT** | Collection + rules specified, no middleware records anything. The admin "Usage & API" KPIs therefore read **0** — they are not broken, they are unimplemented |
+| Per-user engagement columns | ⛔ **NOT BUILT** | watchlists / holdings / apiCalls / alerts per user all render 0 — no collection backs them yet |
+
+**Firestore collections added:** `intraday_bars`, `dividend_history`, `splits`, `plans`, `payments`, `subscriptions`, `feature_adoption`, `api_usage`, `audit_logs`, `revenue_summary`, `system_metrics`.
+**Populated:** intraday_bars (474), dividend_history (241), splits (241), plans (3), feature_adoption (~12 seeded).
+**Empty:** payments, subscriptions, api_usage, audit_logs, revenue_summary, system_metrics.
+
+**Admin auth note:** `isAdmin()` = `token.admin == true` **OR** `token.email == ADMIN_EMAIL`, and it deliberately does **not** require `email_verified` — the admin is a password account with `emailVerified=false`, and requiring verification locked the admin out of Firestore while the backend guard still admitted the same account. That asymmetry is intentional and documented here so it is not "fixed" back into a lockout.
 
 ---
 
 ## What's genuinely blocked (won't close with effort alone)
 
+Two distinct kinds of blocker. **Vendor blocks** need a purchase. **Operational blocks** need no purchase and no new feature code — they are the reason production is quieter than the codebase suggests, and they are the higher priority of the two.
+
+### Operational — production does not actually operate
+
+| # | Blocker | What it breaks *right now* | Unblock path |
+|---|---|---|---|
+| O1 | **The browser cannot reach the backend.** `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4100` is baked into the production bundle and blocked as mixed content | Stripe checkout **and** Stripe webhooks (whenever built); the admin console **Monitor** tab; extended-hours moves; the vendor **market-status pill**; every `/plans`, `/users/:uid/entitlements` and `/admin/*` endpoint | Firebase Hosting rewrite → Cloud Run. ⚠️ **This requires setting `ADMIN_GUARD_TRUST_IAM=false` first** — otherwise `/sync/:job/run`, `/purge` and `/retention` become world-callable |
+| O2 | **No Cloud Scheduler jobs exist in any region**, and no `scheduler-invoker` service account. `create-scheduler-jobs.sh` was never run. With `min-instances=0` the in-process `@Cron` decorators never fire | **Nothing refreshes automatically in production.** Every collection is frozen at its last manual run — prices, news, earnings, bars, indicators, corporate actions, all of it. Every "live" row in this document means "live as of the last manual sync" | Run `create-scheduler-jobs.sh`; create the `scheduler-invoker` SA; grant it Cloud Run invoker |
+| O3 | **`POLYGON_API_KEY` is un-rotated** — it was exposed in chat. Secret Manager version 4 is enabled | Live credential exposure | `deploy/rotate-polygon-key.sh` automates everything **except** generating the replacement key at Polygon |
+| O4 | **Stripe is not implemented** — no Stripe code in either repo | No revenue path. `payments` / `subscriptions` are empty; `/admin/revenue` reports on nothing | Build it — then it still needs O1 for checkout + webhooks |
+| O5 | **`api_usage` is not implemented** — no middleware records API calls | Admin "Usage & API" KPIs read 0; per-user apiCalls column reads 0 | Add recording middleware; the collection and its admin-read rule already exist |
+
+### Vendor — needs a purchase
+
 | Row | Blocker | Unblock path |
 |---|---|---|
-| R32 Options greeks/IV/OI | Polygon paid: `NOT_AUTHORIZED` | Wire **Tradier** (token already provisioned) |
+| R32 Options **greeks/IV/OI/bid-ask** | Polygon options *snapshot*: `NOT_AUTHORIZED` (re-probed 2026-07-22) | Wire **Tradier** (token already provisioned) or buy Polygon Options Advanced. ⚠️ Per-contract **OHLCV/VWAP is NOT blocked** and is already real — scope this narrowly |
 | R41 Analyst per-firm events | Benzinga: 403 on plan | Buy Benzinga, or use Finnhub `/stock/recommendation` (history, not per-firm) |
 | R42 Earnings depth (session/guidance) | FMP feed lacks fields | **Finnhub earnings** adds session (BMO/AMC); guidance needs Benzinga |
 | R43 Options flow / dark pool | UnusualWhales unwired, not on plan | Purchase UW / Polygon-paid flow add-on |
 
-## The four zero-effort or low-effort wins already sitting in synced data
+**Also confirmed 403/404 on the current Polygon plan** (so nothing above is worth re-attempting): index values (`I:SPX`, `I:VIX`), trades/quotes/last-trade, `/benzinga/v1/*`, `/v1/summaries`; 404 on short-interest and futures. **Measured plan limits:** exactly **900 s (15 min)** quote delay, exactly **5-year** rolling history.
 
-These rows are scored low but need **no new vendor** — the data is already in Firestore or on the current plan:
+## The four low-effort wins — three now closed
 
-- **R24 financials** → Polygon `/vX/reference/financials` works on your plan (full statements)
-- **R24 charts** → `ohlcv_bars` already synced, just not wired to the panel
-- **R29 EPS history** → extend `fundamentals-growth` to quarterly (endpoint supports it)
-- **R26 F&G history** → compute from grouped-daily (already pulled for the current value)
+The 2026-07-21 assessment listed four rows that needed **no new vendor**. As of 2026-07-22:
+
+- ✅ **R24 financials** → done. Polygon `/vX/reference/financials` wired; full statements now stored, not discarded
+- ✅ **R24 charts** → done. This was the big one — 1D/1W/5Y were never plan-blocked, only unsynced. Intraday bars job + 5-year backfill closed it; all 7 timeframes real
+- ✅ **R29 EPS history** → done. 10 real quarters, plus balance sheet and cash flow beyond the row's scope
+- 🟡 **R26 F&G history** → data done, **and** the missing `market_sentiment` rule that was hiding it is fixed. Only the 4-component composite methodology remains
+
+**The replacement shortlist** (same character — no vendor needed, just work): O2 Cloud Scheduler, O1 Hosting rewrite + `ADMIN_GUARD_TRUST_IAM=false`, O3 key rotation, O5 `api_usage` middleware, R44 alerts engine.
 
 ## Notes on method
 
-- Percentages reflect *scope delivered*, not calendar progress. A future-dated row at 0% is on-track, not late.
-- W1–W3 weighted completion (82%) is the fair "are we on schedule?" number. The 46% overall is dragged down by 70.5 person-days of Aug–Sep work that isn't due.
-- R6 (feature flags) is the one **overdue** miss with no data-source excuse — it was a W1 enabler and doesn't exist. Every FF_* flag in the plan is currently notional.
+- Percentages reflect *scope delivered and reachable in production*, not calendar progress. A future-dated row at 0% is on-track, not late.
+- W1–W3 weighted completion (**79%**, down from 82%) is the fair "are we on schedule?" number. The 48% overall is dragged down by 70.5 person-days of Aug–Sep work that isn't due.
+- **Two rows were corrected downward or re-diagnosed on 2026-07-22, and both corrections matter more than the upward ones.** R5 fell 95%→75% because "24/7" was never true — nothing is scheduled. R26 was scored 95% on data that no user could actually see, because a missing Firestore rule silently replaced it with a hardcoded value. Both are reminders that *data existing in Firestore* is not the same as *a user seeing it*.
+- R24's earlier note claimed a data-plan limitation that did not exist. Re-probing the plan live is now part of the assessment method, not an assumption carried forward.
+- R6 (feature flags) — the note in the 2026-07-21 revision calling this an overdue miss is **stale**: it was built that same day and has since gained a second entitlement layer. Disregard it.
+- The subscriptions/entitlements/admin workstream is real delivered work but is **outside the 36-row plan** and is excluded from all percentages.

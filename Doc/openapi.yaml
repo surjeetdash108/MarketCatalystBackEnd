@@ -76,6 +76,20 @@ servers:
       documented as REST for a portable, vendor-agnostic contract.
 
 tags:
+  - name: Plans
+    description: Subscription plans and per-user entitlement resolution. Real HTTP endpoints on the NestJS backend.
+  - name: Admin
+    description: Admin read-models (users, subscriptions, revenue). AdminGuard-protected; staff accounts excluded from all metrics.
+  - name: Live
+    description: Delayed price snapshot and vendor market-status. Backend-only — not reachable from a production browser.
+  - name: Billing
+    description: Payments and subscriptions. Collections exist with rules but are EMPTY — Stripe is not integrated.
+  - name: Analytics
+    description: Feature adoption (live) and API usage (specified, not built).
+  - name: Bars
+    description: Daily and intraday OHLCV bars.
+  - name: Dividends
+    description: Dividend history and corporate actions (splits).
   - name: Ops
     description: Sync-job control plane, actually implemented and running on the NestJS backend.
   - name: Companies
@@ -1683,6 +1697,339 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  # ───────────────────────────────────────────────────────────────────────────
+  # Plans, entitlements & billing  (added 2026-07-22)
+  # ───────────────────────────────────────────────────────────────────────────
+
+  /plans:
+    get:
+      tags: [Plans]
+      summary: Pricing table and per-plan entitlements
+      description: |
+        REAL HTTP endpoint on the NestJS backend (`src/plans/plans.controller.ts`),
+        not a Firestore-collection stand-in. `amount` is **MINOR units** (cents):
+        4999 = $49.99. Storing major units would bill 100x wrong through Stripe.
+      x-status: live
+      x-consumed-by:
+        - "Admin console (per-plan entitlement editor)"
+        - "app/iq/entitlements.tsx — reads the `plans` collection directly, not this endpoint"
+      operationId: listPlans
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plans:
+                    type: array
+                    items: { $ref: "#/components/schemas/Plan" }
+
+  /plans/seed:
+    post:
+      tags: [Plans]
+      summary: Re-seed plans from the code registry (merge-based)
+      description: |
+        Merge-based: operator edits made in Firestore survive. Commercial fields
+        (price/currency/cycle) are written only on FIRST create, so a re-seed
+        never silently reverts a price change.
+      x-status: live
+      x-auth: AdminGuard
+      operationId: seedPlans
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  seeded: { type: integer }
+                  keysBackfilled: { type: integer }
+        "401": { description: Not an admin }
+
+  /users/{uid}/entitlements:
+    get:
+      tags: [Plans]
+      summary: Effective entitlements for one user (release flag AND plan grant)
+      description: |
+        Returns BOTH gating axes separately plus their AND. `released` = the FF_*
+        release flag ("is it built?"); `entitled` = the plan grant ("may this tier
+        use it?"); `enabled` = both. `reason` distinguishes `not-released` from
+        `not-in-plan` so the UI can say "coming soon" vs "upgrade to unlock" —
+        collapsing them would make an unbuilt feature look like a paywall.
+
+        Subscription expiry is COMPUTED here, never trusted from the stored
+        status: nothing rewrites a user document at the moment a subscription
+        lapses, so a stale `ACTIVE` would otherwise grant paid access forever.
+      x-status: live
+      x-auth: AdminGuard
+      operationId: getUserEntitlements
+      parameters:
+        - name: uid
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subscription: { $ref: "#/components/schemas/EffectiveSubscription" }
+                  entitlements:
+                    type: array
+                    items: { $ref: "#/components/schemas/ResolvedEntitlement" }
+                  enabled:
+                    type: object
+                    additionalProperties: { type: boolean }
+
+  /admin/users:
+    get:
+      tags: [Admin]
+      summary: All users with their effective (expiry-aware) subscription
+      description: |
+        Staff accounts (ADMIN_EMAIL) are EXCLUDED from this list and from every
+        figure in /admin/revenue — the admin is not a customer, and counting it
+        shifts plan mix, ARPU and the churn denominator.
+      x-status: live
+      x-auth: AdminGuard
+      operationId: adminListUsers
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 500, maximum: 2000 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminUserRow" }
+
+  /admin/subscriptions:
+    get:
+      tags: [Admin]
+      summary: Payment rows joined to their user
+      x-status: live
+      x-auth: AdminGuard
+      x-note: "Returns [] today — the `payments` collection is empty (Stripe is not integrated)."
+      operationId: adminListSubscriptions
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 1000, maximum: 5000 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subscriptions: { type: array, items: { type: object } }
+
+  /admin/revenue:
+    get:
+      tags: [Admin]
+      summary: Revenue roll-up from payments (SUCCESS rows only)
+      description: |
+        Only `paymentStatus == "SUCCESS"` counts — refunds and failures must
+        never inflate revenue. Amounts are summed as integer minor units;
+        converting to major units before summing accumulates float error.
+        `mixedCurrencies` is surfaced rather than silently adding across
+        currencies.
+      x-status: live
+      x-auth: AdminGuard
+      x-note: "All revenue figures are 0 today — `payments` is empty."
+      operationId: adminRevenue
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RevenueSummary" }
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Live / ops  (added 2026-07-22)
+  # ───────────────────────────────────────────────────────────────────────────
+
+  /live/market-status:
+    get:
+      tags: [Live]
+      summary: Exchange session state + upcoming market holidays
+      description: |
+        Vendor-authoritative session state (Polygon `/v1/marketstatus/now` +
+        `/upcoming`), replacing a browser-side clock with a hand-maintained
+        holiday list. Cached 60 s; holidays 12 h.
+
+        NOT REACHABLE FROM A PRODUCTION BROWSER — see the deployment note at the
+        foot of this file.
+      x-status: live-backend-only
+      operationId: getMarketStatus
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  market: { type: string }
+                  phase: { type: string, enum: [open, pre, after, closed] }
+                  label: { type: string }
+                  earlyHours: { type: boolean }
+                  afterHours: { type: boolean }
+                  serverTime: { type: string, format: date-time }
+                  upcoming: { type: array, items: { type: object } }
+
+  /live/snapshot:
+    get:
+      tags: [Live]
+      summary: Cached delayed price snapshot for up to 50 tickers
+      description: |
+        One upstream vendor call per refresh interval regardless of user count.
+        Backed by Polygon's v3 universal snapshot, so it also carries
+        `earlyTradingChangePct` / `lateTradingChangePct` for pre/post-market.
+        Feed is ~15 minutes delayed on the current plan (measured: 900 s).
+      x-status: live-backend-only
+      operationId: getSnapshot
+      parameters:
+        - name: tickers
+          in: query
+          required: true
+          schema: { type: string }
+          example: AAPL,MSFT,NVDA
+      responses:
+        "200": { description: OK }
+        "304": { description: Unchanged since the caller's ETag }
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Firestore-backed collections added 2026-07-22
+  # ───────────────────────────────────────────────────────────────────────────
+
+  /intraday-bars/{ticker}:
+    get:
+      tags: [Bars]
+      summary: Intraday bars — ONE document per (ticker, resolution)
+      description: |
+        Firestore doc id `{ticker}_{5min|30min}` holding an ARRAY of bars, not a
+        document per bar: a doc-per-bar scheme would add ~150 docs/ticker/day
+        purely to be re-read as one contiguous series. Feeds the 1D/1W/1M chart
+        timeframes, which previously rendered a seeded random walk.
+      x-status: live
+      x-collection: intraday_bars
+      operationId: getIntradayBars
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: OK }
+
+  /dividend-history/{ticker}:
+    get:
+      tags: [Dividends]
+      summary: Full declared dividend history + derived yield, CAGR, streak
+      description: |
+        Replaces a client-side extrapolation that decayed the current amount by
+        a hardcoded 6.5%/yr and derived ex-dates from `sym.charCodeAt(0)`.
+        `yieldPct` is null for a non-payer AND for a lapsed payer (no payment in
+        the trailing 12 months) — both are correct answers, not gaps.
+      x-status: live
+      x-collection: dividend_history
+      operationId: getDividendHistory
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: OK }
+
+  /splits/{ticker}:
+    get:
+      tags: [Dividends]
+      summary: Split history
+      description: |
+        Bars are refetched with `adjusted=true`, so a split silently REWRITES
+        price history. Surfacing splits makes that adjustment legible instead of
+        looking like a data error.
+      x-status: live
+      x-collection: splits
+      operationId: getSplits
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: OK }
+
+  /payments:
+    get:
+      tags: [Billing]
+      summary: Payment records (one per successful charge)
+      x-status: not-implemented
+      x-collection: payments
+      x-note: |
+        Collection exists with rules, but is EMPTY — Stripe is not integrated and
+        no code in either repo writes it. Shape below is the intended contract.
+      operationId: listPayments
+      responses:
+        "200": { description: OK }
+
+  /subscriptions:
+    get:
+      tags: [Billing]
+      summary: Subscription records
+      x-status: not-implemented
+      x-collection: subscriptions
+      x-note: "Empty — see /payments."
+      operationId: listSubscriptions
+      responses:
+        "200": { description: OK }
+
+  /feature-adoption:
+    get:
+      tags: [Analytics]
+      summary: Per-(feature, user) open counts
+      description: |
+        Doc id `{feature}__{uid}`. The ONLY client-writable analytics collection:
+        the browser cannot reach the backend, so a server-mediated write is not
+        available. Rules constrain it — the row must belong to the caller,
+        `openCount` may only increase, ownership cannot be reassigned, deletes
+        are denied. A user can still inflate their OWN counters; acceptable for
+        adoption analytics, and explicitly NOT the model used for billing.
+      x-status: live
+      x-collection: feature_adoption
+      operationId: listFeatureAdoption
+      responses:
+        "200": { description: OK }
+
+  /api-usage:
+    get:
+      tags: [Analytics]
+      summary: Per-request API usage log
+      x-status: not-implemented
+      x-collection: api_usage
+      x-note: |
+        Specified but NOT built — no middleware records API calls, so the admin
+        "Usage & API" KPIs read 0. Requires a per-request interceptor plus a
+        write-volume strategy (batching or sampling) before it is safe to enable.
+      operationId: listApiUsage
+      responses:
+        "200": { description: OK }
+
+
 components:
   parameters:
     Ticker:
@@ -1794,6 +2141,98 @@ components:
           example: { statusCode: 501, error: NOT_IMPLEMENTED, message: "No sync job exists for this collection yet — see x-primary-source/x-alternate-source on this path for what's needed to build it.", timestamp: "2026-07-05T14:00:00Z" }
 
   schemas:
+
+    Plan:
+      type: object
+      description: A subscription plan. `amount` is MINOR units (cents).
+      properties:
+        id: { type: string, example: pro }
+        name: { type: string, example: Pro }
+        amount: { type: integer, example: 4999, description: "Cents. 4999 = $49.99." }
+        currency: { type: string, example: USD }
+        billingCycle: { type: string, enum: [monthly, yearly, none] }
+        description: { type: string }
+        active: { type: boolean }
+        sortOrder: { type: integer }
+        stripePriceId:
+          type: string
+          nullable: true
+          description: Null until Stripe products exist; a null keeps the plan non-purchasable.
+        featureFlags:
+          type: object
+          additionalProperties: { type: boolean }
+          description: |
+            Entitlement key -> granted. adminDashboard and userManagement are
+            forced false on EVERY plan — they are staff capabilities, and selling
+            them would be privilege escalation rather than an upsell.
+
+    EffectiveSubscription:
+      type: object
+      properties:
+        userId: { type: string }
+        planId: { type: string }
+        planName: { type: string }
+        status:
+          type: string
+          enum: [ACTIVE, EXPIRED, CANCELLED, PAST_DUE, TRIALING, NONE]
+          description: Status AFTER applying the expiry date; may differ from storedStatus.
+        storedStatus: { type: string, nullable: true }
+        startDate: { type: string, nullable: true }
+        expiryDate: { type: string, nullable: true }
+        expiredSinceLastWrite:
+          type: boolean
+          description: True when a stored ACTIVE was downgraded here because the date passed.
+        daysRemaining: { type: integer, nullable: true }
+        entitlements:
+          type: object
+          additionalProperties: { type: boolean }
+
+    ResolvedEntitlement:
+      type: object
+      properties:
+        key: { type: string }
+        released: { type: boolean, description: "FF_* release flag — is it built and shipped?" }
+        entitled: { type: boolean, description: "Plan grant — may this tier use it?" }
+        enabled: { type: boolean, description: "released AND entitled — the only field to gate rendering on." }
+        reason:
+          type: string
+          enum: [ok, not-released, not-in-plan, both]
+
+    AdminUserRow:
+      type: object
+      properties:
+        uid: { type: string }
+        name: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        planId: { type: string }
+        planName: { type: string }
+        status: { type: string }
+        storedStatus: { type: string, nullable: true }
+        expiredSinceLastWrite: { type: boolean }
+        subscriptionStartDate: { type: string, nullable: true }
+        subscriptionExpiryDate: { type: string, nullable: true }
+        daysRemaining: { type: integer, nullable: true }
+        joinedDate: { type: string, nullable: true }
+        lastLogin: { type: string, nullable: true }
+
+    RevenueSummary:
+      type: object
+      properties:
+        currency: { type: string }
+        totalMinor: { type: integer }
+        currentYearMinor: { type: integer }
+        byPlan: { type: array, items: { type: object } }
+        byMonth: { type: array, items: { type: object } }
+        activeSubscriptions: { type: integer }
+        expiredSubscriptions: { type: integer }
+        freeUsers: { type: integer }
+        totalUsers: { type: integer, description: Customers only — staff excluded. }
+        excludedStaff: { type: integer, description: Staff rows filtered out, surfaced so the exclusion is auditable. }
+        paymentsCounted: { type: integer }
+        mixedCurrencies:
+          type: array
+          items: { type: string }
+          description: Currencies other than `currency`; summing across them would be meaningless.
     AdapterWarning:
       type: object
       description: >-
