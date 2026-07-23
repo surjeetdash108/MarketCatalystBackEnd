@@ -3,7 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { AllSourcesFailedError } from '../adapters/adapter-error';
 import { NEWS_ADAPTER, type NewsAdapter } from '../adapters/types';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { chunkedBatchSet } from '../common/firestore-batch.util';
+import { batchSetWithCreatedAt, chunkedBatchSet, type PendingWrite } from '../common/firestore-batch.util';
 import { scoreImportance } from '../common/news-importance.util';
 import { NotificationsService, type NotificationInput } from '../common/notifications.service';
 import { SyncMetaService } from '../common/sync-meta.service';
@@ -43,6 +43,63 @@ export class NewsJob implements OnModuleInit {
   @Cron('*/30 9-16 * * 1-5', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
+  }
+
+  /**
+   * Denormalises "how many recent articles does this ticker have" onto the
+   * ticker's `companies` doc, as `newsCount` + `newsCountAt`.
+   *
+   * WHY THIS EXISTS
+   * The Earnings calendar renders a per-row news badge. It used to get that by
+   * subscribing to the ENTIRE `news` collection and counting client-side —
+   * ~4,150 documents and ~3.2 MB shipped to every browser, on every page load,
+   * to render one integer per row. That was 76% of the screen's payload.
+   *
+   * `companies` is already fetched by that screen, so putting the number there
+   * costs the client nothing: the news listener disappears outright rather than
+   * being replaced by a smaller one.
+   *
+   * A time-bounded client query was the obvious alternative and does not work:
+   * measured 2026-07-23, 100% of the collection is younger than 7 days (older
+   * articles are pruned by retention), so no sane window trims anything.
+   *
+   * Deliberately a SINGLE equality filter, with no `publishedAt` range. Adding
+   * one turns this into an equality+range across two fields, which Firestore
+   * rejects without a composite index on (ticker, publishedAt) — verified live,
+   * it returns FAILED_PRECONDITION. The range would also buy nothing, since
+   * retention already bounds the collection to ~7 days. Keeping it single-field
+   * means this runs on the automatic index with no deploy step, and returns
+   * exactly the number the client used to compute — verified per ticker against
+   * a full fetch (AAPL 69, NVDA 76, MSFT 69; all MATCH).
+   *
+   * `count()` is a server-side aggregation: it returns a number rather than the
+   * documents, and bills one read per 1,000 counted. 80 of these per run is far
+   * cheaper than every browser pulling the whole collection.
+   */
+  private async writeNewsCounts(tickers: string[]): Promise<number> {
+    const col = this.firebase.firestore.collection('news');
+    const now = new Date().toISOString();
+
+    const writes: PendingWrite[] = [];
+    for (const ticker of tickers) {
+      try {
+        const agg = await col.where('ticker', '==', ticker).count().get();
+        writes.push({
+          ref: this.firebase.firestore.collection('companies').doc(ticker),
+          data: { newsCount: agg.data().count, newsCountAt: now },
+        });
+      } catch (err) {
+        // A transient failure must not fail the news sync itself — the articles
+        // are already written by this point.
+        const why = err instanceof Error ? err.message : String(ticker);
+        this.logger.warn(`newsCount failed for ${ticker}: ${why}`);
+      }
+    }
+    // merge:true (the batch helper's default) is load-bearing: companies.job
+    // owns these docs and rewrites them nightly. A non-merge write from here
+    // would drop the profile, and its write would drop this count.
+    await batchSetWithCreatedAt(this.firebase.firestore, writes);
+    return writes.length;
   }
 
   async run() {
@@ -121,6 +178,7 @@ export class NewsJob implements OnModuleInit {
         await sleep(DELAY_MS);
       }
       await chunkedBatchSet(this.firebase.firestore, 'news', docs);
+      const counted = await this.writeNewsCounts(batch);
       // Only stories matching some user's watchlist/portfolio are stored; the
       // article itself already lives in `news`, so nothing is lost by skipping
       // the rest.
@@ -129,7 +187,8 @@ export class NewsJob implements OnModuleInit {
       this.logger.log(
         `${important.size}/${docs.length} articles important; ` +
         `${pub.written} notification(s) to ${pub.recipients} user(s); ` +
-        `${pub.skipped} matched no subscriber`,
+        `${pub.skipped} matched no subscriber; ` +
+        `newsCount refreshed for ${counted} ticker(s)`,
       );
       await this.meta.setCursor(JOB_NAME, (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length);
       await this.meta.record(JOB_NAME, {
