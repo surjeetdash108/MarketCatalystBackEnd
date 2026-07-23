@@ -27,8 +27,19 @@ import { FinnhubService } from '../vendors/finnhub/finnhub.service';
 const JOB_NAME = 'financials';
 const BATCH_SIZE = 40;
 const QUARTERS = 10;
+const ANNUAL_YEARS = 8;
 const DELAY_MS = 120;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** One fiscal-year row — actuals only (Polygon annual financials). */
+export interface AnnualFinancials {
+  fiscalYear: string | null;
+  endDate: string | null;
+  filingDate: string | null;
+  revenue: number | null;
+  epsActual: number | null;
+  netIncome: number | null;
+}
 
 export interface QuarterFinancials {
   fiscalPeriod: string | null;
@@ -245,9 +256,32 @@ export class FinancialsJob implements OnModuleInit {
                   : null,
             };
           });
+          // ── Annual (fiscal-year) history — actuals only, Polygon ──────────
+          // Same endpoint, timeframe=annual. Drives the Yearly tab's EPS +
+          // Sales columns. Forward analyst estimates are NOT sourced here
+          // (they need the Benzinga add-on) — this is reported actuals only.
+          let annual: AnnualFinancials[] = [];
+          try {
+            const yr = await this.polygon.getFinancialStatements(
+              ticker,
+              'annual',
+              ANNUAL_YEARS,
+            );
+            annual = yr.map((r) => ({
+              fiscalYear: r.fiscalYear,
+              endDate: r.endDate,
+              filingDate: r.filingDate,
+              revenue: r.income.revenues ?? null,
+              epsActual: r.income.diluted_earnings_per_share ?? null,
+              netIncome: r.income.net_income_loss ?? null,
+            }));
+          } catch (err) {
+            this.logger.warn(`annual financials failed for ${ticker}: ${err.message}`);
+          }
+
           docs.push({
             id: ticker,
-            data: { ticker, quarters, updatedAt: new Date().toISOString() },
+            data: { ticker, quarters, annual, updatedAt: new Date().toISOString() },
           });
         } catch (err) {
           this.logger.error(`financials failed for ${ticker}: ${err.message}`);
