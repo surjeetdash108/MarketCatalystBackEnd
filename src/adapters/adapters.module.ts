@@ -236,7 +236,12 @@ function buildComposite(
       provide: NEWS_ADAPTER,
       inject: [ConfigService, PolygonService, FinnhubService],
       useFactory: (config, polygon, finnhub) => {
-        const mode = parseSource(config, 'NEWS_SOURCE', NEWS_SOURCES, 'aggregate');
+        // Default POLYGON, not 'aggregate'. Massive/Polygon is licensed for
+        // redistribution; Finnhub is not, so merging Finnhub articles into a
+        // feed we serve to users would breach Finnhub's terms. Aggregate stays
+        // available for local/dev use but must be opted into explicitly via
+        // NEWS_SOURCE — a blank/misconfigured prod deploy now stays Polygon-only.
+        const mode = parseSource(config, 'NEWS_SOURCE', NEWS_SOURCES, 'polygon');
         const makePolygon = () => new PolygonNewsAdapter(polygon);
         const makeFinnhub = () => new FinnhubNewsAdapter(finnhub);
         if (mode === 'aggregate') {
