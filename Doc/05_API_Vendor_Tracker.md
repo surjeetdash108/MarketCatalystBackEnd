@@ -26,6 +26,25 @@ v1.0 | June 2026
 > dividends/splits history and the `/fed/v1/*` macro namespace are all
 > authorized and were simply never called) and one was wrong against it
 > (Polygon serves no index spot values, so the SPX/VIX tiles are ETF proxies).
+>
+> **Addendum 2026-07-23 — "wire Polygon everywhere it can be" audit.** Swept the
+> app for any place a *non-Polygon* vendor is used where Polygon has an
+> equivalent on the current plan. **Result: none to swap.** Every price / bar /
+> snapshot / company / news / dividend / split / IPO / financials / market-status
+> / sector / mover path is already Polygon. The remaining non-Polygon vendors are
+> used *only* where Polygon has **no product** on Stocks Starter:
+> **FMP** (earnings calendar + analyst consensus) and **Finnhub** (EPS estimate
+> backfill) → Benzinga add-on territory (R41/R42); **FRED** (macro economic
+> series — CPI/unemployment/payrolls/GDP/… — US-government public data;
+> Polygon's `/fed/v1/*` only covers treasury yields + inflation, not the rest).
+> **SEC EDGAR** (13F/Form 4) is public-domain. So the vendor split is already
+> Polygon-first, with non-Polygon only where Polygon offers nothing.
+>
+> Also 2026-07-23: **Search, Watchlist and Portfolio** were switched from the
+> once-a-day EOD price on `companies` to **live delayed prices** via the shared
+> `/live/snapshot` endpoint (`useSnapshotQuotes`), so ticker prices — and the
+> portfolio total (Σ shares×price) — now move intraday. Polygon `/v3/snapshot`
+> backs it; one upstream call per refresh regardless of user count.
 > **Stripe has also been added to §1 as a PLANNED vendor — it is not
 > integrated; no Stripe code exists in either repo.**
 
