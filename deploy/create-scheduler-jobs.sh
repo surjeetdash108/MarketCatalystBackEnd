@@ -48,6 +48,7 @@ JOBS=(
   "market-movers|0 18 * * 1-5"
   "macro-events|10 18 * * 1-5"
   "fear-greed|15 18 * * 1-5"
+  "recaps|45 18 * * 1-5"
   "options-chains|0 19 * * 1-5"
 )
 
@@ -78,4 +79,4 @@ for entry in "${JOBS[@]}"; do
     --attempt-deadline="${DEADLINE}"
 done
 
-echo "✔ All 21 scheduler jobs created/updated."
+echo "✔ All 22 scheduler jobs created/updated."
