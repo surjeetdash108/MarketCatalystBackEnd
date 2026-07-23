@@ -66,6 +66,27 @@
   .s .t{font-weight:700;font-size:.88rem;color:var(--ink)}
   .s .d{font-size:.82rem;color:var(--ink-dim);margin-top:1px}
 
+  /* technical components */
+  .comp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+  .comp{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--cc,var(--accent));border-radius:11px;padding:13px 15px}
+  .comp .t{font-weight:700;font-size:.92rem;color:var(--ink)}
+  .comp .tag{font-family:ui-monospace,monospace;font-size:.66rem;color:var(--cc);margin:2px 0 7px;letter-spacing:.02em}
+  .comp .d{font-size:.84rem;color:var(--ink-2);line-height:1.45}
+
+  /* API reference */
+  .divider{height:1px;background:var(--line-2);margin:8px 0 0}
+  .api{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:10px}
+  .api .hd{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .api .verb{font-family:ui-monospace,monospace;font-size:.68rem;font-weight:700;color:#08110d;background:var(--read);border-radius:5px;padding:1px 6px}
+  .api .path{font-family:ui-monospace,monospace;font-size:.82rem;font-weight:600;color:var(--ink);word-break:break-all}
+  .api .name{margin-left:auto;font-size:.8rem;color:var(--ink-dim)}
+  .api .p{font-size:.85rem;color:var(--ink-2);margin:8px 0 10px}
+  .api .p b{color:var(--ink);font-weight:600}
+  .api .rl{font-family:ui-monospace,monospace;font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-dim);margin:0 0 5px}
+  .api pre{margin:0;overflow-x:auto;background:var(--panel-2);border:1px solid var(--line-2);border-radius:8px;padding:11px 13px;font-family:ui-monospace,monospace;font-size:.72rem;line-height:1.5;color:var(--ink-2);white-space:pre}
+  .note{font-size:.8rem;color:var(--ink-dim);margin-top:7px}
+  .note b{color:var(--ink-2)}
+
   footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);font-family:ui-monospace,monospace;font-size:.74rem;color:var(--ink-dim)}
 </style>
 
@@ -199,6 +220,304 @@
       <div class="s"><div class="t">Secret Manager</div><div class="d">Keeps the vendor API keys</div></div>
       <div class="s"><div class="t">Vendor rule</div><div class="d">Only Polygon (licensed) reaches users</div></div>
       <div class="s"><div class="t">Sentry</div><div class="d">Flags errors if they happen</div></div>
+    </div>
+  </section>
+
+  <!-- ══════════ TECHNICAL VIEW (appended) ══════════ -->
+  <section>
+    <h2>Technical view</h2>
+    <p class="sub">The same three flows, now with the real services, transports and endpoints on every arrow.</p>
+    <div class="diagram">
+      <svg viewBox="0 0 1040 520" role="img" aria-labelledby="tt td">
+        <title id="tt">MarketCatalyst technical architecture</title>
+        <desc id="td">Browser reads Firestore over the client SDK (onSnapshot), calls the public live Cloud Run service for prices over HTTP and SSE which fetches Polygon /v3/snapshot, and Cloud Scheduler triggers the private worker over OIDC which calls Polygon REST and writes Firestore with the Admin SDK.</desc>
+        <defs>
+          <marker id="ta" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/>
+          </marker>
+        </defs>
+        <g fill="none" stroke-width="2.4" marker-end="url(#ta)">
+          <path d="M226,150 L232,224" style="stroke:var(--support)"/>
+          <path d="M226,92 L232,220" style="stroke:var(--support)" marker-start="url(#ta)"/>
+          <path d="M360,278 L242,284" style="stroke:var(--read)" stroke-width="3"/>
+          <path d="M242,250 L662,136" style="stroke:var(--price)" stroke-width="3"/>
+          <path d="M858,132 L906,206" style="stroke:var(--price)"/>
+          <path d="M760,458 L760,422" style="stroke:var(--refresh)"/>
+          <path d="M858,372 L906,332" style="stroke:var(--refresh)"/>
+          <path d="M662,368 L572,300" style="stroke:var(--refresh)" stroke-width="3"/>
+        </g>
+        <g class="el" font-size="11.5" text-anchor="middle">
+          <text x="150" y="196" style="fill:var(--support)" font-size="10.5">static · ID token</text>
+          <text x="300" y="264" style="fill:var(--read)">onSnapshot</text>
+          <text x="450" y="176" style="fill:var(--price)">GET /live/snapshot (+SSE tape)</text>
+          <text x="892" y="168" style="fill:var(--price)" text-anchor="start" font-size="10.5">/v3/snapshot</text>
+          <text x="656" y="406" text-anchor="end" style="fill:var(--refresh)" font-size="11">Admin SDK write</text>
+          <text x="892" y="356" style="fill:var(--refresh)" text-anchor="start" font-size="10.5">REST (adapter)</text>
+          <text x="690" y="448" text-anchor="end" style="fill:var(--refresh)" font-size="10.5">POST /sync/*/run · OIDC</text>
+        </g>
+        <g>
+          <rect x="48" y="64" width="178" height="44" rx="10" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.6"/>
+          <text x="137" y="83" class="nm" text-anchor="middle" font-size="13.5">Firebase Auth</text>
+          <text x="137" y="99" class="ns" text-anchor="middle" font-size="9.5">ID tokens · OAuth</text>
+
+          <rect x="48" y="130" width="178" height="44" rx="10" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.6"/>
+          <text x="137" y="149" class="nm" text-anchor="middle" font-size="13.5">Firebase Hosting</text>
+          <text x="137" y="165" class="ns" text-anchor="middle" font-size="9.5">static export</text>
+
+          <rect x="44" y="218" width="196" height="118" rx="13" style="fill:var(--card-2);stroke:var(--accent)" stroke-width="2.2"/>
+          <text x="142" y="270" class="nm" text-anchor="middle" font-size="17">Browser SPA</text>
+          <text x="142" y="292" class="ns" text-anchor="middle" font-size="10.5">Next.js · Redux · client SDK</text>
+
+          <rect x="360" y="232" width="212" height="104" rx="13" style="fill:var(--card-2);stroke:var(--read)" stroke-width="2.2"/>
+          <text x="466" y="280" class="nm" text-anchor="middle" font-size="16">Cloud Firestore</text>
+          <text x="466" y="301" class="ns" text-anchor="middle" font-size="10.5">40+ collections · rules</text>
+
+          <rect x="662" y="96" width="196" height="80" rx="12" style="fill:var(--card-2);stroke:var(--price)" stroke-width="2.2"/>
+          <text x="760" y="130" class="nm" text-anchor="middle" font-size="15">live · Cloud Run</text>
+          <text x="760" y="150" class="ns" text-anchor="middle" font-size="10">APP_ROLE=live · public</text>
+
+          <rect x="662" y="336" width="196" height="84" rx="12" style="fill:var(--card-2);stroke:var(--refresh)" stroke-width="2.2"/>
+          <text x="760" y="372" class="nm" text-anchor="middle" font-size="15">worker · Cloud Run</text>
+          <text x="760" y="392" class="ns" text-anchor="middle" font-size="10">APP_ROLE=worker · private</text>
+
+          <rect x="662" y="458" width="196" height="52" rx="11" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.6"/>
+          <text x="760" y="480" class="nm" text-anchor="middle" font-size="13.5">Cloud Scheduler</text>
+          <text x="760" y="496" class="ns" text-anchor="middle" font-size="9.5">22 cron jobs · OIDC</text>
+
+          <rect x="906" y="150" width="126" height="266" rx="13" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.8"/>
+          <text x="969" y="270" class="nm" text-anchor="middle" font-size="13.5">Polygon</text>
+          <text x="969" y="288" class="nm" text-anchor="middle" font-size="13.5">Massive</text>
+          <text x="969" y="312" class="ns" text-anchor="middle" font-size="10">REST</text>
+        </g>
+      </svg>
+    </div>
+    <div class="key">
+      <span><span class="d" style="border-color:var(--read)"></span><b>Read</b>: Firestore client SDK · realtime</span>
+      <span><span class="d" style="border-color:var(--price)"></span><b>Prices</b>: HTTP poll + SSE &rarr; Polygon</span>
+      <span><span class="d" style="border-color:var(--refresh)"></span><b>Refresh</b>: OIDC cron &rarr; worker &rarr; Admin SDK</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Components, explained</h2>
+    <p class="sub">What each box actually is.</p>
+    <div class="comp-grid">
+      <div class="comp" style="--cc:var(--accent)"><div class="t">Browser SPA</div><div class="tag">Next.js · static export</div><div class="d">The app. Client components + Redux (auth/profile). Reads Firestore directly and calls the live service; holds no vendor keys.</div></div>
+      <div class="comp" style="--cc:var(--read)"><div class="t">Cloud Firestore</div><div class="tag">client SDK + Admin SDK</div><div class="d">The single source of truth for domain data (companies, prices, earnings, news…). Browser reads live via <code>onSnapshot</code>; the worker writes it server-side.</div></div>
+      <div class="comp" style="--cc:var(--price)"><div class="t">live · Cloud Run</div><div class="tag">APP_ROLE=live · public</div><div class="d">Mounts only the LiveModule. Serves <code>/live/snapshot</code>, the SSE <code>/live/tape/stream</code> and <code>/live/market-status</code>. No admin routes exist here.</div></div>
+      <div class="comp" style="--cc:var(--refresh)"><div class="t">worker · Cloud Run</div><div class="tag">APP_ROLE=worker · private</div><div class="d">Same image, all the sync/admin/plans modules. Only Cloud Scheduler (OIDC) can reach it. Runs the 22 ingestion jobs.</div></div>
+      <div class="comp" style="--cc:var(--support)"><div class="t">Cloud Scheduler</div><div class="tag">22 jobs · OIDC</div><div class="d">Fires <code>POST /sync/{job}/run</code> on each job's cron with a signed OIDC token for the <code>scheduler-invoker</code> service account.</div></div>
+      <div class="comp" style="--cc:var(--support)"><div class="t">Polygon / Massive</div><div class="tag">REST · ~15m delayed</div><div class="d">The market-data vendor. The <b>only</b> vendor whose data reaches users (licensed for redistribution). See the endpoint list below.</div></div>
+      <div class="comp" style="--cc:var(--support)"><div class="t">Firebase Auth · Hosting</div><div class="tag">tokens · static files</div><div class="d">Auth issues the ID token that Firestore rules check; Hosting serves the compiled app bundle.</div></div>
+      <div class="comp" style="--cc:var(--support)"><div class="t">Secret Manager · Sentry</div><div class="tag">keys · errors</div><div class="d">Secret Manager injects vendor keys into both services at startup; Sentry captures runtime errors (DSN-gated).</div></div>
+    </div>
+  </section>
+
+  <!-- ══════════ POLYGON API REFERENCE (appended) ══════════ -->
+  <section>
+    <h2>Polygon APIs we call</h2>
+    <p class="sub">Every Polygon / Massive endpoint in the pipeline, with a <b>real trimmed response</b> captured from our key. Requests are simple GETs; <code>apiKey</code> and paging omitted for clarity.</p>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/v3/snapshot?ticker.any_of={syms}</span><span class="name">Unified Snapshot</span></div>
+      <div class="p">Delayed quotes for many tickers in one call — powers the <b>ticker tape</b> and the <b>watchlist/portfolio/stock price polling</b>.</div>
+      <div class="rl">response</div>
+      <pre>{
+  "status": "OK",
+  "results": [{
+    "ticker": "AAPL", "name": "Apple Inc.", "market_status": "open",
+    "session": {
+      "price": 320.73, "change": -5.16, "change_percent": -1.58,
+      "open": 321.73, "high": 323.30, "low": 319.35,
+      "previous_close": 325.89, "volume": 19763440, "vwap": 321.20,
+      "early_trading_change_percent": -1.31,
+      "late_trading_change_percent": 1.562
+    },
+    "last_minute": { "close": 320.71, "volume": 31275, "transactions": 992 }
+  }]
+}</pre>
+    </div>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/v2/aggs/ticker/{ticker}/range/{mult}/{span}/{from}/{to}</span><span class="name">Aggregates (OHLCV bars)</span></div>
+      <div class="p">Candlestick bars — daily &amp; intraday. Powers <b>charts</b>, <b>5-year history</b>, moving averages and technicals.</div>
+      <div class="rl">response</div>
+      <pre>{
+  "status": "OK", "ticker": "AAPL", "adjusted": true, "resultsCount": 5,
+  "results": [
+    { "t": 1783915200000, "o": 317.02, "h": 323.45, "l": 315.78,
+      "c": 317.31, "v": 43257804, "vw": 318.15, "n": 884512 }
+  ]
+}</pre>
+    </div>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/v2/aggs/grouped/locale/us/market/stocks/{date}</span><span class="name">Grouped Daily</span></div>
+      <div class="p">One row for <b>every US stock</b> for a day (~12k). Powers market <b>breadth</b>, <b>movers</b> and the Fear &amp; Greed breadth component.</div>
+      <div class="rl">response</div>
+      <pre>{
+  "status": "OK", "resultsCount": 12411,
+  "results": [
+    { "T": "FMDE", "o": 40.28, "h": 40.66, "l": 40.28, "c": 40.42,
+      "v": 677964, "vw": 40.46, "t": 1784318400000 }
+  ]
+}</pre>
+    </div>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/vX/reference/financials?ticker={t}&amp;timeframe=annual|quarterly</span><span class="name">Financials</span></div>
+      <div class="p">Reported statements. Powers the <b>Quarterly / Yearly EPS &amp; Sales</b> tabs and the fundamentals panel.</div>
+      <div class="rl">response</div>
+      <pre>{
+  "status": "OK",
+  "results": [{
+    "fiscal_year": "2025", "fiscal_period": "FY", "end_date": "2025-09-27",
+    "company_name": "Apple Inc.",
+    "financials": {
+      "income_statement": {
+        "revenues": { "value": 416161000000, "unit": "USD" },
+        "diluted_earnings_per_share": { "value": 7.46, "unit": "USD / shares" },
+        "net_income_loss": { "value": 112010000000, "unit": "USD" }
+      }
+      // balance_sheet + cash_flow_statement also returned
+    }
+  }]
+}</pre>
+    </div>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/v3/reference/tickers/{ticker}</span><span class="name">Ticker Details</span></div>
+      <div class="p">Company profile — name, sector (SIC), market cap, description, logo. Powers the <b>companies</b> collection.</div>
+      <div class="rl">response</div>
+      <pre>{
+  "status": "OK",
+  "results": {
+    "ticker": "AAPL", "name": "Apple Inc.", "primary_exchange": "XNAS",
+    "type": "CS", "market_cap": 4786462446840,
+    "sic_description": "ELECTRONIC COMPUTERS", "total_employees": 166000,
+    "list_date": "1980-12-12", "homepage_url": "https://www.apple.com",
+    "weighted_shares_outstanding": 14687356000,
+    "branding": { "logo_url": ".../logo.svg", "icon_url": ".../icon.webp" }
+  }
+}</pre>
+      <div class="note"><b>Also:</b> <code>GET /v3/reference/tickers?market=stocks&amp;active=true&amp;limit=1000</code> pages the full ticker <b>universe</b>.</div>
+    </div>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/v3/reference/dividends?ticker={t}</span><span class="name">Dividends</span></div>
+      <div class="p">Dividend history — cash amount, dates, frequency. Powers dividend history + derived yield.</div>
+      <div class="rl">response</div>
+      <pre>{
+  "status": "OK",
+  "results": [{
+    "cash_amount": 0.27, "currency": "USD", "dividend_type": "CD",
+    "frequency": 4, "ex_dividend_date": "2026-05-11",
+    "pay_date": "2026-05-14", "ticker": "AAPL"
+  }]
+}</pre>
+    </div>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/v3/reference/splits?ticker={t}</span><span class="name">Splits</span></div>
+      <div class="p">Stock splits — surfaced because history is adjusted, so a split silently rewrites the price series.</div>
+      <div class="rl">response</div>
+      <pre>{
+  "status": "OK",
+  "results": [{
+    "execution_date": "2020-08-31",
+    "split_from": 1, "split_to": 4, "ticker": "AAPL"
+  }]
+}</pre>
+    </div>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/vX/reference/ipos?listing_date.gte={date}</span><span class="name">IPOs</span></div>
+      <div class="p">Recent + upcoming IPOs. Powers the IPO calendar and (with aggs) day-1 / since-IPO performance.</div>
+      <div class="rl">response</div>
+      <pre>{
+  "status": "OK",
+  "results": [{
+    "ticker": "IMC", "issuer_name": "IMC Rare Earths Ltd.",
+    "ipo_status": "pending", "announced_date": "2026-06-30",
+    "lowest_offer_price": 4.0, "highest_offer_price": 6.0,
+    "total_offer_size": 32000000, "primary_exchange": "XASE"
+  }]
+}</pre>
+    </div>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/v3/reference/options/contracts?underlying_ticker={t}</span><span class="name">Options Contracts</span></div>
+      <div class="p">Option chain contracts (strike, expiry, type). Per-contract OHLC is authorized; greeks/IV are not on the plan.</div>
+      <div class="rl">response</div>
+      <pre>{
+  "status": "OK",
+  "results": [{
+    "ticker": "O:AAPL260724C00110000", "underlying_ticker": "AAPL",
+    "contract_type": "call", "strike_price": 110,
+    "expiration_date": "2026-07-24", "exercise_style": "american",
+    "shares_per_contract": 100
+  }]
+}</pre>
+    </div>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/v2/reference/news?ticker={t}</span><span class="name">News</span></div>
+      <div class="p">Ticker news with publisher + AI sentiment insights. Powers the news feed and per-ticker news counts.</div>
+      <div class="rl">response</div>
+      <pre>{
+  "status": "OK",
+  "results": [{
+    "title": "This Is My No. 1 Recommended ETF to Buy in July",
+    "publisher": { "name": "The Motley Fool" }, "author": "Stefon Walters",
+    "published_utc": "2026-07-23T16:25:49Z",
+    "tickers": ["RSP", "NVDA", "AAPL"],
+    "article_url": "https://www.fool.com/investing/2026/07/23/...",
+    "insights": [
+      { "ticker": "AAPL", "sentiment": "neutral",
+        "sentiment_reasoning": "Mentioned re: S&amp;P 500 concentration risk..." }
+    ]
+  }]
+}</pre>
+    </div>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/v1/marketstatus/now</span><span class="name">Market Status</span></div>
+      <div class="p">Live session state. Powers the <b>market-status pill</b> (pre / open / after / closed).</div>
+      <div class="rl">response</div>
+      <pre>{
+  "market": "open", "earlyHours": false, "afterHours": false,
+  "exchanges": { "nasdaq": "open", "nyse": "open", "otc": "open" },
+  "serverTime": "2026-07-23T14:12:42-04:00"
+}</pre>
+      <div class="note"><b>Also:</b> <code>GET /v1/marketstatus/upcoming</code> returns market holidays.</div>
+    </div>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/fed/v1/treasury-yields?sort=date.desc</span><span class="name">Treasury Yields</span></div>
+      <div class="p">The real yield curve. Powers the <b>US10Y</b> tape tile and the macro regime signal.</div>
+      <div class="rl">response</div>
+      <pre>{
+  "status": "OK",
+  "results": [{
+    "date": "2026-07-21",
+    "yield_1_month": 3.75, "yield_2_year": 4.26,
+    "yield_10_year": 4.63, "yield_30_year": 5.13
+  }]
+}</pre>
+    </div>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/v1/related-companies/{ticker}</span><span class="name">Related Companies</span></div>
+      <div class="p">Real peer tickers (replaced a sector-filtered mock list). Powers the "peers" panel.</div>
+      <div class="rl">response</div>
+      <pre>{
+  "status": "OK", "ticker": "AAPL",
+  "results": [ { "ticker": "MSFT" }, { "ticker": "GOOGL" } ]
+}</pre>
+    </div>
+
+    <div class="note" style="margin-top:14px">
+      <b>Not on the current plan (Stocks Starter):</b> options greeks/IV/OI, index values (I:SPX / I:VIX — we use ETF proxies), tick-level trades/quotes, real-time (non-delayed) data, and analyst estimates (Benzinga add-on). These return <code>NOT_AUTHORIZED</code> and are noted wherever the app would use them.
     </div>
   </section>
 
