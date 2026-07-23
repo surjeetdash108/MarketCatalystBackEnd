@@ -39,6 +39,24 @@ System Architecture Document \| v1.1 \| June 2026
 > is unset, so `http://localhost:4100` is baked into the static bundle and
 > blocked as mixed content. Everything the app renders today therefore still
 > arrives via the Firestore client SDK. See §7 Known Gaps.
+>
+> **Amended 2026-07-23 — the two 2026-07-22 gaps are now CLOSED, and the runtime
+> topology changed.** (1) The backend was split into **two Cloud Run services
+> from one image** via an `APP_ROLE` env var: a **private `worker`**
+> (`market-catalyst-backend`, `--no-allow-unauthenticated`) that mounts every
+> admin/sync module, and a **public `live`** (`market-catalyst-live`,
+> `--allow-unauthenticated`) that mounts **only** `LiveModule` + `/health` — so
+> the browser can reach `/live/*` without exposing `/sync`·`/purge`·`/admin`
+> (they 404 on the public service, verified). `NEXT_PUBLIC_BACKEND_URL` now
+> points at the `live` service, baked in at build. (2) **22 Cloud Scheduler jobs
+> are ENABLED and firing**, POSTing the worker's `/sync/{job}/run` with an OIDC
+> token (`scheduler-invoker` SA). So the app now interacts with the backend over
+> HTTP in two live ways — **SSE** (ticker tape) and **cached JSON polling**
+> (delayed prices, market status) — on top of the Firestore client SDK path. See
+> the new **§6.1 Runtime interaction paths** for the full enumeration and the
+> companion architecture diagram. The Firestore-direct path remains the source
+> for all *domain* data; the `/live/*` HTTP path adds only the moving-price
+> surfaces (tape, watchlist/portfolio/search/stock quotes, market-status pill).
 
 1\. Architecture Overview
 
@@ -521,31 +539,75 @@ carries a DO-NOT-DEPLOY header.
 
 -   **Cloud Firestore**: primary data store. Collections live: `users/{uid}` (profile), `settings/{uid}` (user preferences including dark mode), `stock_comments` (user chart notes — saved from Stock Detail page right-click context menu; schema: `{uid, sym, name, comment, createdAt: Timestamp}`). Security rules enforced via `firestore.rules` (deployed via `firebase deploy --only firestore:rules`). Firebase project: `fin-app26`.
 
-**Deployment topology (actual, 2026-07-22)**
+**Deployment topology (actual, 2026-07-23)**
 
 ```
-Browser ──► Firebase Hosting (marketcatalyst.web.app)   Next.js static export
-   │              project fin-app26
-   │
-   ├──► Cloud Firestore  (client SDK, onSnapshot)  ◄── everything the app renders
-   │
-   └──✗  Cloud Run  market-catalyst-backend-00031-wvc  (us-central1)
-             --no-allow-unauthenticated, min-instances=0
-             ▲ NO route from the browser — see §7 gap 1
-             ▲ NO Cloud Scheduler jobs exist — see §7 gap 2
+                         Firebase Auth ◄──► Browser (SPA)
+                                              │  Next.js static export
+                Firebase Hosting ────────────┤  served from Firebase Hosting
+                (marketcatalyst.web.app)      │  project fin-app26 / market-catalyst-502415
+                                              │
+      ┌───────────────────────────────────────┼───────────────────────────────────┐
+      │ Cloud Firestore (client SDK)           │ Cloud Run: market-catalyst-live    │
+      │  • onSnapshot reads  ◄── all domain    │  (PUBLIC, --allow-unauthenticated) │
+      │    data the app renders                │  APP_ROLE=live · LiveModule only   │
+      │  • owner-scoped writes ──► watchlists, │  • GET  /live/snapshot  (poll+ETag)│
+      │    holdings, settings, comments,       │  • SSE  /live/tape/stream (tape)   │
+      │    feature_adoption                    │  • GET  /live/market-status        │
+      └────────────────────────────────────────┴──────────────┬────────────────────┘
+                    ▲ Admin SDK writes                          │ on-demand vendor calls
+                    │                                           ▼
+   Cloud Run: market-catalyst-backend (PRIVATE)          Polygon / Massive (delayed)
+     --no-allow-unauthenticated · APP_ROLE=worker
+     mounts SyncModule/Purge/Plans/Admin/Live            External vendors (worker only):
+       ▲ POST /sync/{job}/run (OIDC)                     Polygon, FMP, Finnhub, SEC EDGAR, FRED
+       │                                                 (FMP/Finnhub = NOT redistributable,
+   Cloud Scheduler (22 jobs, ENABLED)                     never served to the browser)
+     scheduler-invoker SA · cron ET                      Secret Manager ──► both services (keys)
 ```
 
--   **Backend**: Cloud Run revision `market-catalyst-backend-00031-wvc`, region `us-central1`, `--no-allow-unauthenticated`, `min-instances=0`. Vendor keys in Secret Manager, not env files.
--   **Frontend**: `https://marketcatalyst.web.app` — Firebase Hosting, static export, project `fin-app26`.
--   **Rules**: released, from `MarketCatalystUI/firestore.rules`.
--   No AWS, ECS, ALB, ElastiCache, ClickHouse, S3, CloudFront or Route 53 exists. The block below remains the *proposed* Phase-2 target, not a description of anything running.
+-   **Two Cloud Run services, one image, region `us-central1`**, split by `APP_ROLE`:
+    -   **`market-catalyst-backend`** (worker, PRIVATE, `--no-allow-unauthenticated`, `min=0 max=3`, 512Mi/900s) — every admin/sync/purge/plans module. Reached only by Cloud Scheduler (OIDC) and operators.
+    -   **`market-catalyst-live`** (PUBLIC, `--allow-unauthenticated`, `min=0 max=5`, `concurrency=200`, 1Gi/3600s) — `LiveModule` + `/health` only; `/sync`·`/purge`·`/admin` are **not routed** here (404, verified). `CORS_ORIGINS=https://marketcatalyst.web.app`.
+-   **Cloud Scheduler**: 22 jobs ENABLED, each POSTs the worker's `/sync/{job}/run` on its cron (ET) with an OIDC token minted for the `scheduler-invoker` service account. Data now refreshes automatically; no more manual runs.
+-   **Frontend**: `https://marketcatalyst.web.app` — Firebase Hosting, static export. `NEXT_PUBLIC_BACKEND_URL` = the `live` service URL, inlined at build.
+-   **Secret Manager**: vendor keys injected into both services at startup, never in env files or code.
+-   **Rules**: released from `MarketCatalystUI/firestore.rules`.
+-   No AWS, ECS, ALB, ElastiCache, ClickHouse, S3, CloudFront or Route 53 exists. The Phase-2 block below remains *proposed*, not running.
+
+**6.1 Runtime interaction paths (2026-07-23)**
+
+The distinct ways the systems talk to each other at runtime — the basis for the
+companion architecture diagram. "Client" = the browser SPA.
+
+| # | From → To | Transport | Carries |
+|---|---|---|---|
+| 1 | Browser ⇄ **Firebase Hosting** | HTTPS (static) | The Next.js `out/` bundle + assets |
+| 2 | Browser ⇄ **Firebase Auth** | Firebase SDK | Sign-in/up, `onAuthStateChanged`, 1h ID tokens → Redux via `FirebaseListener` |
+| 3 | Browser ⇄ **Firestore** (read) | Client SDK `onSnapshot` | **All domain data** — companies, market_indices, movers, sectors, breadth, earnings_events, news, financials, dividends, splits, ipos, recaps, market_sentiment(_history), plans, entitlements |
+| 4 | Browser → **Firestore** (write) | Client SDK, owner-scoped | User-owned data — watchlists, portfolio holdings, settings, stock_comments, feature_adoption (the only client-writable analytics) |
+| 5 | Browser → **Cloud Run `live`** | HTTPS `GET /live/snapshot` (poll 15s, `cache:no-store` + `If-None-Match`) | Delayed batched quotes for the shared live-price subscription (watchlist, portfolio, search, stock detail) |
+| 6 | Browser ⇄ **Cloud Run `live`** | **SSE** `GET /live/tape/stream` (EventSource) | The header ticker tape — one `ReplaySubject` broadcast; one vendor call/min for **all** users |
+| 7 | Browser → **Cloud Run `live`** | HTTPS `GET /live/market-status` | Session pill (pre/open/after/closed) + extended-hours |
+| 8 | **Cloud Run `live`** → **Polygon/Massive** | HTTPS (on demand, ref-counted) | `/v3/snapshot` (20 tape syms + snapshot tickers) + `/fed/v1/treasury-yields`; delayed ~15m |
+| 9 | **Cloud Scheduler** → **Cloud Run `worker`** | HTTPS `POST /sync/{job}/run` + OIDC | 22 cron jobs firing the ingestion pipeline |
+| 10 | **Cloud Run `worker`** → **Vendors** | HTTPS, adapter layer w/ fallback | Polygon (redistributable) + FMP/Finnhub/EDGAR/FRED (worker-only) |
+| 11 | **Cloud Run `worker`** → **Firestore** | Firebase **Admin SDK** (write) | Every synced domain collection + `sync_meta`; `recaps` composes existing collections |
+| 12 | **Secret Manager** → both Cloud Run services | env injection at startup | Vendor API keys |
+| 13 | Admin iframe ⇄ React parent | `postMessage` + `sessionStorage` | Admin dataset staged pre-mount; plan-flag writes delegated to the parent's client SDK |
+| 14 | Browser + worker → **Sentry** | HTTPS (DSN-gated no-op until set) | Error/exception capture |
+
+**The load-bearing rule:** domain data flows **Browser ⇄ Firestore** (paths 3–4);
+the backend HTTP paths (5–8) add *only* moving prices and market status; the
+worker never serves the browser and non-redistributable vendor data (FMP/Finnhub)
+never leaves the worker.
 
 7\. Known Gaps (2026-07-22)
 
 Stated plainly because each one changes what the deployed system can actually do:
 
-1.  **The browser cannot reach the backend.** `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4100` is compiled into the production bundle and blocked as mixed content. Dead in production as a result: the Monitor tab, extended-hours moves, the vendor market-status pill, and any future Stripe checkout/webhook. The fix is a Firebase Hosting rewrite to Cloud Run — which **requires** setting `ADMIN_GUARD_TRUST_IAM=false` first, or `/sync/:job/run`, `/purge` and `/retention` become world-callable the moment the route opens.
-2.  **No Cloud Scheduler jobs exist in any region**, and there is no `scheduler-invoker` service account — `create-scheduler-jobs.sh` was never run. With `min-instances=0` the in-process `@Cron` decorators never fire, so **no sync job has ever run automatically in production**. Every row of data currently in Firestore came from a manual run.
+1.  ✅ **RESOLVED 2026-07-23 — the browser now reaches the backend, safely.** Instead of the risky Hosting→Cloud Run rewrite (which would have needed `ADMIN_GUARD_TRUST_IAM=false` to avoid exposing `/sync`·`/purge`·`/retention`), the backend was split into two Cloud Run services from one image (`APP_ROLE`): a public **`live`** service mounting *only* `LiveModule` + `/health`, and the existing private **`worker`**. `NEXT_PUBLIC_BACKEND_URL` points at `live`, so the tape, delayed prices, extended-hours and market-status pill are live for real users, while `/sync`·`/purge`·`/admin` return 404 on the public service (verified) — no admin surface was exposed. Stripe checkout/webhook (gap 4) is now unblocked on the infra side.
+2.  ✅ **RESOLVED 2026-07-23 — Cloud Scheduler is live.** 22 jobs are ENABLED and firing on their crons, the `scheduler-invoker` service account exists, and each job POSTs the worker's `/sync/{job}/run` with an OIDC token. Data now refreshes automatically; the "every row came from a manual run" caveat no longer holds.
 3.  **`POLYGON_API_KEY` is un-rotated** (it was exposed in chat). Secret Manager version 4 is enabled. `deploy/rotate-polygon-key.sh` automates the whole rotation except generating the replacement key.
 4.  **Stripe is not implemented.** No Stripe code exists in either repo; `stripePriceId` is `null` on every plan, which keeps them non-purchasable. `payments` and `subscriptions` are empty collections. Checkout and webhooks are blocked on gap 1.
 5.  **`api_usage` is specified but not implemented** — no middleware records API calls, so the admin console's "Usage & API" KPIs read 0.
