@@ -115,6 +115,24 @@ The "Reason" column now tags each incomplete row by *why*, not just *what*:
 
 ---
 
+## Additional features — delivered outside the 36-row plan
+
+> **None of these are among the 36 planned rows.** They were requested and delivered *on top of* `MarketCatalyst.ai_weekly_deliverables_Plan.xlsx`, carry no person-day budget there, and are **excluded from every percentage above**. Tracked here in the same Provider / API format so they are visible rather than invisible. Same redistribution rule applies: everything served is **Polygon** (redistributable) or public/first-party — no Finnhub/FMP data ships.
+
+| Feature | Provider | API / URL used | State | What it does · what's NOT done |
+|---|---|---|---|---|
+| **Live ticker tape** (scrolling header strip) | Polygon | **SSE** `/live/tape/stream` + JSON fallback `/live/tape`, each fed by one `GET /v3/snapshot?ticker.any_of={20 syms}` per refresh, plus `GET /fed/v1/treasury-yields?limit=2` for the US10Y tile | 🟢 **LIVE** | 21 tiles (8 index ETF proxies + 12 mega-caps + US10Y), delayed ~15 min on the Starter plan. **Server-side SSE broadcast**: one `ReplaySubject`, one vendor call per minute **regardless of user count** (ref-counted poller — zero users ⇒ zero calls; verified `upstreamCalls` tracks minutes, not clients). Falls back to the once-daily `market_indices` (R11) on outage. — Nothing outstanding; real-time (sub-15-min) data would need a Polygon real-time add-on (`T`/`Q` channels return `NOT_AUTHORIZED` on the current plan) |
+| **Live delayed-price overlay** (Search results, Watchlist rows, Portfolio pulse) | Polygon | `GET /live/snapshot?tickers=…` → cached `SnapshotCacheService` → Polygon `/v3/snapshot` (batched, ≤50 tickers, `refreshedFrom: polygon-snapshot`) | 🟢 **LIVE** | `useSnapshotQuotes` hook polls one batched endpoint on a 15 s interval and overlays live delayed prices. Replaced the fabricated index chips ("Nasdaq +1.02%") that were removed. — ~15-min delayed, same plan limit as the tape |
+| **Portfolio recalculation + editable holdings (CRUD)** | — (Firestore, no vendor) | `users/{uid}/holdings` (client SDK) | 🟢 **LIVE** | Portfolio total = Σ(shares × live snapshot price); add-form Shares input + inline editable position persisted to Firestore. Closed the gap where share qty was hardcoded to 10 with no editor |
+| **Public `live` Cloud Run service** (two-service split) | — (infra) | `market-catalyst-live` (`APP_ROLE=live`, mounts only `LiveModule` + `/health`) | 🟢 **LIVE** | Makes the tape / snapshot / market-status read paths browser-reachable **without** exposing `/sync`·`/purge`·`/admin` (→ 404 on the public service, verified). This is the resolution of **O1**; see that row |
+| **Market-status pill + extended-hours moves** | Polygon | `GET /v1/marketstatus/now` (+ snapshot early/late %) | 🟢 **LIVE** | Session-aware pill (pre / open / after / closed) and extended-hours cards, live once `NEXT_PUBLIC_BACKEND_URL` pointed at the public service |
+| **Mobile login persistence fix** | — (Firebase Auth) | — | 🟢 **LIVE** | `navigateAfterAuth` waits for `onAuthStateChanged` non-null before hard-navigating, fixing the mobile "stuck on login page after sign-in" race |
+| **`.firebaseapp.com` → `.web.app` redirect** | — (hosting) | — | 🟢 **LIVE** | Inline redirect script closes the duplicate-origin auth-session gap between the two Firebase Hosting domains |
+
+**Backend surface added for these:** `src/live/tape-universe.ts`, `tape.service.ts`, `tape.controller.ts`, `snapshot-cache.service.ts`, `snapshot.controller.ts`, `market-status.service.ts`, plus the `APP_ROLE` split in `app.module.ts` and `CORS_ORIGINS` in `main.ts`. **UI:** `useMarketTape.ts`, `useSnapshotQuote.ts`, `shell.tsx` marquee, `auth-utils.ts`.
+
+---
+
 ## What's genuinely blocked (won't close with effort alone)
 
 Two distinct kinds of blocker. **Vendor blocks** need a purchase. **Operational blocks** need no purchase and no new feature code — they are the reason production is quieter than the codebase suggests, and they are the higher priority of the two.
