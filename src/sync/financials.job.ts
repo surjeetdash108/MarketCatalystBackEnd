@@ -37,6 +37,8 @@ export interface AnnualFinancials {
   endDate: string | null;
   filingDate: string | null;
   revenue: number | null;
+  grossProfit: number | null;
+  operatingIncome: number | null;
   epsActual: number | null;
   netIncome: number | null;
 }
@@ -272,6 +274,8 @@ export class FinancialsJob implements OnModuleInit {
               endDate: r.endDate,
               filingDate: r.filingDate,
               revenue: r.income.revenues ?? null,
+              grossProfit: r.income.gross_profit ?? null,
+              operatingIncome: r.income.operating_income_loss ?? null,
               epsActual: r.income.diluted_earnings_per_share ?? null,
               netIncome: r.income.net_income_loss ?? null,
             }));
