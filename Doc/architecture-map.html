@@ -1,475 +1,206 @@
-<title>MarketCatalyst — System Architecture & Data Flow</title>
+<title>MarketCatalyst — How it works</title>
 <style>
   :root{
     --bg:#0a0e13; --panel:#0f151c; --panel-2:#131c25; --card:#0e141b; --card-2:#121a23;
     --ink:#e8eff5; --ink-2:#b6c4d0; --ink-dim:#8598a6; --line:#1d2836; --line-2:#2b3a4a;
     --accent:#2fe6a6;
-    --c-store:#f4b740; --c-http:#38bdf8; --c-sse:#2fe6a6; --c-sched:#a78bfa;
-    --c-vendor:#94a3b8; --c-auth:#fb7185; --c-static:#7c8b99; --c-secret:#eab308; --c-err:#f87171; --c-msg:#f472b6;
-    --maxw:1160px;
+    --read:#2fe6a6; --price:#38bdf8; --refresh:#f4b740; --support:#8598a6;
+    --maxw:960px;
   }
   @media (prefers-color-scheme: light){
     :root{
       --bg:#eef2f7; --panel:#ffffff; --panel-2:#f3f6fa; --card:#ffffff; --card-2:#f6f9fc;
       --ink:#0e1a24; --ink-2:#33475a; --ink-dim:#5a6c7c; --line:#dae2ea; --line-2:#c4d1dc;
-      --c-store:#b07d10; --c-http:#0277bd; --c-sse:#0c9b71; --c-sched:#7c3aed;
-      --c-vendor:#526375; --c-auth:#dc2846; --c-static:#5f6f7e; --c-secret:#a8730f; --c-err:#d32f2f; --c-msg:#c026a0;
+      --read:#0c9b71; --price:#0277bd; --refresh:#b07d10; --support:#5f6f7e;
     }
   }
   :root[data-theme="dark"]{
     --bg:#0a0e13; --panel:#0f151c; --panel-2:#131c25; --card:#0e141b; --card-2:#121a23;
     --ink:#e8eff5; --ink-2:#b6c4d0; --ink-dim:#8598a6; --line:#1d2836; --line-2:#2b3a4a;
-    --c-store:#f4b740; --c-http:#38bdf8; --c-sse:#2fe6a6; --c-sched:#a78bfa;
-    --c-vendor:#94a3b8; --c-auth:#fb7185; --c-static:#7c8b99; --c-secret:#eab308; --c-err:#f87171; --c-msg:#f472b6;
+    --read:#2fe6a6; --price:#38bdf8; --refresh:#f4b740; --support:#8598a6;
   }
   :root[data-theme="light"]{
     --bg:#eef2f7; --panel:#ffffff; --panel-2:#f3f6fa; --card:#ffffff; --card-2:#f6f9fc;
     --ink:#0e1a24; --ink-2:#33475a; --ink-dim:#5a6c7c; --line:#dae2ea; --line-2:#c4d1dc;
-    --c-store:#b07d10; --c-http:#0277bd; --c-sse:#0c9b71; --c-sched:#7c3aed;
-    --c-vendor:#526375; --c-auth:#dc2846; --c-static:#5f6f7e; --c-secret:#a8730f; --c-err:#d32f2f; --c-msg:#c026a0;
+    --read:#0c9b71; --price:#0277bd; --refresh:#b07d10; --support:#5f6f7e;
   }
-
   *{box-sizing:border-box}
   html{-webkit-text-size-adjust:100%}
   body{margin:0;background:var(--bg);color:var(--ink);
-    font-family:ui-sans-serif,-apple-system,"Segoe UI",system-ui,Roboto,sans-serif;line-height:1.55;-webkit-font-smoothing:antialiased}
-  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
-  .wrap{max-width:var(--maxw);margin:0 auto;padding:clamp(22px,4vw,52px) clamp(15px,3.5vw,38px) 80px}
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",system-ui,Roboto,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:clamp(24px,5vw,54px) clamp(16px,4vw,40px) 76px}
   .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 
-  .eyebrow{font-family:ui-monospace,monospace;font-size:.72rem;letter-spacing:.26em;text-transform:uppercase;color:var(--accent);margin:0 0 13px}
-  h1{font-size:clamp(1.7rem,4.2vw,2.7rem);line-height:1.06;margin:0 0 13px;font-weight:800;letter-spacing:-.02em;text-wrap:balance}
-  .dek{font-size:clamp(1rem,1.5vw,1.1rem);color:var(--ink-2);max-width:66ch;margin:0 0 20px}
-  .chips{display:flex;flex-wrap:wrap;gap:8px}
-  .chip{font-family:ui-monospace,monospace;font-size:.73rem;padding:5px 11px;border:1px solid var(--line-2);border-radius:999px;color:var(--ink-2);background:var(--panel-2);white-space:nowrap}
-  .chip b{color:var(--accent);font-weight:700}
+  .eyebrow{font-family:ui-monospace,monospace;font-size:.72rem;letter-spacing:.24em;text-transform:uppercase;color:var(--accent);margin:0 0 12px}
+  h1{font-size:clamp(1.8rem,4.6vw,2.7rem);line-height:1.05;margin:0 0 14px;font-weight:800;letter-spacing:-.02em;text-wrap:balance}
+  .dek{font-size:clamp(1.02rem,1.6vw,1.16rem);color:var(--ink-2);max-width:60ch;margin:0}
 
-  section{margin-top:clamp(34px,5.5vw,58px)}
-  .h2{display:flex;align-items:baseline;gap:12px;margin:0 0 6px}
-  .h2 .n{font-family:ui-monospace,monospace;font-size:.78rem;color:var(--accent);letter-spacing:.1em}
-  .h2 h2{font-size:1.25rem;font-weight:700;letter-spacing:-.01em;margin:0}
-  .lead{color:var(--ink-2);max-width:74ch;margin:6px 0 22px;font-size:.94rem}
+  section{margin-top:clamp(30px,5vw,48px)}
+  h2{font-size:1.15rem;font-weight:700;letter-spacing:-.01em;margin:0 0 4px}
+  .sub{color:var(--ink-dim);font-size:.9rem;margin:0 0 18px}
 
-  /* ── SVG diagram ── */
-  .diagram-scroll{overflow-x:auto;background:var(--panel);border:1px solid var(--line-2);border-radius:14px;padding:6px}
-  .diagram-scroll svg{display:block;width:100%;min-width:900px;height:auto}
-  .diagram-scroll .nlabel{font-family:ui-sans-serif,system-ui,sans-serif;font-weight:700;fill:var(--ink)}
-  .diagram-scroll .nsub{font-family:ui-monospace,monospace;fill:var(--ink-dim)}
-  .diagram-scroll .colh{font-family:ui-monospace,monospace;fill:var(--ink-dim);letter-spacing:.12em;font-weight:700}
-  .diagram-scroll .enum{font-family:ui-monospace,monospace;font-weight:700;fill:#08110d}
-  .dlegend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px;font-family:ui-monospace,monospace;font-size:.72rem;color:var(--ink-dim)}
-  .dlegend span b{font-weight:400}
-  .dlegend .sw{display:inline-block;width:22px;height:0;border-top-width:2px;border-top-style:solid;vertical-align:middle;margin-right:5px}
+  /* diagram */
+  .diagram{overflow-x:auto;background:var(--panel);border:1px solid var(--line-2);border-radius:16px;padding:10px}
+  .diagram svg{display:block;width:100%;min-width:640px;height:auto}
+  .diagram .nm{font-family:ui-sans-serif,system-ui,sans-serif;font-weight:700;fill:var(--ink)}
+  .diagram .ns{font-family:ui-monospace,monospace;fill:var(--ink-dim)}
+  .diagram .el{font-family:ui-sans-serif,system-ui,sans-serif;font-weight:600}
 
-  /* ── Tier map ── */
-  .tiers{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
-  .tier{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:12px;display:flex;flex-direction:column;gap:10px}
-  .tier-h{font-family:ui-monospace,monospace;font-size:.66rem;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-dim);padding:2px 2px 8px;border-bottom:1px dashed var(--line-2)}
-  .node{background:var(--card-2);border:1px solid var(--line-2);border-left:3px solid var(--nc,var(--line-2));border-radius:9px;padding:10px 11px}
-  .node .nm{font-weight:700;font-size:.9rem;color:var(--ink);letter-spacing:-.01em}
-  .node .sub{font-family:ui-monospace,monospace;font-size:.66rem;color:var(--ink-dim);margin-top:2px;line-height:1.35}
-  .node .conns{display:flex;flex-wrap:wrap;gap:3px;margin-top:8px}
-  .cnum{font-family:ui-monospace,monospace;font-size:.62rem;font-weight:700;min-width:16px;height:16px;padding:0 3px;display:inline-flex;align-items:center;justify-content:center;border-radius:4px;color:#08110d;background:var(--cc,var(--ink-dim))}
-  .maplegend{margin-top:14px;font-family:ui-monospace,monospace;font-size:.7rem;color:var(--ink-dim)}
+  .key{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:14px;font-size:.85rem}
+  .key b{font-weight:600;color:var(--ink)}
+  .key .d{display:inline-block;width:26px;height:0;border-top:3px solid;border-radius:2px;vertical-align:middle;margin-right:7px}
 
-  /* ── Connection legend grid ── */
-  .conns-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
-  .conn{display:flex;gap:11px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 13px}
-  .conn .badge{font-family:ui-monospace,monospace;font-weight:700;font-size:.72rem;width:22px;height:22px;flex:none;display:grid;place-items:center;border-radius:6px;color:#08110d;background:var(--cc)}
-  .conn .body .r{font-family:ui-monospace,monospace;font-size:.8rem;color:var(--ink);font-weight:600}
-  .conn .body .t{font-family:ui-monospace,monospace;font-size:.68rem;color:var(--cc);font-weight:600;margin:2px 0 3px}
-  .conn .body .d{font-size:.82rem;color:var(--ink-dim);line-height:1.4}
+  /* flow cards */
+  .flows{display:grid;grid-template-columns:1fr;gap:12px}
+  .flow{display:grid;grid-template-columns:44px 1fr;gap:15px;align-items:start;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--fc);border-radius:13px;padding:16px 18px}
+  .flow .num{font-family:ui-mono,ui-monospace,monospace;font-weight:800;font-size:1.15rem;color:var(--fc);background:color-mix(in srgb,var(--fc) 15%,transparent);border-radius:10px;height:40px;display:grid;place-items:center}
+  .flow h3{margin:0 0 5px;font-size:1.05rem;font-weight:700}
+  .flow p{margin:0;color:var(--ink-2);font-size:.94rem}
+  .flow p b{color:var(--ink);font-weight:600}
+  .flow .tech{margin-top:8px;font-family:ui-monospace,monospace;font-size:.72rem;color:var(--ink-dim)}
 
-  /* ── Flow lanes (API-call patterns) ── */
-  .lane{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:15px 16px;margin-bottom:12px;border-left:4px solid var(--lc,var(--accent))}
-  .lane-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
-  .lane-h .k{font-family:ui-monospace,monospace;font-size:.72rem;font-weight:700;color:var(--lc);background:color-mix(in srgb,var(--lc) 16%,transparent);border:1px solid color-mix(in srgb,var(--lc) 40%,transparent);border-radius:6px;padding:2px 8px}
-  .lane-h h3{margin:0;font-size:1rem;font-weight:700;letter-spacing:-.01em}
-  .lane-h .tag{margin-left:auto;font-family:ui-monospace,monospace;font-size:.68rem;color:var(--ink-dim)}
-  .flow{display:flex;align-items:stretch;gap:0;overflow-x:auto;padding-bottom:4px}
-  .hop{flex:0 0 auto;background:var(--card-2);border:1px solid var(--line-2);border-radius:9px;padding:8px 11px;min-width:0;display:flex;flex-direction:column;justify-content:center}
-  .hop .who{font-weight:700;font-size:.8rem;color:var(--ink);white-space:nowrap}
-  .hop .how{font-family:ui-monospace,monospace;font-size:.66rem;color:var(--ink-dim);margin-top:2px;white-space:nowrap}
-  .arrow{flex:0 0 auto;align-self:center;color:var(--lc);font-family:ui-monospace,monospace;font-size:.95rem;font-weight:700;padding:0 9px;white-space:nowrap}
-  .lane-note{margin-top:11px;font-size:.83rem;color:var(--ink-2);line-height:1.45}
-  .lane-note b{color:var(--ink)}
+  /* supporting */
+  .supp{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+  .s{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:10px 13px}
+  .s .t{font-weight:700;font-size:.88rem;color:var(--ink)}
+  .s .d{font-size:.82rem;color:var(--ink-dim);margin-top:1px}
 
-  /* ── Process steps ── */
-  .steps{display:flex;flex-direction:column;gap:9px}
-  .step{display:grid;grid-template-columns:30px 1fr;gap:13px;align-items:start;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 13px}
-  .step .s{font-family:ui-monospace,monospace;font-weight:700;font-size:.82rem;color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent);border-radius:7px;height:26px;display:grid;place-items:center}
-  .step .txt{font-size:.88rem;color:var(--ink-2)}
-  .step .txt b{color:var(--ink)}
-  .step .txt code,.lane-note code,.conn code{font-family:ui-monospace,monospace;font-size:.86em;background:var(--panel-2);border:1px solid var(--line-2);border-radius:4px;padding:.5px 4px}
-
-  footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);font-family:ui-monospace,monospace;font-size:.73rem;color:var(--ink-dim);display:flex;flex-wrap:wrap;gap:6px 18px;justify-content:space-between}
-
-  @media (max-width:820px){ .tiers{grid-template-columns:1fr 1fr} }
-  @media (max-width:520px){ .tiers{grid-template-columns:1fr} }
+  footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);font-family:ui-monospace,monospace;font-size:.74rem;color:var(--ink-dim)}
 </style>
 
 <div class="wrap">
-  <p class="sr-only">A system architecture map of MarketCatalyst showing four tiers — browser client, Firebase, two Cloud Run services, and external vendors — connected by fourteen numbered data-flow paths, followed by the seven API-call patterns.</p>
+  <p class="sr-only">A simplified map of MarketCatalyst showing three flows: the browser reads the database live, asks a public price service for live prices, and a private collector refreshes the database on a timer from market-data vendors.</p>
 
   <header>
-    <p class="eyebrow">System Architecture &amp; Data Flow · 2026-07-23</p>
-    <h1>MarketCatalyst — how the systems connect</h1>
-    <p class="dek">The browser, two Cloud&nbsp;Run services (split from one image), Firebase (Hosting · Auth · Firestore), Cloud&nbsp;Scheduler, Secret&nbsp;Manager and the market-data vendors — mapped as <b>14 numbered connections</b> and the <b>7 distinct ways an API is actually called</b>.</p>
-    <div class="chips">
-      <span class="chip"><b>4</b> tiers</span>
-      <span class="chip"><b>14</b> connections</span>
-      <span class="chip"><b>10</b> transport types</span>
-      <span class="chip"><b>7</b> API-call patterns</span>
-      <span class="chip"><b>2</b> Cloud Run services</span>
-    </div>
+    <p class="eyebrow">How MarketCatalyst works</p>
+    <h1>The whole system, in one picture</h1>
+    <p class="dek">There are really just <b>three things going on</b>: your browser <b>reads</b> the database live, <b>asks</b> a price service for moving prices, and a background <b>collector</b> keeps the database fresh. Everything else supports those three.</p>
   </header>
 
-  <!-- ── 1. TIER MAP ─────────────────────────────────────────────────────── -->
   <section>
-    <div class="h2"><span class="n">MAP</span><h2>The system diagram</h2></div>
-    <p class="lead">Read left → right. Solid lines carry runtime data; dashed lines are infrastructure (keys, errors, iframe messaging). Every arrow is numbered — the number is defined in the key that follows and traced end-to-end in the flow lanes.</p>
-
-    <div class="diagram-scroll">
-      <svg viewBox="0 0 1200 626" role="img" aria-labelledby="diagTitle diagDesc">
-        <title id="diagTitle">MarketCatalyst system architecture</title>
-        <desc id="diagDesc">Browser connects to Firebase Hosting, Auth and Firestore and to the public live Cloud Run service; the private worker service is driven by Cloud Scheduler, calls external vendors, and writes to Firestore. Secret Manager feeds both services.</desc>
+    <div class="diagram">
+      <svg viewBox="0 0 1040 520" role="img" aria-labelledby="t d">
+        <title id="t">MarketCatalyst simplified architecture</title>
+        <desc id="d">The browser reads the Firestore database directly (green), asks the public price service which fetches from vendors (blue), and a private collector on a timer fetches from vendors and saves to the database (amber).</desc>
         <defs>
-          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/>
           </marker>
         </defs>
 
-        <!-- column headers -->
-        <text x="125" y="24" class="colh" text-anchor="middle" font-size="11">CLIENT</text>
-        <text x="425" y="24" class="colh" text-anchor="middle" font-size="11">FIREBASE · GOOGLE</text>
-        <text x="725" y="24" class="colh" text-anchor="middle" font-size="11">CLOUD RUN · 1 IMAGE</text>
-        <text x="1025" y="24" class="colh" text-anchor="middle" font-size="11">VENDORS &amp; INFRA</text>
-
-        <!-- ── edges (drawn first, under nodes) ── -->
-        <g fill="none" stroke-width="2" marker-end="url(#ah)">
-          <path d="M330,80 L216,300" style="stroke:var(--c-static)"/>
-          <path d="M216,318 L330,173" style="stroke:var(--c-auth)" marker-start="url(#ah)"/>
-          <path d="M330,330 L216,348" style="stroke:var(--c-store)"/>
-          <path d="M216,366 L330,362" style="stroke:var(--c-store)"/>
-          <path d="M216,300 L296,300 L296,214 L604,214 L630,180" style="stroke:var(--c-http)"/>
-          <path d="M216,312 L308,312 L308,226 L598,226 L630,192" style="stroke:var(--c-sse)" marker-start="url(#ah)"/>
-          <path d="M216,324 L320,324 L320,238 L592,238 L630,204" style="stroke:var(--c-http)"/>
-          <path d="M820,178 L900,150" style="stroke:var(--c-vendor)"/>
-          <path d="M900,435 L820,452" style="stroke:var(--c-sched)"/>
-          <path d="M820,440 L900,162" style="stroke:var(--c-vendor)"/>
-          <path d="M820,458 L900,277" style="stroke:var(--c-vendor)"/>
-          <path d="M630,442 L520,352" style="stroke:var(--c-store)"/>
-          <path d="M900,566 L762,494" style="stroke:var(--c-secret)" stroke-dasharray="5 4"/>
-          <path d="M900,560 L600,560 L600,300 L630,214" style="stroke:var(--c-secret)" stroke-dasharray="5 4"/>
-          <path d="M125,100 L125,284" style="stroke:var(--c-msg)" stroke-dasharray="5 4" marker-start="url(#ah)"/>
-          <path d="M125,388 L125,558" style="stroke:var(--c-err)" stroke-dasharray="5 4"/>
+        <!-- edges (under nodes) -->
+        <g fill="none" stroke-width="2.4" marker-end="url(#a)">
+          <!-- support -->
+          <path d="M226,150 L232,224" style="stroke:var(--support)"/>
+          <path d="M226,92 L232,220" style="stroke:var(--support)" marker-start="url(#a)"/>
+          <!-- read (green): database -> browser -->
+          <path d="M360,278 L242,284" style="stroke:var(--read)" stroke-width="3"/>
+          <!-- prices (blue): browser -> price service -> vendors -->
+          <path d="M242,250 L662,136" style="stroke:var(--price)" stroke-width="3"/>
+          <path d="M858,132 L906,206" style="stroke:var(--price)"/>
+          <!-- refresh (amber): timer -> collector -> vendors, collector -> database -->
+          <path d="M760,458 L760,422" style="stroke:var(--refresh)"/>
+          <path d="M858,372 L906,332" style="stroke:var(--refresh)"/>
+          <path d="M662,368 L572,300" style="stroke:var(--refresh)" stroke-width="3"/>
         </g>
 
-        <!-- ── nodes ── -->
+        <!-- edge labels -->
+        <g class="el" font-size="12.5" text-anchor="middle">
+          <text x="150" y="196" style="fill:var(--support)" font-size="11">loads app / login</text>
+          <text x="300" y="264" style="fill:var(--read)">reads data (live)</text>
+          <text x="452" y="176" style="fill:var(--price)">asks for prices</text>
+          <text x="656" y="406" text-anchor="end" style="fill:var(--refresh)" font-size="11.5">saves fresh data</text>
+          <text x="690" y="448" style="fill:var(--refresh)" font-size="11" text-anchor="end">on a timer</text>
+        </g>
+
+        <!-- nodes -->
         <g>
-          <rect x="40" y="54" width="170" height="46" rx="10" style="fill:var(--card-2);stroke:var(--c-msg)" stroke-width="1.6"/>
-          <text x="125" y="74" class="nlabel" text-anchor="middle" font-size="14">Admin iframe</text>
-          <text x="125" y="90" class="nsub" text-anchor="middle" font-size="10">same origin</text>
+          <rect x="48" y="64" width="178" height="44" rx="10" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.6"/>
+          <text x="137" y="83" class="nm" text-anchor="middle" font-size="13.5">Sign-in</text>
+          <text x="137" y="99" class="ns" text-anchor="middle" font-size="9.5">Firebase Auth</text>
 
-          <rect x="34" y="286" width="182" height="100" rx="12" style="fill:var(--card-2);stroke:var(--accent)" stroke-width="1.8"/>
-          <text x="125" y="330" class="nlabel" text-anchor="middle" font-size="17">Browser SPA</text>
-          <text x="125" y="351" class="nsub" text-anchor="middle" font-size="10.5">Next.js static export</text>
+          <rect x="48" y="130" width="178" height="44" rx="10" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.6"/>
+          <text x="137" y="149" class="nm" text-anchor="middle" font-size="13.5">App files</text>
+          <text x="137" y="165" class="ns" text-anchor="middle" font-size="9.5">Firebase Hosting</text>
 
-          <rect x="40" y="558" width="170" height="44" rx="10" style="fill:var(--card-2);stroke:var(--c-err)" stroke-width="1.6"/>
-          <text x="125" y="578" class="nlabel" text-anchor="middle" font-size="14">Sentry</text>
-          <text x="125" y="593" class="nsub" text-anchor="middle" font-size="10">DSN-gated</text>
+          <rect x="44" y="218" width="196" height="118" rx="13" style="fill:var(--card-2);stroke:var(--accent)" stroke-width="2.2"/>
+          <text x="142" y="270" class="nm" text-anchor="middle" font-size="18">Your browser</text>
+          <text x="142" y="292" class="ns" text-anchor="middle" font-size="11">the app you use</text>
 
-          <rect x="330" y="54" width="190" height="46" rx="10" style="fill:var(--card-2);stroke:var(--c-static)" stroke-width="1.6"/>
-          <text x="425" y="74" class="nlabel" text-anchor="middle" font-size="14">Hosting</text>
-          <text x="425" y="90" class="nsub" text-anchor="middle" font-size="10">static bundle</text>
+          <rect x="360" y="232" width="212" height="104" rx="13" style="fill:var(--card-2);stroke:var(--read)" stroke-width="2.2"/>
+          <text x="466" y="280" class="nm" text-anchor="middle" font-size="17">Database</text>
+          <text x="466" y="301" class="ns" text-anchor="middle" font-size="11">Cloud Firestore</text>
 
-          <rect x="330" y="150" width="190" height="46" rx="10" style="fill:var(--card-2);stroke:var(--c-auth)" stroke-width="1.6"/>
-          <text x="425" y="170" class="nlabel" text-anchor="middle" font-size="14">Authentication</text>
-          <text x="425" y="186" class="nsub" text-anchor="middle" font-size="10">ID tokens</text>
+          <rect x="662" y="96" width="196" height="80" rx="12" style="fill:var(--card-2);stroke:var(--price)" stroke-width="2.2"/>
+          <text x="760" y="130" class="nm" text-anchor="middle" font-size="15">Price service</text>
+          <text x="760" y="150" class="ns" text-anchor="middle" font-size="10.5">public, Cloud Run</text>
 
-          <rect x="330" y="300" width="190" height="80" rx="11" style="fill:var(--card-2);stroke:var(--c-store)" stroke-width="1.8"/>
-          <text x="425" y="334" class="nlabel" text-anchor="middle" font-size="15">Cloud Firestore</text>
-          <text x="425" y="353" class="nsub" text-anchor="middle" font-size="10.5">domain data store</text>
+          <rect x="662" y="336" width="196" height="84" rx="12" style="fill:var(--card-2);stroke:var(--refresh)" stroke-width="2.2"/>
+          <text x="760" y="372" class="nm" text-anchor="middle" font-size="15">Data collector</text>
+          <text x="760" y="392" class="ns" text-anchor="middle" font-size="10.5">private, Cloud Run</text>
 
-          <rect x="630" y="150" width="190" height="74" rx="11" style="fill:var(--card-2);stroke:var(--c-sse)" stroke-width="1.8"/>
-          <text x="725" y="181" class="nlabel" text-anchor="middle" font-size="15">live · PUBLIC</text>
-          <text x="725" y="200" class="nsub" text-anchor="middle" font-size="10.5">LiveModule only</text>
+          <rect x="662" y="458" width="196" height="52" rx="11" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.6"/>
+          <text x="760" y="480" class="nm" text-anchor="middle" font-size="13.5">Timer</text>
+          <text x="760" y="496" class="ns" text-anchor="middle" font-size="9.5">Cloud Scheduler</text>
 
-          <rect x="630" y="420" width="190" height="76" rx="11" style="fill:var(--card-2);stroke:var(--c-sched)" stroke-width="1.8"/>
-          <text x="725" y="452" class="nlabel" text-anchor="middle" font-size="15">worker · PRIVATE</text>
-          <text x="725" y="471" class="nsub" text-anchor="middle" font-size="10.5">sync · admin · plans</text>
-
-          <rect x="900" y="120" width="250" height="54" rx="10" style="fill:var(--card-2);stroke:var(--c-vendor)" stroke-width="1.6"/>
-          <text x="1025" y="144" class="nlabel" text-anchor="middle" font-size="14">Polygon / Massive</text>
-          <text x="1025" y="161" class="nsub" text-anchor="middle" font-size="10">redistributable</text>
-
-          <rect x="900" y="250" width="250" height="54" rx="10" style="fill:var(--card-2);stroke:var(--c-vendor)" stroke-width="1.6"/>
-          <text x="1025" y="274" class="nlabel" text-anchor="middle" font-size="12.5">FMP · Finnhub · EDGAR · FRED</text>
-          <text x="1025" y="291" class="nsub" text-anchor="middle" font-size="10">worker-only</text>
-
-          <rect x="900" y="410" width="250" height="50" rx="10" style="fill:var(--card-2);stroke:var(--c-sched)" stroke-width="1.6"/>
-          <text x="1025" y="432" class="nlabel" text-anchor="middle" font-size="14">Cloud Scheduler</text>
-          <text x="1025" y="448" class="nsub" text-anchor="middle" font-size="10">22 cron jobs</text>
-
-          <rect x="900" y="545" width="250" height="46" rx="10" style="fill:var(--card-2);stroke:var(--c-secret)" stroke-width="1.6"/>
-          <text x="1025" y="565" class="nlabel" text-anchor="middle" font-size="14">Secret Manager</text>
-          <text x="1025" y="581" class="nsub" text-anchor="middle" font-size="10">vendor keys</text>
-        </g>
-
-        <!-- ── numbered edge chips ── -->
-        <g class="enum" font-size="11" text-anchor="middle">
-          <g><circle cx="285" cy="180" r="10" style="fill:var(--c-static)"/><text x="285" y="184">1</text></g>
-          <g><circle cx="276" cy="248" r="10" style="fill:var(--c-auth)"/><text x="276" y="252">2</text></g>
-          <g><circle cx="282" cy="330" r="10" style="fill:var(--c-store)"/><text x="282" y="334">3</text></g>
-          <g><circle cx="282" cy="368" r="10" style="fill:var(--c-store)"/><text x="282" y="372">4</text></g>
-          <g><circle cx="400" cy="214" r="10" style="fill:var(--c-http)"/><text x="400" y="218">5</text></g>
-          <g><circle cx="470" cy="226" r="10" style="fill:var(--c-sse)"/><text x="470" y="230">6</text></g>
-          <g><circle cx="540" cy="238" r="10" style="fill:var(--c-http)"/><text x="540" y="242">7</text></g>
-          <g><circle cx="858" cy="156" r="10" style="fill:var(--c-vendor)"/><text x="858" y="160">8</text></g>
-          <g><circle cx="862" cy="440" r="10" style="fill:var(--c-sched)"/><text x="862" y="444">9</text></g>
-          <g><circle cx="884" cy="250" r="10" style="fill:var(--c-vendor)"/><text x="884" y="254">10</text></g>
-          <g><circle cx="884" cy="380" r="10" style="fill:var(--c-vendor)"/><text x="884" y="384">10</text></g>
-          <g><circle cx="576" cy="392" r="10" style="fill:var(--c-store)"/><text x="576" y="396">11</text></g>
-          <g><circle cx="614" cy="430" r="10" style="fill:var(--c-secret)"/><text x="614" y="434">12</text></g>
-          <g><circle cx="125" cy="192" r="10" style="fill:var(--c-msg)"/><text x="125" y="196">13</text></g>
-          <g><circle cx="125" cy="473" r="10" style="fill:var(--c-err)"/><text x="125" y="477">14</text></g>
+          <rect x="906" y="150" width="126" height="266" rx="13" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.8"/>
+          <text x="969" y="278" class="nm" text-anchor="middle" font-size="14">Market</text>
+          <text x="969" y="296" class="nm" text-anchor="middle" font-size="14">data</text>
+          <text x="969" y="320" class="ns" text-anchor="middle" font-size="10">Polygon +</text>
         </g>
       </svg>
     </div>
-    <div class="dlegend">
-      <span><span class="sw" style="border-top-color:var(--ink-2)"></span>solid = runtime data</span>
-      <span><span class="sw" style="border-top-color:var(--ink-2);border-top-style:dashed"></span>dashed = infra (keys · errors · postMessage)</span>
-      <span><b>→</b> one-way &nbsp; <b>⇄</b> two-way</span>
+    <div class="key">
+      <span><span class="d" style="border-color:var(--read)"></span><b>Read</b>: browser &harr; database</span>
+      <span><span class="d" style="border-color:var(--price)"></span><b>Live prices</b>: browser &rarr; price service &rarr; vendors</span>
+      <span><span class="d" style="border-color:var(--refresh)"></span><b>Refresh</b>: timer &rarr; collector &rarr; database</span>
     </div>
-
-    <div class="h2" style="margin-top:26px"><span class="n">·</span><h2 style="font-size:1.05rem">Components by tier</h2></div>
-    <div class="tiers">
-      <div class="tier">
-        <div class="tier-h">1 · Client (browser)</div>
-        <div class="node" style="--nc:var(--accent)">
-          <div class="nm">Browser SPA</div>
-          <div class="sub">Next.js static export</div>
-          <div class="conns">
-            <span class="cnum" style="--cc:var(--c-static)">1</span><span class="cnum" style="--cc:var(--c-auth)">2</span>
-            <span class="cnum" style="--cc:var(--c-store)">3</span><span class="cnum" style="--cc:var(--c-store)">4</span>
-            <span class="cnum" style="--cc:var(--c-http)">5</span><span class="cnum" style="--cc:var(--c-sse)">6</span>
-            <span class="cnum" style="--cc:var(--c-http)">7</span><span class="cnum" style="--cc:var(--c-msg)">13</span><span class="cnum" style="--cc:var(--c-err)">14</span>
-          </div>
-        </div>
-        <div class="node" style="--nc:var(--c-msg)">
-          <div class="nm">Admin console</div>
-          <div class="sub">iframe, same origin</div>
-          <div class="conns"><span class="cnum" style="--cc:var(--c-msg)">13</span></div>
-        </div>
-        <div class="node" style="--nc:var(--c-err)">
-          <div class="nm">Sentry</div>
-          <div class="sub">DSN-gated</div>
-          <div class="conns"><span class="cnum" style="--cc:var(--c-err)">14</span></div>
-        </div>
-      </div>
-
-      <div class="tier">
-        <div class="tier-h">2 · Firebase (Google)</div>
-        <div class="node" style="--nc:var(--c-static)">
-          <div class="nm">Hosting</div>
-          <div class="sub">serves the bundle</div>
-          <div class="conns"><span class="cnum" style="--cc:var(--c-static)">1</span></div>
-        </div>
-        <div class="node" style="--nc:var(--c-auth)">
-          <div class="nm">Authentication</div>
-          <div class="sub">email · Google OAuth</div>
-          <div class="conns"><span class="cnum" style="--cc:var(--c-auth)">2</span></div>
-        </div>
-        <div class="node" style="--nc:var(--c-store)">
-          <div class="nm">Cloud Firestore</div>
-          <div class="sub">domain data store</div>
-          <div class="conns"><span class="cnum" style="--cc:var(--c-store)">3</span><span class="cnum" style="--cc:var(--c-store)">4</span><span class="cnum" style="--cc:var(--c-store)">11</span></div>
-        </div>
-      </div>
-
-      <div class="tier">
-        <div class="tier-h">3 · Cloud Run (1 image)</div>
-        <div class="node" style="--nc:var(--c-sse)">
-          <div class="nm">live · PUBLIC</div>
-          <div class="sub">LiveModule only</div>
-          <div class="conns"><span class="cnum" style="--cc:var(--c-http)">5</span><span class="cnum" style="--cc:var(--c-sse)">6</span><span class="cnum" style="--cc:var(--c-http)">7</span><span class="cnum" style="--cc:var(--c-vendor)">8</span><span class="cnum" style="--cc:var(--c-secret)">12</span></div>
-        </div>
-        <div class="node" style="--nc:var(--c-sched)">
-          <div class="nm">worker · PRIVATE</div>
-          <div class="sub">sync · admin · plans</div>
-          <div class="conns"><span class="cnum" style="--cc:var(--c-sched)">9</span><span class="cnum" style="--cc:var(--c-vendor)">10</span><span class="cnum" style="--cc:var(--c-store)">11</span><span class="cnum" style="--cc:var(--c-secret)">12</span></div>
-        </div>
-      </div>
-
-      <div class="tier">
-        <div class="tier-h">4 · Infra &amp; vendors</div>
-        <div class="node" style="--nc:var(--c-sched)">
-          <div class="nm">Cloud Scheduler</div>
-          <div class="sub">22 cron jobs</div>
-          <div class="conns"><span class="cnum" style="--cc:var(--c-sched)">9</span></div>
-        </div>
-        <div class="node" style="--nc:var(--c-secret)">
-          <div class="nm">Secret Manager</div>
-          <div class="sub">vendor keys</div>
-          <div class="conns"><span class="cnum" style="--cc:var(--c-secret)">12</span></div>
-        </div>
-        <div class="node" style="--nc:var(--c-vendor)">
-          <div class="nm">Polygon / Massive</div>
-          <div class="sub">redistributable</div>
-          <div class="conns"><span class="cnum" style="--cc:var(--c-vendor)">8</span><span class="cnum" style="--cc:var(--c-vendor)">10</span></div>
-        </div>
-        <div class="node" style="--nc:var(--c-vendor)">
-          <div class="nm">FMP · Finnhub · EDGAR · FRED</div>
-          <div class="sub">worker-only, not redistributed</div>
-          <div class="conns"><span class="cnum" style="--cc:var(--c-vendor)">10</span></div>
-        </div>
-      </div>
-    </div>
-    <div class="maplegend">Numbers = connections (defined next). Colour = connection kind: <span style="color:var(--c-store)">■ Firestore</span> · <span style="color:var(--c-http)">■ HTTP poll</span> · <span style="color:var(--c-sse)">■ SSE</span> · <span style="color:var(--c-sched)">■ scheduler</span> · <span style="color:var(--c-vendor)">■ vendor</span> · <span style="color:var(--c-auth)">■ auth</span> · <span style="color:var(--c-secret)">■ secrets</span> · <span style="color:var(--c-msg)">■ postMessage</span> · <span style="color:var(--c-err)">■ errors</span></div>
   </section>
 
-  <!-- ── 2. THE 14 CONNECTIONS ───────────────────────────────────────────── -->
   <section>
-    <div class="h2"><span class="n">KEY</span><h2>The 14 connections &amp; their transport</h2></div>
-    <p class="lead">Ten different transport mechanisms carry data across the system. This is the "different types of connection" — each row is one edge on the map above.</p>
-    <div class="conns-grid">
-      <div class="conn" style="--cc:var(--c-static)"><span class="badge">1</span><div class="body"><div class="r">Hosting → Browser</div><div class="t">HTTPS · static</div><div class="d">Downloads the Next.js <code>out/</code> bundle + assets.</div></div></div>
-      <div class="conn" style="--cc:var(--c-auth)"><span class="badge">2</span><div class="body"><div class="r">Browser ⇄ Auth</div><div class="t">Firebase Auth SDK</div><div class="d">Sign-in, <code>onAuthStateChanged</code>, 1-hour ID tokens.</div></div></div>
-      <div class="conn" style="--cc:var(--c-store)"><span class="badge">3</span><div class="body"><div class="r">Firestore → Browser</div><div class="t">SDK · onSnapshot (realtime)</div><div class="d">All domain data, pushed live over a persistent listener.</div></div></div>
-      <div class="conn" style="--cc:var(--c-store)"><span class="badge">4</span><div class="body"><div class="r">Browser → Firestore</div><div class="t">SDK · write (owner-scoped)</div><div class="d">Watchlist, holdings, settings — scoped by <code>rules</code>.</div></div></div>
-      <div class="conn" style="--cc:var(--c-http)"><span class="badge">5</span><div class="body"><div class="r">Browser → live</div><div class="t">HTTPS GET · poll 15s + ETag</div><div class="d">Batched delayed quotes for watchlist/portfolio/search/stock.</div></div></div>
-      <div class="conn" style="--cc:var(--c-sse)"><span class="badge">6</span><div class="body"><div class="r">Browser ⇄ live</div><div class="t">Server-Sent Events</div><div class="d">The ticker tape — one broadcast stream to all clients.</div></div></div>
-      <div class="conn" style="--cc:var(--c-http)"><span class="badge">7</span><div class="body"><div class="r">Browser → live</div><div class="t">HTTPS GET · cached</div><div class="d">Market-status pill + extended-hours state.</div></div></div>
-      <div class="conn" style="--cc:var(--c-vendor)"><span class="badge">8</span><div class="body"><div class="r">live → Polygon</div><div class="t">HTTPS REST · on demand</div><div class="d"><code>/v3/snapshot</code> + <code>/fed/v1/treasury-yields</code>.</div></div></div>
-      <div class="conn" style="--cc:var(--c-sched)"><span class="badge">9</span><div class="body"><div class="r">Scheduler → worker</div><div class="t">HTTPS POST + OIDC token</div><div class="d">22 cron jobs fire the ingestion pipeline, IAM-verified.</div></div></div>
-      <div class="conn" style="--cc:var(--c-vendor)"><span class="badge">10</span><div class="body"><div class="r">worker → Vendors</div><div class="t">HTTPS REST · fallback adapter</div><div class="d">Polygon + FMP/Finnhub/EDGAR/FRED (worker-only).</div></div></div>
-      <div class="conn" style="--cc:var(--c-store)"><span class="badge">11</span><div class="body"><div class="r">worker → Firestore</div><div class="t">Firebase Admin SDK · write</div><div class="d">Writes every synced collection + <code>sync_meta</code>.</div></div></div>
-      <div class="conn" style="--cc:var(--c-secret)"><span class="badge">12</span><div class="body"><div class="r">Secret Mgr → services</div><div class="t">env injection · startup</div><div class="d">Vendor keys into both services — never in code.</div></div></div>
-      <div class="conn" style="--cc:var(--c-msg)"><span class="badge">13</span><div class="body"><div class="r">Admin iframe ⇄ parent</div><div class="t">postMessage · sessionStorage</div><div class="d">Data staged pre-mount; writes delegated to the parent.</div></div></div>
-      <div class="conn" style="--cc:var(--c-err)"><span class="badge">14</span><div class="body"><div class="r">Browser + worker → Sentry</div><div class="t">HTTPS · DSN-gated</div><div class="d">Error/exception capture (no-op until DSN set).</div></div></div>
+    <h2>The three flows, in plain words</h2>
+    <p class="sub">Read them top to bottom — that's the whole system.</p>
+    <div class="flows">
+      <div class="flow" style="--fc:var(--read)">
+        <div class="num">1</div>
+        <div>
+          <h3>Reading data</h3>
+          <p>Your browser talks to the <b>database directly and live</b>. Open any screen — companies, earnings, movers, news — and the data appears, then keeps updating on its own. <b>No server sits in between.</b></p>
+          <div class="tech">Firestore realtime listeners (onSnapshot). Your own data (watchlist, portfolio) is saved back the same way.</div>
+        </div>
+      </div>
+      <div class="flow" style="--fc:var(--price)">
+        <div class="num">2</div>
+        <div>
+          <h3>Live prices</h3>
+          <p>Moving prices and the ticker tape come from a small <b>public price service</b> that fetches from the market-data vendor (Polygon). <b>One fetch is shared by every user</b>, so it stays fast and cheap — no matter how many people are online.</p>
+          <div class="tech">Cloud Run "live" service · cached polling + a shared SSE stream · ~15-min delayed on the current plan.</div>
+        </div>
+      </div>
+      <div class="flow" style="--fc:var(--refresh)">
+        <div class="num">3</div>
+        <div>
+          <h3>Refreshing the data</h3>
+          <p>On a <b>timer</b>, a separate <b>private collector</b> pulls fresh company data, earnings and news from the vendors and <b>saves it into the database</b> — which your browser then shows through flow 1. This runs quietly in the background; users never touch it.</p>
+          <div class="tech">Cloud Scheduler → private "worker" Cloud Run → vendors → writes Firestore. 22 jobs on a schedule.</div>
+        </div>
+      </div>
     </div>
   </section>
 
-  <!-- ── 3. API-CALL PATTERNS ────────────────────────────────────────────── -->
   <section>
-    <div class="h2"><span class="n">FLOWS</span><h2>The 7 ways an API is actually called</h2></div>
-    <p class="lead">The same word — "API call" — hides seven very different mechanics. Each lane below traces one request end-to-end, left → right.</p>
-
-    <div class="lane" style="--lc:var(--c-store)">
-      <div class="lane-h"><span class="k">A</span><h3>Real-time domain read</h3><span class="tag">connection 3</span></div>
-      <div class="flow">
-        <div class="hop"><div class="who">Browser</div><div class="how">useCollection(name)</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">Firestore listener</div><div class="how">onSnapshot (persistent)</div></div>
-        <div class="arrow">⇢</div>
-        <div class="hop"><div class="who">Browser re-renders</div><div class="how">on every change, pushed</div></div>
-      </div>
-      <div class="lane-note"><b>No backend in the path.</b> The SDK holds an open channel; Firestore <b>pushes</b> new snapshots — the app never polls. This carries every screen's data (companies, indices, movers, earnings, news, financials…).</div>
-    </div>
-
-    <div class="lane" style="--lc:var(--c-store)">
-      <div class="lane-h"><span class="k">B</span><h3>Owner-scoped write</h3><span class="tag">connection 4</span></div>
-      <div class="flow">
-        <div class="hop"><div class="who">Browser</div><div class="how">setDoc / updateDoc</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">Firestore rules</div><div class="how">isOwner(uid) gate</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">Written</div><div class="how">→ fans back via A</div></div>
-      </div>
-      <div class="lane-note">User-owned data (watchlist, holdings, settings) is written <b>directly by the browser</b>. The security rules — not the backend — enforce that you can only write your own paths.</div>
-    </div>
-
-    <div class="lane" style="--lc:var(--c-http)">
-      <div class="lane-h"><span class="k">C</span><h3>Delayed-price polling (cached + conditional)</h3><span class="tag">connections 5 → 8</span></div>
-      <div class="flow">
-        <div class="hop"><div class="who">Browser</div><div class="how">fetch 15s · no-store · If-None-Match</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">live service</div><div class="how">GET /live/snapshot</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">SnapshotCache</div><div class="how">fresh? serve : fetch</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">Polygon</div><div class="how">/v3/snapshot</div></div>
-        <div class="arrow">↩</div>
-        <div class="hop"><div class="who">200 body / 304</div><div class="how">ETag unchanged → 304</div></div>
-      </div>
-      <div class="lane-note"><b>N browsers collapse to one vendor call.</b> The server caches the snapshot; each client's <code>ETag</code> yields a cheap <b>304</b> when nothing changed, and <code>no-store</code> stops the browser serving a stale body.</div>
-    </div>
-
-    <div class="lane" style="--lc:var(--c-sse)">
-      <div class="lane-h"><span class="k">D</span><h3>Ticker tape (SSE broadcast)</h3><span class="tag">connections 6 → 8</span></div>
-      <div class="flow">
-        <div class="hop"><div class="who">Browser</div><div class="how">EventSource (one-way)</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">live service</div><div class="how">/live/tape/stream</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">ReplaySubject</div><div class="how">1 ref-counted poller</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">Polygon</div><div class="how">/v3/snapshot · 60s</div></div>
-        <div class="arrow">⇢</div>
-        <div class="hop"><div class="who">All clients</div><div class="how">frame pushed to each</div></div>
-      </div>
-      <div class="lane-note">One upstream call per minute fans out to <b>every</b> connected user, regardless of count. Zero users online ⇒ the poller stops ⇒ zero vendor calls.</div>
-    </div>
-
-    <div class="lane" style="--lc:var(--c-http)">
-      <div class="lane-h"><span class="k">E</span><h3>Market status</h3><span class="tag">connection 7</span></div>
-      <div class="flow">
-        <div class="hop"><div class="who">Browser</div><div class="how">GET /live/market-status</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">live service</div><div class="how">60s cache</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">Polygon</div><div class="how">/v1/marketstatus/*</div></div>
-      </div>
-      <div class="lane-note">Replaced a browser-maintained holiday table — the session pill (pre / open / after / closed) now comes from the vendor's authoritative calendar.</div>
-    </div>
-
-    <div class="lane" style="--lc:var(--c-sched)">
-      <div class="lane-h"><span class="k">F</span><h3>Ingestion pipeline (cron → worker → vendors → store)</h3><span class="tag">connections 9 → 10 → 11</span></div>
-      <div class="flow">
-        <div class="hop"><div class="who">Cloud Scheduler</div><div class="how">cron (ET)</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">worker</div><div class="how">POST /sync/{job}/run + OIDC</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">Vendor adapter</div><div class="how">Polygon → FMP/Finnhub fallback</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">Firestore</div><div class="how">Admin SDK write</div></div>
-        <div class="arrow">⇢</div>
-        <div class="hop"><div class="who">Browsers</div><div class="how">see it via A</div></div>
-      </div>
-      <div class="lane-note">The <b>write side</b>. 22 jobs run on cron; the OIDC token proves the caller is the <code>scheduler-invoker</code> service account, so the private worker stays closed to everyone else. This is what fills the collections pattern A reads.</div>
-    </div>
-
-    <div class="lane" style="--lc:var(--c-msg)">
-      <div class="lane-h"><span class="k">G</span><h3>Admin console bridge</h3><span class="tag">connection 13</span></div>
-      <div class="flow">
-        <div class="hop"><div class="who">React parent</div><div class="how">reads Firestore as admin</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">sessionStorage</div><div class="how">staged pre-mount</div></div>
-        <div class="arrow">→</div>
-        <div class="hop"><div class="who">iframe</div><div class="how">renders console</div></div>
-        <div class="arrow">↩</div>
-        <div class="hop"><div class="who">postMessage</div><div class="how">write → parent updateDoc</div></div>
-      </div>
-      <div class="lane-note">The iframe holds no Firebase SDK. It reads staged data and <b>delegates every write</b> to the parent over <code>postMessage</code> — same origin, so no token crosses a boundary.</div>
+    <h2>The supporting pieces</h2>
+    <p class="sub">Everything else just holds those three flows up.</p>
+    <div class="supp">
+      <div class="s"><div class="t">Sign-in</div><div class="d">Firebase Auth — who you are</div></div>
+      <div class="s"><div class="t">App files</div><div class="d">Firebase Hosting — serves the app</div></div>
+      <div class="s"><div class="t">Two services, one build</div><div class="d">Public "live" + private "worker" from the same image</div></div>
+      <div class="s"><div class="t">Secret Manager</div><div class="d">Keeps the vendor API keys</div></div>
+      <div class="s"><div class="t">Vendor rule</div><div class="d">Only Polygon (licensed) reaches users</div></div>
+      <div class="s"><div class="t">Sentry</div><div class="d">Flags errors if they happen</div></div>
     </div>
   </section>
 
-  <!-- ── 4. PROCESS WALKTHROUGH ──────────────────────────────────────────── -->
-  <section>
-    <div class="h2"><span class="n">TRACE</span><h2>What happens when you open the dashboard</h2></div>
-    <p class="lead">One page load exercises five of the seven patterns at once — here is the order they fire.</p>
-    <div class="steps">
-      <div class="step"><div class="s">1</div><div class="txt"><b>Load</b> — Firebase Hosting serves the static bundle to the browser. <span class="mono">(conn 1)</span></div></div>
-      <div class="step"><div class="s">2</div><div class="txt"><b>Authenticate</b> — <code>onAuthStateChanged</code> restores the session; the ID token identifies the user for owner-scoped Firestore rules. <span class="mono">(conn 2 · pattern B gate)</span></div></div>
-      <div class="step"><div class="s">3</div><div class="txt"><b>Subscribe</b> — each widget's <code>useCollection</code> opens a Firestore listener; indices, movers, sectors, F&amp;G, earnings paint from pushed snapshots. <span class="mono">(pattern A)</span></div></div>
-      <div class="step"><div class="s">4</div><div class="txt"><b>Go live</b> — the shell opens one SSE stream for the ticker tape and shares the frame to the Market&nbsp;Pulse boxes + index drawer, so all three agree. <span class="mono">(pattern D)</span></div></div>
-      <div class="step"><div class="s">5</div><div class="txt"><b>Price poll</b> — watchlist / portfolio / stock quotes poll <code>/live/snapshot</code> every 15s; the server collapses them to one Polygon call. <span class="mono">(pattern C)</span></div></div>
-      <div class="step"><div class="s">6</div><div class="txt"><b>Meanwhile, off-screen</b> — Cloud Scheduler keeps firing the worker on cron, refreshing the very collections step 3 is subscribed to. <span class="mono">(pattern F)</span></div></div>
-    </div>
-  </section>
-
-  <footer>
-    <span>MarketCatalyst · Market Intelligence Terminal</span>
-    <span>us-central1 · project market-catalyst-502415 · marketcatalyst.web.app</span>
-  </footer>
+  <footer>MarketCatalyst · Market Intelligence Terminal · marketcatalyst.web.app</footer>
 </div>
