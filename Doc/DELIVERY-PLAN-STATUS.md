@@ -15,15 +15,15 @@ Completion is judged against the **actual codebase and live production state**, 
 | Basis | Figure |
 |---|---|
 | **Weighted by person-days (all 36 rows)** | **≈ 48%** (was 46%) |
-| Weeks 1–3 only (what's *due* now, 26.5 p-days) | **≈ 79%** (was 82% — lowered, see R5) |
+| Weeks 1–3 only (what's *due* now, 26.5 p-days) | **≈ 84%** ⬆ (2026-07-23: R5 and R9 both reached 100%, scheduler now live) |
 | Weeks 4–10 (future, 70.5 p-days) | **≈ 37%** (was 33% — work pulled forward) |
-| Rows fully complete (100%) | 8 of 36 (R5 closed 2026-07-23) |
+| Rows fully complete (100%) | 9 of 36 (R5, R9 closed 2026-07-23) |
 | Rows blocked by data-plan limits (not effort) | 4 (options greeks, analyst events, earnings depth, options flow) |
 | **Additional scope delivered outside the 36-row plan** | Subscriptions / entitlements / admin analytics (see [below](#additional-workstream--subscriptions-entitlements-admin-analytics)) |
 
 **Plain reading:** the market-data screens (W1–W3) are largely delivered and the Polygon data layer went materially deeper on 2026-07-22 (intraday bars, 5-year history, corporate actions, real statements, real 10Y yield). The remaining ~52% is dominated by AI features (no Anthropic wiring yet), options depth (plan-gated), and the launch-hardening weeks — all scheduled for Aug–Sep.
 
-**The honest caveat that cuts across every row below:** there are **no Cloud Scheduler jobs in any region**, and Cloud Run runs at `min-instances=0`, so the in-process `@Cron` decorators never fire. **No sync job has ever run automatically in production** — every populated collection got there by a manual run. Every "live" data row in this table is therefore live *as of the last manual sync*, not continuously fresh. This is the single largest gap in the delivery and it is scored against R5.
+**Cross-cutting note (updated 2026-07-23 — the earlier "nothing is scheduled" caveat is now resolved):** **21 Cloud Scheduler jobs are ENABLED and firing on schedule** — verified live (`sync-companies` 06:00 UTC, `sync-news` 20:30 UTC, `sync-market-movers` 22:00 UTC — all matching their crons), each invoking the worker's `/sync/{job}/run` endpoint. Data now refreshes **continuously** in production. Cloud Run still runs `min-instances=0`, but the Scheduler HTTP triggers do exactly the work the in-process `@Cron` decorators would (the container wakes per trigger), so `min-instances=0` is a cost optimisation, not a functional gap. This was R5's largest gap and it is now closed. The backend is also browser-reachable (public `market-catalyst-live` service + `NEXT_PUBLIC_BACKEND_URL` wired), so the live-data rows are reachable by real users, not localhost-only.
 
 ---
 
