@@ -50,6 +50,17 @@
   .h2 h2{font-size:1.25rem;font-weight:700;letter-spacing:-.01em;margin:0}
   .lead{color:var(--ink-2);max-width:74ch;margin:6px 0 22px;font-size:.94rem}
 
+  /* ── SVG diagram ── */
+  .diagram-scroll{overflow-x:auto;background:var(--panel);border:1px solid var(--line-2);border-radius:14px;padding:6px}
+  .diagram-scroll svg{display:block;width:100%;min-width:900px;height:auto}
+  .diagram-scroll .nlabel{font-family:ui-sans-serif,system-ui,sans-serif;font-weight:700;fill:var(--ink)}
+  .diagram-scroll .nsub{font-family:ui-monospace,monospace;fill:var(--ink-dim)}
+  .diagram-scroll .colh{font-family:ui-monospace,monospace;fill:var(--ink-dim);letter-spacing:.12em;font-weight:700}
+  .diagram-scroll .enum{font-family:ui-monospace,monospace;font-weight:700;fill:#08110d}
+  .dlegend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px;font-family:ui-monospace,monospace;font-size:.72rem;color:var(--ink-dim)}
+  .dlegend span b{font-weight:400}
+  .dlegend .sw{display:inline-block;width:22px;height:0;border-top-width:2px;border-top-style:solid;vertical-align:middle;margin-right:5px}
+
   /* ── Tier map ── */
   .tiers{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
   .tier{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:12px;display:flex;flex-direction:column;gap:10px}
@@ -115,8 +126,123 @@
 
   <!-- ── 1. TIER MAP ─────────────────────────────────────────────────────── -->
   <section>
-    <div class="h2"><span class="n">MAP</span><h2>The four tiers</h2></div>
-    <p class="lead">Read left → right: the browser talks to Firebase and the public <span class="mono">live</span> service; the private <span class="mono">worker</span> is driven by Cloud&nbsp;Scheduler and writes back to Firestore. Each card lists the connection numbers it participates in — the numbers are defined in the legend below and traced in the flow lanes.</p>
+    <div class="h2"><span class="n">MAP</span><h2>The system diagram</h2></div>
+    <p class="lead">Read left → right. Solid lines carry runtime data; dashed lines are infrastructure (keys, errors, iframe messaging). Every arrow is numbered — the number is defined in the key that follows and traced end-to-end in the flow lanes.</p>
+
+    <div class="diagram-scroll">
+      <svg viewBox="0 0 1200 626" role="img" aria-labelledby="diagTitle diagDesc">
+        <title id="diagTitle">MarketCatalyst system architecture</title>
+        <desc id="diagDesc">Browser connects to Firebase Hosting, Auth and Firestore and to the public live Cloud Run service; the private worker service is driven by Cloud Scheduler, calls external vendors, and writes to Firestore. Secret Manager feeds both services.</desc>
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/>
+          </marker>
+        </defs>
+
+        <!-- column headers -->
+        <text x="125" y="24" class="colh" text-anchor="middle" font-size="11">CLIENT</text>
+        <text x="425" y="24" class="colh" text-anchor="middle" font-size="11">FIREBASE · GOOGLE</text>
+        <text x="725" y="24" class="colh" text-anchor="middle" font-size="11">CLOUD RUN · 1 IMAGE</text>
+        <text x="1025" y="24" class="colh" text-anchor="middle" font-size="11">VENDORS &amp; INFRA</text>
+
+        <!-- ── edges (drawn first, under nodes) ── -->
+        <g fill="none" stroke-width="2" marker-end="url(#ah)">
+          <path d="M330,80 L216,300" style="stroke:var(--c-static)"/>
+          <path d="M216,318 L330,173" style="stroke:var(--c-auth)" marker-start="url(#ah)"/>
+          <path d="M330,330 L216,348" style="stroke:var(--c-store)"/>
+          <path d="M216,366 L330,362" style="stroke:var(--c-store)"/>
+          <path d="M216,300 L296,300 L296,214 L604,214 L630,180" style="stroke:var(--c-http)"/>
+          <path d="M216,312 L308,312 L308,226 L598,226 L630,192" style="stroke:var(--c-sse)" marker-start="url(#ah)"/>
+          <path d="M216,324 L320,324 L320,238 L592,238 L630,204" style="stroke:var(--c-http)"/>
+          <path d="M820,178 L900,150" style="stroke:var(--c-vendor)"/>
+          <path d="M900,435 L820,452" style="stroke:var(--c-sched)"/>
+          <path d="M820,440 L900,162" style="stroke:var(--c-vendor)"/>
+          <path d="M820,458 L900,277" style="stroke:var(--c-vendor)"/>
+          <path d="M630,442 L520,352" style="stroke:var(--c-store)"/>
+          <path d="M900,566 L762,494" style="stroke:var(--c-secret)" stroke-dasharray="5 4"/>
+          <path d="M900,560 L600,560 L600,300 L630,214" style="stroke:var(--c-secret)" stroke-dasharray="5 4"/>
+          <path d="M125,100 L125,284" style="stroke:var(--c-msg)" stroke-dasharray="5 4" marker-start="url(#ah)"/>
+          <path d="M125,388 L125,558" style="stroke:var(--c-err)" stroke-dasharray="5 4"/>
+        </g>
+
+        <!-- ── nodes ── -->
+        <g>
+          <rect x="40" y="54" width="170" height="46" rx="10" style="fill:var(--card-2);stroke:var(--c-msg)" stroke-width="1.6"/>
+          <text x="125" y="74" class="nlabel" text-anchor="middle" font-size="14">Admin iframe</text>
+          <text x="125" y="90" class="nsub" text-anchor="middle" font-size="10">same origin</text>
+
+          <rect x="34" y="286" width="182" height="100" rx="12" style="fill:var(--card-2);stroke:var(--accent)" stroke-width="1.8"/>
+          <text x="125" y="330" class="nlabel" text-anchor="middle" font-size="17">Browser SPA</text>
+          <text x="125" y="351" class="nsub" text-anchor="middle" font-size="10.5">Next.js static export</text>
+
+          <rect x="40" y="558" width="170" height="44" rx="10" style="fill:var(--card-2);stroke:var(--c-err)" stroke-width="1.6"/>
+          <text x="125" y="578" class="nlabel" text-anchor="middle" font-size="14">Sentry</text>
+          <text x="125" y="593" class="nsub" text-anchor="middle" font-size="10">DSN-gated</text>
+
+          <rect x="330" y="54" width="190" height="46" rx="10" style="fill:var(--card-2);stroke:var(--c-static)" stroke-width="1.6"/>
+          <text x="425" y="74" class="nlabel" text-anchor="middle" font-size="14">Hosting</text>
+          <text x="425" y="90" class="nsub" text-anchor="middle" font-size="10">static bundle</text>
+
+          <rect x="330" y="150" width="190" height="46" rx="10" style="fill:var(--card-2);stroke:var(--c-auth)" stroke-width="1.6"/>
+          <text x="425" y="170" class="nlabel" text-anchor="middle" font-size="14">Authentication</text>
+          <text x="425" y="186" class="nsub" text-anchor="middle" font-size="10">ID tokens</text>
+
+          <rect x="330" y="300" width="190" height="80" rx="11" style="fill:var(--card-2);stroke:var(--c-store)" stroke-width="1.8"/>
+          <text x="425" y="334" class="nlabel" text-anchor="middle" font-size="15">Cloud Firestore</text>
+          <text x="425" y="353" class="nsub" text-anchor="middle" font-size="10.5">domain data store</text>
+
+          <rect x="630" y="150" width="190" height="74" rx="11" style="fill:var(--card-2);stroke:var(--c-sse)" stroke-width="1.8"/>
+          <text x="725" y="181" class="nlabel" text-anchor="middle" font-size="15">live · PUBLIC</text>
+          <text x="725" y="200" class="nsub" text-anchor="middle" font-size="10.5">LiveModule only</text>
+
+          <rect x="630" y="420" width="190" height="76" rx="11" style="fill:var(--card-2);stroke:var(--c-sched)" stroke-width="1.8"/>
+          <text x="725" y="452" class="nlabel" text-anchor="middle" font-size="15">worker · PRIVATE</text>
+          <text x="725" y="471" class="nsub" text-anchor="middle" font-size="10.5">sync · admin · plans</text>
+
+          <rect x="900" y="120" width="250" height="54" rx="10" style="fill:var(--card-2);stroke:var(--c-vendor)" stroke-width="1.6"/>
+          <text x="1025" y="144" class="nlabel" text-anchor="middle" font-size="14">Polygon / Massive</text>
+          <text x="1025" y="161" class="nsub" text-anchor="middle" font-size="10">redistributable</text>
+
+          <rect x="900" y="250" width="250" height="54" rx="10" style="fill:var(--card-2);stroke:var(--c-vendor)" stroke-width="1.6"/>
+          <text x="1025" y="274" class="nlabel" text-anchor="middle" font-size="12.5">FMP · Finnhub · EDGAR · FRED</text>
+          <text x="1025" y="291" class="nsub" text-anchor="middle" font-size="10">worker-only</text>
+
+          <rect x="900" y="410" width="250" height="50" rx="10" style="fill:var(--card-2);stroke:var(--c-sched)" stroke-width="1.6"/>
+          <text x="1025" y="432" class="nlabel" text-anchor="middle" font-size="14">Cloud Scheduler</text>
+          <text x="1025" y="448" class="nsub" text-anchor="middle" font-size="10">22 cron jobs</text>
+
+          <rect x="900" y="545" width="250" height="46" rx="10" style="fill:var(--card-2);stroke:var(--c-secret)" stroke-width="1.6"/>
+          <text x="1025" y="565" class="nlabel" text-anchor="middle" font-size="14">Secret Manager</text>
+          <text x="1025" y="581" class="nsub" text-anchor="middle" font-size="10">vendor keys</text>
+        </g>
+
+        <!-- ── numbered edge chips ── -->
+        <g class="enum" font-size="11" text-anchor="middle">
+          <g><circle cx="285" cy="180" r="10" style="fill:var(--c-static)"/><text x="285" y="184">1</text></g>
+          <g><circle cx="276" cy="248" r="10" style="fill:var(--c-auth)"/><text x="276" y="252">2</text></g>
+          <g><circle cx="282" cy="330" r="10" style="fill:var(--c-store)"/><text x="282" y="334">3</text></g>
+          <g><circle cx="282" cy="368" r="10" style="fill:var(--c-store)"/><text x="282" y="372">4</text></g>
+          <g><circle cx="400" cy="214" r="10" style="fill:var(--c-http)"/><text x="400" y="218">5</text></g>
+          <g><circle cx="470" cy="226" r="10" style="fill:var(--c-sse)"/><text x="470" y="230">6</text></g>
+          <g><circle cx="540" cy="238" r="10" style="fill:var(--c-http)"/><text x="540" y="242">7</text></g>
+          <g><circle cx="858" cy="156" r="10" style="fill:var(--c-vendor)"/><text x="858" y="160">8</text></g>
+          <g><circle cx="862" cy="440" r="10" style="fill:var(--c-sched)"/><text x="862" y="444">9</text></g>
+          <g><circle cx="884" cy="250" r="10" style="fill:var(--c-vendor)"/><text x="884" y="254">10</text></g>
+          <g><circle cx="884" cy="380" r="10" style="fill:var(--c-vendor)"/><text x="884" y="384">10</text></g>
+          <g><circle cx="576" cy="392" r="10" style="fill:var(--c-store)"/><text x="576" y="396">11</text></g>
+          <g><circle cx="614" cy="430" r="10" style="fill:var(--c-secret)"/><text x="614" y="434">12</text></g>
+          <g><circle cx="125" cy="192" r="10" style="fill:var(--c-msg)"/><text x="125" y="196">13</text></g>
+          <g><circle cx="125" cy="473" r="10" style="fill:var(--c-err)"/><text x="125" y="477">14</text></g>
+        </g>
+      </svg>
+    </div>
+    <div class="dlegend">
+      <span><span class="sw" style="border-top-color:var(--ink-2)"></span>solid = runtime data</span>
+      <span><span class="sw" style="border-top-color:var(--ink-2);border-top-style:dashed"></span>dashed = infra (keys · errors · postMessage)</span>
+      <span><b>→</b> one-way &nbsp; <b>⇄</b> two-way</span>
+    </div>
+
+    <div class="h2" style="margin-top:26px"><span class="n">·</span><h2 style="font-size:1.05rem">Components by tier</h2></div>
     <div class="tiers">
       <div class="tier">
         <div class="tier-h">1 · Client (browser)</div>
