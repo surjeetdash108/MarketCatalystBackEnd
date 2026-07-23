@@ -1,0 +1,335 @@
+<title>MarketCatalyst — System Interaction Map</title>
+<style>
+  :root{
+    --bg:#0a0e13; --panel:#0f151c; --panel-2:#131c25; --card:#0e141b;
+    --ink:#e7eef4; --ink-2:#b3c2ce; --ink-dim:#8496a3; --line:#1e2a36; --line-2:#2a3a48;
+    --accent:#2fe6a6;
+    /* category hues — legible on the dark terminal screen and on light chrome */
+    --c-store:#f4b740; --c-http:#38bdf8; --c-sse:#2fe6a6; --c-sched:#a78bfa;
+    --c-vendor:#8b97a5; --c-auth:#fb7185; --c-static:#7c8b99; --c-secret:#eab308; --c-err:#f87171;
+    --screen:#080c11; /* the always-dark diagram surface */
+    --maxw:1120px;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#eef2f7; --panel:#ffffff; --panel-2:#f4f7fa; --card:#ffffff;
+      --ink:#0f1a24; --ink-2:#33465a; --ink-dim:#5c6f80; --line:#dbe3ec; --line-2:#c6d2de;
+      --c-store:#b7791f; --c-http:#0284c7; --c-sse:#0d9f74; --c-sched:#7c3aed;
+      --c-vendor:#5b6b7a; --c-auth:#e11d48; --c-static:#64748b; --c-secret:#b7791f; --c-err:#dc2626;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0a0e13; --panel:#0f151c; --panel-2:#131c25; --card:#0e141b;
+    --ink:#e7eef4; --ink-2:#b3c2ce; --ink-dim:#8496a3; --line:#1e2a36; --line-2:#2a3a48;
+    --c-store:#f4b740; --c-http:#38bdf8; --c-sse:#2fe6a6; --c-sched:#a78bfa;
+    --c-vendor:#8b97a5; --c-auth:#fb7185; --c-static:#7c8b99; --c-secret:#eab308; --c-err:#f87171;
+  }
+  :root[data-theme="light"]{
+    --bg:#eef2f7; --panel:#ffffff; --panel-2:#f4f7fa; --card:#ffffff;
+    --ink:#0f1a24; --ink-2:#33465a; --ink-dim:#5c6f80; --line:#dbe3ec; --line-2:#c6d2de;
+    --c-store:#b7791f; --c-http:#0284c7; --c-sse:#0d9f74; --c-sched:#7c3aed;
+    --c-vendor:#5b6b7a; --c-auth:#e11d48; --c-static:#64748b; --c-secret:#b7791f; --c-err:#dc2626;
+  }
+
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",system-ui,Roboto,sans-serif;
+    line-height:1.55; -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+  .wrap{max-width:var(--maxw); margin:0 auto; padding:clamp(22px,4vw,56px) clamp(16px,3.5vw,40px) 72px}
+
+  /* ── header ── */
+  .eyebrow{
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.72rem;
+    letter-spacing:.28em; text-transform:uppercase; color:var(--accent); margin:0 0 14px;
+  }
+  h1{
+    font-size:clamp(1.7rem,4.4vw,2.9rem); line-height:1.05; margin:0 0 14px;
+    font-weight:800; letter-spacing:-.02em; text-wrap:balance;
+  }
+  .dek{font-size:clamp(1rem,1.5vw,1.12rem); color:var(--ink-2); max-width:64ch; margin:0 0 22px}
+  .dek b{color:var(--ink); font-weight:600}
+  .chips{display:flex; flex-wrap:wrap; gap:8px; margin:0 0 8px}
+  .chip{
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.74rem;
+    padding:5px 11px; border:1px solid var(--line-2); border-radius:999px;
+    color:var(--ink-2); background:var(--panel-2); white-space:nowrap;
+  }
+  .chip b{color:var(--accent); font-weight:700}
+
+  /* ── section scaffolding ── */
+  section{margin-top:clamp(30px,5vw,52px)}
+  .h2{
+    display:flex; align-items:baseline; gap:12px; margin:0 0 18px;
+  }
+  .h2 .n{font-family:ui-monospace,monospace; font-size:.8rem; color:var(--accent); letter-spacing:.1em}
+  .h2 h2{font-size:1.18rem; font-weight:700; letter-spacing:-.01em; margin:0}
+  .lead{color:var(--ink-2); max-width:70ch; margin:-6px 0 22px}
+
+  /* ── diagram terminal ── */
+  .screen{
+    background:var(--screen);
+    border:1px solid var(--line-2); border-radius:16px;
+    padding:8px 10px 14px; overflow-x:auto;
+    box-shadow:0 24px 60px -30px rgba(0,0,0,.7);
+  }
+  .screen-bar{
+    display:flex; align-items:center; gap:8px; padding:9px 8px 12px;
+    border-bottom:1px solid #1a2632; margin-bottom:10px;
+  }
+  .screen-bar .dot{width:11px; height:11px; border-radius:50%}
+  .screen-bar .dot:nth-child(1){background:#ff5f57}
+  .screen-bar .dot:nth-child(2){background:#febc2e}
+  .screen-bar .dot:nth-child(3){background:#28c840}
+  .screen-bar .t{
+    margin-left:8px; font-family:ui-monospace,monospace; font-size:.72rem;
+    color:#7f93a3; letter-spacing:.04em;
+  }
+  .mermaid{display:flex; justify-content:center; min-width:720px}
+  .cap{
+    font-family:ui-monospace,monospace; font-size:.72rem; color:#6f8496;
+    text-align:center; margin:8px 0 2px;
+  }
+
+  /* ── load-bearing rule ── */
+  .rule{
+    margin-top:22px; display:grid; grid-template-columns:auto 1fr; gap:16px; align-items:start;
+    background:linear-gradient(180deg,var(--panel-2),var(--panel));
+    border:1px solid var(--line-2); border-left:3px solid var(--accent);
+    border-radius:12px; padding:18px 20px;
+  }
+  .rule .k{
+    font-family:ui-monospace,monospace; font-size:.7rem; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--accent); writing-mode:horizontal-tb; white-space:nowrap;
+  }
+  .rule p{margin:0; color:var(--ink-2)}
+  .rule p + p{margin-top:8px}
+  .rule strong{color:var(--ink)}
+
+  /* ── legend ── */
+  .grouphdr{
+    font-family:ui-monospace,monospace; font-size:.72rem; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--ink-dim); margin:26px 0 12px;
+    padding-bottom:8px; border-bottom:1px dashed var(--line-2);
+  }
+  .cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(288px,1fr)); gap:12px}
+  .pcard{
+    background:var(--card); border:1px solid var(--line); border-radius:11px;
+    padding:14px 15px; position:relative; overflow:hidden;
+  }
+  .pcard::before{content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--dot)}
+  .pcard .top{display:flex; align-items:center; gap:9px; margin-bottom:9px}
+  .pcard .num{
+    font-family:ui-monospace,monospace; font-weight:700; font-size:.74rem;
+    width:22px; height:22px; flex:none; display:grid; place-items:center;
+    border-radius:6px; color:#08110d; background:var(--dot);
+  }
+  .pcard .route{font-family:ui-monospace,monospace; font-size:.82rem; color:var(--ink); font-weight:600}
+  .pcard .transport{
+    font-family:ui-monospace,monospace; font-size:.7rem; color:var(--dot);
+    letter-spacing:.02em; margin-bottom:6px; font-weight:600;
+  }
+  .pcard .carries{font-size:.83rem; color:var(--ink-dim); line-height:1.45}
+
+  /* ── the three read-paths ── */
+  .ways{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px}
+  .way{background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 17px}
+  .way .tag{
+    font-family:ui-monospace,monospace; font-size:.7rem; letter-spacing:.08em;
+    text-transform:uppercase; font-weight:700; margin-bottom:8px; color:var(--way);
+  }
+  .way h3{margin:0 0 8px; font-size:1.02rem; font-weight:700; letter-spacing:-.01em}
+  .way p{margin:0; color:var(--ink-2); font-size:.9rem}
+  .way .path{font-family:ui-monospace,monospace; font-size:.72rem; color:var(--ink-dim); margin-top:10px}
+
+  footer{
+    margin-top:52px; padding-top:20px; border-top:1px solid var(--line);
+    font-family:ui-monospace,monospace; font-size:.74rem; color:var(--ink-dim);
+    display:flex; flex-wrap:wrap; gap:6px 18px; justify-content:space-between;
+  }
+  a{color:var(--accent)}
+  @media (max-width:560px){
+    .rule{grid-template-columns:1fr}
+    .screen{padding:6px}
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">System Architecture · 2026-07-23</p>
+    <h1>MarketCatalyst — System Interaction Map</h1>
+    <p class="dek">How the pieces actually talk to each other in production: a browser SPA, two Cloud&nbsp;Run services split from one image, Firebase (Hosting · Auth · Firestore), Cloud&nbsp;Scheduler, Secret&nbsp;Manager, and the market-data vendors. <b>Fourteen distinct interaction paths</b>, colour-coded by kind.</p>
+    <div class="chips">
+      <span class="chip"><b>14</b> interaction paths</span>
+      <span class="chip"><b>2</b> Cloud Run services · 1 image</span>
+      <span class="chip"><b>22</b> Cloud Scheduler jobs</span>
+      <span class="chip"><b>3</b> live read paths to the screen</span>
+      <span class="chip">Polygon delayed <b>~15m</b></span>
+    </div>
+  </header>
+
+  <section>
+    <div class="h2"><span class="n">FIG.1</span><h2>The interaction graph</h2></div>
+    <div class="screen" role="img" aria-label="Architecture graph: browser, Firebase Hosting/Auth/Firestore, two Cloud Run services, Cloud Scheduler, Secret Manager and external vendors, connected by fourteen numbered paths.">
+      <div class="screen-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="t mono">marketcatalyst · runtime topology</span></div>
+      <pre class="mermaid">
+%%{init: {"theme":"base","themeVariables":{
+  "fontFamily":"ui-monospace, SFMono-Regular, Menlo, monospace",
+  "fontSize":"13px",
+  "primaryColor":"#111a22","primaryTextColor":"#e7eef4","primaryBorderColor":"#2a3a48",
+  "lineColor":"#5f7183","clusterBkg":"#0b1118","clusterBorder":"#1c2833",
+  "titleColor":"#8fa3b3","edgeLabelBackground":"#0b1017"
+}}}%%
+flowchart TD
+  subgraph CLIENT["CLIENT — browser SPA"]
+    direction TB
+    B["Browser<br/>Next.js static export"]
+    ADM["Admin console<br/>iframe"]
+  end
+  subgraph FB["FIREBASE — Google"]
+    direction TB
+    HOST["Hosting"]
+    AUTH["Authentication"]
+    FS[("Cloud Firestore")]
+  end
+  subgraph RUN["CLOUD RUN — one image · APP_ROLE split"]
+    direction TB
+    LIVE["live · PUBLIC<br/>LiveModule only"]
+    WORK["worker · PRIVATE<br/>sync · admin · plans"]
+  end
+  subgraph GI["GOOGLE INFRA"]
+    direction TB
+    SCHED["Cloud Scheduler<br/>22 cron jobs"]
+    SEC["Secret Manager"]
+  end
+  subgraph VEND["EXTERNAL DATA VENDORS"]
+    direction TB
+    POLY["Polygon / Massive<br/>redistributable"]
+    OTHER["FMP · Finnhub<br/>EDGAR · FRED<br/>worker-only"]
+  end
+  SENT["Sentry<br/>DSN-gated"]
+
+  HOST -->|"1 · static bundle"| B
+  B <-->|"2 · auth · ID token"| AUTH
+  FS -->|"3 · onSnapshot · domain data"| B
+  B -->|"4 · owner-scoped writes"| FS
+  B -->|"5 · GET /live/snapshot · poll 15s"| LIVE
+  B <-->|"6 · SSE /live/tape/stream"| LIVE
+  B -->|"7 · GET /live/market-status"| LIVE
+  LIVE -->|"8 · /v3/snapshot + yields"| POLY
+  SCHED -->|"9 · POST /sync/*/run · OIDC"| WORK
+  WORK -->|"10 · adapter + fallback"| POLY
+  WORK -->|"10 · adapter + fallback"| OTHER
+  WORK -->|"11 · Admin SDK writes"| FS
+  SEC -->|"12 · keys"| LIVE
+  SEC -->|"12 · keys"| WORK
+  ADM -.->|"13 · postMessage"| B
+  B -->|"14 · errors"| SENT
+
+  classDef store fill:#171b10,stroke:#f4b740,color:#f6d98a;
+  classDef live  fill:#0e1c18,stroke:#2fe6a6,color:#8ff0cf;
+  classDef work  fill:#15121f,stroke:#a78bfa,color:#cbbcff;
+  classDef vend  fill:#141a20,stroke:#8b97a5,color:#c6ced6;
+  classDef auth  fill:#1d1216,stroke:#fb7185,color:#ffb3bf;
+  class FS store; class LIVE live; class WORK work; class POLY,OTHER vend; class AUTH auth;
+
+  linkStyle 0 stroke:#7c8b99,stroke-width:1.5px;
+  linkStyle 1 stroke:#fb7185,stroke-width:2px;
+  linkStyle 2 stroke:#f4b740,stroke-width:2.5px;
+  linkStyle 3 stroke:#f4b740,stroke-width:2px;
+  linkStyle 4 stroke:#38bdf8,stroke-width:2px;
+  linkStyle 5 stroke:#2fe6a6,stroke-width:2.5px;
+  linkStyle 6 stroke:#38bdf8,stroke-width:2px;
+  linkStyle 7 stroke:#8b97a5,stroke-width:1.5px;
+  linkStyle 8 stroke:#a78bfa,stroke-width:2.5px;
+  linkStyle 9 stroke:#8b97a5,stroke-width:1.5px;
+  linkStyle 10 stroke:#8b97a5,stroke-width:1.5px;
+  linkStyle 11 stroke:#f4b740,stroke-width:2.5px;
+  linkStyle 12 stroke:#eab308,stroke-width:1.3px,stroke-dasharray:4 3;
+  linkStyle 13 stroke:#eab308,stroke-width:1.3px,stroke-dasharray:4 3;
+  linkStyle 14 stroke:#a78bfa,stroke-width:1.3px,stroke-dasharray:4 3;
+  linkStyle 15 stroke:#f87171,stroke-width:1.3px,stroke-dasharray:4 3;
+      </pre>
+    </div>
+    <p class="cap mono">Solid = data / request flow · dashed = keys, errors &amp; internal messaging · arrowheads show direction, ⇄ is bidirectional</p>
+  </section>
+
+  <section>
+    <div class="rule">
+      <div class="k">The load-bearing rule</div>
+      <div>
+        <p><strong>Domain data flows Browser ⇄ Firestore</strong> (paths 3–4) — everything the app renders, in real time, with no backend in the path. User-owned writes go straight back, scoped by <span class="mono">firestore.rules</span>.</p>
+        <p>The backend HTTP paths (5–8) add <strong>only</strong> moving prices and market status. The <strong>worker never serves the browser</strong>, and non-redistributable vendor data (FMP / Finnhub) <strong>never leaves the worker</strong> — only Polygon/Massive, which is licensed for redistribution, reaches a user.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="h2"><span class="n">FIG.2</span><h2>Three ways data reaches the screen</h2></div>
+    <p class="lead">Read paths differ by <em>what</em> they carry and <em>how fresh</em> it must be. A fourth flow — ingestion — fills the collections the first one reads.</p>
+    <div class="ways">
+      <div class="way" style="--way:var(--c-store)">
+        <div class="tag">Real-time · Firestore</div>
+        <h3>Direct document reads</h3>
+        <p>All domain data — companies, indices, movers, earnings, news, financials, recaps, sentiment, plans — via client-SDK <span class="mono">onSnapshot</span>. Live, cache-free, no backend hop.</p>
+        <div class="path">paths 3 · 4</div>
+      </div>
+      <div class="way" style="--way:var(--c-http)">
+        <div class="tag">Polled · cached HTTP</div>
+        <h3>Delayed prices &amp; status</h3>
+        <p>The public <span class="mono">live</span> service serves batched quotes every 15s (<span class="mono">no-store</span> + ETag) and the market-status pill. The server collapses N browsers into one vendor call.</p>
+        <div class="path">paths 5 · 7 → 8</div>
+      </div>
+      <div class="way" style="--way:var(--c-sse)">
+        <div class="tag">Streamed · SSE</div>
+        <h3>The ticker tape</h3>
+        <p>One <span class="mono">ReplaySubject</span> broadcast over Server-Sent Events. One upstream vendor call per minute fans out to every connected user, regardless of count.</p>
+        <div class="path">path 6 → 8</div>
+      </div>
+      <div class="way" style="--way:var(--c-sched)">
+        <div class="tag">Ingestion · write side</div>
+        <h3>The refresh pipeline</h3>
+        <p>Cloud Scheduler fires the private <span class="mono">worker</span> on cron; it calls the vendors through a fallback adapter and writes every collection with the Admin SDK.</p>
+        <div class="path">paths 9 → 10 → 11</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="h2"><span class="n">KEY</span><h2>All fourteen paths</h2></div>
+
+    <div class="grouphdr">Client ⇄ Firebase</div>
+    <div class="cards">
+      <div class="pcard" style="--dot:var(--c-static)"><div class="top"><span class="num">1</span><span class="route">Hosting → Browser</span></div><div class="transport">HTTPS · static</div><div class="carries">The Next.js <code class="mono">out/</code> bundle and assets, served from Firebase Hosting.</div></div>
+      <div class="pcard" style="--dot:var(--c-auth)"><div class="top"><span class="num">2</span><span class="route">Browser ⇄ Auth</span></div><div class="transport">Firebase SDK</div><div class="carries">Sign-in / up, <code class="mono">onAuthStateChanged</code>, 1-hour ID tokens → Redux via <code class="mono">FirebaseListener</code>.</div></div>
+      <div class="pcard" style="--dot:var(--c-store)"><div class="top"><span class="num">3</span><span class="route">Firestore → Browser</span></div><div class="transport">Client SDK · onSnapshot</div><div class="carries">All domain data: companies, market_indices, movers, sectors, breadth, earnings, news, financials, dividends, ipos, recaps, sentiment, plans.</div></div>
+      <div class="pcard" style="--dot:var(--c-store)"><div class="top"><span class="num">4</span><span class="route">Browser → Firestore</span></div><div class="transport">Client SDK · owner-scoped</div><div class="carries">User-owned writes: watchlists, portfolio holdings, settings, stock_comments, feature_adoption.</div></div>
+    </div>
+
+    <div class="grouphdr">Client ⇄ Backend (public <span class="mono">live</span> service)</div>
+    <div class="cards">
+      <div class="pcard" style="--dot:var(--c-http)"><div class="top"><span class="num">5</span><span class="route">Browser → live</span></div><div class="transport">GET /live/snapshot · 15s</div><div class="carries">Batched delayed quotes for the shared live-price subscription (watchlist, portfolio, search, stock detail). <code class="mono">cache:no-store</code> + <code class="mono">If-None-Match</code>.</div></div>
+      <div class="pcard" style="--dot:var(--c-sse)"><div class="top"><span class="num">6</span><span class="route">Browser ⇄ live</span></div><div class="transport">SSE · /live/tape/stream</div><div class="carries">The header ticker tape. One <code class="mono">ReplaySubject</code> broadcast — one vendor call/min serves every user.</div></div>
+      <div class="pcard" style="--dot:var(--c-http)"><div class="top"><span class="num">7</span><span class="route">Browser → live</span></div><div class="transport">GET /live/market-status</div><div class="carries">Session pill (pre / open / after / closed) and extended-hours state.</div></div>
+      <div class="pcard" style="--dot:var(--c-vendor)"><div class="top"><span class="num">8</span><span class="route">live → Polygon</span></div><div class="transport">HTTPS · on demand</div><div class="carries"><code class="mono">/v3/snapshot</code> (tape + quote tickers) and <code class="mono">/fed/v1/treasury-yields</code>. Ref-counted; ~15m delayed.</div></div>
+    </div>
+
+    <div class="grouphdr">Backend internals (private <span class="mono">worker</span> · infra)</div>
+    <div class="cards">
+      <div class="pcard" style="--dot:var(--c-sched)"><div class="top"><span class="num">9</span><span class="route">Scheduler → worker</span></div><div class="transport">POST /sync/*/run · OIDC</div><div class="carries">22 cron jobs (ET) fire the ingestion pipeline. Token minted for the <code class="mono">scheduler-invoker</code> service account.</div></div>
+      <div class="pcard" style="--dot:var(--c-vendor)"><div class="top"><span class="num">10</span><span class="route">worker → Vendors</span></div><div class="transport">HTTPS · fallback adapter</div><div class="carries">Polygon (redistributable) + FMP / Finnhub / SEC EDGAR / FRED. Non-redistributable feeds stay worker-side.</div></div>
+      <div class="pcard" style="--dot:var(--c-store)"><div class="top"><span class="num">11</span><span class="route">worker → Firestore</span></div><div class="transport">Firebase Admin SDK</div><div class="carries">Writes every synced collection + <code class="mono">sync_meta</code>. The <code class="mono">recaps</code> job composes existing collections into a daily snapshot.</div></div>
+      <div class="pcard" style="--dot:var(--c-secret)"><div class="top"><span class="num">12</span><span class="route">Secret Manager → both</span></div><div class="transport">env injection · startup</div><div class="carries">Vendor API keys, injected into <code class="mono">live</code> and <code class="mono">worker</code> — never in code or env files.</div></div>
+      <div class="pcard" style="--dot:var(--c-sched)"><div class="top"><span class="num">13</span><span class="route">Admin iframe ⇄ parent</span></div><div class="transport">postMessage · sessionStorage</div><div class="carries">Admin dataset staged before the iframe mounts; plan-flag writes delegated to the parent's client SDK.</div></div>
+      <div class="pcard" style="--dot:var(--c-err)"><div class="top"><span class="num">14</span><span class="route">Browser + worker → Sentry</span></div><div class="transport">HTTPS · DSN-gated</div><div class="carries">Error / exception capture. A no-op until the DSN is configured.</div></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>MarketCatalyst · Market Intelligence Terminal</span>
+    <span>Region us-central1 · project market-catalyst-502415 · marketcatalyst.web.app</span>
+  </footer>
+</div>
