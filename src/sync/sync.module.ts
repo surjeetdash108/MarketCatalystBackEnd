@@ -17,6 +17,7 @@ import { MarketQuotesJob } from './market-quotes.job';
 import { NewsJob } from './news.job';
 import { OptionsChainsJob } from './options-chains.job';
 import { FearGreedJob } from './fear-greed.job';
+import { RecapsJob } from './recaps.job';
 import { FundamentalsGrowthJob } from './fundamentals-growth.job';
 import { FinancialsJob } from './financials.job';
 import { IntradayBarsJob } from './intraday-bars.job';
@@ -68,6 +69,7 @@ import { TickerUniverseJob } from './ticker-universe.job';
     FinancialsJob,
     MarketBreadthJob,
     FearGreedJob,
+    RecapsJob,
   ],
 })
 export class SyncModule {}
