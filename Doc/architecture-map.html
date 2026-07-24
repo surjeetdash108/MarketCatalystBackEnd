@@ -124,6 +124,8 @@
           <path d="M226,92 L232,220" style="stroke:var(--support)" marker-start="url(#a)"/>
           <!-- read (green): database -> browser -->
           <path d="M360,278 L242,284" style="stroke:var(--read)" stroke-width="3"/>
+          <!-- shared collections cached via the live service (read path) -->
+          <path d="M572,254 L660,156" style="stroke:var(--read)" stroke-width="2.2" stroke-dasharray="5 4"/>
           <!-- prices (blue): browser -> price service -> vendors -->
           <path d="M242,250 L662,136" style="stroke:var(--price)" stroke-width="3"/>
           <path d="M858,132 L906,206" style="stroke:var(--price)"/>
@@ -137,6 +139,7 @@
         <g class="el" font-size="12.5" text-anchor="middle">
           <text x="150" y="196" style="fill:var(--support)" font-size="11">loads app / login</text>
           <text x="300" y="264" style="fill:var(--read)">reads data (live)</text>
+          <text x="604" y="200" style="fill:var(--read)" font-size="10.5" text-anchor="middle">shared cache</text>
           <text x="452" y="176" style="fill:var(--price)">asks for prices</text>
           <text x="656" y="406" text-anchor="end" style="fill:var(--refresh)" font-size="11.5">saves fresh data</text>
           <text x="690" y="448" style="fill:var(--refresh)" font-size="11" text-anchor="end">on a timer</text>
@@ -161,8 +164,8 @@
           <text x="466" y="301" class="ns" text-anchor="middle" font-size="11">Cloud Firestore</text>
 
           <rect x="662" y="96" width="196" height="80" rx="12" style="fill:var(--card-2);stroke:var(--price)" stroke-width="2.2"/>
-          <text x="760" y="130" class="nm" text-anchor="middle" font-size="15">Price service</text>
-          <text x="760" y="150" class="ns" text-anchor="middle" font-size="10.5">public, Cloud Run</text>
+          <text x="760" y="130" class="nm" text-anchor="middle" font-size="15">Live service</text>
+          <text x="760" y="150" class="ns" text-anchor="middle" font-size="10.5">prices + cached reads</text>
 
           <rect x="662" y="336" width="196" height="84" rx="12" style="fill:var(--card-2);stroke:var(--refresh)" stroke-width="2.2"/>
           <text x="760" y="372" class="nm" text-anchor="middle" font-size="15">Data collector</text>
@@ -180,8 +183,8 @@
       </svg>
     </div>
     <div class="key">
-      <span><span class="d" style="border-color:var(--read)"></span><b>Read</b>: browser &harr; database</span>
-      <span><span class="d" style="border-color:var(--price)"></span><b>Live prices</b>: browser &rarr; price service &rarr; vendors</span>
+      <span><span class="d" style="border-color:var(--read)"></span><b>Read</b>: browser &harr; database (owner data direct; shared data via the live-service <span class="mono">/live/collections</span> 5-min cache — dashed)</span>
+      <span><span class="d" style="border-color:var(--price)"></span><b>Live prices</b>: browser &rarr; live service &rarr; vendors</span>
       <span><span class="d" style="border-color:var(--refresh)"></span><b>Refresh</b>: timer &rarr; collector &rarr; database</span>
     </div>
   </section>
@@ -237,7 +240,7 @@
     <div class="diagram">
       <svg viewBox="0 0 1040 520" role="img" aria-labelledby="tt td">
         <title id="tt">MarketCatalyst technical architecture</title>
-        <desc id="td">Browser reads Firestore over the client SDK (onSnapshot), calls the public live Cloud Run service for prices over HTTP and SSE which fetches Polygon /v3/snapshot, and Cloud Scheduler triggers the private worker over OIDC which calls Polygon REST and writes Firestore with the Admin SDK.</desc>
+        <desc id="td">Browser reads owner data from Firestore over the client SDK (onSnapshot); shared collections come from the live service's /live/collections 5-minute cache which reads Firestore server-side. The browser also calls the live service for prices over HTTP and SSE (Polygon /v3/snapshot). Cloud Scheduler triggers the private worker over OIDC, which calls Polygon REST and writes Firestore with the Admin SDK.</desc>
         <defs>
           <marker id="ta" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/>
@@ -247,6 +250,7 @@
           <path d="M226,150 L232,224" style="stroke:var(--support)"/>
           <path d="M226,92 L232,220" style="stroke:var(--support)" marker-start="url(#ta)"/>
           <path d="M360,278 L242,284" style="stroke:var(--read)" stroke-width="3"/>
+          <path d="M566,254 L664,168" style="stroke:var(--read)" stroke-width="2.2" stroke-dasharray="5 4"/>
           <path d="M242,250 L662,136" style="stroke:var(--price)" stroke-width="3"/>
           <path d="M858,132 L906,206" style="stroke:var(--price)"/>
           <path d="M760,458 L760,422" style="stroke:var(--refresh)"/>
@@ -256,7 +260,9 @@
         <g class="el" font-size="11.5" text-anchor="middle">
           <text x="150" y="196" style="fill:var(--support)" font-size="10.5">static · ID token</text>
           <text x="300" y="264" style="fill:var(--read)">onSnapshot</text>
-          <text x="450" y="176" style="fill:var(--price)">GET /live/snapshot (+SSE tape)</text>
+          <text x="600" y="198" style="fill:var(--read)" font-size="10">GET /live/collections</text>
+          <text x="600" y="211" style="fill:var(--read)" font-size="9.5" text-anchor="start">5-min cache</text>
+          <text x="450" y="168" style="fill:var(--price)">GET /live/snapshot (+SSE tape)</text>
           <text x="892" y="168" style="fill:var(--price)" text-anchor="start" font-size="10.5">/v3/snapshot</text>
           <text x="656" y="406" text-anchor="end" style="fill:var(--refresh)" font-size="11">Admin SDK write</text>
           <text x="892" y="356" style="fill:var(--refresh)" text-anchor="start" font-size="10.5">REST (adapter)</text>
@@ -299,7 +305,7 @@
       </svg>
     </div>
     <div class="key">
-      <span><span class="d" style="border-color:var(--read)"></span><b>Read</b>: Firestore client SDK · realtime</span>
+      <span><span class="d" style="border-color:var(--read)"></span><b>Read</b>: onSnapshot (owner) + <span class="mono">/live/collections</span> 5-min cache (shared, dashed)</span>
       <span><span class="d" style="border-color:var(--price)"></span><b>Prices</b>: HTTP poll + SSE &rarr; Polygon</span>
       <span><span class="d" style="border-color:var(--refresh)"></span><b>Refresh</b>: OIDC cron &rarr; worker &rarr; Admin SDK</span>
     </div>
