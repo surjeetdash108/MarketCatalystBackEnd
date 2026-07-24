@@ -7,6 +7,8 @@ import { SnapshotController } from './snapshot.controller';
 import { MarketStatusService } from './market-status.service';
 import { TapeController } from './tape.controller';
 import { TapeService } from './tape.service';
+import { CachedCollectionsController } from './cached-collections.controller';
+import { CachedCollectionsService } from './cached-collections.service';
 
 /**
  * Live (delayed) price streaming for the Search screen and the header tape.
@@ -20,8 +22,8 @@ import { TapeService } from './tape.service';
  */
 @Module({
   imports: [PolygonModule],
-  controllers: [LiveController, SnapshotController, TapeController],
-  providers: [PolygonLiveService, SnapshotCacheService, MarketStatusService, TapeService],
-  exports: [PolygonLiveService, SnapshotCacheService, MarketStatusService, TapeService],
+  controllers: [LiveController, SnapshotController, TapeController, CachedCollectionsController],
+  providers: [PolygonLiveService, SnapshotCacheService, MarketStatusService, TapeService, CachedCollectionsService],
+  exports: [PolygonLiveService, SnapshotCacheService, MarketStatusService, TapeService, CachedCollectionsService],
 })
 export class LiveModule {}
