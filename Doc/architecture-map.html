@@ -195,7 +195,7 @@
         <div>
           <h3>Reading data</h3>
           <p>Your browser talks to the <b>database directly and live</b>. Open any screen — companies, earnings, movers, news — and the data appears, then keeps updating on its own. <b>No server sits in between.</b></p>
-          <div class="tech">Firestore realtime listeners (onSnapshot). Your own data (watchlist, portfolio) is saved back the same way.</div>
+          <div class="tech">Firestore realtime listeners (onSnapshot) for your own data (watchlist, portfolio). Shared, slow-changing data (indices, movers, sectors, earnings…) is served from a 5-minute cache on the live service (<code>/live/collections</code>, ETag/304) so reads don't scale with users.</div>
         </div>
       </div>
       <div class="flow" style="--fc:var(--price)">
@@ -310,7 +310,7 @@
     <p class="sub">What each box actually is.</p>
     <div class="comp-grid">
       <div class="comp" style="--cc:var(--accent)"><div class="t">Browser SPA</div><div class="tag">Next.js · static export</div><div class="d">The app. Client components + Redux (auth/profile). Reads Firestore directly and calls the live service; holds no vendor keys.</div></div>
-      <div class="comp" style="--cc:var(--read)"><div class="t">Cloud Firestore</div><div class="tag">client SDK + Admin SDK</div><div class="d">The single source of truth for domain data (companies, prices, earnings, news…). Browser reads live via <code>onSnapshot</code>; the worker writes it server-side.</div></div>
+      <div class="comp" style="--cc:var(--read)"><div class="t">Cloud Firestore</div><div class="tag">client SDK + Admin SDK</div><div class="d">The single source of truth for domain data. The worker writes it server-side; the browser reads owner data (watchlist, portfolio) live via <code>onSnapshot</code>, while shared collections come through the live service's <code>/live/collections</code> 5-min cache (ETag/304) to keep Firestore reads flat as users grow.</div></div>
       <div class="comp" style="--cc:var(--price)"><div class="t">live · Cloud Run</div><div class="tag">APP_ROLE=live · public</div><div class="d">Mounts only the LiveModule. Serves <code>/live/snapshot</code>, the SSE <code>/live/tape/stream</code> and <code>/live/market-status</code>. No admin routes exist here.</div></div>
       <div class="comp" style="--cc:var(--refresh)"><div class="t">worker · Cloud Run</div><div class="tag">APP_ROLE=worker · private</div><div class="d">Same image, all the sync/admin/plans modules. Only Cloud Scheduler (OIDC) can reach it. Runs the 22 ingestion jobs.</div></div>
       <div class="comp" style="--cc:var(--support)"><div class="t">Cloud Scheduler</div><div class="tag">22 jobs · OIDC</div><div class="d">Fires <code>POST /sync/{job}/run</code> on each job's cron with a signed OIDC token for the <code>scheduler-invoker</code> service account.</div></div>
