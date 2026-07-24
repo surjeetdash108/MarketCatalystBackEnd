@@ -86,6 +86,13 @@
   .api pre{margin:0;overflow-x:auto;background:var(--panel-2);border:1px solid var(--line-2);border-radius:8px;padding:11px 13px;font-family:ui-monospace,monospace;font-size:.72rem;line-height:1.5;color:var(--ink-2);white-space:pre}
   .note{font-size:.8rem;color:var(--ink-dim);margin-top:7px}
   .note b{color:var(--ink-2)}
+  .apiidx{margin:0 0 20px;padding:14px 16px;background:var(--panel-2);border:1px solid var(--line-2);border-radius:12px}
+  .apiidx .cap{font-family:ui-monospace,monospace;font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-dim);margin:0 0 10px}
+  .apiidx ol{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:6px 22px}
+  .apiidx li{display:flex;gap:9px;align-items:baseline;font-size:.8rem}
+  .apiidx .i{font-family:ui-monospace,monospace;font-size:.7rem;color:var(--accent);min-width:16px;text-align:right}
+  .apiidx .pp{font-family:ui-monospace,monospace;font-size:.74rem;color:var(--ink);word-break:break-all}
+  .apiidx .pu{color:var(--ink-dim)}
 
   footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);font-family:ui-monospace,monospace;font-size:.74rem;color:var(--ink-dim)}
 </style>
@@ -316,7 +323,28 @@
   <!-- ══════════ POLYGON API REFERENCE (appended) ══════════ -->
   <section>
     <h2>Polygon APIs we call</h2>
-    <p class="sub">Every Polygon / Massive endpoint in the pipeline, with a <b>real trimmed response</b> captured from our key. Requests are simple GETs; <code>apiKey</code> and paging omitted for clarity.</p>
+    <p class="sub">All <b>15 Polygon / Massive endpoints</b> in the pipeline, with a <b>real trimmed response</b> captured from our key. Requests are simple GETs; <code>apiKey</code> and paging omitted for clarity.</p>
+
+    <div class="apiidx">
+      <div class="cap">At a glance — every endpoint we call</div>
+      <ol>
+        <li><span class="i">1</span><span><span class="pp">/v3/snapshot</span> <span class="pu">— live delayed quotes</span></span></li>
+        <li><span class="i">2</span><span><span class="pp">/v2/aggs/ticker/…/range/…</span> <span class="pu">— OHLCV bars (daily + intraday)</span></span></li>
+        <li><span class="i">3</span><span><span class="pp">/v2/aggs/grouped/…/{date}</span> <span class="pu">— whole-market EOD</span></span></li>
+        <li><span class="i">4</span><span><span class="pp">/vX/reference/financials</span> <span class="pu">— income/balance/cash-flow</span></span></li>
+        <li><span class="i">5</span><span><span class="pp">/v3/reference/tickers/{t}</span> <span class="pu">— company details</span></span></li>
+        <li><span class="i">6</span><span><span class="pp">/v3/reference/tickers</span> <span class="pu">— ticker universe (list)</span></span></li>
+        <li><span class="i">7</span><span><span class="pp">/v3/reference/dividends</span> <span class="pu">— dividend history</span></span></li>
+        <li><span class="i">8</span><span><span class="pp">/v3/reference/splits</span> <span class="pu">— stock splits</span></span></li>
+        <li><span class="i">9</span><span><span class="pp">/vX/reference/ipos</span> <span class="pu">— IPO calendar</span></span></li>
+        <li><span class="i">10</span><span><span class="pp">/v3/reference/options/contracts</span> <span class="pu">— option chains</span></span></li>
+        <li><span class="i">11</span><span><span class="pp">/v2/reference/news</span> <span class="pu">— news + sentiment</span></span></li>
+        <li><span class="i">12</span><span><span class="pp">/v1/marketstatus/now</span> <span class="pu">— session state</span></span></li>
+        <li><span class="i">13</span><span><span class="pp">/v1/marketstatus/upcoming</span> <span class="pu">— market holidays</span></span></li>
+        <li><span class="i">14</span><span><span class="pp">/fed/v1/treasury-yields</span> <span class="pu">— yield curve</span></span></li>
+        <li><span class="i">15</span><span><span class="pp">/v1/related-companies/{t}</span> <span class="pu">— peers</span></span></li>
+      </ol>
+    </div>
 
     <div class="api">
       <div class="hd"><span class="verb">GET</span><span class="path">/v3/snapshot?ticker.any_of={syms}</span><span class="name">Unified Snapshot</span></div>
@@ -400,7 +428,20 @@
     "branding": { "logo_url": ".../logo.svg", "icon_url": ".../icon.webp" }
   }
 }</pre>
-      <div class="note"><b>Also:</b> <code>GET /v3/reference/tickers?market=stocks&amp;active=true&amp;limit=1000</code> pages the full ticker <b>universe</b>.</div>
+    </div>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/v3/reference/tickers?market=stocks&amp;active=true&amp;limit=1000</span><span class="name">Ticker List (universe)</span></div>
+      <div class="p">Pages the full active-stock <b>universe</b> — the ticker list the sync jobs iterate over.</div>
+      <div class="rl">response</div>
+      <pre>{
+  "status": "OK", "count": 10847,
+  "results": [{
+    "ticker": "A", "name": "Agilent Technologies Inc.",
+    "market": "stocks", "locale": "us", "primary_exchange": "XNYS",
+    "type": "CS", "active": true, "currency_name": "usd"
+  }]
+}</pre>
     </div>
 
     <div class="api">
@@ -489,7 +530,16 @@
   "exchanges": { "nasdaq": "open", "nyse": "open", "otc": "open" },
   "serverTime": "2026-07-23T14:12:42-04:00"
 }</pre>
-      <div class="note"><b>Also:</b> <code>GET /v1/marketstatus/upcoming</code> returns market holidays.</div>
+    </div>
+
+    <div class="api">
+      <div class="hd"><span class="verb">GET</span><span class="path">/v1/marketstatus/upcoming</span><span class="name">Market Holidays</span></div>
+      <div class="p">Upcoming market holidays &amp; early closes per exchange — feeds the session logic behind the status pill.</div>
+      <div class="rl">response</div>
+      <pre>[
+  { "date": "2026-09-07", "exchange": "NASDAQ", "name": "Labor Day", "status": "closed" },
+  { "date": "2026-09-07", "exchange": "NYSE",   "name": "Labor Day", "status": "closed" }
+]</pre>
     </div>
 
     <div class="api">
