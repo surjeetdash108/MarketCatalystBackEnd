@@ -73,6 +73,22 @@
   .comp .tag{font-family:ui-monospace,monospace;font-size:.66rem;color:var(--cc);margin:2px 0 7px;letter-spacing:.02em}
   .comp .d{font-size:.84rem;color:var(--ink-2);line-height:1.45}
 
+  /* frequency table */
+  .ftwrap{overflow-x:auto;margin-bottom:20px;border:1px solid var(--line-2);border-radius:12px}
+  .ftable{width:100%;border-collapse:collapse;font-size:.82rem;min-width:680px}
+  .ftable th{text-align:left;font-family:ui-monospace,monospace;font-size:.62rem;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-dim);padding:10px 13px;border-bottom:1px solid var(--line-2);background:var(--panel-2)}
+  .ftable td{padding:11px 13px;border-bottom:1px solid var(--line);color:var(--ink-2);vertical-align:top;line-height:1.4}
+  .ftable tr:last-child td{border-bottom:none}
+  .ftable td:first-child{color:var(--ink);font-weight:600}
+  .ftable code{font-family:ui-monospace,monospace;font-size:.88em;color:var(--ink)}
+  .ftable .hl{color:var(--accent);font-weight:600}
+  .grouphdr2{font-family:ui-monospace,monospace;font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-dim);margin:8px 0 12px}
+  .schedgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px}
+  .sched{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:12px 14px}
+  .sched .st{font-family:ui-monospace,monospace;font-size:.66rem;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);margin-bottom:7px}
+  .sched .sr{font-size:.8rem;color:var(--ink-2);padding:2px 0;display:flex;justify-content:space-between;gap:10px}
+  .sched .sr b{color:var(--ink);font-family:ui-monospace,monospace;font-size:.86em;font-weight:600;white-space:nowrap}
+
   /* API reference */
   .divider{height:1px;background:var(--line-2);margin:8px 0 0}
   .api{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:10px}
@@ -324,6 +340,106 @@
       <div class="comp" style="--cc:var(--support)"><div class="t">Firebase Auth · Hosting</div><div class="tag">tokens · static files</div><div class="d">Auth issues the ID token that Firestore rules check; Hosting serves the compiled app bundle.</div></div>
       <div class="comp" style="--cc:var(--support)"><div class="t">Secret Manager · Sentry</div><div class="tag">keys · errors</div><div class="d">Secret Manager injects vendor keys into both services at startup; Sentry captures runtime errors (DSN-gated).</div></div>
     </div>
+  </section>
+
+  <!-- ══════════ DATA FLOW · FREQUENCY · CACHE (appended) ══════════ -->
+  <section>
+    <h2>How the data flows — frequency, cache &amp; API calls</h2>
+    <p class="sub">The same paths, now with the timing: who calls what, how often, what's cached, and how fresh it is. Three ideas do all the work — <b>live paths make one vendor call for everyone</b>, the <b>shared cache makes reads independent of user count</b>, and <b>ingestion is batched</b> on a schedule.</p>
+
+    <div class="ftwrap">
+      <table class="ftable">
+        <thead>
+          <tr><th>Data path</th><th>Trigger &amp; cadence</th><th>Cache</th><th>Vendor / store call</th><th>Freshness</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Ticker tape<br><span style="font-weight:400;color:var(--ink-dim)">(SSE broadcast)</span></td>
+            <td>Server poller runs while ≥1 viewer is connected. <span class="hl">1 refresh / 60s</span> in market hours (session-aware; ~15&nbsp;min off-hours). 20s heartbeat.</td>
+            <td>In-memory frame (<code>ReplaySubject</code>); pushed to all clients on change only</td>
+            <td><span class="hl">1</span> × Polygon <code>/v3/snapshot</code> (20 syms) + <code>/fed/…/treasury-yields</code> (6h cache) — <b>for ALL users</b></td>
+            <td>~15&nbsp;min delayed</td>
+          </tr>
+          <tr>
+            <td>Delayed quotes<br><span style="font-weight:400;color:var(--ink-dim)">(watchlist / portfolio / search / stock)</span></td>
+            <td>Browser polls <code>/live/snapshot</code> <span class="hl">every 15s</span> (<code>no-store</code> + <code>If-None-Match</code> → 304 when unchanged)</td>
+            <td>Server cache <code>max-age 5s · s-maxage 10s · swr 30s</code></td>
+            <td>~<span class="hl">1</span> Polygon <code>/v3/snapshot</code> per refresh window, shared by all callers</td>
+            <td>~15&nbsp;min delayed</td>
+          </tr>
+          <tr>
+            <td>Market status</td>
+            <td>Browser fetch on load + revalidate</td>
+            <td>Server cache <span class="hl">60s</span></td>
+            <td>Polygon <code>/v1/marketstatus/now</code></td>
+            <td>Changes a few×/day</td>
+          </tr>
+          <tr>
+            <td>Shared collections<br><span style="font-weight:400;color:var(--ink-dim)">(indices, movers, sectors, earnings, companies…)</span></td>
+            <td>Browser polls <code>/live/collections</code> <span class="hl">every 5&nbsp;min</span> (If-None-Match → 304 when unchanged)</td>
+            <td>Server <span class="hl">5-min TTL</span> + browser <code>max-age 120s · s-maxage 300s</code> + ETag</td>
+            <td>Firestore read ≤1 / collection / 5&nbsp;min / instance — <b>NOT per user</b></td>
+            <td>≤5&nbsp;min behind the daily sync</td>
+          </tr>
+          <tr>
+            <td>Your own data<br><span style="font-weight:400;color:var(--ink-dim)">(watchlist, portfolio, settings)</span></td>
+            <td>Firestore realtime listener (<code>onSnapshot</code>)</td>
+            <td>None — live</td>
+            <td>Firestore push per changed doc (owner-scoped by rules)</td>
+            <td><span class="hl">Instant</span></td>
+          </tr>
+          <tr>
+            <td>Ingestion<br><span style="font-weight:400;color:var(--ink-dim)">(the refresh robot)</span></td>
+            <td>Cloud Scheduler cron (22 jobs) → worker via OIDC — see the schedule below</td>
+            <td>n/a (writes)</td>
+            <td>Polygon (+ FMP/Finnhub fallback) → Firestore <b>Admin SDK</b> write. Grouped-daily = <span class="hl">1</span> call for ~12k stocks</td>
+            <td>Per job (nightly / EOD / 30-min)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grouphdr2">Ingestion schedule — worker cron (America/New_York)</div>
+    <div class="schedgrid">
+      <div class="sched">
+        <div class="st">Overnight batch · 1–4:30 AM</div>
+        <div class="sr"><span>13F institutional holdings</span><b>01:00</b></div>
+        <div class="sr"><span>Insider (Form 4)</span><b>01:30</b></div>
+        <div class="sr"><span>Company profiles</span><b>02:00</b></div>
+        <div class="sr"><span>Price history (5-yr)</span><b>03:00</b></div>
+        <div class="sr"><span>Ticker universe (Sun)</span><b>03:00</b></div>
+        <div class="sr"><span>Relative-strength rating</span><b>04:00</b></div>
+        <div class="sr"><span>Technical indicators</span><b>04:10</b></div>
+        <div class="sr"><span>Tech rating</span><b>04:15</b></div>
+        <div class="sr"><span>Fundamentals growth</span><b>04:30</b></div>
+      </div>
+      <div class="sched">
+        <div class="st">Morning · 6 AM</div>
+        <div class="sr"><span>Analyst actions</span><b>06:00</b></div>
+        <div class="sr"><span>Earnings calendar</span><b>06:00</b></div>
+        <div class="sr"><span>IPO calendar</span><b>06:15</b></div>
+        <div class="sr"><span>Dividends + splits</span><b>06:20</b></div>
+      </div>
+      <div class="sched">
+        <div class="st">Market hours · weekdays</div>
+        <div class="sr"><span>News + sentiment</span><b>every 30 min<br>09:00–16:00</b></div>
+      </div>
+      <div class="sched">
+        <div class="st">End of day · 6:00–6:45 PM</div>
+        <div class="sr"><span>Market movers</span><b>18:00</b></div>
+        <div class="sr"><span>Sectors</span><b>18:00</b></div>
+        <div class="sr"><span>Indices (+ US10Y)</span><b>18:05</b></div>
+        <div class="sr"><span>Market quotes</span><b>18:07</b></div>
+        <div class="sr"><span>Macro events</span><b>18:10</b></div>
+        <div class="sr"><span>Fear &amp; Greed</span><b>18:15</b></div>
+        <div class="sr"><span>Recaps (EOD compose)</span><b>18:45</b></div>
+      </div>
+      <div class="sched">
+        <div class="st">Evening · 7 PM</div>
+        <div class="sr"><span>Options chains</span><b>19:00</b></div>
+      </div>
+    </div>
+    <p class="note" style="margin-top:12px">The EOD block runs weekdays only (<code>* * 1-5</code>); the nightly/morning jobs run daily. Each Scheduler job POSTs the worker's <code>/sync/{job}/run</code> with a signed OIDC token — the browser never triggers ingestion.</p>
   </section>
 
   <!-- ══════════ POLYGON API REFERENCE (appended) ══════════ -->
