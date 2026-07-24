@@ -1,6 +1,13 @@
 -- ============================================================================
 -- MarketCatalyst (FinApp26) — relational schema mirror
 -- ============================================================================
+-- STATE SYNC 2026-07-24: The live store is Firestore — 34 collections, ~322k
+-- docs. Newer collections to mirror if this SQL model is used: `recaps`,
+-- `market_sentiment_history`, and the annual-financials fields (gross_profit,
+-- operating_income) added to `financials`. Note: `/live/collections` (the
+-- 5-minute server-side cache for shared collections) is a SERVING optimisation,
+-- not a store — it reads the same collections below; nothing new to model.
+-- ============================================================================
 -- Purpose: a drop-in relational model of the data MarketCatalyst currently keeps
 -- in Firestore, so that migrating off Firestore (to Postgres, or adapted to
 -- MySQL/SQLite) doesn't require redesigning the data model from scratch.

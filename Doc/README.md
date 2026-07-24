@@ -1,5 +1,55 @@
 # MarketCatalyst — Market Intelligence Terminal
 
+
+> ## ⏱ State sync — 2026-07-24 (current deployed reality)
+>
+> _This block reflects what is actually built, deployed, and running as of
+> 2026-07-24. Where anything below predates it, this block is authoritative._
+>
+> **This doc, specifically:** For the README: the deploy is a two-service Cloud Run split behind Firebase Hosting/Auth/Firestore.
+>
+> **Infrastructure (live).** One image → **two Cloud Run services** split by
+> `APP_ROLE`: a **private `worker`** (`market-catalyst-backend` — all
+> sync/admin/plans) and a **public `live`** (`market-catalyst-live` — `LiveModule`
+> only; `/sync`·`/purge`·`/admin` 404 there). **22 Cloud Scheduler jobs are
+> ENABLED and firing** (OIDC via the `scheduler-invoker` SA). The browser reaches
+> the backend through the public `live` service (`NEXT_PUBLIC_BACKEND_URL`).
+> Vendor keys in **Secret Manager**. Firestore: **34 collections, ~322k docs**.
+>
+> **Live data paths.** SSE ticker tape (`/live/tape/stream`), cached snapshot
+> polling (`/live/snapshot`, backing a **shared live-price subscription** across
+> tape / watchlist / portfolio / search / stock), market status
+> (`/live/market-status`), and a new **`/live/collections`** endpoint that serves
+> the shared, slow-changing collections from a **5-minute server-side cache**
+> (Cache-Control + ETag/304) so per-user Firestore reads no longer scale with
+> user count.
+>
+> **Data completeness (this session).** Real **4-component Fear & Greed** + history
+> backfill (`market_sentiment_history`); **Recaps EOD job** writing `recaps/`
+> per-date docs (prose narrative stays AI, tracked under R36); **macro regime**
+> computed from VIX/breadth/yield; financials now carry **10 quarters + 8 annual
+> years** (income / balance / cash-flow) driving the **EPS & Sales** and **Income
+> statement** *Quarterly / Yearly* tabs; screener filters wired; stock detail
+> fully Polygon-real; **TradingView removed**; heatmap **sector + stock modals**
+> and the dashboard **Market Pulse** wired to real `companies` (fabricated
+> ranges / news / sector rows removed).
+>
+> **Vendor / licensing.** **Polygon/Massive is the ONLY vendor whose data reaches
+> users** (licensed for redistribution). FMP / Finnhub are **worker-only** and are
+> never served to the browser. **15 Polygon endpoints** are in use (see
+> `architecture-map.html`). The one remaining gap is EPS **estimates** (need
+> Polygon's Benzinga add-on). Alpha Vantage was evaluated (~85% data coverage but
+> a redistribution-licensing blocker); OpenRouter is a viable option for the AI
+> layer (AI output is not market-data redistribution).
+>
+> **Delivery plan.** **21 of 36 rows at 100%** (R26 Fear & Greed, R28 Recaps, R30
+> macro complete; R29 capped at 90% pending Benzinga estimates).
+>
+> **Cost.** GCP/Firebase infra ~**$3–5/month** at current usage (scale-to-zero,
+> one vendor call fanned out to all users, shared reads cached); the Polygon data
+> subscription is the dominant fixed cost.
+
+
 A subscription-based active-investor research platform that consolidates earnings, analyst actions, market movers, screening, insider/institutional flows, macro, and portfolio tools into a single dark-themed terminal. Built with Next.js 16 App Router (static export), Firebase Auth + Firestore, and Redux Toolkit.
 
 15 of 18 screens now read at least some live data, additively merged onto the original mock UI (nothing was deleted to make room for it) — see `Doc/screen-data-sources.md` for the accurate, per-screen breakdown of what's real vs. still illustrative, and why. Options Chain's main bid/ask/IV/greeks/OI table stays simulated (Polygon's options snapshot is confirmed 403 on the current plan; would need an upgrade or a Tradier key), and Recaps remains fully static (blocked on `ANTHROPIC_API_KEY` + a new job).

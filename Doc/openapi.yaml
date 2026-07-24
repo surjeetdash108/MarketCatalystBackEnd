@@ -1911,6 +1911,35 @@ paths:
         "200": { description: OK }
         "304": { description: Unchanged since the caller's ETag }
 
+  /live/collections:
+    get:
+      tags: [Live]
+      summary: Shared, slow-changing Firestore collections from a server-side cache
+      description: |
+        Added 2026-07-24. Serves the SHARED, daily-cadence collections (indices,
+        movers, sectors, breadth, sentiment(+history), earnings_events,
+        analyst_actions, ipos, macro_events, recaps, insider_transactions,
+        companies) from one 5-minute server cache. Lets the browser stop opening a
+        per-user Firestore `onSnapshot` on these, so Firestore reads scale with
+        (instances × refreshes) instead of (users × documents). Allow-listed only —
+        never user-owned paths (watchlists, holdings, settings), which stay on the
+        client SDK. `useCollection` on the frontend routes these names here and
+        falls back to a direct Firestore listener if the endpoint is unreachable.
+      x-status: live-backend-only
+      operationId: getCachedCollections
+      parameters:
+        - name: names
+          in: query
+          required: true
+          description: Comma-separated allow-listed collection names (max 24).
+          schema: { type: string }
+          example: companies,market_indices,market_movers,sectors,recaps
+      responses:
+        "200":
+          description: "Object keyed by collection name → array of documents (each with its `id`)."
+        "304": { description: Unchanged since the caller's ETag }
+        "400": { description: A requested collection is not on the cacheable allow-list }
+
   /live/tape/stream:
     get:
       tags: [Live]
