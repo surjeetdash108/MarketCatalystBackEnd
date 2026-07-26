@@ -1,9 +1,8 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
 import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
-import { TICKER_UNIVERSE } from '../common/ticker-universe';
+import { activeUniverse } from '../common/ticker-universe';
 import { MARKET_BARS_ADAPTER, type MarketBarsAdapter } from '../adapters/types';
 import { SyncRegistry } from '../common/sync-registry.service';
 import { planHistoryFloor } from '../vendors/polygon/polygon.service';
@@ -54,15 +53,21 @@ export class StockHistoryJob implements OnModuleInit {
     });
   }
 
-  @Cron('0 3 * * *', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
   }
 
   async run() {
     try {
+      const universe = await activeUniverse(this.firebase.firestore);
+      if (universe.length === 0) {
+        await this.meta.record(JOB_NAME, { ok: true, count: 0 });
+        return { count: 0, note: 'no active tickers yet' };
+      }
+      // Batch never larger than the active universe, so a small
+      // universe is fully covered in one premarket run.
       const cursor = await this.meta.getCursor(JOB_NAME);
-      const batch = Array.from({ length: BATCH_SIZE }, (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length]);
+      const batch = Array.from({ length: Math.min(BATCH_SIZE, universe.length) }, (_, i) => universe[(cursor + i) % universe.length]);
       const today = isoDate(new Date());
       const floor = planHistoryFloor();
       let barsWritten = 0;
@@ -168,7 +173,7 @@ export class StockHistoryJob implements OnModuleInit {
         }
         await sleep(this.bars.requestDelayMs);
       }
-      await this.meta.setCursor(JOB_NAME, (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length);
+      await this.meta.setCursor(JOB_NAME, (cursor + BATCH_SIZE) % universe.length);
       await this.meta.record(JOB_NAME, { ok: true, count: barsWritten });
       return { barsWritten, tickersUpdated };
     } catch (err) {

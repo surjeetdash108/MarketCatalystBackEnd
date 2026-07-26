@@ -1,5 +1,4 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { AllSourcesFailedError } from '../adapters/adapter-error';
 import { MOVERS_ADAPTER, MOVER_ENRICHMENT_ADAPTER, type MoverEnrichmentAdapter, type MoversAdapter } from '../adapters/types';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
@@ -32,7 +31,6 @@ export class MarketMoversJob implements OnModuleInit {
     });
   }
 
-  @Cron('0 18 * * 1-5', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
   }

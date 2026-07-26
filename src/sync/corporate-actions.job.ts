@@ -1,10 +1,9 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
 import { chunkedBatchSet } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
 import { SyncRegistry } from '../common/sync-registry.service';
-import { TICKER_UNIVERSE } from '../common/ticker-universe';
+import { activeUniverse } from '../common/ticker-universe';
 import { PolygonService } from '../vendors/polygon/polygon.service';
 
 /**
@@ -114,17 +113,23 @@ export class CorporateActionsJob implements OnModuleInit {
     });
   }
 
-  @Cron('40 6 * * *', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
   }
 
   async run() {
     try {
+      const universe = await activeUniverse(this.firebase.firestore);
+      if (universe.length === 0) {
+        await this.meta.record(JOB_NAME, { ok: true, count: 0 });
+        return { count: 0, note: 'no active tickers yet' };
+      }
+      // Batch never larger than the active universe, so a small
+      // universe is fully covered in one premarket run.
       const cursor = await this.meta.getCursor(JOB_NAME);
       const batch = Array.from(
-        { length: BATCH_SIZE },
-        (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
+        { length: Math.min(BATCH_SIZE, universe.length) },
+        (_, i) => universe[(cursor + i) % universe.length],
       );
 
       // Prices for the yield derivation, read once for the batch rather than
@@ -211,7 +216,7 @@ export class CorporateActionsJob implements OnModuleInit {
       await chunkedBatchSet(this.firebase.firestore, 'splits', splitDocs);
       await this.meta.setCursor(
         JOB_NAME,
-        (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length,
+        (cursor + BATCH_SIZE) % universe.length,
       );
       await this.meta.record(JOB_NAME, { ok: true, count: divDocs.length });
       return { dividendDocs: divDocs.length, splitDocs: splitDocs.length, failed };

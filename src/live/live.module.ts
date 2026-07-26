@@ -10,6 +10,9 @@ import { TapeService } from './tape.service';
 import { CachedCollectionsController } from './cached-collections.controller';
 import { CachedCollectionsService } from './cached-collections.service';
 import { WhoamiController } from './whoami.controller';
+import { OnDemandController } from './ondemand.controller';
+import { OnDemandService } from './ondemand.service';
+import { TickerSearchService } from './ticker-search.service';
 
 /**
  * Live (delayed) price streaming for the Search screen and the header tape.
@@ -23,8 +26,8 @@ import { WhoamiController } from './whoami.controller';
  */
 @Module({
   imports: [PolygonModule],
-  controllers: [LiveController, SnapshotController, TapeController, CachedCollectionsController, WhoamiController],
-  providers: [PolygonLiveService, SnapshotCacheService, MarketStatusService, TapeService, CachedCollectionsService],
-  exports: [PolygonLiveService, SnapshotCacheService, MarketStatusService, TapeService, CachedCollectionsService],
+  controllers: [LiveController, SnapshotController, TapeController, CachedCollectionsController, WhoamiController, OnDemandController],
+  providers: [PolygonLiveService, SnapshotCacheService, MarketStatusService, TapeService, CachedCollectionsService, OnDemandService, TickerSearchService],
+  exports: [PolygonLiveService, SnapshotCacheService, MarketStatusService, TapeService, CachedCollectionsService, OnDemandService, TickerSearchService],
 })
 export class LiveModule {}

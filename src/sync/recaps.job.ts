@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { setWithCreatedAt } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
 import { SyncRegistry } from '../common/sync-registry.service';
 
@@ -45,7 +45,6 @@ export class RecapsJob implements OnModuleInit {
     });
   }
 
-  @Cron('45 18 * * 1-5', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
   }
@@ -129,22 +128,19 @@ export class RecapsJob implements OnModuleInit {
         : null;
 
       const date = breadthId ?? isoDate(new Date());
-      await db.collection('recaps').doc(date).set(
-        {
-          date,
-          indices,
-          topGainers,
-          topLosers,
-          sectorLeaders,
-          sectorLaggards,
-          internals,
-          // Narrative is R36 (Anthropic) — this job intentionally leaves it null.
-          narrative: null,
-          source: 'polygon-derived',
-          updatedAt: new Date().toISOString(),
-        },
-        { merge: true },
-      );
+      await setWithCreatedAt(db, db.collection('recaps').doc(date), {
+        date,
+        indices,
+        topGainers,
+        topLosers,
+        sectorLeaders,
+        sectorLaggards,
+        internals,
+        // Narrative is R36 (Anthropic) — this job intentionally leaves it null.
+        narrative: null,
+        source: 'polygon-derived',
+        updatedAt: new Date().toISOString(),
+      });
 
       await this.meta.record(JOB_NAME, { ok: true, count: 1 });
       this.logger.log(

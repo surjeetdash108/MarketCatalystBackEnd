@@ -1,697 +1,1281 @@
-<title>MarketCatalyst — How it works</title>
-<style>
-  :root{
-    --bg:#0a0e13; --panel:#0f151c; --panel-2:#131c25; --card:#0e141b; --card-2:#121a23;
-    --ink:#e8eff5; --ink-2:#b6c4d0; --ink-dim:#8598a6; --line:#1d2836; --line-2:#2b3a4a;
-    --accent:#2fe6a6;
-    --read:#2fe6a6; --price:#38bdf8; --refresh:#f4b740; --support:#8598a6;
-    --maxw:960px;
-  }
-  @media (prefers-color-scheme: light){
-    :root{
-      --bg:#eef2f7; --panel:#ffffff; --panel-2:#f3f6fa; --card:#ffffff; --card-2:#f6f9fc;
-      --ink:#0e1a24; --ink-2:#33475a; --ink-dim:#5a6c7c; --line:#dae2ea; --line-2:#c4d1dc;
-      --read:#0c9b71; --price:#0277bd; --refresh:#b07d10; --support:#5f6f7e;
-    }
-  }
-  :root[data-theme="dark"]{
-    --bg:#0a0e13; --panel:#0f151c; --panel-2:#131c25; --card:#0e141b; --card-2:#121a23;
-    --ink:#e8eff5; --ink-2:#b6c4d0; --ink-dim:#8598a6; --line:#1d2836; --line-2:#2b3a4a;
-    --read:#2fe6a6; --price:#38bdf8; --refresh:#f4b740; --support:#8598a6;
-  }
-  :root[data-theme="light"]{
-    --bg:#eef2f7; --panel:#ffffff; --panel-2:#f3f6fa; --card:#ffffff; --card-2:#f6f9fc;
-    --ink:#0e1a24; --ink-2:#33475a; --ink-dim:#5a6c7c; --line:#dae2ea; --line-2:#c4d1dc;
-    --read:#0c9b71; --price:#0277bd; --refresh:#b07d10; --support:#5f6f7e;
-  }
-  *{box-sizing:border-box}
-  html{-webkit-text-size-adjust:100%}
-  body{margin:0;background:var(--bg);color:var(--ink);
-    font-family:ui-sans-serif,-apple-system,"Segoe UI",system-ui,Roboto,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
-  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-  .wrap{max-width:var(--maxw);margin:0 auto;padding:clamp(24px,5vw,54px) clamp(16px,4vw,40px) 76px}
-  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
-
-  .eyebrow{font-family:ui-monospace,monospace;font-size:.72rem;letter-spacing:.24em;text-transform:uppercase;color:var(--accent);margin:0 0 12px}
-  h1{font-size:clamp(1.8rem,4.6vw,2.7rem);line-height:1.05;margin:0 0 14px;font-weight:800;letter-spacing:-.02em;text-wrap:balance}
-  .dek{font-size:clamp(1.02rem,1.6vw,1.16rem);color:var(--ink-2);max-width:60ch;margin:0}
-
-  section{margin-top:clamp(30px,5vw,48px)}
-  h2{font-size:1.15rem;font-weight:700;letter-spacing:-.01em;margin:0 0 4px}
-  .sub{color:var(--ink-dim);font-size:.9rem;margin:0 0 18px}
-
-  /* diagram */
-  .diagram{overflow-x:auto;background:var(--panel);border:1px solid var(--line-2);border-radius:16px;padding:10px}
-  .diagram svg{display:block;width:100%;min-width:640px;height:auto}
-  .diagram .nm{font-family:ui-sans-serif,system-ui,sans-serif;font-weight:700;fill:var(--ink)}
-  .diagram .ns{font-family:ui-monospace,monospace;fill:var(--ink-dim)}
-  .diagram .el{font-family:ui-sans-serif,system-ui,sans-serif;font-weight:600}
-
-  .key{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:14px;font-size:.85rem}
-  .key b{font-weight:600;color:var(--ink)}
-  .key .d{display:inline-block;width:26px;height:0;border-top:3px solid;border-radius:2px;vertical-align:middle;margin-right:7px}
-
-  /* flow cards */
-  .flows{display:grid;grid-template-columns:1fr;gap:12px}
-  .flow{display:grid;grid-template-columns:44px 1fr;gap:15px;align-items:start;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--fc);border-radius:13px;padding:16px 18px}
-  .flow .num{font-family:ui-mono,ui-monospace,monospace;font-weight:800;font-size:1.15rem;color:var(--fc);background:color-mix(in srgb,var(--fc) 15%,transparent);border-radius:10px;height:40px;display:grid;place-items:center}
-  .flow h3{margin:0 0 5px;font-size:1.05rem;font-weight:700}
-  .flow p{margin:0;color:var(--ink-2);font-size:.94rem}
-  .flow p b{color:var(--ink);font-weight:600}
-  .flow .tech{margin-top:8px;font-family:ui-monospace,monospace;font-size:.72rem;color:var(--ink-dim)}
-
-  /* supporting */
-  .supp{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
-  .s{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:10px 13px}
-  .s .t{font-weight:700;font-size:.88rem;color:var(--ink)}
-  .s .d{font-size:.82rem;color:var(--ink-dim);margin-top:1px}
-
-  /* technical components */
-  .comp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
-  .comp{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--cc,var(--accent));border-radius:11px;padding:13px 15px}
-  .comp .t{font-weight:700;font-size:.92rem;color:var(--ink)}
-  .comp .tag{font-family:ui-monospace,monospace;font-size:.66rem;color:var(--cc);margin:2px 0 7px;letter-spacing:.02em}
-  .comp .d{font-size:.84rem;color:var(--ink-2);line-height:1.45}
-
-  /* frequency table */
-  .ftwrap{overflow-x:auto;margin-bottom:20px;border:1px solid var(--line-2);border-radius:12px}
-  .ftable{width:100%;border-collapse:collapse;font-size:.82rem;min-width:680px}
-  .ftable th{text-align:left;font-family:ui-monospace,monospace;font-size:.62rem;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-dim);padding:10px 13px;border-bottom:1px solid var(--line-2);background:var(--panel-2)}
-  .ftable td{padding:11px 13px;border-bottom:1px solid var(--line);color:var(--ink-2);vertical-align:top;line-height:1.4}
-  .ftable tr:last-child td{border-bottom:none}
-  .ftable td:first-child{color:var(--ink);font-weight:600}
-  .ftable code{font-family:ui-monospace,monospace;font-size:.88em;color:var(--ink)}
-  .ftable .hl{color:var(--accent);font-weight:600}
-  .grouphdr2{font-family:ui-monospace,monospace;font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-dim);margin:8px 0 12px}
-  .schedgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px}
-  .sched{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:12px 14px}
-  .sched .st{font-family:ui-monospace,monospace;font-size:.66rem;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);margin-bottom:7px}
-  .sched .sr{font-size:.8rem;color:var(--ink-2);padding:2px 0;display:flex;justify-content:space-between;gap:10px}
-  .sched .sr b{color:var(--ink);font-family:ui-monospace,monospace;font-size:.86em;font-weight:600;white-space:nowrap}
-
-  /* API reference */
-  .divider{height:1px;background:var(--line-2);margin:8px 0 0}
-  .api{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:10px}
-  .api .hd{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
-  .api .verb{font-family:ui-monospace,monospace;font-size:.68rem;font-weight:700;color:#08110d;background:var(--read);border-radius:5px;padding:1px 6px}
-  .api .path{font-family:ui-monospace,monospace;font-size:.82rem;font-weight:600;color:var(--ink);word-break:break-all}
-  .api .name{margin-left:auto;font-size:.8rem;color:var(--ink-dim)}
-  .api .p{font-size:.85rem;color:var(--ink-2);margin:8px 0 10px}
-  .api .p b{color:var(--ink);font-weight:600}
-  .api .rl{font-family:ui-monospace,monospace;font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-dim);margin:0 0 5px}
-  .api pre{margin:0;overflow-x:auto;background:var(--panel-2);border:1px solid var(--line-2);border-radius:8px;padding:11px 13px;font-family:ui-monospace,monospace;font-size:.72rem;line-height:1.5;color:var(--ink-2);white-space:pre}
-  .note{font-size:.8rem;color:var(--ink-dim);margin-top:7px}
-  .note b{color:var(--ink-2)}
-  .apiidx{margin:0 0 20px;padding:14px 16px;background:var(--panel-2);border:1px solid var(--line-2);border-radius:12px}
-  .apiidx .cap{font-family:ui-monospace,monospace;font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-dim);margin:0 0 10px}
-  .apiidx ol{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:6px 22px}
-  .apiidx li{display:flex;gap:9px;align-items:baseline;font-size:.8rem}
-  .apiidx .i{font-family:ui-monospace,monospace;font-size:.7rem;color:var(--accent);min-width:16px;text-align:right}
-  .apiidx .pp{font-family:ui-monospace,monospace;font-size:.74rem;color:var(--ink);word-break:break-all}
-  .apiidx .pu{color:var(--ink-dim)}
-
-  footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);font-family:ui-monospace,monospace;font-size:.74rem;color:var(--ink-dim)}
-</style>
-
-<div class="wrap">
-  <p class="sr-only">A simplified map of MarketCatalyst showing three flows: the browser reads the database live, asks a public price service for live prices, and a private collector refreshes the database on a timer from market-data vendors.</p>
-
-  <header>
-    <p class="eyebrow">How MarketCatalyst works</p>
-    <h1>The whole system, in one picture</h1>
-    <p class="dek">There are really just <b>three things going on</b>: your browser <b>reads</b> the database live, <b>asks</b> a price service for moving prices, and a background <b>collector</b> keeps the database fresh. Everything else supports those three.</p>
-  </header>
-
-  <section>
-    <div class="diagram">
-      <svg viewBox="0 0 1040 520" role="img" aria-labelledby="t d">
-        <title id="t">MarketCatalyst simplified architecture</title>
-        <desc id="d">The browser reads the Firestore database directly (green), asks the public price service which fetches from vendors (blue), and a private collector on a timer fetches from vendors and saves to the database (amber).</desc>
-        <defs>
-          <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/>
-          </marker>
-        </defs>
-
-        <!-- edges (under nodes) -->
-        <g fill="none" stroke-width="2.4" marker-end="url(#a)">
-          <!-- support -->
-          <path d="M226,150 L232,224" style="stroke:var(--support)"/>
-          <path d="M226,92 L232,220" style="stroke:var(--support)" marker-start="url(#a)"/>
-          <!-- read (green): database -> browser -->
-          <path d="M360,278 L242,284" style="stroke:var(--read)" stroke-width="3"/>
-          <!-- shared collections cached via the live service (read path) -->
-          <path d="M572,254 L660,156" style="stroke:var(--read)" stroke-width="2.2" stroke-dasharray="5 4"/>
-          <!-- prices (blue): browser -> price service -> vendors -->
-          <path d="M242,250 L662,136" style="stroke:var(--price)" stroke-width="3"/>
-          <path d="M858,132 L906,206" style="stroke:var(--price)"/>
-          <!-- refresh (amber): timer -> collector -> vendors, collector -> database -->
-          <path d="M760,458 L760,422" style="stroke:var(--refresh)"/>
-          <path d="M858,372 L906,332" style="stroke:var(--refresh)"/>
-          <path d="M662,368 L572,300" style="stroke:var(--refresh)" stroke-width="3"/>
-        </g>
-
-        <!-- edge labels -->
-        <g class="el" font-size="12.5" text-anchor="middle">
-          <text x="150" y="196" style="fill:var(--support)" font-size="11">loads app / login</text>
-          <text x="300" y="264" style="fill:var(--read)">reads data (live)</text>
-          <text x="604" y="200" style="fill:var(--read)" font-size="10.5" text-anchor="middle">shared cache</text>
-          <text x="452" y="176" style="fill:var(--price)">asks for prices</text>
-          <text x="656" y="406" text-anchor="end" style="fill:var(--refresh)" font-size="11.5">saves fresh data</text>
-          <text x="690" y="448" style="fill:var(--refresh)" font-size="11" text-anchor="end">on a timer</text>
-        </g>
-
-        <!-- nodes -->
-        <g>
-          <rect x="48" y="64" width="178" height="44" rx="10" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.6"/>
-          <text x="137" y="83" class="nm" text-anchor="middle" font-size="13.5">Sign-in</text>
-          <text x="137" y="99" class="ns" text-anchor="middle" font-size="9.5">Firebase Auth</text>
-
-          <rect x="48" y="130" width="178" height="44" rx="10" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.6"/>
-          <text x="137" y="149" class="nm" text-anchor="middle" font-size="13.5">App files</text>
-          <text x="137" y="165" class="ns" text-anchor="middle" font-size="9.5">Firebase Hosting</text>
-
-          <rect x="44" y="218" width="196" height="118" rx="13" style="fill:var(--card-2);stroke:var(--accent)" stroke-width="2.2"/>
-          <text x="142" y="270" class="nm" text-anchor="middle" font-size="18">Your browser</text>
-          <text x="142" y="292" class="ns" text-anchor="middle" font-size="11">the app you use</text>
-
-          <rect x="360" y="232" width="212" height="104" rx="13" style="fill:var(--card-2);stroke:var(--read)" stroke-width="2.2"/>
-          <text x="466" y="280" class="nm" text-anchor="middle" font-size="17">Database</text>
-          <text x="466" y="301" class="ns" text-anchor="middle" font-size="11">Cloud Firestore</text>
-
-          <rect x="662" y="96" width="196" height="80" rx="12" style="fill:var(--card-2);stroke:var(--price)" stroke-width="2.2"/>
-          <text x="760" y="130" class="nm" text-anchor="middle" font-size="15">Live service</text>
-          <text x="760" y="150" class="ns" text-anchor="middle" font-size="10.5">prices + cached reads</text>
-
-          <rect x="662" y="336" width="196" height="84" rx="12" style="fill:var(--card-2);stroke:var(--refresh)" stroke-width="2.2"/>
-          <text x="760" y="372" class="nm" text-anchor="middle" font-size="15">Data collector</text>
-          <text x="760" y="392" class="ns" text-anchor="middle" font-size="10.5">private, Cloud Run</text>
-
-          <rect x="662" y="458" width="196" height="52" rx="11" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.6"/>
-          <text x="760" y="480" class="nm" text-anchor="middle" font-size="13.5">Timer</text>
-          <text x="760" y="496" class="ns" text-anchor="middle" font-size="9.5">Cloud Scheduler</text>
-
-          <rect x="906" y="150" width="126" height="266" rx="13" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.8"/>
-          <text x="969" y="278" class="nm" text-anchor="middle" font-size="14">Market</text>
-          <text x="969" y="296" class="nm" text-anchor="middle" font-size="14">data</text>
-          <text x="969" y="320" class="ns" text-anchor="middle" font-size="10">Polygon +</text>
-        </g>
-      </svg>
-    </div>
-    <div class="key">
-      <span><span class="d" style="border-color:var(--read)"></span><b>Read</b>: browser &harr; database (owner data direct; shared data via the live-service <span class="mono">/live/collections</span> 5-min cache — dashed)</span>
-      <span><span class="d" style="border-color:var(--price)"></span><b>Live prices</b>: browser &rarr; live service &rarr; vendors</span>
-      <span><span class="d" style="border-color:var(--refresh)"></span><b>Refresh</b>: timer &rarr; collector &rarr; database</span>
-    </div>
-  </section>
-
-  <section>
-    <h2>The three flows, in plain words</h2>
-    <p class="sub">Read them top to bottom — that's the whole system.</p>
-    <div class="flows">
-      <div class="flow" style="--fc:var(--read)">
-        <div class="num">1</div>
-        <div>
-          <h3>Reading data</h3>
-          <p>Your browser talks to the <b>database directly and live</b>. Open any screen — companies, earnings, movers, news — and the data appears, then keeps updating on its own. <b>No server sits in between.</b></p>
-          <div class="tech">Firestore realtime listeners (onSnapshot) for your own data (watchlist, portfolio). Shared, slow-changing data (indices, movers, sectors, earnings…) is served from a 5-minute cache on the live service (<code>/live/collections</code>, ETag/304) so reads don't scale with users.</div>
-        </div>
-      </div>
-      <div class="flow" style="--fc:var(--price)">
-        <div class="num">2</div>
-        <div>
-          <h3>Live prices</h3>
-          <p>Moving prices and the ticker tape come from a small <b>public price service</b> that fetches from the market-data vendor (Polygon). <b>One fetch is shared by every user</b>, so it stays fast and cheap — no matter how many people are online.</p>
-          <div class="tech">Cloud Run "live" service · cached polling + a shared SSE stream · ~15-min delayed on the current plan.</div>
-        </div>
-      </div>
-      <div class="flow" style="--fc:var(--refresh)">
-        <div class="num">3</div>
-        <div>
-          <h3>Refreshing the data</h3>
-          <p>On a <b>timer</b>, a separate <b>private collector</b> pulls fresh company data, earnings and news from the vendors and <b>saves it into the database</b> — which your browser then shows through flow 1. This runs quietly in the background; users never touch it.</p>
-          <div class="tech">Cloud Scheduler → private "worker" Cloud Run → vendors → writes Firestore. 22 jobs on a schedule.</div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <h2>The supporting pieces</h2>
-    <p class="sub">Everything else just holds those three flows up.</p>
-    <div class="supp">
-      <div class="s"><div class="t">Sign-in</div><div class="d">Firebase Auth — who you are</div></div>
-      <div class="s"><div class="t">App files</div><div class="d">Firebase Hosting — serves the app</div></div>
-      <div class="s"><div class="t">Two services, one build</div><div class="d">Public "live" + private "worker" from the same image</div></div>
-      <div class="s"><div class="t">Secret Manager</div><div class="d">Keeps the vendor API keys</div></div>
-      <div class="s"><div class="t">Vendor rule</div><div class="d">Only Polygon (licensed) reaches users</div></div>
-      <div class="s"><div class="t">Sentry</div><div class="d">Flags errors if they happen</div></div>
-    </div>
-  </section>
-
-  <!-- ══════════ TECHNICAL VIEW (appended) ══════════ -->
-  <section>
-    <h2>Technical view</h2>
-    <p class="sub">The same three flows, now with the real services, transports and endpoints on every arrow.</p>
-    <div class="diagram">
-      <svg viewBox="0 0 1040 520" role="img" aria-labelledby="tt td">
-        <title id="tt">MarketCatalyst technical architecture</title>
-        <desc id="td">Browser reads owner data from Firestore over the client SDK (onSnapshot); shared collections come from the live service's /live/collections 5-minute cache which reads Firestore server-side. The browser also calls the live service for prices over HTTP and SSE (Polygon /v3/snapshot). Cloud Scheduler triggers the private worker over OIDC, which calls Polygon REST and writes Firestore with the Admin SDK.</desc>
-        <defs>
-          <marker id="ta" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/>
-          </marker>
-        </defs>
-        <g fill="none" stroke-width="2.4" marker-end="url(#ta)">
-          <path d="M226,150 L232,224" style="stroke:var(--support)"/>
-          <path d="M226,92 L232,220" style="stroke:var(--support)" marker-start="url(#ta)"/>
-          <path d="M360,278 L242,284" style="stroke:var(--read)" stroke-width="3"/>
-          <path d="M566,254 L664,168" style="stroke:var(--read)" stroke-width="2.2" stroke-dasharray="5 4"/>
-          <path d="M242,250 L662,136" style="stroke:var(--price)" stroke-width="3"/>
-          <path d="M858,132 L906,206" style="stroke:var(--price)"/>
-          <path d="M760,458 L760,422" style="stroke:var(--refresh)"/>
-          <path d="M858,372 L906,332" style="stroke:var(--refresh)"/>
-          <path d="M662,368 L572,300" style="stroke:var(--refresh)" stroke-width="3"/>
-        </g>
-        <g class="el" font-size="11.5" text-anchor="middle">
-          <text x="150" y="196" style="fill:var(--support)" font-size="10.5">static · ID token</text>
-          <text x="300" y="264" style="fill:var(--read)">onSnapshot</text>
-          <text x="600" y="198" style="fill:var(--read)" font-size="10">GET /live/collections</text>
-          <text x="600" y="211" style="fill:var(--read)" font-size="9.5" text-anchor="start">5-min cache</text>
-          <text x="450" y="168" style="fill:var(--price)">GET /live/snapshot (+SSE tape)</text>
-          <text x="892" y="168" style="fill:var(--price)" text-anchor="start" font-size="10.5">/v3/snapshot</text>
-          <text x="656" y="406" text-anchor="end" style="fill:var(--refresh)" font-size="11">Admin SDK write</text>
-          <text x="892" y="356" style="fill:var(--refresh)" text-anchor="start" font-size="10.5">REST (adapter)</text>
-          <text x="690" y="448" text-anchor="end" style="fill:var(--refresh)" font-size="10.5">POST /sync/*/run · OIDC</text>
-        </g>
-        <g>
-          <rect x="48" y="64" width="178" height="44" rx="10" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.6"/>
-          <text x="137" y="83" class="nm" text-anchor="middle" font-size="13.5">Firebase Auth</text>
-          <text x="137" y="99" class="ns" text-anchor="middle" font-size="9.5">ID tokens · OAuth</text>
-
-          <rect x="48" y="130" width="178" height="44" rx="10" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.6"/>
-          <text x="137" y="149" class="nm" text-anchor="middle" font-size="13.5">Firebase Hosting</text>
-          <text x="137" y="165" class="ns" text-anchor="middle" font-size="9.5">static export</text>
-
-          <rect x="44" y="218" width="196" height="118" rx="13" style="fill:var(--card-2);stroke:var(--accent)" stroke-width="2.2"/>
-          <text x="142" y="270" class="nm" text-anchor="middle" font-size="17">Browser SPA</text>
-          <text x="142" y="292" class="ns" text-anchor="middle" font-size="10.5">Next.js · Redux · client SDK</text>
-
-          <rect x="360" y="232" width="212" height="104" rx="13" style="fill:var(--card-2);stroke:var(--read)" stroke-width="2.2"/>
-          <text x="466" y="280" class="nm" text-anchor="middle" font-size="16">Cloud Firestore</text>
-          <text x="466" y="301" class="ns" text-anchor="middle" font-size="10.5">40+ collections · rules</text>
-
-          <rect x="662" y="96" width="196" height="80" rx="12" style="fill:var(--card-2);stroke:var(--price)" stroke-width="2.2"/>
-          <text x="760" y="130" class="nm" text-anchor="middle" font-size="15">live · Cloud Run</text>
-          <text x="760" y="150" class="ns" text-anchor="middle" font-size="10">APP_ROLE=live · public</text>
-
-          <rect x="662" y="336" width="196" height="84" rx="12" style="fill:var(--card-2);stroke:var(--refresh)" stroke-width="2.2"/>
-          <text x="760" y="372" class="nm" text-anchor="middle" font-size="15">worker · Cloud Run</text>
-          <text x="760" y="392" class="ns" text-anchor="middle" font-size="10">APP_ROLE=worker · private</text>
-
-          <rect x="662" y="458" width="196" height="52" rx="11" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.6"/>
-          <text x="760" y="480" class="nm" text-anchor="middle" font-size="13.5">Cloud Scheduler</text>
-          <text x="760" y="496" class="ns" text-anchor="middle" font-size="9.5">22 cron jobs · OIDC</text>
-
-          <rect x="906" y="150" width="126" height="266" rx="13" style="fill:var(--card-2);stroke:var(--support)" stroke-width="1.8"/>
-          <text x="969" y="270" class="nm" text-anchor="middle" font-size="13.5">Polygon</text>
-          <text x="969" y="288" class="nm" text-anchor="middle" font-size="13.5">Massive</text>
-          <text x="969" y="312" class="ns" text-anchor="middle" font-size="10">REST</text>
-        </g>
-      </svg>
-    </div>
-    <div class="key">
-      <span><span class="d" style="border-color:var(--read)"></span><b>Read</b>: onSnapshot (owner) + <span class="mono">/live/collections</span> 5-min cache (shared, dashed)</span>
-      <span><span class="d" style="border-color:var(--price)"></span><b>Prices</b>: HTTP poll + SSE &rarr; Polygon</span>
-      <span><span class="d" style="border-color:var(--refresh)"></span><b>Refresh</b>: OIDC cron &rarr; worker &rarr; Admin SDK</span>
-    </div>
-  </section>
-
-  <section>
-    <h2>Components, explained</h2>
-    <p class="sub">What each box actually is.</p>
-    <div class="comp-grid">
-      <div class="comp" style="--cc:var(--accent)"><div class="t">Browser SPA</div><div class="tag">Next.js · static export</div><div class="d">The app. Client components + Redux (auth/profile). Reads Firestore directly and calls the live service; holds no vendor keys.</div></div>
-      <div class="comp" style="--cc:var(--read)"><div class="t">Cloud Firestore</div><div class="tag">client SDK + Admin SDK</div><div class="d">The single source of truth for domain data. The worker writes it server-side; the browser reads owner data (watchlist, portfolio) live via <code>onSnapshot</code>, while shared collections come through the live service's <code>/live/collections</code> 5-min cache (ETag/304) to keep Firestore reads flat as users grow.</div></div>
-      <div class="comp" style="--cc:var(--price)"><div class="t">live · Cloud Run</div><div class="tag">APP_ROLE=live · public</div><div class="d">Mounts only the LiveModule. Serves <code>/live/snapshot</code>, the SSE <code>/live/tape/stream</code> and <code>/live/market-status</code>. No admin routes exist here.</div></div>
-      <div class="comp" style="--cc:var(--refresh)"><div class="t">worker · Cloud Run</div><div class="tag">APP_ROLE=worker · private</div><div class="d">Same image, all the sync/admin/plans modules. Only Cloud Scheduler (OIDC) can reach it. Runs the 22 ingestion jobs.</div></div>
-      <div class="comp" style="--cc:var(--support)"><div class="t">Cloud Scheduler</div><div class="tag">22 jobs · OIDC</div><div class="d">Fires <code>POST /sync/{job}/run</code> on each job's cron with a signed OIDC token for the <code>scheduler-invoker</code> service account.</div></div>
-      <div class="comp" style="--cc:var(--support)"><div class="t">Polygon / Massive</div><div class="tag">REST · ~15m delayed</div><div class="d">The market-data vendor. The <b>only</b> vendor whose data reaches users (licensed for redistribution). See the endpoint list below.</div></div>
-      <div class="comp" style="--cc:var(--support)"><div class="t">Firebase Auth · Hosting</div><div class="tag">tokens · static files</div><div class="d">Auth issues the ID token that Firestore rules check; Hosting serves the compiled app bundle.</div></div>
-      <div class="comp" style="--cc:var(--support)"><div class="t">Secret Manager · Sentry</div><div class="tag">keys · errors</div><div class="d">Secret Manager injects vendor keys into both services at startup; Sentry captures runtime errors (DSN-gated).</div></div>
-    </div>
-  </section>
-
-  <!-- ══════════ DATA FLOW · FREQUENCY · CACHE (appended) ══════════ -->
-  <section>
-    <h2>How the data flows — frequency, cache &amp; API calls</h2>
-    <p class="sub">The same paths, now with the timing: who calls what, how often, what's cached, and how fresh it is. Three ideas do all the work — <b>live paths make one vendor call for everyone</b>, the <b>shared cache makes reads independent of user count</b>, and <b>ingestion is batched</b> on a schedule.</p>
-
-    <div class="ftwrap">
-      <table class="ftable">
-        <thead>
-          <tr><th>Data path</th><th>Trigger &amp; cadence</th><th>Cache</th><th>Vendor / store call</th><th>Freshness</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>Ticker tape<br><span style="font-weight:400;color:var(--ink-dim)">(SSE broadcast)</span></td>
-            <td>Server poller runs while ≥1 viewer is connected. <span class="hl">1 refresh / 60s</span> in market hours (session-aware; ~15&nbsp;min off-hours). 20s heartbeat.</td>
-            <td>In-memory frame (<code>ReplaySubject</code>); pushed to all clients on change only</td>
-            <td><span class="hl">1</span> × Polygon <code>/v3/snapshot</code> (20 syms) + <code>/fed/…/treasury-yields</code> (6h cache) — <b>for ALL users</b></td>
-            <td>~15&nbsp;min delayed</td>
-          </tr>
-          <tr>
-            <td>Delayed quotes<br><span style="font-weight:400;color:var(--ink-dim)">(watchlist / portfolio / search / stock)</span></td>
-            <td>Browser polls <code>/live/snapshot</code> <span class="hl">every 15s</span> (<code>no-store</code> + <code>If-None-Match</code> → 304 when unchanged)</td>
-            <td>Server cache <code>max-age 5s · s-maxage 10s · swr 30s</code></td>
-            <td>~<span class="hl">1</span> Polygon <code>/v3/snapshot</code> per refresh window, shared by all callers</td>
-            <td>~15&nbsp;min delayed</td>
-          </tr>
-          <tr>
-            <td>Market status</td>
-            <td>Browser fetch on load + revalidate</td>
-            <td>Server cache <span class="hl">60s</span></td>
-            <td>Polygon <code>/v1/marketstatus/now</code></td>
-            <td>Changes a few×/day</td>
-          </tr>
-          <tr>
-            <td>Shared collections<br><span style="font-weight:400;color:var(--ink-dim)">(indices, movers, sectors, earnings, companies…)</span></td>
-            <td>Browser polls <code>/live/collections</code> <span class="hl">every 5&nbsp;min</span> (If-None-Match → 304 when unchanged)</td>
-            <td>Server <span class="hl">5-min TTL</span> + browser <code>max-age 120s · s-maxage 300s</code> + ETag</td>
-            <td>Firestore read ≤1 / collection / 5&nbsp;min / instance — <b>NOT per user</b></td>
-            <td>≤5&nbsp;min behind the daily sync</td>
-          </tr>
-          <tr>
-            <td>Your own data<br><span style="font-weight:400;color:var(--ink-dim)">(watchlist, portfolio, settings)</span></td>
-            <td>Firestore realtime listener (<code>onSnapshot</code>)</td>
-            <td>None — live</td>
-            <td>Firestore push per changed doc (owner-scoped by rules)</td>
-            <td><span class="hl">Instant</span></td>
-          </tr>
-          <tr>
-            <td>Ingestion<br><span style="font-weight:400;color:var(--ink-dim)">(the refresh robot)</span></td>
-            <td>Cloud Scheduler cron (22 jobs) → worker via OIDC — see the schedule below</td>
-            <td>n/a (writes)</td>
-            <td>Polygon (+ FMP/Finnhub fallback) → Firestore <b>Admin SDK</b> write. Grouped-daily = <span class="hl">1</span> call for ~12k stocks</td>
-            <td>Per job (nightly / EOD / 30-min)</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="grouphdr2">Ingestion schedule — worker cron (America/New_York)</div>
-    <div class="schedgrid">
-      <div class="sched">
-        <div class="st">Overnight batch · 1–4:30 AM</div>
-        <div class="sr"><span>13F institutional holdings</span><b>01:00</b></div>
-        <div class="sr"><span>Insider (Form 4)</span><b>01:30</b></div>
-        <div class="sr"><span>Company profiles</span><b>02:00</b></div>
-        <div class="sr"><span>Price history (5-yr)</span><b>03:00</b></div>
-        <div class="sr"><span>Ticker universe (Sun)</span><b>03:00</b></div>
-        <div class="sr"><span>Relative-strength rating</span><b>04:00</b></div>
-        <div class="sr"><span>Technical indicators</span><b>04:10</b></div>
-        <div class="sr"><span>Tech rating</span><b>04:15</b></div>
-        <div class="sr"><span>Fundamentals growth</span><b>04:30</b></div>
-      </div>
-      <div class="sched">
-        <div class="st">Morning · 6 AM</div>
-        <div class="sr"><span>Analyst actions</span><b>06:00</b></div>
-        <div class="sr"><span>Earnings calendar</span><b>06:00</b></div>
-        <div class="sr"><span>IPO calendar</span><b>06:15</b></div>
-        <div class="sr"><span>Dividends + splits</span><b>06:20</b></div>
-      </div>
-      <div class="sched">
-        <div class="st">Market hours · weekdays</div>
-        <div class="sr"><span>News + sentiment</span><b>every 30 min<br>09:00–16:00</b></div>
-      </div>
-      <div class="sched">
-        <div class="st">End of day · 6:00–6:45 PM</div>
-        <div class="sr"><span>Market movers</span><b>18:00</b></div>
-        <div class="sr"><span>Sectors</span><b>18:00</b></div>
-        <div class="sr"><span>Indices (+ US10Y)</span><b>18:05</b></div>
-        <div class="sr"><span>Market quotes</span><b>18:07</b></div>
-        <div class="sr"><span>Macro events</span><b>18:10</b></div>
-        <div class="sr"><span>Fear &amp; Greed</span><b>18:15</b></div>
-        <div class="sr"><span>Recaps (EOD compose)</span><b>18:45</b></div>
-      </div>
-      <div class="sched">
-        <div class="st">Evening · 7 PM</div>
-        <div class="sr"><span>Options chains</span><b>19:00</b></div>
-      </div>
-    </div>
-    <p class="note" style="margin-top:12px">The EOD block runs weekdays only (<code>* * 1-5</code>); the nightly/morning jobs run daily. Each Scheduler job POSTs the worker's <code>/sync/{job}/run</code> with a signed OIDC token — the browser never triggers ingestion.</p>
-  </section>
-
-  <!-- ══════════ POLYGON API REFERENCE (appended) ══════════ -->
-  <section>
-    <h2>Polygon APIs we call</h2>
-    <p class="sub">All <b>15 Polygon / Massive endpoints</b> in the pipeline, with a <b>real trimmed response</b> captured from our key. Requests are simple GETs; <code>apiKey</code> and paging omitted for clarity.</p>
-
-    <div class="apiidx">
-      <div class="cap">At a glance — every endpoint we call</div>
-      <ol>
-        <li><span class="i">1</span><span><span class="pp">/v3/snapshot</span> <span class="pu">— live delayed quotes</span></span></li>
-        <li><span class="i">2</span><span><span class="pp">/v2/aggs/ticker/…/range/…</span> <span class="pu">— OHLCV bars (daily + intraday)</span></span></li>
-        <li><span class="i">3</span><span><span class="pp">/v2/aggs/grouped/…/{date}</span> <span class="pu">— whole-market EOD</span></span></li>
-        <li><span class="i">4</span><span><span class="pp">/vX/reference/financials</span> <span class="pu">— income/balance/cash-flow</span></span></li>
-        <li><span class="i">5</span><span><span class="pp">/v3/reference/tickers/{t}</span> <span class="pu">— company details</span></span></li>
-        <li><span class="i">6</span><span><span class="pp">/v3/reference/tickers</span> <span class="pu">— ticker universe (list)</span></span></li>
-        <li><span class="i">7</span><span><span class="pp">/v3/reference/dividends</span> <span class="pu">— dividend history</span></span></li>
-        <li><span class="i">8</span><span><span class="pp">/v3/reference/splits</span> <span class="pu">— stock splits</span></span></li>
-        <li><span class="i">9</span><span><span class="pp">/vX/reference/ipos</span> <span class="pu">— IPO calendar</span></span></li>
-        <li><span class="i">10</span><span><span class="pp">/v3/reference/options/contracts</span> <span class="pu">— option chains</span></span></li>
-        <li><span class="i">11</span><span><span class="pp">/v2/reference/news</span> <span class="pu">— news + sentiment</span></span></li>
-        <li><span class="i">12</span><span><span class="pp">/v1/marketstatus/now</span> <span class="pu">— session state</span></span></li>
-        <li><span class="i">13</span><span><span class="pp">/v1/marketstatus/upcoming</span> <span class="pu">— market holidays</span></span></li>
-        <li><span class="i">14</span><span><span class="pp">/fed/v1/treasury-yields</span> <span class="pu">— yield curve</span></span></li>
-        <li><span class="i">15</span><span><span class="pp">/v1/related-companies/{t}</span> <span class="pu">— peers</span></span></li>
-      </ol>
-    </div>
-
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/v3/snapshot?ticker.any_of={syms}</span><span class="name">Unified Snapshot</span></div>
-      <div class="p">Delayed quotes for many tickers in one call — powers the <b>ticker tape</b> and the <b>watchlist/portfolio/stock price polling</b>.</div>
-      <div class="rl">response</div>
-      <pre>{
-  "status": "OK",
-  "results": [{
-    "ticker": "AAPL", "name": "Apple Inc.", "market_status": "open",
-    "session": {
-      "price": 320.73, "change": -5.16, "change_percent": -1.58,
-      "open": 321.73, "high": 323.30, "low": 319.35,
-      "previous_close": 325.89, "volume": 19763440, "vwap": 321.20,
-      "early_trading_change_percent": -1.31,
-      "late_trading_change_percent": 1.562
-    },
-    "last_minute": { "close": 320.71, "volume": 31275, "transactions": 992 }
-  }]
-}</pre>
-    </div>
-
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/v2/aggs/ticker/{ticker}/range/{mult}/{span}/{from}/{to}</span><span class="name">Aggregates (OHLCV bars)</span></div>
-      <div class="p">Candlestick bars — daily &amp; intraday. Powers <b>charts</b>, <b>5-year history</b>, moving averages and technicals.</div>
-      <div class="rl">response</div>
-      <pre>{
-  "status": "OK", "ticker": "AAPL", "adjusted": true, "resultsCount": 5,
-  "results": [
-    { "t": 1783915200000, "o": 317.02, "h": 323.45, "l": 315.78,
-      "c": 317.31, "v": 43257804, "vw": 318.15, "n": 884512 }
-  ]
-}</pre>
-    </div>
-
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/v2/aggs/grouped/locale/us/market/stocks/{date}</span><span class="name">Grouped Daily</span></div>
-      <div class="p">One row for <b>every US stock</b> for a day (~12k). Powers market <b>breadth</b>, <b>movers</b> and the Fear &amp; Greed breadth component.</div>
-      <div class="rl">response</div>
-      <pre>{
-  "status": "OK", "resultsCount": 12411,
-  "results": [
-    { "T": "FMDE", "o": 40.28, "h": 40.66, "l": 40.28, "c": 40.42,
-      "v": 677964, "vw": 40.46, "t": 1784318400000 }
-  ]
-}</pre>
-    </div>
-
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/vX/reference/financials?ticker={t}&amp;timeframe=annual|quarterly</span><span class="name">Financials</span></div>
-      <div class="p">Reported statements. Powers the <b>Quarterly / Yearly EPS &amp; Sales</b> tabs and the fundamentals panel.</div>
-      <div class="rl">response</div>
-      <pre>{
-  "status": "OK",
-  "results": [{
-    "fiscal_year": "2025", "fiscal_period": "FY", "end_date": "2025-09-27",
-    "company_name": "Apple Inc.",
-    "financials": {
-      "income_statement": {
-        "revenues": { "value": 416161000000, "unit": "USD" },
-        "diluted_earnings_per_share": { "value": 7.46, "unit": "USD / shares" },
-        "net_income_loss": { "value": 112010000000, "unit": "USD" }
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MarketCatalyst Backend Architecture</title>
+    <style>
+      :root {
+        --bg: #0b1016;
+        --panel: #111923;
+        --panel-2: #17212d;
+        --card: #0e151d;
+        --ink: #ecf3f8;
+        --muted: #a9bac7;
+        --dim: #758a99;
+        --line: #2b3b4b;
+        --green: #38d99a;
+        --blue: #46b8ff;
+        --amber: #f5bc4f;
+        --red: #ff7c83;
+        --max: 1120px;
       }
-      // balance_sheet + cash_flow_statement also returned
-    }
-  }]
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #eef3f7;
+          --panel: #fff;
+          --panel-2: #f4f7fa;
+          --card: #fff;
+          --ink: #162530;
+          --muted: #435967;
+          --dim: #657b89;
+          --line: #cad7e0;
+          --green: #087b58;
+          --blue: #087dbb;
+          --amber: #a66a00;
+          --red: #b4232b;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          16px/1.55 ui-sans-serif,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+      .wrap {
+        max-width: var(--max);
+        margin: auto;
+        padding: clamp(28px, 5vw, 60px) clamp(16px, 4vw, 40px) 72px;
+      }
+      .eyebrow,
+      .tag,
+      th {
+        font:
+          700 0.7rem/1.3 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+      }
+      .eyebrow {
+        margin: 0 0 12px;
+        color: var(--green);
+      }
+      h1 {
+        font-size: clamp(2rem, 5vw, 3.4rem);
+        line-height: 1.04;
+        letter-spacing: -0.035em;
+        margin: 0 0 16px;
+      }
+      h2 {
+        font-size: clamp(1.25rem, 2.4vw, 1.65rem);
+        line-height: 1.2;
+        margin: 0 0 8px;
+        letter-spacing: -0.02em;
+      }
+      h3 {
+        font-size: 1rem;
+        margin: 0 0 6px;
+      }
+      p {
+        margin: 0;
+      }
+      .dek {
+        max-width: 72ch;
+        color: var(--muted);
+        font-size: 1.08rem;
+      }
+      section {
+        margin-top: 48px;
+      }
+      .sub {
+        color: var(--dim);
+        margin: 0 0 18px;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.9em;
+        color: var(--ink);
+      }
+      .notice {
+        margin-top: 20px;
+        padding: 14px 16px;
+        border: 1px solid var(--amber);
+        border-radius: 12px;
+        background: color-mix(in srgb, var(--amber) 10%, var(--panel));
+        color: var(--muted);
+      }
+      .notice b {
+        color: var(--ink);
+      }
+      .notice.risk {
+        border-color: var(--red);
+        background: color-mix(in srgb, var(--red) 9%, var(--panel));
+      }
+      .diagram {
+        overflow-x: auto;
+        padding: 12px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+      }
+      svg {
+        display: block;
+        width: 100%;
+        min-width: 820px;
+        height: auto;
+      }
+      .node {
+        fill: var(--card);
+        stroke: var(--line);
+        stroke-width: 1.5;
+      }
+      .node.live {
+        stroke: var(--blue);
+        stroke-width: 2.2;
+      }
+      .node.store {
+        stroke: var(--green);
+        stroke-width: 2.2;
+      }
+      .node.worker {
+        stroke: var(--amber);
+        stroke-width: 2.2;
+      }
+      .node.vendor {
+        stroke: var(--dim);
+        stroke-width: 1.8;
+      }
+      .t {
+        fill: var(--ink);
+        font:
+          700 15px ui-sans-serif,
+          system-ui;
+      }
+      .s {
+        fill: var(--dim);
+        font:
+          11px ui-monospace,
+          monospace;
+      }
+      .l {
+        font:
+          600 11px ui-sans-serif,
+          system-ui;
+      }
+      .key {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 20px;
+        margin: 13px 4px 0;
+        color: var(--muted);
+        font-size: 0.86rem;
+      }
+      .dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 99px;
+        margin-right: 7px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(235px, 1fr));
+        gap: 12px;
+      }
+      .card {
+        padding: 16px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        border-top: 3px solid var(--accent, var(--line));
+      }
+      .card p {
+        font-size: 0.9rem;
+        color: var(--muted);
+      }
+      .tag {
+        color: var(--accent, var(--dim));
+        margin-bottom: 8px;
+      }
+      .table-wrap {
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+      }
+      .api {
+        padding: 16px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--blue);
+        border-radius: 12px;
+      }
+      .api + .api {
+        margin-top: 12px;
+      }
+      .api-head {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .method {
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: var(--green);
+        color: #052017;
+        font: 800 0.68rem ui-monospace, monospace;
+      }
+      .api p {
+        margin-top: 9px;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      pre {
+        overflow: auto;
+        margin: 11px 0 0;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel-2);
+        color: var(--muted);
+        font: 0.76rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      table {
+        width: 100%;
+        min-width: 760px;
+        border-collapse: collapse;
+        font-size: 0.88rem;
+      }
+      th {
+        text-align: left;
+        color: var(--dim);
+        background: var(--panel-2);
+        padding: 11px 13px;
+      }
+      td {
+        padding: 12px 13px;
+        border-top: 1px solid var(--line);
+        vertical-align: top;
+        color: var(--muted);
+      }
+      td:first-child {
+        color: var(--ink);
+        font-weight: 650;
+      }
+      ul {
+        margin: 8px 0 0;
+        padding-left: 20px;
+        color: var(--muted);
+      }
+      li + li {
+        margin-top: 5px;
+      }
+      .callout {
+        margin: 15px 0 0;
+        padding: 12px 14px;
+        border-left: 3px solid var(--blue);
+        background: var(--panel-2);
+        border-radius: 0 9px 9px 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      footer {
+        margin-top: 52px;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+        color: var(--dim);
+        font:
+          12px ui-monospace,
+          monospace;
+      }
+      a {
+        color: var(--blue);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <header>
+        <p class="eyebrow">MarketCatalyst Backend · implementation map</p>
+        <h1>Current backend architecture</h1>
+        <p class="dek">
+          A code-led map of the NestJS backend: two Cloud Run roles from one
+          image, a public live-data surface, a private worker surface, Firestore
+          cache and domain storage, and a single Scheduler-backed premarket
+          orchestration run.
+        </p>
+        <div class="notice">
+          <b>Scope and audit date.</b> This map is based on this backend
+          repository as inspected on 2026-07-26: <code>src/</code>,
+          <code>deploy/</code>, <code>firebase.json</code>, and Firestore
+          configuration. A box is marked when it is configured in a separate UI
+          repository or is unreliable with the deployed scale-to-zero model.
+        </div>
+      </header>
+
+      <section>
+        <h2>Deployed topology</h2>
+        <p class="sub">
+          One container image is deployed twice. The public service has no
+          worker or admin routes mounted; this is a route-surface boundary, not
+          merely an authorization check.
+        </p>
+        <div class="diagram">
+          <svg
+            viewBox="0 0 1120 655"
+            role="img"
+            aria-labelledby="title description"
+          >
+            <title id="title">MarketCatalyst backend deployed topology</title>
+            <desc id="description">
+              Browser access flows to Firebase Auth and Firestore, the Hosting
+              CDN routes regular live API calls to the public live service, SSE
+              uses the live service directly, and Cloud Scheduler calls the
+              private worker. Both services use Firestore and Polygon. The
+              worker also uses SEC EDGAR and FRED.
+            </desc>
+            <defs>
+              <marker
+                id="arrow"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="7"
+                markerHeight="7"
+                orient="auto"
+              >
+                <path d="M0,0 L10,5 L0,10 z" fill="context-stroke" />
+              </marker>
+            </defs>
+            <g fill="none" stroke-width="2.4" marker-end="url(#arrow)">
+              <path d="M324 115 L428 160" stroke="var(--blue)" />
+              <path
+                d="M324 115 C400 250 214 230 212 350"
+                stroke="var(--green)"
+              />
+              <path
+                d="M324 115 L575 318"
+                stroke="var(--blue)"
+                stroke-dasharray="6 5"
+              />
+              <path
+                d="M212 380 L428 380"
+                stroke="var(--green)"
+                marker-start="url(#arrow)"
+              />
+              <path
+                d="M652 300 L676 380"
+                stroke="var(--green)"
+                marker-start="url(#arrow)"
+              />
+              <path d="M540 470 L540 560" stroke="var(--dim)" />
+              <path d="M760 470 L760 560" stroke="var(--dim)" />
+              <path d="M928 230 L828 318" stroke="var(--amber)" />
+              <path d="M900 420 L828 420" stroke="var(--amber)" />
+              <path d="M900 420 L900 560" stroke="var(--dim)" />
+              <path d="M980 420 L1000 560" stroke="var(--dim)" />
+            </g>
+            <g class="l" text-anchor="middle">
+              <text x="385" y="129" fill="var(--blue)">
+                same-origin JSON GETs
+              </text>
+              <text x="460" y="210" fill="var(--blue)">direct SSE</text>
+              <text x="310" y="285" fill="var(--green)">Firebase SDK</text>
+              <text x="320" y="365" fill="var(--green)">Admin SDK</text>
+              <text x="932" y="285" fill="var(--amber)">OIDC POST</text>
+              <text x="603" y="525" fill="var(--dim)">market data</text>
+              <text x="840" y="525" fill="var(--dim)">batch data</text>
+            </g>
+            <g>
+              <rect
+                class="node"
+                x="92"
+                y="54"
+                width="232"
+                height="62"
+                rx="12"
+              />
+              <text class="t" x="208" y="82" text-anchor="middle">
+                Browser / Next.js SPA
+              </text>
+              <text class="s" x="208" y="103" text-anchor="middle">
+                public clients
+              </text>
+
+              <rect
+                class="node"
+                x="428"
+                y="160"
+                width="224"
+                height="72"
+                rx="12"
+              />
+              <text class="t" x="540" y="189" text-anchor="middle">
+                Firebase Hosting CDN
+              </text>
+              <text class="s" x="540" y="211" text-anchor="middle">
+                UI-repo rewrite: /live/**
+              </text>
+
+              <rect
+                class="node store"
+                x="92"
+                y="330"
+                width="240"
+                height="100"
+                rx="12"
+              />
+              <text class="t" x="212" y="362" text-anchor="middle">
+                Cloud Firestore
+              </text>
+              <text class="s" x="212" y="385" text-anchor="middle">
+                domain data · shared cache
+              </text>
+              <text class="s" x="212" y="404" text-anchor="middle">
+                user-owned subcollections
+              </text>
+
+              <rect
+                class="node live"
+                x="428"
+                y="318"
+                width="224"
+                height="152"
+                rx="12"
+              />
+              <text class="t" x="540" y="349" text-anchor="middle">
+                live · Cloud Run
+              </text>
+              <text class="s" x="540" y="371" text-anchor="middle">
+                APP_ROLE=live · public
+              </text>
+              <text class="s" x="540" y="394" text-anchor="middle">
+                LiveModule + /health only
+              </text>
+              <text class="s" x="540" y="417" text-anchor="middle">
+                cache, SSE, on-demand reads
+              </text>
+              <text class="s" x="540" y="440" text-anchor="middle">
+                no sync/admin/purge routes
+              </text>
+
+              <rect
+                class="node worker"
+                x="676"
+                y="318"
+                width="224"
+                height="152"
+                rx="12"
+              />
+              <text class="t" x="788" y="349" text-anchor="middle">
+                worker · Cloud Run
+              </text>
+              <text class="s" x="788" y="371" text-anchor="middle">
+                APP_ROLE=worker · private
+              </text>
+              <text class="s" x="788" y="394" text-anchor="middle">
+                sync + ops + plans modules
+              </text>
+              <text class="s" x="788" y="417" text-anchor="middle">
+                private Admin SDK writes
+              </text>
+              <text class="s" x="788" y="440" text-anchor="middle">
+                static ops UI at /
+              </text>
+
+              <rect
+                class="node worker"
+                x="928"
+                y="160"
+                width="156"
+                height="70"
+                rx="12"
+              />
+              <text class="t" x="1006" y="189" text-anchor="middle">
+                Cloud Scheduler
+              </text>
+              <text class="s" x="1006" y="211" text-anchor="middle">
+                08:00 ET, Mon–Fri
+              </text>
+
+              <rect
+                class="node vendor"
+                x="430"
+                y="560"
+                width="220"
+                height="60"
+                rx="12"
+              />
+              <text class="t" x="540" y="587" text-anchor="middle">
+                Polygon / Massive
+              </text>
+              <text class="s" x="540" y="607" text-anchor="middle">
+                REST + delayed WebSocket
+              </text>
+
+              <rect
+                class="node vendor"
+                x="670"
+                y="560"
+                width="180"
+                height="60"
+                rx="12"
+              />
+              <text class="t" x="760" y="587" text-anchor="middle">
+                SEC EDGAR
+              </text>
+              <text class="s" x="760" y="607" text-anchor="middle">
+                Form 4 + 13F
+              </text>
+
+              <rect
+                class="node vendor"
+                x="900"
+                y="560"
+                width="180"
+                height="60"
+                rx="12"
+              />
+              <text class="t" x="990" y="587" text-anchor="middle">FRED</text>
+              <text class="s" x="990" y="607" text-anchor="middle">
+                macro events
+              </text>
+            </g>
+          </svg>
+        </div>
+        <div class="key">
+          <span
+            ><i class="dot" style="background: var(--blue)"></i>Public API / CDN
+            path</span
+          >
+          <span
+            ><i class="dot" style="background: var(--green)"></i>Firestore data
+            path</span
+          >
+          <span
+            ><i class="dot" style="background: var(--amber)"></i>Private
+            Scheduler path</span
+          >
+          <span
+            ><i class="dot" style="background: var(--dim)"></i>Vendor
+            calls</span
+          >
+        </div>
+      </section>
+
+      <section>
+        <h2>Runtime roles and boundaries</h2>
+        <div class="grid">
+          <article class="card" style="--accent: var(--blue)">
+            <div class="tag">Public role</div>
+            <h3>live Cloud Run</h3>
+            <p>
+              Mounts <code>LiveModule</code> and <code>/health</code>. It is
+              intentionally <code>--allow-unauthenticated</code> for browser
+              SSE. The application does not mount sync, purge, retention,
+              feature flags, plans, admin analytics, or the worker ops screen in
+              this role.
+            </p>
+          </article>
+          <article class="card" style="--accent: var(--amber)">
+            <div class="tag">Private role</div>
+            <h3>worker Cloud Run</h3>
+            <p>
+              Mounts all backend modules and is intended to run behind Cloud Run
+              IAM. Scheduler and privileged operators use OIDC/IAM; the process
+              uses Application Default Credentials to access Firestore and
+              Secret Manager-injected API keys.
+            </p>
+          </article>
+          <article class="card" style="--accent: var(--green)">
+            <div class="tag">Storage and identity</div>
+            <h3>Firebase</h3>
+            <p>
+              Firebase Auth is consumed by browser Firestore access. The backend
+              uses the Firebase Admin SDK and bypasses Firestore rules for
+              server writes. <code>SENTRY_DSN</code> enables process-level
+              exception reporting.
+            </p>
+          </article>
+          <article class="card" style="--accent: var(--red)">
+            <div class="tag">Configuration caveat</div>
+            <h3>Hosting rewrite is external</h3>
+            <p>
+              This repository's <code>firebase.json</code> declares only
+              Firestore rules and indexes. The <code>/live/**</code> Hosting
+              rewrite is documented in <code>deploy/DEPLOY.md</code> as
+              configuration shipped from the UI repository, so it cannot be
+              verified from this repo alone.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h2>Public live-data surface</h2>
+        <p class="sub">
+          All routes below are mounted in the public live role. They have no
+          application authentication guard; cache headers and CORS are the
+          primary browser-facing controls.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Route</th>
+                <th>Implementation</th>
+                <th>Cache / stream behavior</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>GET /health</code></td>
+                <td>Basic process health response; mounted in both roles.</td>
+                <td>No data dependency.</td>
+              </tr>
+              <tr>
+                <td>
+                  <code>GET /live/bars</code><br /><code
+                    >GET /live/company</code
+                  >
+                </td>
+                <td>
+                  On-demand cache-aside reads. Service checks in-memory data,
+                  then Firestore, then makes a coalesced Polygon request and
+                  writes the shared cache.
+                </td>
+                <td>
+                  Bars: 60s CDN/browser contract; company: 300s. Bars use one
+                  <code>stock_bars/{ticker}_{resolution}</code> document per
+                  resolution; daily ranges widen in place.
+                </td>
+              </tr>
+              <tr>
+                <td><code>GET /live/search</code></td>
+                <td>
+                  Substring search against the Polygon reference universe kept
+                  in service memory.
+                </td>
+                <td>
+                  One-hour cache header; no Firestore reads per search. The
+                  universe is loaded/refreshed by the service, not from
+                  <code>tickers</code>.
+                </td>
+              </tr>
+              <tr>
+                <td><code>GET /live/snapshot</code></td>
+                <td>
+                  Demand-driven shared quote cache for up to 50 tickers per
+                  request.
+                </td>
+                <td>
+                  5s browser / 10s shared cache + ETag. At most one Polygon
+                  universal-snapshot fetch per refresh window per live instance;
+                  no regular refresh outside extended session.
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <code>GET /live/tape</code><br /><code
+                    >GET /live/tape/stream</code
+                  >
+                </td>
+                <td>
+                  Shared tape frame and ref-counted SSE broadcast. The tape
+                  fetches a configured small universe and a cached Treasury
+                  tile.
+                </td>
+                <td>
+                  JSON has 30s browser / 60s shared-cache headers and ETag. SSE
+                  is direct to Cloud Run, sends tape frames plus 20s heartbeats,
+                  and stops its poller when no viewers remain.
+                </td>
+              </tr>
+              <tr>
+                <td><code>GET /live/stream?ticker=…</code></td>
+                <td>
+                  Ticker-specific SSE bridge through
+                  <code>PolygonLiveService</code>, including an initial
+                  previous-close snapshot.
+                </td>
+                <td>
+                  Direct SSE. This is distinct from the shared tape stream and
+                  uses Polygon's delayed aggregate WebSocket path.
+                </td>
+              </tr>
+              <tr>
+                <td><code>GET /live/collections</code></td>
+                <td>
+                  Allow-listed shared Firestore collections served through a
+                  server-side cache.
+                </td>
+                <td>
+                  120s browser / 300s shared cache + ETag. Avoids one Firestore
+                  read per user for slow-changing shared collections.
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <code>GET /live/market-status</code><br /><code
+                    >GET /live/whoami</code
+                  ><br /><code>GET /live/*/stats</code>
+                </td>
+                <td>
+                  Market session status, first-party IP echo, and cache/stream
+                  observability.
+                </td>
+                <td>
+                  Status: 30s browser / 60s shared cache.
+                  <code>whoami</code> and stats are <code>no-store</code>.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>API request and response reference</h2>
+        <p class="sub">
+          Public examples below follow the controllers in
+          <code>src/live/</code>. JSON calls receive the listed
+          <code>Cache-Control</code> and ETag behavior; an
+          <code>If-None-Match</code> match receives <code>304</code> with no
+          body.
+        </p>
+
+        <article class="api">
+          <div class="api-head">
+            <span class="method">GET</span>
+            <code>/live/bars?ticker=AAPL&amp;tf=1Y</code>
+            <strong>On-demand chart series</strong>
+          </div>
+          <p>
+            Valid timeframes:
+            <code>1H, 1D, 1W, 1M, 3M, 6M, 1Y, 5Y</code>. Ticker must match
+            <code>[A-Z0-9.-]{1,10}</code>. The service reads a resolution
+            family from memory/Firestore, or coalesces a Polygon aggregate call
+            on a cache miss. Response header:
+            <code>Cache-Control: public, max-age=60, s-maxage=60,
+            stale-while-revalidate=120</code>.
+          </p>
+          <pre>{
+  "ticker": "AAPL",
+  "tf": "1Y",
+  "bars": [
+    { "t": 1721620800000, "o": 211.09, "h": 214.85,
+      "l": 210.72, "c": 214.24, "v": 62997800, "vw": 213.51 }
+  ],
+  "source": "memory",
+  "asOf": "2026-07-26T02:30:00.000Z"
 }</pre>
-    </div>
+        </article>
 
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/v3/reference/tickers/{ticker}</span><span class="name">Ticker Details</span></div>
-      <div class="p">Company profile — name, sector (SIC), market cap, description, logo. Powers the <b>companies</b> collection.</div>
-      <div class="rl">response</div>
-      <pre>{
-  "status": "OK",
-  "results": {
-    "ticker": "AAPL", "name": "Apple Inc.", "primary_exchange": "XNAS",
-    "type": "CS", "market_cap": 4786462446840,
-    "sic_description": "ELECTRONIC COMPUTERS", "total_employees": 166000,
-    "list_date": "1980-12-12", "homepage_url": "https://www.apple.com",
-    "weighted_shares_outstanding": 14687356000,
-    "branding": { "logo_url": ".../logo.svg", "icon_url": ".../icon.webp" }
-  }
+        <article class="api">
+          <div class="api-head">
+            <span class="method">GET</span>
+            <code>/live/company?ticker=AAPL</code>
+            <strong>On-demand company + delayed price</strong>
+          </div>
+          <p>
+            Merges the profile and quote into <code>companies/AAPL</code> on a
+            miss without overwriting fields generated by batch jobs. The
+            company cache freshness window is 20 hours; the HTTP response is
+            cacheable for five minutes. Returns <code>404</code> only when
+            neither a Polygon profile nor a quote is available.
+          </p>
+          <pre>{
+  "ticker": "AAPL", "name": "Apple Inc.",
+  "sector": "ELECTRONIC COMPUTERS", "marketCap": 3210000000000,
+  "exchange": "XNAS", "price": 214.24, "pctChange": 1.14,
+  "prevClose": 211.83, "volume": 62997800,
+  "createdAt": "2026-07-26T02:30:10.000Z",
+  "updatedAt": "2026-07-26T02:30:10.000Z",
+  "source": "polygon-ondemand"
 }</pre>
-    </div>
+        </article>
 
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/v3/reference/tickers?market=stocks&amp;active=true&amp;limit=1000</span><span class="name">Ticker List (universe)</span></div>
-      <div class="p">Pages the full active-stock <b>universe</b> — the ticker list the sync jobs iterate over.</div>
-      <div class="rl">response</div>
-      <pre>{
-  "status": "OK", "count": 10847,
-  "results": [{
-    "ticker": "A", "name": "Agilent Technologies Inc.",
-    "market": "stocks", "locale": "us", "primary_exchange": "XNYS",
-    "type": "CS", "active": true, "currency_name": "usd"
-  }]
+        <article class="api">
+          <div class="api-head">
+            <span class="method">GET</span>
+            <code>/live/search?q=apple</code>
+            <strong>Ticker and company-name search</strong>
+          </div>
+          <p>
+            Query is required and limited to 40 characters. Results are ranked
+            exact ticker → ticker prefix → company-name prefix → substring and
+            limited to 20. The endpoint searches a 24-hour in-memory Polygon
+            reference universe, so it performs no Firestore reads.
+          </p>
+          <pre>{
+  "q": "apple",
+  "results": [
+    { "ticker": "AAPL", "name": "Apple Inc." },
+    { "ticker": "APLE", "name": "Apple Hospitality REIT, Inc." }
+  ]
 }</pre>
-    </div>
+        </article>
 
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/v3/reference/dividends?ticker={t}</span><span class="name">Dividends</span></div>
-      <div class="p">Dividend history — cash amount, dates, frequency. Powers dividend history + derived yield.</div>
-      <div class="rl">response</div>
-      <pre>{
-  "status": "OK",
-  "results": [{
-    "cash_amount": 0.27, "currency": "USD", "dividend_type": "CD",
-    "frequency": 4, "ex_dividend_date": "2026-05-11",
-    "pay_date": "2026-05-14", "ticker": "AAPL"
-  }]
+        <article class="api">
+          <div class="api-head">
+            <span class="method">GET</span>
+            <code>/live/snapshot?tickers=AAPL,MSFT,NVDA</code>
+            <strong>Batched delayed quotes</strong>
+          </div>
+          <p>
+            Accepts 1–50 valid tickers. Requests register demand in the shared
+            cache; an initial uncached request may fill the cache, then a
+            demand-driven timer refreshes the tracked set. Response header:
+            <code>max-age=5, s-maxage=10, stale-while-revalidate=30</code>.
+            Quotes are frozen outside the extended session except for an
+            uncached cold start.
+          </p>
+          <pre>{
+  "quotes": [{
+    "ticker": "AAPL", "price": 214.24, "change": 2.41,
+    "changePct": 1.14, "previousClose": 211.83,
+    "open": 211.78, "dayHigh": 215.10, "dayLow": 210.50,
+    "dayVolume": 62997800, "dayVwap": 213.51,
+    "minuteClose": 214.24, "minuteAt": 1721968200000,
+    "vendorUpdatedAt": 1721968200000,
+    "earlyTradingChangePct": null, "lateTradingChangePct": null,
+    "regularTradingChangePct": 1.14, "marketStatus": "open"
+  }],
+  "cacheAgeMs": 2411,
+  "refreshedFrom": "polygon-snapshot",
+  "delayNote": "Underlying feed is ~15 minutes delayed on the current plan.",
+  "servedAt": "2026-07-26T02:30:15.000Z"
 }</pre>
-    </div>
+        </article>
 
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/v3/reference/splits?ticker={t}</span><span class="name">Splits</span></div>
-      <div class="p">Stock splits — surfaced because history is adjusted, so a split silently rewrites the price series.</div>
-      <div class="rl">response</div>
-      <pre>{
-  "status": "OK",
-  "results": [{
-    "execution_date": "2020-08-31",
-    "split_from": 1, "split_to": 4, "ticker": "AAPL"
-  }]
+        <article class="api">
+          <div class="api-head">
+            <span class="method">GET</span>
+            <code>/live/collections?names=market_indices,sectors</code>
+            <strong>Shared Firestore collection cache</strong>
+          </div>
+          <p>
+            Only the server allow-list is accepted (for example:
+            <code>companies</code>, indices, movers, sectors, breadth,
+            sentiment, earnings, IPOs, macro, recaps, and insider
+            transactions). At most 24 names may be requested. The response is
+            a map of arrays whose objects are prefixed with Firestore document
+            IDs; it is cacheable for two minutes in browsers and five minutes
+            at shared caches.
+          </p>
+          <pre>{
+  "market_indices": [
+    { "id": "SPY", "symbol": "SPY", "price": 540.12, "asOfDate": "2026-07-25" }
+  ],
+  "sectors": [
+    { "id": "XLK", "symbol": "XLK", "changePct": 0.73, "asOfDate": "2026-07-25" }
+  ]
 }</pre>
-    </div>
+        </article>
 
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/vX/reference/ipos?listing_date.gte={date}</span><span class="name">IPOs</span></div>
-      <div class="p">Recent + upcoming IPOs. Powers the IPO calendar and (with aggs) day-1 / since-IPO performance.</div>
-      <div class="rl">response</div>
-      <pre>{
-  "status": "OK",
-  "results": [{
-    "ticker": "IMC", "issuer_name": "IMC Rare Earths Ltd.",
-    "ipo_status": "pending", "announced_date": "2026-06-30",
-    "lowest_offer_price": 4.0, "highest_offer_price": 6.0,
-    "total_offer_size": 32000000, "primary_exchange": "XASE"
-  }]
+        <article class="api">
+          <div class="api-head">
+            <span class="method">SSE</span>
+            <code>GET /live/tape/stream</code>
+            <strong>Shared header tape</strong>
+          </div>
+          <p>
+            A direct Cloud Run EventSource endpoint. It emits
+            <code>tape</code> frames from a common replay buffer and a
+            <code>heartbeat</code> event every 20 seconds. One tape poller is
+            shared by every connected viewer; the JSON fallback is
+            <code>GET /live/tape</code>.
+          </p>
+          <pre>event: tape
+data: {
+  "items": [{ "id": "SPY", "label": "S&amp;P 500", "value": 540.12,
+              "change": 0.73, "pctChange": 0.73, "isProxy": true }],
+  "asOf": "2026-07-26T02:30:00.000Z",
+  "marketPhase": "open", "stale": false,
+  "vendorDelayNote": "Underlying feed is ~15 minutes delayed on the current plan."
+}
+
+event: heartbeat
+data: { "at": "2026-07-26T02:30:20.000Z", "stale": false }</pre>
+        </article>
+
+        <article class="api">
+          <div class="api-head">
+            <span class="method">SSE</span>
+            <code>GET /live/stream?ticker=AAPL</code>
+            <strong>Per-ticker delayed aggregate stream</strong>
+          </div>
+          <p>
+            Ticker must contain only uppercase A–Z and periods (1–10
+            characters). The stream emits a startup status, an initial
+            previous-close snapshot, connection statuses, and delayed aggregate
+            <code>tick</code> events from the Polygon WebSocket bridge.
+          </p>
+          <pre>event: snapshot
+data: { "ticker": "AAPL", "previousClose": 211.83,
+        "feed": "polygon-delayed", "channel": "A", "delayMinutes": 15 }
+
+event: tick
+data: { "ticker": "AAPL", "open": 211.78, "high": 215.10,
+        "low": 210.50, "close": 214.24, "volume": 62997800 }</pre>
+        </article>
+
+        <article class="api">
+          <div class="api-head">
+            <span class="method">POST</span>
+            <code>/sync/premarket/run</code>
+            <strong>Private scheduled entry point</strong>
+          </div>
+          <p>
+            Invoked by Cloud Scheduler with an OIDC token. It is absent from
+            the public live role. Manual job endpoints follow the
+            <code>/sync/:job/run</code> contract and are guarded by
+            <code>AdminGuard</code>.
+          </p>
+          <pre>{
+  "hotTickers": 57, "warmed": 55, "failed": 2,
+  "jobs": [{ "job": "market-indices", "ok": true }],
+  "succeeded": 22, "failed": 0, "tookMs": 412345
 }</pre>
-    </div>
+        </article>
+      </section>
 
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/v3/reference/options/contracts?underlying_ticker={t}</span><span class="name">Options Contracts</span></div>
-      <div class="p">Option chain contracts (strike, expiry, type). Per-contract OHLC is authorized; greeks/IV are not on the plan.</div>
-      <div class="rl">response</div>
-      <pre>{
-  "status": "OK",
-  "results": [{
-    "ticker": "O:AAPL260724C00110000", "underlying_ticker": "AAPL",
-    "contract_type": "call", "strike_price": 110,
-    "expiration_date": "2026-07-24", "exercise_style": "american",
-    "shares_per_contract": 100
-  }]
-}</pre>
-    </div>
+      <section>
+        <h2>On-demand data and Firestore</h2>
+        <div class="grid">
+          <article class="card" style="--accent: var(--green)">
+            <div class="tag">Shared cache-aside</div>
+            <h3>Company and chart data</h3>
+            <p>
+              <code>companies/{ticker}</code> stores company data and
+              <code>stock_bars/{ticker}_{resolution}</code> stores compact bar
+              arrays. Freshness is evaluated from ISO <code>createdAt</code>;
+              daily and intraday ranges have different TTLs.
+            </p>
+          </article>
+          <article class="card" style="--accent: var(--green)">
+            <div class="tag">Demand feedback</div>
+            <h3><code>ticker_usage</code></h3>
+            <p>
+              On-demand bars and company reads accumulate usage and flush it at
+              most once per ticker per minute. The worker reads the top 100 used
+              tickers as part of its next warm set.
+            </p>
+          </article>
+          <article class="card" style="--accent: var(--green)">
+            <div class="tag">Domain collections</div>
+            <h3>Batch outputs</h3>
+            <p>
+              The worker writes market, reference, financial, news, SEC,
+              options, history, and recap data. Operational state lives in
+              <code>sync_meta</code> and <code>sync_watermarks</code>;
+              payments/plans live in their own collections.
+            </p>
+          </article>
+          <article class="card" style="--accent: var(--green)">
+            <div class="tag">User-owned paths</div>
+            <h3>Users and notifications</h3>
+            <p>
+              Watchlists, portfolios, holdings, settings, sessions, and
+              notifications are under user paths. Important news fans out to
+              matching users’ notification subcollections, then is pruned to 100
+              items / 30 days per user.
+            </p>
+          </article>
+        </div>
+        <div class="callout">
+          The backend repository’s <code>firestore.rules</code> explicitly says
+          it is not the deployed ruleset; production rules are maintained in the
+          UI repository. Do not treat this repository’s rules file as the source
+          of truth for browser access.
+        </div>
+      </section>
 
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/v2/reference/news?ticker={t}</span><span class="name">News</span></div>
-      <div class="p">Ticker news with publisher + AI sentiment insights. Powers the news feed and per-ticker news counts.</div>
-      <div class="rl">response</div>
-      <pre>{
-  "status": "OK",
-  "results": [{
-    "title": "This Is My No. 1 Recommended ETF to Buy in July",
-    "publisher": { "name": "The Motley Fool" }, "author": "Stefon Walters",
-    "published_utc": "2026-07-23T16:25:49Z",
-    "tickers": ["RSP", "NVDA", "AAPL"],
-    "article_url": "https://www.fool.com/investing/2026/07/23/...",
-    "insights": [
-      { "ticker": "AAPL", "sentiment": "neutral",
-        "sentiment_reasoning": "Mentioned re: S&amp;P 500 concentration risk..." }
-    ]
-  }]
-}</pre>
-    </div>
+      <section>
+        <h2>What is actually scheduled</h2>
+        <p class="sub">
+          There are two distinct mechanisms in the codebase: the
+          Scheduler-backed premarket run and in-process
+          <code>@Cron</code> tasks.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Mechanism</th>
+                <th>Trigger</th>
+                <th>Work performed</th>
+                <th>Production reliability</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><b>Cloud Scheduler</b><br /><code>sync-premarket</code></td>
+                <td>
+                  <code>0 8 * * 1-5</code>, America/New_York; OIDC
+                  <code>POST /sync/premarket/run</code>.
+                </td>
+                <td>
+                  Warm tape symbols + user watchlist/portfolio holdings + top
+                  usage tickers; then market-wide jobs, per-ticker jobs over
+                  <code>companies</code>, then recaps.
+                </td>
+                <td>
+                  <b>Authoritative production schedule.</b>
+                  <code>deploy/create-scheduler-jobs.sh</code> creates/updates
+                  this entry and deletes the retired per-job Scheduler names it
+                  knows about.
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <b>Sync registry metadata</b><br />Individual job cron fields
+                </td>
+                <td>
+                  Each job registers its former cadence for
+                  <code>/sync/jobs</code> visibility and manual triggers.
+                </td>
+                <td>
+                  The underlying jobs are invoked by the premarket orchestrator
+                  where listed; the metadata itself does not create a Nest cron
+                  task.
+                </td>
+                <td>
+                  <b>Not an execution schedule.</b> The legacy 01:00–19:00 times
+                  should not be read as active Cloud Scheduler calls.
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <b>In-process decorators</b><br /><code>auto-purge</code>,
+                  retention
+                </td>
+                <td>
+                  Midnight daily ET and Sunday 05:00 ET, respectively, using
+                  <code>@Cron</code>.
+                </td>
+                <td>
+                  Auto-purges stale ephemeral collections; retention prunes
+                  historical market, sector, news, and OHLCV records.
+                </td>
+                <td>
+                  <b>Best-effort only.</b> The worker is documented as
+                  scale-to-zero, so no process exists to fire these decorators
+                  unless an instance happens to be running. They need Scheduler
+                  jobs or another durable trigger to be guaranteed.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="notice risk">
+          <b>Operational discrepancy to resolve.</b> The currently deployed
+          worker model relies on Cloud Scheduler for durable timing, but
+          auto-purge and retention rely on in-process timers. This map reports
+          their code behavior; it does not claim that they reliably run in
+          production.
+        </div>
+      </section>
 
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/v1/marketstatus/now</span><span class="name">Market Status</span></div>
-      <div class="p">Live session state. Powers the <b>market-status pill</b> (pre / open / after / closed).</div>
-      <div class="rl">response</div>
-      <pre>{
-  "market": "open", "earlyHours": false, "afterHours": false,
-  "exchanges": { "nasdaq": "open", "nyse": "open", "otc": "open" },
-  "serverTime": "2026-07-23T14:12:42-04:00"
-}</pre>
-    </div>
+      <section>
+        <h2>Premarket orchestrator</h2>
+        <p class="sub">
+          The one Scheduler invocation deliberately replaces the old independent
+          batch schedule. A failure in one phase job is recorded and does not
+          stop later jobs.
+        </p>
+        <div class="grid">
+          <article class="card" style="--accent: var(--amber)">
+            <div class="tag">Phase 1 · warm</div>
+            <h3>Hot set through on-demand cache</h3>
+            <p>
+              Tape symbols, all user watchlist/portfolio symbols, and the top
+              usage list receive company, 1Y daily-bar, and 1D intraday-bar
+              requests.
+            </p>
+          </article>
+          <article class="card" style="--accent: var(--amber)">
+            <div class="tag">Phase 2 · market-wide</div>
+            <h3>Shared market collections</h3>
+            <p>
+              Indices, sectors, movers, breadth, Fear &amp; Greed, macro,
+              earnings, IPOs, news, analyst actions, Form 4, 13F, dividends, and
+              options chains.
+            </p>
+          </article>
+          <article class="card" style="--accent: var(--amber)">
+            <div class="tag">Phase 3 · per ticker</div>
+            <h3>Active company universe</h3>
+            <p>
+              Companies, historical OHLCV, technical indicators, RS rating, tech
+              rating, financials, fundamentals growth, and corporate actions run
+              over existing <code>companies</code> documents rather than a fixed
+              market universe.
+            </p>
+          </article>
+          <article class="card" style="--accent: var(--amber)">
+            <div class="tag">Phase 4 · recap</div>
+            <h3>Prior-session composition</h3>
+            <p>
+              The recap job runs last, after the data it summarizes. The
+              standalone ticker-universe, market-quotes, and intraday-bars
+              registry jobs are not part of this phase list.
+            </p>
+          </article>
+        </div>
+      </section>
 
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/v1/marketstatus/upcoming</span><span class="name">Market Holidays</span></div>
-      <div class="p">Upcoming market holidays &amp; early closes per exchange — feeds the session logic behind the status pill.</div>
-      <div class="rl">response</div>
-      <pre>[
-  { "date": "2026-09-07", "exchange": "NASDAQ", "name": "Labor Day", "status": "closed" },
-  { "date": "2026-09-07", "exchange": "NYSE",   "name": "Labor Day", "status": "closed" }
-]</pre>
-    </div>
+      <section>
+        <h2>Private operations and commercial surface</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Area</th>
+                <th>Routes / behavior</th>
+                <th>Access control</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Sync control</td>
+                <td>
+                  <code>GET /sync/jobs</code>, status routes, manual
+                  <code>POST /sync/:job/run</code>, and
+                  <code>POST /sync/run-all</code>.
+                </td>
+                <td>
+                  Status reads are not decorated with <code>AdminGuard</code>;
+                  manual triggers are guarded. The entire controller exists only
+                  in the private worker role.
+                </td>
+              </tr>
+              <tr>
+                <td>Destructive / lifecycle</td>
+                <td>
+                  Purge preview/execute, retention preview/run, and auto-purge
+                  registry support. Purge requires a preview token before
+                  execution.
+                </td>
+                <td>
+                  AdminGuard plus private worker route surface. Retention and
+                  auto-purge execution are controlled by their dry-run
+                  environment flags.
+                </td>
+              </tr>
+              <tr>
+                <td>Feature flags and plans</td>
+                <td>
+                  Flag map and updates; public plan listing; guarded plan seed
+                  and user entitlement lookup; worker-only admin analytics for
+                  users, subscriptions, and revenue.
+                </td>
+                <td>
+                  Flag routes and sensitive plan/admin routes use AdminGuard;
+                  public plan listing remains mounted only in the private worker
+                  role.
+                </td>
+              </tr>
+              <tr>
+                <td>Authorization model</td>
+                <td>
+                  AdminGuard validates Firebase ID tokens for the configured
+                  admin email, or—when configured—trusts Cloud Run IAM after the
+                  private service has authenticated the caller.
+                </td>
+                <td>
+                  <code>ADMIN_GUARD_TRUST_IAM=true</code> is safe only while the
+                  worker remains private. The public live role avoids this risk
+                  by not mounting privileged modules.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
 
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/fed/v1/treasury-yields?sort=date.desc</span><span class="name">Treasury Yields</span></div>
-      <div class="p">The real yield curve. Powers the <b>US10Y</b> tape tile and the macro regime signal.</div>
-      <div class="rl">response</div>
-      <pre>{
-  "status": "OK",
-  "results": [{
-    "date": "2026-07-21",
-    "yield_1_month": 3.75, "yield_2_year": 4.26,
-    "yield_10_year": 4.63, "yield_30_year": 5.13
-  }]
-}</pre>
-    </div>
+      <section>
+        <h2>External providers</h2>
+        <div class="grid">
+          <article class="card" style="--accent: var(--blue)">
+            <div class="tag">Production primary</div>
+            <h3>Polygon / Massive</h3>
+            <p>
+              The worker configuration selects Polygon for profiles, movers,
+              news, dividends, IPOs, sectors, quotes, bars, ticker reference,
+              and financials. The public live service also uses it for delayed
+              snapshots, tape data, aggregates, reference search, and the ticker
+              SSE bridge.
+            </p>
+          </article>
+          <article class="card" style="--accent: var(--amber)">
+            <div class="tag">Direct worker sources</div>
+            <h3>SEC EDGAR + FRED</h3>
+            <p>
+              SEC EDGAR provides Form 4 and 13F data. FRED supplies macro
+              events. Both run from the worker-side sync modules.
+            </p>
+          </article>
+          <article class="card" style="--accent: var(--dim)">
+            <div class="tag">Installed, not selected in production config</div>
+            <h3>Fallback and Wave 3 clients</h3>
+            <p>
+              FMP and Finnhub are adapter-capable fallbacks, but current worker
+              environment values select Polygon with fallback <code>none</code>.
+              Benzinga, Tradier, and Unusual Whales services are mounted in the
+              worker-only Wave3 module; no current controller route exposes
+              them.
+            </p>
+          </article>
+        </div>
+      </section>
 
-    <div class="api">
-      <div class="hd"><span class="verb">GET</span><span class="path">/v1/related-companies/{ticker}</span><span class="name">Related Companies</span></div>
-      <div class="p">Real peer tickers (replaced a sector-filtered mock list). Powers the "peers" panel.</div>
-      <div class="rl">response</div>
-      <pre>{
-  "status": "OK", "ticker": "AAPL",
-  "results": [ { "ticker": "MSFT" }, { "ticker": "GOOGL" } ]
-}</pre>
-    </div>
+      <section>
+        <h2>Implementation notes</h2>
+        <ul>
+          <li>
+            The application is NestJS 11 on Node 22, built once in a multi-stage
+            Docker image and run as the non-root <code>node</code> user.
+          </li>
+          <li>
+            The live role is designed for long-lived SSE connections; deployment
+            guidance sets a 3,600-second timeout and 200 concurrency. The worker
+            guidance uses a 900-second timeout, while the Scheduler script sets
+            a 1,800-second attempt deadline—verify these values align with the
+            actual longest premarket run.
+          </li>
+          <li>
+            The public cache story is layered: browser <code>max-age</code>,
+            Hosting CDN <code>s-maxage</code> where the UI rewrite exists,
+            in-instance caches, then Firestore as the durable shared cache.
+            Direct SSE bypasses Hosting.
+          </li>
+          <li>
+            <code>/live/stats</code>, <code>/live/tape/stats</code>, and
+            <code>/live/ondemand-stats</code> expose the cache/coalescing
+            counters needed to verify that upstream calls scale with refresh
+            windows rather than user count.
+          </li>
+        </ul>
+      </section>
 
-    <div class="note" style="margin-top:14px">
-      <b>Not on the current plan (Stocks Starter):</b> options greeks/IV/OI, index values (I:SPX / I:VIX — we use ETF proxies), tick-level trades/quotes, real-time (non-delayed) data, and analyst estimates (Benzinga add-on). These return <code>NOT_AUTHORIZED</code> and are noted wherever the app would use them.
-    </div>
-  </section>
-
-  <footer>MarketCatalyst · Market Intelligence Terminal · marketcatalyst.web.app</footer>
-</div>
+      <footer>
+        MarketCatalyst Backend Architecture · code audit 2026-07-26 · source:
+        this repository only
+      </footer>
+    </main>
+  </body>
+</html>

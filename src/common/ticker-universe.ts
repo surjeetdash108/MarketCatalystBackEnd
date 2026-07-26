@@ -25,3 +25,21 @@ export const TICKER_UNIVERSE: string[] = [
   'WDC', 'WELL', 'WFC', 'WMT', 'WY', 'XOM', 'YELP', 'ZBH', 'ZI', 'ZIM',
   'ZS',
 ];
+
+/**
+ * DYNAMIC universe — the on-demand redesign (2026-07-24).
+ *
+ * The fixed list above is no longer the sync target; it survives only as a
+ * reference/seed. Per-ticker jobs now iterate the `companies` collection ids:
+ * post-reset that collection contains exactly the tickers users have actually
+ * touched (grown by the on-demand endpoints) plus what the premarket warm
+ * seeded (tape universe + every user's watchlist/portfolio tickers +
+ * `ticker_usage` hot list). An empty list is VALID — no usage yet means
+ * nothing to sync and nothing to pay for.
+ */
+import type { Firestore } from 'firebase-admin/firestore';
+
+export async function activeUniverse(firestore: Firestore): Promise<string[]> {
+  const snap = await firestore.collection('companies').select().get();
+  return snap.docs.map((d) => d.id).sort();
+}

@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 #
-# Creates (or updates) one Cloud Scheduler job per sync job, each POSTing to the
-# Cloud Run service's /sync/<job>/run endpoint on the same schedule the code's
-# @Cron decorators declare. Schedules are mirrored verbatim from src/sync/*.job.ts.
+# ONE Cloud Scheduler job (2026-07-24 on-demand redesign): everything periodic
+# runs inside a single premarket window via /sync/premarket/run, which
+# orchestrates warm-cache + market-wide + per-ticker + recap phases in
+# dependency order (see src/sync/premarket.job.ts). The 22 scattered per-job
+# schedules are RETIRED — this script also deletes them.
+#
+# Intraday freshness does not come from batch syncs: it comes from the live
+# layer (/live/tape SSE, /live/snapshot, and the on-demand /live/bars TTLs).
 #
 # Prereqs:
-#   - Cloud Run service already deployed (see DEPLOY.md); note its URL.
-#   - A service account Scheduler uses to authenticate to the (private) Cloud Run
-#     service, with roles/run.invoker on that service.
+#   - Cloud Run worker service deployed (see DEPLOY.md); note its URL.
+#   - INVOKER_SA has roles/run.invoker on that service.
 #
 # Usage:
 #   PROJECT_ID=market-catalyst-502415 \
@@ -24,59 +28,48 @@ set -euo pipefail
 : "${INVOKER_SA:?set INVOKER_SA (service account email with roles/run.invoker)}"
 
 TZ_NAME="America/New_York"
-DEADLINE="900s"   # < Cloud Scheduler's 30-min max; each job is bounded/batched
+# The orchestrator runs many jobs sequentially — give it the Scheduler maximum.
+DEADLINE="1800s"
 
-# job-name | cron schedule  (verbatim from the @Cron decorators)
-JOBS=(
-  "sec-13f|0 1 * * *"
-  "sec-form4|30 1 * * *"
-  "companies|0 2 * * *"
-  "stock-history|0 3 * * *"
-  "ticker-universe|0 3 * * 0"
-  "rs-rating|0 4 * * *"
-  "technical-indicators|10 4 * * *"
-  "tech-rating|15 4 * * *"
-  "fundamentals-growth|30 4 * * *"
-  "analyst-actions|0 6 * * *"
-  "earnings|0 6 * * *"
-  "ipos|15 6 * * *"
-  "dividends|20 6 * * *"
-  "news|*/30 9-16 * * 1-5"
-  "market-indices|5 18 * * 1-5"
-  "market-quotes|7 18 * * 1-5"
-  "sectors|0 18 * * 1-5"
-  "market-movers|0 18 * * 1-5"
-  "macro-events|10 18 * * 1-5"
-  "fear-greed|15 18 * * 1-5"
-  "recaps|45 18 * * 1-5"
-  "options-chains|0 19 * * 1-5"
+NAME="sync-premarket"
+SCHEDULE="0 8 * * 1-5"   # 08:00 ET weekdays — premarket, before the open
+URI="${SERVICE_URL}/sync/premarket/run"
+
+echo "→ ${NAME}  ('${SCHEDULE}' ${TZ_NAME})  ${URI}"
+
+if gcloud scheduler jobs describe "${NAME}" \
+      --project="${PROJECT_ID}" --location="${REGION}" >/dev/null 2>&1; then
+  action=update
+else
+  action=create
+fi
+
+gcloud scheduler jobs "${action}" http "${NAME}" \
+  --project="${PROJECT_ID}" \
+  --location="${REGION}" \
+  --schedule="${SCHEDULE}" \
+  --time-zone="${TZ_NAME}" \
+  --uri="${URI}" \
+  --http-method=POST \
+  --oidc-service-account-email="${INVOKER_SA}" \
+  --oidc-token-audience="${SERVICE_URL}" \
+  --attempt-deadline="${DEADLINE}"
+
+# ── Retire the old per-job schedules ─────────────────────────────────────────
+OLD_JOBS=(
+  sec-13f sec-form4 companies stock-history ticker-universe rs-rating
+  technical-indicators tech-rating fundamentals-growth analyst-actions
+  earnings ipos dividends news market-indices market-quotes sectors
+  market-movers macro-events fear-greed recaps options-chains
 )
-
-for entry in "${JOBS[@]}"; do
-  job="${entry%%|*}"
-  schedule="${entry##*|}"
+for job in "${OLD_JOBS[@]}"; do
   name="sync-${job}"
-  uri="${SERVICE_URL}/sync/${job}/run"
-
-  echo "→ ${name}  ('${schedule}' ${TZ_NAME})  ${uri}"
-
   if gcloud scheduler jobs describe "${name}" \
         --project="${PROJECT_ID}" --location="${REGION}" >/dev/null 2>&1; then
-    action=update
-  else
-    action=create
+    echo "✂ deleting retired scheduler job ${name}"
+    gcloud scheduler jobs delete "${name}" --quiet \
+      --project="${PROJECT_ID}" --location="${REGION}"
   fi
-
-  gcloud scheduler jobs "${action}" http "${name}" \
-    --project="${PROJECT_ID}" \
-    --location="${REGION}" \
-    --schedule="${schedule}" \
-    --time-zone="${TZ_NAME}" \
-    --uri="${uri}" \
-    --http-method=POST \
-    --oidc-service-account-email="${INVOKER_SA}" \
-    --oidc-token-audience="${SERVICE_URL}" \
-    --attempt-deadline="${DEADLINE}"
 done
 
-echo "✔ All 22 scheduler jobs created/updated."
+echo "✔ Single premarket scheduler job in place; retired jobs removed."

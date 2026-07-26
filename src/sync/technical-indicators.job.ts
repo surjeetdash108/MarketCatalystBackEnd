@@ -1,9 +1,8 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
 import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
-import { TICKER_UNIVERSE } from '../common/ticker-universe';
+import { activeUniverse } from '../common/ticker-universe';
 import { SyncRegistry } from '../common/sync-registry.service';
 
 const JOB_NAME = 'technical-indicators';
@@ -145,7 +144,6 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
     });
   }
 
-  @Cron('10 4 * * *', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
   }
@@ -241,9 +239,16 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
 
   async run() {
     try {
+      // Dynamic universe: exactly the tickers users have touched (on-demand
+      // growth) plus the premarket warm set — never the fixed list.
+      const universe = await activeUniverse(this.firebase.firestore);
+      if (universe.length === 0) {
+        await this.meta.record(JOB_NAME, { ok: true, count: 0 });
+        return { computed: 0, skipped: 0, note: 'no active tickers yet' };
+      }
       const results = [];
       let skipped = 0;
-      for (const ticker of TICKER_UNIVERSE) {
+      for (const ticker of universe) {
         try {
           const ind = await this.computeFor(ticker);
           if (!ind) {
@@ -260,7 +265,7 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
         }
       }
       if (results.length === 0) {
-        this.logger.warn(`No tickers had enough ohlcv_bars to compute indicators (${skipped}/${TICKER_UNIVERSE.length} skipped) — has stock-history.job.ts run yet?`);
+        this.logger.warn(`No tickers had enough ohlcv_bars to compute indicators (${skipped}/${universe.length} skipped) — has stock-history.job.ts run yet?`);
         await this.meta.record(JOB_NAME, { ok: true, count: 0 });
         return { computed: 0, skipped };
       }

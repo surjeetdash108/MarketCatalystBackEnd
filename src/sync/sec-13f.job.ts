@@ -1,5 +1,4 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
 import { batchSetWithCreatedAt, setWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
 import { FUND_UNIVERSE } from '../common/fund-universe';
@@ -32,7 +31,6 @@ export class Sec13FJob implements OnModuleInit {
     });
   }
 
-  @Cron('0 1 * * *', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
   }

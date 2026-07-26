@@ -1,5 +1,4 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
 import { chunkedBatchSet } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
@@ -49,7 +48,6 @@ export class MarketBreadthJob implements OnModuleInit {
     });
   }
 
-  @Cron('30 18 * * 1-5', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
   }

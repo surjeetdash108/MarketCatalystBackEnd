@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { setWithCreatedAt } from '../common/firestore-batch.util';
 import { OPTIONS_UNIVERSE } from '../common/options-universe';
 import { SyncMetaService } from '../common/sync-meta.service';
 import { PolygonService } from '../vendors/polygon/polygon.service';
@@ -34,7 +34,6 @@ export class OptionsChainsJob implements OnModuleInit {
     });
   }
 
-  @Cron('0 19 * * 1-5', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
   }
@@ -85,16 +84,15 @@ export class OptionsChainsJob implements OnModuleInit {
           }
           await sleep(this.polygon.requestDelayMs);
         }
-        await this.firebase.firestore
+        await setWithCreatedAt(this.firebase.firestore, this.firebase.firestore
           .collection('options_chains')
-          .doc(ticker)
-          .set({
+          .doc(ticker), {
             underlyingTicker: ticker,
             contracts: enriched,
             source: 'polygon',
             note: 'Strikes, expirations and per-contract OHLCV/VWAP/volume are real (delayed). Bid/ask, IV, greeks and open interest return NOT_AUTHORIZED on the current Polygon plan — they need the Options add-on or Tradier.',
             updatedAt: new Date().toISOString(),
-          }, { merge: true });
+          });
         tickersWritten++;
       } catch (err) {
         this.logger.error(`Failed syncing options for ${ticker}: ${err.message}`);

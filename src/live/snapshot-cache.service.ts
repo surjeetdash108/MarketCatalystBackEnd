@@ -31,6 +31,18 @@ const IDLE_EVICT_MS = 5 * 60_000;
 /** Guard against an unbounded refresh set if callers request wildly. */
 const MAX_TRACKED = 200;
 
+/** True during US extended trading (04:00–20:00 ET weekdays) — the only window
+ *  in which a delayed-quote refresh can return something new. */
+function inExtendedSession(now = new Date()): boolean {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour12: false, weekday: 'short', hour: 'numeric',
+  }).formatToParts(now);
+  const wd = parts.find((p) => p.type === 'weekday')?.value ?? 'Mon';
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '12') % 24;
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(wd);
+  return weekday >= 1 && weekday <= 5 && hour >= 4 && hour < 20;
+}
+
 export interface SnapshotQuote {
   ticker: string;
   price: number | null;
@@ -155,7 +167,21 @@ export class SnapshotCacheService implements OnModuleDestroy {
         this.timer = null;
         return;
       }
-      void this.refresh([...this.demand.keys()]);
+      // ZERO-poll when closed (2026-07-26): outside the extended session
+      // (04:00–20:00 ET weekdays) prices cannot change, so the vendor is not
+      // called AT ALL — cached frozen-at-close quotes are served. The one
+      // exception is a cold start (instance restarted after hours, cache
+      // empty): fetch once so users see the close, then go silent. Polling
+      // resumes by itself at the next session because this clock check runs
+      // every tick locally, costing no network.
+      const demanded = [...this.demand.keys()];
+      if (!inExtendedSession()) {
+        const uncached = demanded.filter((t) => !this.cache.has(t));
+        if (uncached.length === 0) return;
+        void this.refresh(uncached);
+        return;
+      }
+      void this.refresh(demanded);
     }, this.refreshMs);
   }
 

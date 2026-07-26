@@ -1,5 +1,4 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { MACRO_SERIES } from '../common/macro-series';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
 import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
@@ -28,7 +27,6 @@ export class MacroEventsJob implements OnModuleInit {
     });
   }
 
-  @Cron('10 18 * * 1-5', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
   }

@@ -32,6 +32,8 @@ import { SectorsJob } from './sectors.job';
 import { StockHistoryJob } from './stock-history.job';
 import { SyncController } from './sync.controller';
 import { TickerUniverseJob } from './ticker-universe.job';
+import { PremarketJob } from './premarket.job';
+import { LiveModule } from '../live/live.module';
 
 @Module({
   imports: [
@@ -41,6 +43,9 @@ import { TickerUniverseJob } from './ticker-universe.job';
     FredModule,
     SecEdgarModule,
     AdaptersModule,
+    // For OnDemandService — the premarket warm fills the same cache the
+    // on-demand endpoints serve from.
+    LiveModule,
   ],
   controllers: [SyncController],
   providers: [
@@ -70,6 +75,7 @@ import { TickerUniverseJob } from './ticker-universe.job';
     MarketBreadthJob,
     FearGreedJob,
     RecapsJob,
+    PremarketJob,
   ],
 })
 export class SyncModule {}

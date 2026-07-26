@@ -1,5 +1,110 @@
 # Widgets → Data Providers
 
+> ## ⏱ State sync — 2026-07-26 (evening) · CDN, zero-poll, spinners, DB reset EXECUTED
+>
+> _Additive to the morning 2026-07-26 on-demand block below; nothing prior is
+> removed. Where they differ, this block is newest._
+>
+> **DB reset executed.** `deploy/empty-market-data.mjs` was RUN against
+> production: **323,575 market-data docs deleted** across 29 collections
+> (ohlcv_bars ~300k, tickers ~13k, news ~5.6k, …). Users, watchlists,
+> portfolios, sessions, settings, plans and feature flags were kept. The DB now
+> starts empty and grows strictly with usage + the premarket warm.
+>
+> **Spinners app-wide (first-fetch UX).** Every on-demand path now shows a
+> spinner while data is being fetched and an honest empty state if none exists:
+> the Dashboard's single grid spinner, the shared `DataState` loading state,
+> the chart pane (spinner while `/live/bars` is in flight — and the last
+> fabricated fallback, `genOHLC`'s seeded random-walk chart, was **removed**),
+> the stock page and stock drawer (`useCompanyState`, ~12 s bounded grace while
+> `/live/company` lands).
+>
+> **Zero vendor/client polling while the market is closed.** Client price poll:
+> one fetch to populate, then silent until 04:00 ET (local clock check, no
+> network); hidden tabs never poll and refresh instantly on return. Snapshot
+> cache: zero Polygon calls when closed (cold-start exception only). Tape:
+> skips the vendor entirely once a clean closing frame exists; a 15-min phase
+> check is the only reopen signal (market-status, 60 s TTL, ~1 light call/min
+> server-wide). WebSocket: never opens (unused path, kept for a future
+> real-time plan).
+>
+> **Firebase Hosting free CDN.** `firebase.json` rewrites `/live/**` on the
+> Hosting origin to the public `market-catalyst-live` Cloud Run service. The UI
+> (`app/iq/backend.ts`) calls same-origin on `*.web.app`/`*.firebaseapp.com`
+> (→ rides Hosting's global CDN, cached per each endpoint's Cache-Control/
+> s-maxage; no CORS) and the direct Cloud Run URL in dev. **SSE stays direct**
+> (Hosting buffers streams). `/live/whoami` is `no-store` so the CDN can never
+> cache one user's IP for another. 11 UI consumers rewired.
+>
+> **SSE decision.** The tape keeps SSE while its compute stays under
+> ~$1/month (roughly ≤300 concurrent viewers; ref-counted, 0 viewers = $0).
+> Past that, the pre-built fallback — polling the CDN-cached `GET /live/tape`
+> (s-maxage=60) — is a ~30-minute switch that collapses 10k viewers to ~1
+> origin request/minute.
+>
+> **Cost (honest, at 10k users).** Firestore **≈ $0.70/mo** — the <$1 target,
+> met. Whole GCP infra **≈ $10–25/mo** at genuinely 10k daily-active (network
+> egress + concurrent compute are bandwidth physics, not design slack); ~$2–5
+> if ~1k are active daily. The Polygon subscription (~$2,000/mo) dominates
+> everything — see `Polygon-vs-Finnhub-Vendor-Comparison.pdf`.
+
+
+> ## ⏱ State sync — 2026-07-26 (ON-DEMAND DATA LAYER redesign)
+>
+> _This block supersedes any earlier description of scheduled full-universe
+> syncing. The data layer is now on-demand._
+>
+> **Design.** The app no longer pre-syncs a fixed ticker universe. Firestore
+> starts EMPTY (market-data collections) and grows strictly with usage:
+> `GET /live/bars?ticker&tf` and `GET /live/company?ticker` check Firestore
+> (every doc carries **`createdAt`** + a per-resolution TTL) → on miss make ONE
+> coalesced Polygon call → write back → serve. Repeat users hit the shared
+> cache; browsers additionally cache via Cache-Control+ETag (304s).
+>
+> **Bars storage.** One doc per (ticker, resolution family) in `stock_bars/`:
+> `_1min` (1H) · `_5min` (1D/1W) · `_30min` (1M) · `_daily` (3M/6M/1Y/5Y,
+> **widen-in-place**: a 1Y request upgrades a 3M doc in place; narrower
+> timeframes are served as slices of the wider doc with zero vendor calls).
+> The old per-bar `ohlcv_bars` (≈300k docs) is retired as a client read path
+> (it remains only as the internal substrate the indicator jobs read).
+>
+> **Usage tracking.** Every on-demand fetch increments **`ticker_usage/{t}`**
+> (batched ≤1 write/min/ticker) — the gradually-built record of which stocks
+> are REALLY used.
+>
+> **One premarket cron.** A single Cloud Scheduler job (`sync-premarket`,
+> 08:00 ET weekdays → `/sync/premarket/run`) replaces all 22 scattered jobs
+> (deleted; in-code `@Cron` decorators removed). Phases: ① warm the
+> high-frequency set (tape universe + every user's watchlist/portfolio +
+> `ticker_usage` top-100) through the on-demand cache; ② market-wide jobs
+> (indices, sectors, movers, breadth, F&G, calendars, news, insider);
+> ③ per-ticker compute jobs over the **dynamic universe** (= `companies` ids,
+> i.e. only used tickers — the fixed 241-ticker list is retired);
+> ④ recap (freezes the prior session). Intraday freshness comes from the live
+> layer (SSE tape, /live/snapshot, on-demand TTLs), not from re-running batch
+> syncs — no other cron frequency is required.
+>
+> **Search.** `GET /live/search?q=` — in-memory index over the full ~13k
+> Polygon reference universe, per instance, refreshed daily. The `tickers`
+> collection (10k docs) is retired: search costs ZERO Firestore reads and now
+> matches substrings.
+>
+> **Presence cost fix.** Heartbeat 90s → 30 min (client-gated); ~2-4 writes
+> per active user per day. Presence read convention: online = `isOnline` and
+> `lastSeenAt` fresher than ~35 min.
+>
+> **Firebase cost @ 10k users/month (nam5 pricing, free tier ignored —
+> conservative):** shared/cached reads ≈ $0.04 · owner-scoped reads
+> (watchlist/portfolio/settings, ~10 docs/session) ≈ $0.45 · writes (presence
+> + premarket + usage) ≈ $0.20 · storage < free 1 GB ⇒ **≈ $0.70/month
+> total — under the $1 target.** Reads no longer scale with (users × docs)
+> anywhere; the dominant remaining term is owner-scoped reads, linear in
+> sessions, not in market data.
+>
+> **Reset.** `deploy/empty-market-data.mjs` empties ONLY market-data
+> collections (DRY_RUN by default; users/settings/plans/flags kept).
+
+
 
 > ## ⏱ State sync — 2026-07-24 (current deployed reality)
 >

@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { batchSetWithCreatedAt, setWithCreatedAt } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
 import { candidateTradingDays } from '../common/trading-days.util';
 import { PolygonService } from '../vendors/polygon/polygon.service';
@@ -45,7 +45,6 @@ export class FearGreedJob implements OnModuleInit {
     });
   }
 
-  @Cron('15 18 * * 1-5', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
   }
@@ -114,17 +113,18 @@ export class FearGreedJob implements OnModuleInit {
         throw new Error('No Fear & Greed components could be computed');
       }
       const value = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
-      await this.firebase.firestore
-        .collection('market_sentiment')
-        .doc('fear_greed')
-        .set({
+      await setWithCreatedAt(
+        this.firebase.firestore,
+        this.firebase.firestore.collection('market_sentiment').doc('fear_greed'),
+        {
           value,
           label: label(value),
           components: Object.fromEntries(Object.entries(components).map(([k, v]) => [k, Math.round(v)])),
           asOfDate: latest?.date ?? null,
           source: 'polygon',
           updatedAt: new Date().toISOString(),
-        }, { merge: true });
+        },
+      );
 
       // ── R26: backfill the real composite HISTORY ──────────────────────────
       // The dashboard's F&G history line was reading market_breadth.breadthSentiment
@@ -162,11 +162,10 @@ export class FearGreedJob implements OnModuleInit {
       }
       // Chunked batch write (Firestore caps at 500 ops/batch).
       const col = this.firebase.firestore.collection('market_sentiment_history');
-      for (let i = 0; i < hist.length; i += 400) {
-        const batch = this.firebase.firestore.batch();
-        for (const h of hist.slice(i, i + 400)) batch.set(col.doc(h.id), h.data, { merge: true });
-        await batch.commit();
-      }
+      await batchSetWithCreatedAt(
+        this.firebase.firestore,
+        hist.map((h) => ({ ref: col.doc(h.id), data: h.data })),
+      );
 
       await this.meta.record(JOB_NAME, { ok: true, count: 1 });
       this.logger.log(`fear-greed: value ${value}; backfilled ${hist.length} history day(s)`);

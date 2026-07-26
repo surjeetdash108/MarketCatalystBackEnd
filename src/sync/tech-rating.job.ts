@@ -1,9 +1,8 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { FirebaseAdminService } from '../common/firebase-admin.provider';
 import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
-import { TICKER_UNIVERSE } from '../common/ticker-universe';
+import { activeUniverse } from '../common/ticker-universe';
 import { SyncRegistry } from '../common/sync-registry.service';
 
 const JOB_NAME = 'tech-rating';
@@ -71,7 +70,6 @@ export class TechRatingJob implements OnModuleInit {
     });
   }
 
-  @Cron('15 4 * * *', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
   }
@@ -103,9 +101,14 @@ export class TechRatingJob implements OnModuleInit {
 
   async run() {
     try {
+      const universe = await activeUniverse(this.firebase.firestore);
+      if (universe.length === 0) {
+        await this.meta.record(JOB_NAME, { ok: true, count: 0 });
+        return { count: 0, note: 'no active tickers yet' };
+      }
       const rows = [];
       let skipped = 0;
-      for (const ticker of TICKER_UNIVERSE) {
+      for (const ticker of universe) {
         try {
           const c = await this.componentsFor(ticker);
           if (!c) {
@@ -119,7 +122,7 @@ export class TechRatingJob implements OnModuleInit {
         }
       }
       if (rows.length === 0) {
-        this.logger.warn(`No tickers had enough ohlcv_bars for tech rating (${skipped}/${TICKER_UNIVERSE.length}) — has stock-history run?`);
+        this.logger.warn(`No tickers had enough ohlcv_bars for tech rating (${skipped}/${universe.length}) — has stock-history run?`);
         await this.meta.record(JOB_NAME, { ok: true, count: 0 });
         return { rated: 0, skipped };
       }

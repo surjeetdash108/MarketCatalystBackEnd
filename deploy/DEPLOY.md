@@ -241,27 +241,31 @@ gcloud run services add-iam-policy-binding market-catalyst-backend \
   --region "$REGION" --member="serviceAccount:${INVOKER_SA}" --role="roles/run.invoker"
 ```
 
-## 5. Create the 21 scheduler jobs
+## 5. Create THE scheduler job (singular — 2026-07-26 on-demand redesign)
+
+One Cloud Scheduler entry (`sync-premarket`, 08:00 ET weekdays →
+`/sync/premarket/run`) replaces the previous 22. The script below creates it
+AND deletes the retired per-job schedules:
 
 ```bash
 PROJECT_ID="$PROJECT_ID" REGION="$REGION" SERVICE_URL="$SERVICE_URL" INVOKER_SA="$INVOKER_SA" \
   ./deploy/create-scheduler-jobs.sh
 ```
 
-## 6. First backfill (one-time)
+## 6. First fill (one-time, optional)
 
-The schedules only fire going forward. To populate Firestore now, trigger jobs
-manually (order matters for a couple):
+There is no universe backfill anymore — the DB starts empty and grows with
+usage (on-demand `/live/bars` + `/live/company`) plus the premarket warm. To
+prime the cache immediately instead of waiting for tomorrow's premarket run:
 
 ```bash
 TOKEN=$(gcloud auth print-identity-token --audiences="$SERVICE_URL")
-for JOB in ticker-universe companies sectors market-indices market-quotes \
-           market-movers earnings analyst-actions news dividends ipos \
-           macro-events options-chains fear-greed sec-13f sec-form4; do
-  echo "== $JOB =="; curl -s -X POST -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/sync/$JOB/run" | head -c 200; echo
-done
-# stock-history is a rotating batch — run ~4x to cover the universe, THEN rs-rating/tech-rating/technical-indicators.
+curl -s -X POST -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/sync/premarket/run" | head -c 400
 ```
+
+To reset the market-data collections to the on-demand shape (keeps users,
+settings, plans, flags): `node deploy/empty-market-data.mjs` (dry run), then
+`CONFIRM_DELETE=yes node deploy/empty-market-data.mjs`.
 
 ## 7. Verify
 
@@ -288,3 +292,20 @@ npm run start:dev         # http://localhost:4100  (monitor at /, ops API at /sy
   barDate+~400d, `news` = publishedAt+~90d) — see the root README migration notes.
 - Cloud Run scale-to-zero means the first Scheduler hit each run does a cold start
   (~a few seconds incl. Firestore's first gRPC channel) — fine for cron cadence.
+
+## 7. Free CDN via Firebase Hosting (2026-07-26)
+
+`firebase.json` (UI repo) rewrites `/live/**` on the Hosting origin to the
+`market-catalyst-live` Cloud Run service. Same-origin API calls from the app
+therefore ride Firebase Hosting's global CDN for free, cached per the
+backend's own `Cache-Control`/`s-maxage` headers — identical polls from many
+users collapse to ~1 origin request per interval per edge.
+
+- The UI picks the base automatically (`app/iq/backend.ts`): same-origin on
+  `*.web.app` / `*.firebaseapp.com` (→ CDN), the direct Cloud Run URL in dev.
+- **SSE stays direct** (`/live/tape/stream` uses the Cloud Run URL) — Hosting
+  rewrites buffer/timeout long streams.
+- Safe by construction: the rewrite targets the PUBLIC `live` service only
+  (LiveModule; no /sync//purge//admin routes exist there), and per-user
+  responses (`/live/whoami`) are `no-store` so the CDN never caches them.
+- Ships automatically with any `firebase deploy --only hosting`.

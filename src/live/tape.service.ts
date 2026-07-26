@@ -232,6 +232,15 @@ export class TapeService implements OnModuleDestroy {
     try {
       const phase = await this.phase();
 
+      // ZERO-poll when closed (2026-07-26): with the market closed and a
+      // non-stale frame already captured, prices cannot move — skip the vendor
+      // entirely. The timer keeps ticking (15-min cadence) only to re-check
+      // the phase, so the tape resumes by itself at the next session open.
+      if (phase === 'closed' && this.lastFrame && !this.lastFrame.stale) {
+        if (this.clients > 0) this.ensureTimer(IDLE_REFRESH_MS);
+        return;
+      }
+
       // One request for every equity on the tape — indices proxies and
       // mega-caps together. `ticker.any_of` is what makes this O(1) in the
       // number of symbols instead of one call each.

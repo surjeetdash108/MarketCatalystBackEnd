@@ -1940,6 +1940,113 @@ paths:
         "304": { description: Unchanged since the caller's ETag }
         "400": { description: A requested collection is not on the cacheable allow-list }
 
+  /live/bars:
+    get:
+      tags: [Live]
+      summary: On-demand chart bars — cache-aside via stock_bars (2026-07-26)
+      description: |
+        The on-demand data layer's bars endpoint. Checks Firestore
+        `stock_bars/{TICKER}_{resolution}` (single doc per resolution family,
+        `createdAt` + per-resolution TTL) → on miss makes ONE coalesced Polygon
+        aggregates call → writes back → serves. Daily docs WIDEN IN PLACE
+        (a 1Y request upgrades a stored 3M range; narrower timeframes are
+        served as slices of the wider doc with zero vendor calls).
+        Resolution families: 1H→1min · 1D/1W→5min · 1M→30min ·
+        3M/6M/1Y/5Y→daily. Also records `ticker_usage/{ticker}`.
+      x-status: live-backend-only
+      operationId: getOnDemandBars
+      parameters:
+        - name: ticker
+          in: query
+          required: true
+          schema: { type: string }
+          example: AAPL
+        - name: tf
+          in: query
+          required: true
+          description: One of 1H, 1D, 1W, 1M, 3M, 6M, 1Y, 5Y.
+          schema: { type: string }
+          example: 1Y
+      responses:
+        "200":
+          description: "{ ticker, tf, bars:[{t,o,h,l,c,v,vw}], source: memory|firestore|vendor, asOf }"
+        "304": { description: Unchanged since the caller's ETag }
+        "400": { description: Invalid ticker or timeframe }
+
+  /live/company:
+    get:
+      tags: [Live]
+      summary: On-demand company profile+price — cache-aside via companies (2026-07-26)
+      description: |
+        Fetches (and caches into `companies/{ticker}`, merge-write with
+        `createdAt`, ~20 h TTL) the profile + latest delayed price for ANY US
+        ticker on first request. This is how the `companies` collection GROWS —
+        there is no fixed pre-synced universe anymore. The premarket job's
+        per-ticker compute pipeline then enriches exactly these docs.
+      x-status: live-backend-only
+      operationId: getOnDemandCompany
+      parameters:
+        - name: ticker
+          in: query
+          required: true
+          schema: { type: string }
+          example: AAPL
+      responses:
+        "200": { description: The company document }
+        "304": { description: Unchanged since the caller's ETag }
+        "404": { description: Unknown ticker (no profile and no quote) }
+
+  /live/search:
+    get:
+      tags: [Live]
+      summary: Ticker/company-name search — in-memory universe, zero Firestore (2026-07-26)
+      description: |
+        Searches the full ~13k-symbol Polygon reference universe held in
+        instance memory (loaded once, refreshed daily). Replaces the Firestore
+        `tickers` collection sync (10k docs/day) and its per-keystroke range
+        queries. Ranked exact → ticker-prefix → name-prefix → substring
+        (substrings were impossible on Firestore prefix ranges).
+      x-status: live-backend-only
+      operationId: searchTickers
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, maxLength: 40 }
+          example: apple
+      responses:
+        "200":
+          description: "{ q, results: [{ ticker, name }] } — top 20, ranked"
+        "400": { description: Missing or over-long q }
+
+  /live/ondemand-stats:
+    get:
+      tags: [Live]
+      summary: On-demand cache observability (requests vs vendor calls vs cache hits)
+      x-status: live-backend-only
+      operationId: getOnDemandStats
+      responses:
+        "200":
+          description: Counters proving cache-aside behaviour (barsVendorCalls ≪ barsRequests).
+
+  /sync/premarket/run:
+    post:
+      tags: [Sync]
+      summary: THE single scheduled entry point — premarket orchestrator (2026-07-26)
+      description: |
+        Runs every periodic sync in ONE premarket window (Scheduler
+        `sync-premarket`, 08:00 ET weekdays; the 22 per-job schedules are
+        retired). Phases — ① warm the high-frequency set (tape universe + every
+        user's watchlist/portfolio tickers + `ticker_usage` top-100) through
+        the on-demand cache; ② market-wide jobs; ③ per-ticker compute over the
+        DYNAMIC universe (`companies` ids = used tickers only); ④ recap of the
+        prior session. Admin-guarded like every /sync route.
+      x-status: worker-only
+      operationId: runPremarket
+      responses:
+        "200":
+          description: "{ hotTickers, warmed, failed, jobs:[{job,ok,error?}], succeeded, tookMs }"
+
   /live/tape/stream:
     get:
       tags: [Live]

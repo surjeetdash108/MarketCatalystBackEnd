@@ -928,3 +928,41 @@ CREATE TABLE recap_sector_performance (
 -- re-sync behavior were all exercised with real inserts.
 -- Cross-check against Doc/openapi.yaml if either drifts from the other.
 -- ============================================================================
+
+-- ============================================================================
+-- 2026-07-26 · ON-DEMAND DATA LAYER — new collections (Firestore, documented
+-- here in relational form for cross-reference only)
+-- ============================================================================
+
+-- stock_bars: ONE doc per (ticker, resolution family) — replaces per-bar
+-- ohlcv_bars as the CLIENT read path (ohlcv_bars remains an internal compute
+-- substrate for the indicator jobs). Doc id: {TICKER}_{resolution}.
+-- resolution ∈ 1min(1H) | 5min(1D/1W) | 30min(1M) | daily(3M/6M/1Y/5Y).
+-- daily docs carry rangeDays and WIDEN IN PLACE (5Y ⊃ 1Y ⊃ 6M ⊃ 3M).
+CREATE TABLE stock_bars (
+  doc_id        TEXT PRIMARY KEY,          -- '{TICKER}_{resolution}'
+  ticker        TEXT NOT NULL,
+  resolution    TEXT NOT NULL CHECK (resolution IN ('1min','5min','30min','daily')),
+  bars          JSONB NOT NULL,            -- [{t,o,h,l,c,v,vw}]
+  range_days    INTEGER NOT NULL,
+  bar_count     INTEGER NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL,      -- the cache clock (TTL basis)
+  updated_at    TIMESTAMPTZ NOT NULL,
+  source        TEXT NOT NULL DEFAULT 'polygon-ondemand'
+);
+
+-- ticker_usage: which stocks are REALLY used, grown gradually from zero.
+-- Incremented (batched) by every on-demand fetch; read by the premarket warm
+-- (top-100 by count) to pre-fill the cache before the open.
+CREATE TABLE ticker_usage (
+  ticker        TEXT PRIMARY KEY,
+  count         BIGINT NOT NULL DEFAULT 0,
+  first_used_at TIMESTAMPTZ,               -- createdAt
+  last_used_at  TIMESTAMPTZ NOT NULL,
+  updated_at    TIMESTAMPTZ NOT NULL
+);
+
+-- RETIRED as client read paths (2026-07-26): tickers (search → in-memory
+-- /live/search), ohlcv_bars + intraday_bars (charts → /live/bars). Every
+-- market-data doc now carries created_at, and the whole market-data set can
+-- be emptied safely via deploy/empty-market-data.mjs (users/config kept).
