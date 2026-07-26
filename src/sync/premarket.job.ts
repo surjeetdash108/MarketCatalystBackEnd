@@ -14,11 +14,12 @@ const JOB_NAME = 'premarket';
  *
  *   Phase 1 · WARM — resolve the "high-frequency" set (tape universe + every
  *     user's watchlist & portfolio tickers + the `ticker_usage` hot list) and
- *     pre-fill the on-demand cache: company profile + 1Y daily + 1D intraday
- *     bars per ticker. This is what makes the first user of the day fast, and
- *     it also seeds `companies` — the dynamic universe the per-ticker jobs
- *     below iterate. Usage-driven and grown gradually: an unused app warms
- *     only the 21-symbol tape universe.
+ *     refresh their company PROFILES (one cheap call each). This seeds
+ *     `companies` — the dynamic universe the per-ticker jobs below iterate.
+ *     Bar HISTORY is NOT warmed: charts are strictly on-demand and
+ *     incremental (only the days since the last stored bar are ever fetched —
+ *     never a 5-year re-download). Usage-driven and grown gradually: an
+ *     unused app warms only the 21-symbol tape universe.
  *
  *   Phase 2 · MARKET-WIDE — small, market-level collections every screen
  *     shares (indices, sectors, movers, breadth, F&G, calendars, news,
@@ -119,6 +120,14 @@ export class PremarketJob implements OnModuleInit {
     return [...hot].filter((t) => /^[A-Z][A-Z0-9.\-]{0,9}$/.test(t)).sort();
   }
 
+  /**
+   * Warm = company PROFILES only (one cheap call each — powers lists/screens
+   * and seeds the dynamic universe). Bar HISTORY is deliberately NOT warmed:
+   * charts are strictly on-demand — fetched, processed and written to
+   * Firestore the moment a user asks, and incremental thereafter (the
+   * on-demand layer appends only the days since the last stored bar; it never
+   * re-downloads five years every morning).
+   */
   private async warm(tickers: string[]): Promise<{ warmed: number; failed: number }> {
     let warmed = 0;
     let failed = 0;
@@ -129,8 +138,6 @@ export class PremarketJob implements OnModuleInit {
         if (!t) return;
         try {
           await this.ondemand.getCompany(t);
-          await this.ondemand.getBars(t, '1Y');
-          await this.ondemand.getBars(t, '1D');
           warmed++;
         } catch (err) {
           failed++;

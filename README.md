@@ -1,19 +1,34 @@
 # Market Catalyst Backend
 
-The **data-ingestion service** for Market Catalyst. It pulls market data from
-vendor APIs on scheduled cron jobs and writes the results into **Cloud Firestore**.
-The Next.js frontend reads those Firestore collections directly via the client SDK
-— it never calls this service and never holds a vendor API key.
+The **data-ingestion service** for Market Catalyst. Market-wide data (indices,
+movers, sectors, earnings, news, etc.) is filled by ONE daily batch job
+(`premarket`, 08:00 ET weekdays); per-ticker data (company profile, bars) is
+filled **on demand** the first time any user asks for it. Either way, results
+land in **Cloud Firestore**, and the Next.js frontend reads most of it back
+directly via the client SDK. It never holds a vendor API key.
 
 ```
 Vendor APIs (Polygon, FMP, Finnhub, FRED, SEC EDGAR)
-        │   21 scheduled sync jobs (@nestjs/schedule)
+        │
+        ├─ premarket job (@nestjs/schedule, 08:00 ET weekdays)
+        │     → market-wide + per-ticker batch collections
+        │
+        └─ GET /live/bars, /live/company  (on-demand, cache-aside)
+              → per-ticker collections, populated on first request
         ▼
    Cloud Firestore   ← written server-side via the Firebase Admin SDK
-        │   onSnapshot() real-time reads (Firestore client SDK)
+        │   onSnapshot() real-time reads (Firestore client SDK) for most
+        │   screens, PLUS direct HTTP calls to /live/bars + /live/company
+        │   (see MarketCatalystUI's useOhlcvBars / useEnsureCompanies hooks)
+        │   to trigger the on-demand fetch in the first place
         ▼
    Next.js app (separate repo)  — every live screen element
 ```
+
+> Market-wide collections have no on-demand path — they only refill via the
+> `premarket` job. If Firestore was just emptied, expect those screens to stay
+> blank until the next scheduled run (or trigger it manually — see
+> `deploy/DEPLOY.md` §6, `POST /sync/premarket/run`).
 
 This is a NestJS app. Vendor calls go through an **adapter layer** (`src/adapters/`)
 with automatic fallback between two vendors for company profiles, movers, mover
@@ -66,9 +81,19 @@ it uses the runtime service account's Application Default Credentials.
 
 ## Sync jobs
 
-21 jobs, each with a fixed `@Cron(...)` schedule (America/New_York) and the Firestore
-collection(s) it writes. In production these are driven by **Cloud Scheduler** (see
-Deployment); locally the in-process `@nestjs/schedule` cron fires them.
+21 jobs, each writing the Firestore collection(s) below. They no longer self-schedule
+individually — **one** Cloud Scheduler entry (`sync-premarket`, 08:00 ET weekdays) hits
+`POST /sync/premarket/run`, which runs all of them in dependency-ordered phases (see
+`src/sync/premarket.job.ts`). The `cronExpression` shown per job is now just registry
+metadata (surfaced on `GET /sync/jobs`) describing how often that job *used to* run
+standalone — not a live trigger. Each job can still be fired individually via
+`POST /sync/:job/run` for manual backfills/debugging.
+
+Per-ticker company + bars data additionally fills **on demand**: `companies` and
+`stock_bars` are also written by `GET /live/bars` / `GET /live/company` the first
+time any user's browser requests a ticker (see `src/live/ondemand.service.ts`) —
+that path is what the frontend actually calls day to day; the batch schedule below
+is the once-a-day floor, not the only way these collections fill.
 
 | Job | Schedule (ET) | Writes collection(s) |
 |---|---|---|
@@ -101,13 +126,15 @@ tracks incremental cursors.
 
 ## Deployment (Firebase / GCP)
 
-Runs on **Cloud Run** (scale-to-zero) with **Cloud Scheduler** triggering each job
-over HTTP. Full step-by-step runbook: **[`deploy/DEPLOY.md`](deploy/DEPLOY.md)**.
+Two Cloud Run services from the same image (worker + public `live`), plus **one**
+Cloud Scheduler job (`sync-premarket`) triggering the batch orchestrator over HTTP.
+Full step-by-step runbook: **[`deploy/DEPLOY.md`](deploy/DEPLOY.md)**.
 
 Deploy artifacts in this repo:
 - [`Dockerfile`](Dockerfile) — multi-stage container (uses ADC, no baked key)
 - [`firebase.json`](firebase.json) + [`firestore.rules`](firestore.rules) + [`firestore.indexes.json`](firestore.indexes.json) — Firestore config
-- [`deploy/create-scheduler-jobs.sh`](deploy/create-scheduler-jobs.sh) — creates all 21 Cloud Scheduler jobs from the schedules above
+- [`deploy/create-scheduler-jobs.sh`](deploy/create-scheduler-jobs.sh) — creates the single `sync-premarket` job and deletes any leftover per-job schedules
+- [`deploy/empty-market-data.mjs`](deploy/empty-market-data.mjs) — resets market-data collections to the on-demand shape (never touches users/plans/settings)
 
 > Requires the Firebase project on the **Blaze** plan (Cloud Run + Scheduler +
 > backfill write-bursts). The project must be the **same** one the frontend reads from.

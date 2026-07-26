@@ -75,8 +75,10 @@
 > **One premarket cron.** A single Cloud Scheduler job (`sync-premarket`,
 > 08:00 ET weekdays → `/sync/premarket/run`) replaces all 22 scattered jobs
 > (deleted; in-code `@Cron` decorators removed). Phases: ① warm the
-> high-frequency set (tape universe + every user's watchlist/portfolio +
-> `ticker_usage` top-100) through the on-demand cache; ② market-wide jobs
+> high-frequency set's company PROFILES only (tape universe + every user's
+> watchlist/portfolio + `ticker_usage` top-100) — bar history is strictly
+> on-demand and INCREMENTAL (only days since the last stored bar are fetched;
+> a 5-year series is never re-downloaded); ② market-wide jobs
 > (indices, sectors, movers, breadth, F&G, calendars, news, insider);
 > ③ per-ticker compute jobs over the **dynamic universe** (= `companies` ids,
 > i.e. only used tickers — the fixed 241-ticker list is retired);

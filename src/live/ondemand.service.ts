@@ -192,17 +192,67 @@ export class OnDemandService implements OnModuleDestroy {
         this.stats.barsFirestoreHits++;
         return { ticker, tf, bars: this.slice(doc, spec), source: 'firestore', asOf: doc.createdAt };
       }
-      // Stale or too narrow — refetch at least as wide as ever stored, so a
-      // 1Y-widened doc never shrinks back when a 3M user comes along.
-      spec satisfies TfSpec;
+      // Wide enough but STALE → INCREMENTAL refresh: history never changes, so
+      // fetch only the days since the last stored bar and append. A 5-year doc
+      // costs a ~2-day fetch per day of staleness — old data is never re-pulled.
+      if ((doc.rangeDays ?? 0) >= spec.fetchDays && doc.bars.length > 0) {
+        const fresh = await this.refreshIncremental(ticker, spec.resolution, doc, ref);
+        return { ticker, tf, bars: this.slice(fresh, spec), source: 'vendor', asOf: fresh.createdAt };
+      }
+      // Too narrow — a wider window was requested than ever stored. This is the
+      // one genuine full fetch (backfill), still a single vendor call.
       const widest = Math.max(spec.fetchDays, doc.rangeDays ?? 0);
       const fresh = await this.fetchAndStore(ticker, spec.resolution, widest, ref);
       return { ticker, tf, bars: this.slice(fresh, spec), source: 'vendor', asOf: fresh.createdAt };
     }
 
-    // 3. Vendor (coalesced).
+    // 3. Vendor (coalesced) — first-ever request for this ticker+resolution.
     const fresh = await this.fetchAndStore(ticker, spec.resolution, spec.fetchDays, ref);
     return { ticker, tf, bars: this.slice(fresh, spec), source: 'vendor', asOf: fresh.createdAt };
+  }
+
+  /**
+   * Append-only refresh of an existing doc: fetch from the last stored bar's
+   * date (inclusive — the tail bar may have been partial when captured) to
+   * today, replace that tail bar and append the rest. rangeDays is preserved,
+   * so a 5Y-widened doc stays 5Y without ever re-downloading 5 years.
+   */
+  private async refreshIncremental(
+    ticker: string, resolution: Resolution, doc: BarsDoc,
+    ref: FirebaseFirestore.DocumentReference,
+  ): Promise<BarsDoc> {
+    const key = `${ticker}_${resolution}_incr`;
+    const existing = this.inflight.get(key) as Promise<BarsDoc> | undefined;
+    if (existing) return existing;
+
+    const p = (async (): Promise<BarsDoc> => {
+      const { multiplier, timespan } = RES_PARAMS[resolution];
+      const lastT = doc.bars[doc.bars.length - 1].t;
+      const from = isoDate(new Date(lastT));
+      const to = isoDate(new Date());
+      this.stats.barsVendorCalls++;
+      const raw: PolygonAggBar[] = await this.polygon.getAggsRange(
+        ticker, from, to, timespan, multiplier, 50_000,
+      );
+      const now = new Date().toISOString();
+      const kept = doc.bars.filter((b) => b.t < lastT); // drop the possibly-partial tail
+      const appended = raw
+        .filter((b) => b.t >= lastT)
+        .map((b) => ({ t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v, vw: b.vw ?? null }));
+      const next: BarsDoc = {
+        ...doc,
+        bars: [...kept, ...appended],
+        barCount: kept.length + appended.length,
+        createdAt: now, // the cache clock — this doc is fresh as of now
+        updatedAt: now,
+      };
+      await ref.set(next);
+      this.memBars.set(`${ticker}_${resolution}`, next);
+      return next;
+    })().finally(() => this.inflight.delete(key));
+
+    this.inflight.set(key, p);
+    return p;
   }
 
   private slice(doc: BarsDoc, spec: TfSpec): StoredBar[] {
