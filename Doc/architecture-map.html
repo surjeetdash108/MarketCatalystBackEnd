@@ -319,10 +319,25 @@
         </p>
         <div class="notice">
           <b>Scope and audit date.</b> This map is based on this backend
-          repository as inspected on 2026-07-26: <code>src/</code>,
+          repository as inspected on 2026-07-27: <code>src/</code>,
           <code>deploy/</code>, <code>firebase.json</code>, and Firestore
           configuration. A box is marked when it is configured in a separate UI
           repository or is unreliable with the deployed scale-to-zero model.
+        </div>
+        <div class="notice">
+          <b>Two environments (2026-07-27).</b> The topology below exists
+          <em>twice</em>, once per isolated Firebase project:
+          <code>market-catalyst-502415</code> (prod) and
+          <code>market-catalyst-stage</code> (stage). Each project has its own
+          Firestore (nam5), Auth, rules, and <code>backend-runtime</code> service
+          account; stage was seeded with a full copy of prod data. Nothing is
+          hardcoded to one project — the backend selects the project by
+          <code>FIREBASE_PROJECT_ID</code> (<code>deploy/env.&lt;env&gt;.yaml</code>)
+          and the UI by <code>NEXT_PUBLIC_FIREBASE_*</code> (stage build via
+          <code>.env.production</code>). The UI's backend base URL is resolved at
+          runtime — <code>localhost:4100</code> in dev, <b>same-origin</b> when
+          deployed — so the same static build runs against either environment.
+          Both repos develop on the <code>stage</code> branch.
         </div>
       </header>
 
@@ -604,21 +619,30 @@
             <div class="tag">Storage and identity</div>
             <h3>Firebase</h3>
             <p>
-              Firebase Auth is consumed by browser Firestore access. The backend
-              uses the Firebase Admin SDK and bypasses Firestore rules for
-              server writes. <code>SENTRY_DSN</code> enables process-level
-              exception reporting.
+              The browser uses Firebase <em>Auth only</em> (identity); market and
+              user data come from this service's REST/SSE surface, not direct
+              Firestore reads. The project is selected per environment by
+              <code>FIREBASE_PROJECT_ID</code> — <code>market-catalyst-502415</code>
+              (prod) or <code>market-catalyst-stage</code> (stage) — and the
+              backend uses the Firebase Admin SDK (ADC via the
+              <code>backend-runtime</code> service account), bypassing Firestore
+              rules for server writes. <code>SENTRY_DSN</code> enables
+              process-level exception reporting.
             </p>
           </article>
           <article class="card" style="--accent: var(--red)">
             <div class="tag">Configuration caveat</div>
-            <h3>Hosting rewrite is external</h3>
+            <h3>Hosting rewrites are external</h3>
             <p>
               This repository's <code>firebase.json</code> declares only
-              Firestore rules and indexes. The <code>/live/**</code> Hosting
-              rewrite is documented in <code>deploy/DEPLOY.md</code> as
-              configuration shipped from the UI repository, so it cannot be
-              verified from this repo alone.
+              Firestore rules and indexes. The Hosting rewrites that make the UI
+              reach this service same-origin — <code>/api/**</code>,
+              <code>/market-data/**</code>, <code>/live/**</code> →
+              <code>market-catalyst-live</code> — ship from the <em>UI</em> repo's
+              <code>firebase.json</code>, so they cannot be verified from this
+              repo alone. They require the Cloud Run API + billing on the target
+              project; the free-tier stage project currently ships only the SPA
+              catch-all until billing is linked.
             </p>
           </article>
         </div>

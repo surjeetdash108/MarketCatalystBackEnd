@@ -1,7 +1,17 @@
 # Deploying Market Catalyst Backend to Firebase / GCP (Cloud Run + Cloud Scheduler)
 
-This backend is an **ingestion service**: it pulls from vendor APIs and writes to
-Firestore. The frontend reads Firestore directly — it never calls this service.
+This backend both **ingests** (pulls from vendor APIs → writes Firestore) and
+**serves** the frontend: the Next.js app calls this service's REST/SSE surface
+(`/api`, `/market-data`, `/live`) — same-origin in production, proxied by
+Firebase Hosting rewrites to the public `market-catalyst-live` Cloud Run service.
+(An earlier design had the frontend read Firestore directly; it no longer does.)
+
+> **Two environments.** Everything below is written per-environment. Production
+> is project `market-catalyst-502415`; **stage** is the isolated project
+> `market-catalyst-stage` (own Firestore/Auth/rules/service-account, own
+> `market-catalyst-live`/`market-catalyst-backend` services). Pick the target by
+> setting `PROJECT_ID` in §0 (and use the matching `deploy/env.<env>.yaml`).
+> `.firebaserc` provides `stage`/`prod` aliases for `--project`.
 
 **Runtime model:** the app is a long-running NestJS server. On Cloud Run we deploy
 it **scale-to-zero** and let **Cloud Scheduler** trigger each sync job over HTTP
@@ -19,16 +29,26 @@ installed and authenticated.
 ## 0. Variables
 
 ```bash
-export PROJECT_ID=market-catalyst-502415      # MUST match the frontend's Firebase project
+# Pick ONE environment:
+export PROJECT_ID=market-catalyst-502415   # production
+# export PROJECT_ID=market-catalyst-stage  # stage
 export REGION=us-central1
+export ENV_FILE=deploy/env.production.yaml # use deploy/env.stage.yaml for stage
 gcloud config set project "$PROJECT_ID"
 gcloud services enable run.googleapis.com cloudscheduler.googleapis.com \
   cloudbuild.googleapis.com secretmanager.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com
 ```
 
-> ⚠ **Project ID must match the frontend.** The backend writes to `$PROJECT_ID`;
-> the Next.js app must read from the same project or it sees an empty database.
-> Confirm the frontend's `firebaseConfig.projectId` equals `$PROJECT_ID`.
+> ⚠ **Project ID must match the frontend build.** The backend writes to and
+> serves `$PROJECT_ID`; the Next.js build must target the same project (backend
+> `FIREBASE_PROJECT_ID` in the env file == the UI's `NEXT_PUBLIC_FIREBASE_PROJECT_ID`),
+> or the app authenticates against one project and reads an empty database in
+> another. Prod: both `market-catalyst-502415`. Stage: both `market-catalyst-stage`.
+>
+> ⚠ **Billing (Blaze) required.** Cloud Run, Cloud Scheduler, the backfill
+> write-bursts, **and** the Firebase Hosting Cloud Run rewrites all need billing
+> linked on `$PROJECT_ID`. A free-tier project can host the static UI but cannot
+> run the backend or proxy `/api`·`/market-data`·`/live`.
 
 ## 1. Deploy Firestore rules + indexes
 
@@ -130,7 +150,7 @@ gcloud run deploy market-catalyst-backend \
   --max-instances=3 \
   --memory=512Mi \
   --timeout=900 \
-  --env-vars-file=deploy/env.production.yaml \
+  --env-vars-file="$ENV_FILE" \
   --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FMP_API_KEY=FMP_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
 ```
 
@@ -194,12 +214,19 @@ Three of these settings are load-bearing; the defaults silently break SSE:
 the process and starts on the first viewer. Do not add one to
 `create-scheduler-jobs.sh`.
 
-Point the frontend at it (this is the `NEXT_PUBLIC_BACKEND_URL` gap that also
-keeps the market-status pill and the extended-hours cards localhost-only):
+**Frontend wiring — no per-deploy URL step.** The UI resolves its backend base
+URL at runtime (`app/iq/backend.ts`): `localhost:4100` in dev, **same-origin**
+when deployed. `firebase.json` rewrites `/api/**`, `/market-data/**` and
+`/live/**` to this `market-catalyst-live` service, so nothing hardcodes the
+Cloud Run URL. Requirements: the UI's Hosting site and this service live in the
+**same project**, the rewrites are present in `firebase.json` (they need Cloud
+Run API + billing to deploy), and this service is named `market-catalyst-live`.
+`NEXT_PUBLIC_BACKEND_URL` is only an optional non-localhost override for pointing
+a local UI at a remote backend.
 
 ```bash
 gcloud run services describe market-catalyst-live --region "$REGION" --format='value(status.url)'
-# -> set NEXT_PUBLIC_BACKEND_URL to that URL in the UI production build
+# informational only — the UI reaches this via the same-origin Hosting rewrite
 ```
 
 Verify after deploying:

@@ -1,5 +1,16 @@
 # UI → Backend REST/SSE Migration (retire direct Firestore access from the browser)
 
+> **Update 2026-07-27 — two environments + env-driven config.** This plan was
+> written single-project (`market-catalyst-502415`). There are now **two isolated
+> environments**: prod `market-catalyst-502415` and stage `market-catalyst-stage`
+> (see `../02_Architecture_Document_Tracker.md`, top block). Everything below
+> holds per-environment; the concrete changes are: (a) the backend Firestore/Auth
+> project is chosen by `FIREBASE_PROJECT_ID` (stage = `market-catalyst-stage`),
+> not pinned; (b) the UI's `NEXT_PUBLIC_BACKEND_URL` is no longer the mechanism —
+> the base URL is resolved at runtime (`localhost:4100` in dev, same-origin when
+> deployed, via `firebase.json` rewrites to `market-catalyst-live`), with
+> `NEXT_PUBLIC_BACKEND_URL` kept only as an optional non-localhost override.
+
 ## Context
 
 Today `MarketCatalystUI` talks to Firestore directly from the browser for

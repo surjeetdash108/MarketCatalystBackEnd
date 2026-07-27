@@ -210,13 +210,15 @@ Changes (2026-07-22) — subscriptions, entitlements, admin analytics:
 
 ---
 
-## Deployment & Known Gaps (2026-07-22)
+## Deployment & Known Gaps (2026-07-27)
 
-**Deployed:** frontend at `https://marketcatalyst.web.app` (Firebase Hosting, static export, project `fin-app26`); backend on Cloud Run revision `market-catalyst-backend-00031-wvc` (us-central1, `--no-allow-unauthenticated`, `min-instances=0`); Firestore rules released.
+**Two environments (isolated Firebase projects).** Production = `market-catalyst-502415`; **stage** = `market-catalyst-stage` (own Firestore in nam5, same rules/indexes, own Auth + `backend-runtime` SA, prod data copied in). Both repos work on the `stage` branch. Firebase config is env-driven: backend `FIREBASE_PROJECT_ID`, UI `NEXT_PUBLIC_FIREBASE_*` (UI stage build via `.env.production`).
+
+**Deployed (prod):** frontend at `https://marketcatalyst.web.app` (Firebase Hosting, static export, project `market-catalyst-502415`); backend on Cloud Run (`market-catalyst-backend` worker `--no-allow-unauthenticated` + public `market-catalyst-live`, us-central1, `min-instances=0`); Firestore rules released. **Stage:** static UI live at `https://market-catalyst-stage.web.app`; stage backend not deployed yet (blocked on stage billing).
 
 Stated plainly, because each one limits what the deployed system can do:
 
-1. **The browser cannot reach the backend.** `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4100` is baked into the production bundle and blocked as mixed content. Dead in production: the Monitor tab, extended-hours moves, the vendor market-status pill, and any future Stripe checkout/webhook. Everything else works because it reads Firestore directly. The fix is a Firebase Hosting rewrite to Cloud Run — which **requires** setting `ADMIN_GUARD_TRUST_IAM=false` first, or `/sync/:job/run`, `/purge` and `/retention` become world-callable the moment that route opens.
+1. **~~The browser cannot reach the backend~~ — RESOLVED.** The UI now resolves its backend base URL at runtime (`app/iq/backend.ts`): `localhost:4100` in dev, **same-origin** when deployed, with `firebase.json` rewriting `/api`, `/market-data` and `/live` to the public `market-catalyst-live` service (no CORS, CDN-cached). A localhost `NEXT_PUBLIC_BACKEND_URL` is ignored on a deployed host. Remaining prerequisites: keep `ADMIN_GUARD_TRUST_IAM=false` on any public route, and on **stage** the rewrites need billing (Cloud Run API) before they can deploy.
 2. **No Cloud Scheduler jobs exist in any region**, and there is no `scheduler-invoker` service account — `create-scheduler-jobs.sh` was never run. With `min-instances=0` the in-process `@Cron` decorators never fire, so **no sync job has ever run automatically in production**; every row currently in Firestore came from a manual run.
 3. **`POLYGON_API_KEY` is un-rotated** (exposed in chat). Secret Manager version 4 is enabled; `deploy/rotate-polygon-key.sh` automates everything except generating the replacement key.
 4. **Stripe is not implemented.** No Stripe code exists in either repo, `stripePriceId` is `null` on every plan (which keeps them non-purchasable), and `payments`/`subscriptions` are empty. Checkout and webhooks are blocked on gap 1.

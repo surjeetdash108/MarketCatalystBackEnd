@@ -66,7 +66,7 @@ for the full list. Essentials:
 
 | Var | Purpose |
 |---|---|
-| `FIREBASE_PROJECT_ID` | GCP/Firebase project to write to — **must match the frontend's project** |
+| `FIREBASE_PROJECT_ID` | GCP/Firebase project to serve — selects the **environment**: `market-catalyst-502415` (prod) or `market-catalyst-stage` (stage). **Must match the frontend build's `NEXT_PUBLIC_FIREBASE_PROJECT_ID`** for that environment. Nothing is hardcoded — the same image runs against either project by this one var (`.env` locally, `deploy/env.<env>.yaml` on Cloud Run). |
 | `FIREBASE_SERVICE_ACCOUNT_PATH` | Local only; on Cloud Run leave unset (uses Application Default Credentials) |
 | `POLYGON_API_KEY`, `FMP_API_KEY`, `FINNHUB_API_KEY`, `FRED_API_KEY` | Core vendor keys |
 | `SEC_EDGAR_USER_AGENT` | Required contact string for SEC EDGAR |
