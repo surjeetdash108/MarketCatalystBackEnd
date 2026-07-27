@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AdaptersModule } from '../adapters/adapters.module';
 import { PolygonModule } from '../vendors/polygon/polygon.module';
 import { LiveController } from './live.controller';
 import { PolygonLiveService } from './polygon-live.service';
@@ -25,7 +26,7 @@ import { TickerSearchService } from './ticker-search.service';
  * module the public `APP_ROLE=live` service mounts. See src/app.module.ts.
  */
 @Module({
-  imports: [PolygonModule],
+  imports: [PolygonModule, AdaptersModule],
   controllers: [LiveController, SnapshotController, TapeController, CachedCollectionsController, WhoamiController, OnDemandController],
   providers: [PolygonLiveService, SnapshotCacheService, MarketStatusService, TapeService, CachedCollectionsService, OnDemandService, TickerSearchService],
   exports: [PolygonLiveService, SnapshotCacheService, MarketStatusService, TapeService, CachedCollectionsService, OnDemandService, TickerSearchService],

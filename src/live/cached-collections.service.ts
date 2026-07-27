@@ -37,6 +37,8 @@ const ALLOWED = new Set<string>([
   'macro_events',
   'recaps',
   'insider_transactions',
+  'dividends',
+  'fund_holdings',
 ]);
 
 const TTL_MS = 5 * 60 * 1000; // 5 minutes — these collections change daily

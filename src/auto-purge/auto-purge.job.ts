@@ -53,9 +53,22 @@ export class AutoPurgeJob implements OnModuleInit {
     );
   }
 
+  /**
+   * Gate for this version's "no cron jobs run automatically" milestone — see
+   * ENABLE_SCHEDULED_JOBS in .env.example and the matching flag in
+   * RetentionService. Cache-warm-up crons come back selectively later.
+   */
+  private get scheduledJobsEnabled(): boolean {
+    return String(this.config.get('ENABLE_SCHEDULED_JOBS', 'false')).trim().toLowerCase() === 'true';
+  }
+
   /** Midnight ET. */
   @Cron('0 0 * * *', { timeZone: 'America/New_York' })
   async scheduled() {
+    if (!this.scheduledJobsEnabled) {
+      this.logger.log('auto-purge: scheduled run skipped (ENABLE_SCHEDULED_JOBS is not true)');
+      return;
+    }
     await this.registry.get(JOB_NAME)();
   }
 

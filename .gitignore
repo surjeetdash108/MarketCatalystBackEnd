@@ -45,3 +45,6 @@ Thumbs.db
 # Temp
 .tmp/
 .temp/
+
+# mcps
+.playwright-mcp

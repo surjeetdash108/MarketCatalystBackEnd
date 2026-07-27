@@ -3,13 +3,19 @@ import type { Request, Response } from 'express';
 import { createHash } from 'crypto';
 import { OnDemandService, BarsTf, BARS_TFS } from './ondemand.service';
 import { TickerSearchService } from './ticker-search.service';
+import { OPTIONS_UNIVERSE } from '../common/options-universe';
 
 /**
  * On-demand data endpoints (see ondemand.service.ts for the caching design).
  *
- *   GET /live/bars?ticker=AAPL&tf=1Y   → bars, cache-aside via stock_bars
- *   GET /live/company?ticker=AAPL      → profile+price, cache-aside via companies
- *   GET /live/search?q=apple           → in-memory universe search (no Firestore)
+ *   GET /live/bars?ticker=AAPL&tf=1Y            → bars, cache-aside via stock_bars
+ *   GET /live/company?ticker=AAPL               → profile+price, cache-aside via companies
+ *   GET /live/dividend-history?ticker=AAPL      → cache-aside via dividend_history
+ *   GET /live/splits?ticker=AAPL                → cache-aside via splits
+ *   GET /live/financials?ticker=AAPL            → cache-aside via financials
+ *   GET /live/news?ticker=AAPL                  → per-ticker cache-aside via news
+ *   GET /live/options-chain?ticker=AAPL         → cache-aside via options_chains (curated 8-ticker universe)
+ *   GET /live/search?q=apple                    → in-memory universe search (no Firestore)
  *
  * Responses carry Cache-Control + ETag so each BROWSER also caches: a repeat
  * view inside the max-age costs zero requests, and a 304 costs no body.
@@ -66,6 +72,78 @@ export class OnDemandController {
     const sym = (ticker ?? '').toUpperCase().trim();
     if (!TICKER_RE.test(sym)) throw new BadRequestException('ticker must be 1-10 chars, A-Z0-9.-');
     const doc = await this.ondemand.getCompany(sym);
+    if (!doc) throw new NotFoundException(`No data for ${sym}`);
+    sendWithEtag(req, res, doc);
+  }
+
+  @Get('dividend-history')
+  @Header('Cache-Control', 'public, max-age=300, s-maxage=300, stale-while-revalidate=600')
+  async dividendHistory(
+    @Query('ticker') ticker: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? '').toUpperCase().trim();
+    if (!TICKER_RE.test(sym)) throw new BadRequestException('ticker must be 1-10 chars, A-Z0-9.-');
+    const doc = await this.ondemand.getDividendHistory(sym);
+    if (!doc) throw new NotFoundException(`No data for ${sym}`);
+    sendWithEtag(req, res, doc);
+  }
+
+  @Get('splits')
+  @Header('Cache-Control', 'public, max-age=300, s-maxage=300, stale-while-revalidate=600')
+  async splits(
+    @Query('ticker') ticker: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? '').toUpperCase().trim();
+    if (!TICKER_RE.test(sym)) throw new BadRequestException('ticker must be 1-10 chars, A-Z0-9.-');
+    const doc = await this.ondemand.getSplits(sym);
+    if (!doc) throw new NotFoundException(`No data for ${sym}`);
+    sendWithEtag(req, res, doc);
+  }
+
+  @Get('financials')
+  @Header('Cache-Control', 'public, max-age=300, s-maxage=300, stale-while-revalidate=600')
+  async financials(
+    @Query('ticker') ticker: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? '').toUpperCase().trim();
+    if (!TICKER_RE.test(sym)) throw new BadRequestException('ticker must be 1-10 chars, A-Z0-9.-');
+    const doc = await this.ondemand.getFinancials(sym);
+    if (!doc) throw new NotFoundException(`No data for ${sym}`);
+    sendWithEtag(req, res, doc);
+  }
+
+  @Get('news')
+  @Header('Cache-Control', 'public, max-age=300, s-maxage=300, stale-while-revalidate=600')
+  async news(
+    @Query('ticker') ticker: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? '').toUpperCase().trim();
+    if (!TICKER_RE.test(sym)) throw new BadRequestException('ticker must be 1-10 chars, A-Z0-9.-');
+    const articles = await this.ondemand.getNews(sym);
+    sendWithEtag(req, res, articles);
+  }
+
+  @Get('options-chain')
+  @Header('Cache-Control', 'public, max-age=300, s-maxage=300, stale-while-revalidate=600')
+  async optionsChain(
+    @Query('ticker') ticker: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? '').toUpperCase().trim();
+    if (!TICKER_RE.test(sym)) throw new BadRequestException('ticker must be 1-10 chars, A-Z0-9.-');
+    if (!OPTIONS_UNIVERSE.includes(sym)) {
+      throw new BadRequestException(`Options data is only available for: ${OPTIONS_UNIVERSE.join(', ')}`);
+    }
+    const doc = await this.ondemand.getOptionsChain(sym);
     if (!doc) throw new NotFoundException(`No data for ${sym}`);
     sendWithEtag(req, res, doc);
   }

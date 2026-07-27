@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(seq 1 40)",
+      "Bash(curl -sf http://localhost:4100/health)",
+      "Bash(break)",
+      "Bash(sleep 1)",
+      "Bash(echo \"--- health ---\")",
+      "Bash(lsof -ti:4400 -sTCP:LISTEN)",
+      "Bash(xargs -r ps -p)",
+      "Bash(lsof -ti:4100 -sTCP:LISTEN)",
+      "Bash(npm run *)",
+      "Bash(echo \"started PID $!\")"
+    ]
+  }
+}

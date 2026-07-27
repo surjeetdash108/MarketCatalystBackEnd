@@ -1,0 +1,49 @@
+import { Controller, Get, Header } from '@nestjs/common';
+import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { MarketDataService } from './market-data.service';
+
+// A bounded, sorted view of `news` — NOT routed through CachedCollectionsService's
+// allow-list, since that does a full unfiltered collection().get() per entry;
+// `news` fans out to thousands of docs across the whole ticker universe (one
+// per ticker per article), so a flat cache-aside read there would ship the
+// entire collection into memory just to show the 30-60 most recent items two
+// screens actually want. This keeps its own small cache instead.
+const NEWS_FEED_LIMIT = 60;
+const NEWS_FEED_CACHE_MS = 2 * 60_000;
+// news.job.ts's own cron runs every 30 min — ensureFresh only needs to trigger
+// a refresh when nothing has synced in roughly that window, not MarketDataService's
+// default 20h (built for ~daily jobs).
+const NEWS_STALE_MS = 15 * 60_000;
+
+/**
+ * GET /market-data/news — the global "most recent across every ticker" feed
+ * that commentary.tsx's Live tab and Dashboard's Live Market Feed both want.
+ * Per-ticker news (Stock Detail, commentary's per-symbol drawer) is served by
+ * GET /live/news?ticker=X (src/live/ondemand.controller.ts) instead — that's a
+ * cache-aside fill against the same `news` collection, scoped to one ticker.
+ */
+@Controller('market-data')
+export class NewsController {
+  private cache: { data: Record<string, unknown>[]; at: number } | null = null;
+
+  constructor(
+    private readonly marketData: MarketDataService,
+    private readonly firebase: FirebaseAdminService,
+  ) {}
+
+  @Get('news')
+  @Header('Cache-Control', 'public, max-age=60, s-maxage=120, stale-while-revalidate=300')
+  async news(): Promise<Record<string, unknown>[]> {
+    if (this.cache && Date.now() - this.cache.at < NEWS_FEED_CACHE_MS) return this.cache.data;
+
+    await this.marketData.ensureFresh('news', NEWS_STALE_MS);
+    const snap = await this.firebase.firestore
+      .collection('news')
+      .orderBy('publishedAt', 'desc')
+      .limit(NEWS_FEED_LIMIT)
+      .get();
+    const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    this.cache = { data, at: Date.now() };
+    return data;
+  }
+}

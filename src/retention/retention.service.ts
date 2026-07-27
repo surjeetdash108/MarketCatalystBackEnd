@@ -34,9 +34,23 @@ export class RetentionService {
     return String(this.config.get('RETENTION_DRY_RUN', 'true')).trim().toLowerCase() !== 'false';
   }
 
+  /**
+   * Gate for this version's "no cron jobs run automatically" milestone — see
+   * ENABLE_SCHEDULED_JOBS in .env.example. Cache-warm-up crons come back
+   * selectively later; this flag is the single on/off switch for both of the
+   * codebase's real in-process @Cron handlers (this one and AutoPurgeJob's).
+   */
+  private get scheduledJobsEnabled(): boolean {
+    return String(this.config.get('ENABLE_SCHEDULED_JOBS', 'false')).trim().toLowerCase() === 'true';
+  }
+
   /** Weekly, Sunday 05:00 ET — after the Sunday ticker-universe run, before Monday. */
   @Cron('0 5 * * 0', { timeZone: 'America/New_York' })
   async scheduled(): Promise<void> {
+    if (!this.scheduledJobsEnabled) {
+      this.logger.log('retention: scheduled run skipped (ENABLE_SCHEDULED_JOBS is not true)');
+      return;
+    }
     const results = await this.runAll();
     const totalMatched = results.reduce((a, r) => a + r.matched, 0);
     const totalDeleted = results.reduce((a, r) => a + r.deleted, 0);
