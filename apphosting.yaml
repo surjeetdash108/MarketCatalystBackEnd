@@ -1,0 +1,124 @@
+# Firebase App Hosting config for the STAGE worker backend (.firebaserc default
+# project is market-catalyst-stage). This is a SEPARATE config surface from
+# gcloud run deploy — App Hosting does not read deploy/env.*.yaml, does not use
+# the root Dockerfile, and does not honor --set-secrets. Everything the app
+# needs at runtime must be declared here.
+#
+# Secrets referenced below must already exist in Secret Manager for this
+# project and be granted to the App Hosting backend's service account:
+#   firebase apphosting:secrets:set POLYGON_API_KEY --project market-catalyst-stage
+#   firebase apphosting:secrets:grantaccess POLYGON_API_KEY --backend <BACKEND_ID> --project market-catalyst-stage
+# (repeat per secret)
+
+runConfig:
+  minInstances: 0
+  maxInstances: 3
+  concurrency: 80
+  cpuMiB: 1000
+  memoryMiB: 512
+
+env:
+  - variable: NODE_ENV
+    value: "production"
+
+  # ─── Service role (src/app.module.ts) ────────────────────────────────────────
+  # This backend is the WORKER: runs the @Cron/Scheduler-triggered sync jobs and
+  # mounts the admin controllers + ops monitor at /. Do NOT set APP_ROLE=live
+  # here — see deploy/DEPLOY.md §3b for why the public "live" role must stay a
+  # separate backend/config.
+  - variable: APP_ROLE
+    value: "worker"
+
+  # Selects the Firestore project this backend reads/writes. Must match the UI's
+  # NEXT_PUBLIC_FIREBASE_PROJECT_ID for this environment.
+  - variable: FIREBASE_PROJECT_ID
+    value: "market-catalyst-stage"
+
+  # ─── Polygon / Massive ────────────────────────────────────────────────────────
+  - variable: POLYGON_API_BASE_URL
+    value: "https://api.massive.com"
+  # MUST be 0 on a paid plan — see deploy/env.production.yaml for the full
+  # rationale. Non-zero makes several jobs exceed platform timeouts.
+  - variable: POLYGON_PAGE_DELAY_MS
+    value: "0"
+
+  # ─── Vendor routing (src/adapters/adapters.module.ts) ────────────────────────
+  - variable: COMPANY_PROFILE_SOURCE
+    value: "polygon"
+  - variable: COMPANY_PROFILE_FALLBACK_SOURCE
+    value: "none"
+  - variable: MOVER_ENRICHMENT_SOURCE
+    value: "polygon"
+  - variable: MOVER_ENRICHMENT_FALLBACK_SOURCE
+    value: "none"
+  - variable: MOVERS_SOURCE
+    value: "polygon"
+  - variable: MOVERS_FALLBACK_SOURCE
+    value: "none"
+  - variable: NEWS_SOURCE
+    value: "polygon"
+  - variable: DIVIDENDS_SOURCE
+    value: "polygon"
+  - variable: DIVIDENDS_FALLBACK_SOURCE
+    value: "none"
+  - variable: IPOS_SOURCE
+    value: "polygon"
+  - variable: IPOS_FALLBACK_SOURCE
+    value: "none"
+  - variable: SECTORS_SOURCE
+    value: "polygon"
+  - variable: SECTORS_FALLBACK_SOURCE
+    value: "none"
+  - variable: QUOTE_SOURCE
+    value: "polygon"
+  - variable: QUOTE_FALLBACK_SOURCE
+    value: "none"
+  - variable: MARKET_BARS_SOURCE
+    value: "polygon"
+  - variable: MARKET_BARS_FALLBACK_SOURCE
+    value: "none"
+  - variable: TICKER_UNIVERSE_SOURCE
+    value: "polygon"
+  - variable: TICKER_UNIVERSE_FALLBACK_SOURCE
+    value: "none"
+  - variable: FINANCIALS_SOURCE
+    value: "polygon"
+  - variable: FINANCIALS_FALLBACK_SOURCE
+    value: "none"
+
+  # ─── SEC ──────────────────────────────────────────────────────────────────────
+  - variable: SEC_EDGAR_USER_AGENT
+    value: "Market Catalyst Backend (stage) hello@inc108.com"
+
+  # ─── Retention / purge ────────────────────────────────────────────────────────
+  - variable: RETENTION_DRY_RUN
+    value: "false"
+  - variable: AUTO_PURGE_DRY_RUN
+    value: "false"
+
+  # ─── Admin authorization ──────────────────────────────────────────────────────
+  - variable: ADMIN_EMAIL
+    value: "admin@marketcatalyst.ai"
+  - variable: ADMIN_GUARD_TRUST_IAM
+    value: "true"
+
+  # ─── Vendor API keys — Secret Manager-backed, RUNTIME only ───────────────────
+  - variable: POLYGON_API_KEY
+    secret: POLYGON_API_KEY
+  - variable: FMP_API_KEY
+    secret: FMP_API_KEY
+  - variable: FINNHUB_API_KEY
+    secret: FINNHUB_API_KEY
+  - variable: FRED_API_KEY
+    secret: FRED_API_KEY
+
+  # Optional vendors (code warns and no-ops if unset — see the vendor services'
+  # onModuleInit). Uncomment once the secret exists for this project.
+  # - variable: BENZINGA_API_KEY
+  #   secret: BENZINGA_API_KEY
+  # - variable: TRADIER_ACCESS_TOKEN
+  #   secret: TRADIER_ACCESS_TOKEN
+  # - variable: UNUSUAL_WHALES_API_KEY
+  #   secret: UNUSUAL_WHALES_API_KEY
+  # - variable: SENTRY_DSN
+  #   secret: SENTRY_DSN
