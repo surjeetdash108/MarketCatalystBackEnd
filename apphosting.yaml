@@ -11,7 +11,7 @@
 # project and be granted to the App Hosting backend's service account:
 #   firebase apphosting:secrets:set POLYGON_API_KEY --project market-catalyst-502415
 #   firebase apphosting:secrets:grantaccess POLYGON_API_KEY --backend <BACKEND_ID> --project market-catalyst-502415
-# (repeat per secret)
+# (repeat for FMP_API_KEY, FINNHUB_API_KEY, FRED_API_KEY)
 
 runConfig:
   minInstances: 0
@@ -33,7 +33,7 @@ env:
     value: "worker"
 
   # Selects the Firestore project this backend reads/writes. Must match the UI's
-  # NEXT_PUBLIC_FIREBASE_PROJECT_ID for this environment.
+  # NEXT_PUBLIC_FIREBASE_PROJECT_ID for prod.
   - variable: FIREBASE_PROJECT_ID
     value: "market-catalyst-502415"
 
@@ -46,6 +46,9 @@ env:
     value: "0"
 
   # ─── Vendor routing (src/adapters/adapters.module.ts) ────────────────────────
+  # Every domain is single-sourced on Polygon/Massive; FALLBACK "none" keeps the
+  # other adapters registered so a vendor can be switched later without a code
+  # change. Mirrors deploy/env.production.yaml.
   - variable: COMPANY_PROFILE_SOURCE
     value: "polygon"
   - variable: COMPANY_PROFILE_FALLBACK_SOURCE
@@ -58,6 +61,8 @@ env:
     value: "polygon"
   - variable: MOVERS_FALLBACK_SOURCE
     value: "none"
+  # Polygon-only, NOT "aggregate": we hold a Massive/Polygon redistribution
+  # licence but not one for Finnhub, so merging its articles would breach it.
   - variable: NEWS_SOURCE
     value: "polygon"
   - variable: DIVIDENDS_SOURCE
@@ -89,23 +94,41 @@ env:
   - variable: FINANCIALS_FALLBACK_SOURCE
     value: "none"
 
-  # ─── SEC ──────────────────────────────────────────────────────────────────────
+  # ─── SEC EDGAR ───────────────────────────────────────────────────────────────
+  # SEC requires a descriptive User-Agent with a real contact address.
   - variable: SEC_EDGAR_USER_AGENT
-    value: "Market Catalyst Backend (prod) hello@inc108.com"
+    value: "Market Catalyst Backend hello@inc108.com"
 
-  # ─── Retention / purge ────────────────────────────────────────────────────────
+  # ─── Data lifecycle jobs ─────────────────────────────────────────────────────
   - variable: RETENTION_DRY_RUN
     value: "false"
   - variable: AUTO_PURGE_DRY_RUN
     value: "false"
 
-  # ─── Admin authorization ──────────────────────────────────────────────────────
+  # ─── Admin authorization (src/common/admin.guard.ts) ─────────────────────────
+  # The single fixed admin account for /sync, /purge, /retention, feature-flags.
   - variable: ADMIN_EMAIL
     value: "admin@marketcatalyst.ai"
-  - variable: ADMIN_GUARD_TRUST_IAM
-    value: "true"
 
-  # ─── Vendor API keys — Secret Manager-backed, RUNTIME only ───────────────────
+  # CRITICAL: this OVERRIDES deploy/env.production.yaml, which sets "true".
+  #
+  # "true" means "trust that Cloud Run IAM already vetted the caller" — correct
+  # ONLY for the private (--no-allow-unauthenticated) gcloud worker. Firebase App
+  # Hosting serves this backend PUBLICLY (ingress: all, no IAM in front), so with
+  # trust-IAM on, the guard would accept ANY anonymous request to /purge and
+  # /sync. Forcing "false" makes those endpoints require a verified Firebase
+  # admin ID token instead — the only thing standing between the internet and
+  # the purge/sync controllers on a public service.
+  - variable: ADMIN_GUARD_TRUST_IAM
+    value: "false"
+
+  # ─── Secrets (Google Secret Manager) ─────────────────────────────────────────
+  # These are the four the worker uses (per deploy/DEPLOY.md --set-secrets). Each
+  # MUST already exist in Secret Manager for market-catalyst-502415 and be
+  # granted to the backend, or the rollout fails. Create + grant every one first:
+  #   firebase apphosting:secrets:set POLYGON_API_KEY  --project market-catalyst-502415
+  #   firebase apphosting:secrets:grantaccess POLYGON_API_KEY --backend <BACKEND_ID> --project market-catalyst-502415
+  # (repeat for FMP_API_KEY, FINNHUB_API_KEY, FRED_API_KEY)
   - variable: POLYGON_API_KEY
     secret: POLYGON_API_KEY
   - variable: FMP_API_KEY
