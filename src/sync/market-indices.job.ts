@@ -12,6 +12,10 @@ function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Same multiplier convention as TAPE_INDICES in tape-universe.ts — kept in
+// sync deliberately (see that file's docblock: this job and the tape render
+// the same instruments from two independent code paths; any divergence in
+// value shows up as two tiles disagreeing about "S&P 500" on the same screen).
 const INDEX_PROXIES = [
   {
     symbol: 'SPX',
@@ -19,6 +23,7 @@ const INDEX_PROXIES = [
     proxyTicker: 'SPY',
     isProxy: true,
     note: 'ETF proxy for the S&P 500 index',
+    multiplier: 10,
   },
   {
     symbol: 'NDX',
@@ -26,6 +31,7 @@ const INDEX_PROXIES = [
     proxyTicker: 'QQQ',
     isProxy: true,
     note: 'ETF proxy for the Nasdaq-100 index',
+    multiplier: 36.3,
   },
   {
     symbol: 'DJI',
@@ -33,6 +39,7 @@ const INDEX_PROXIES = [
     proxyTicker: 'DIA',
     isProxy: true,
     note: 'ETF proxy for the Dow Jones index',
+    multiplier: 100,
   },
   {
     symbol: 'RUT',
@@ -40,6 +47,7 @@ const INDEX_PROXIES = [
     proxyTicker: 'IWM',
     isProxy: true,
     note: 'ETF proxy for the Russell 2000 index',
+    multiplier: 10,
   },
   {
     symbol: 'GOLD',
@@ -111,16 +119,21 @@ export class MarketIndicesJob implements OnModuleInit {
           }
           const quote = quoteResult.data;
           const source = quoteResult.source;
+          // value/change/open/prevClose/dayHigh/dayLow are price-level fields
+          // and scale with the index; pctChange is scale-invariant.
+          const mult = idx.multiplier ?? 1;
           const doc = {
             label: idx.label,
             proxyTicker: idx.proxyTicker,
             isProxy: idx.isProxy,
             note: idx.note ?? null,
-            value: quote.c,
-            change: quote.d,
+            value: quote.c * mult,
+            change: quote.d * mult,
             pctChange: quote.dp,
-            open: quote.o,
-            prevClose: quote.pc,
+            open: quote.o * mult,
+            dayHigh: quote.h * mult,
+            dayLow: quote.l * mult,
+            prevClose: quote.pc * mult,
             source,
             updatedAt: new Date().toISOString(),
           };

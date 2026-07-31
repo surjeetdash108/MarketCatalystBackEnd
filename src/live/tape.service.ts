@@ -253,6 +253,10 @@ export class TapeService implements OnModuleDestroy {
       const items: TapeItem[] = this.universe.map((s) => {
         if (s.kind === 'rate') return rate(s);
         const r = s.proxyTicker ? bySymbol.get(s.proxyTicker) : undefined;
+        // Index-level fields scale by the proxy ETF's fixed share-to-index
+        // ratio (see TapeSymbol.multiplier's docblock); % change is
+        // scale-invariant and is left as the ETF's own move.
+        const mult = s.multiplier ?? 1;
         return {
           id: s.id,
           kind: s.kind,
@@ -261,15 +265,15 @@ export class TapeService implements OnModuleDestroy {
           proxyTicker: s.proxyTicker,
           isProxy: s.isProxy,
           note: s.note,
-          value: r?.price ?? null,
+          value: r?.price != null ? r.price * mult : null,
           // Price tiles render a PERCENT move, matching what the strip has
           // always shown and what mergePulse feeds the index drawer.
           change: r?.changePercent ?? null,
           pctChange: r?.changePercent ?? null,
-          open: r?.open ?? null,
-          dayHigh: r?.high ?? null,
-          dayLow: r?.low ?? null,
-          prevClose: r?.previousClose ?? null,
+          open: r?.open != null ? r.open * mult : null,
+          dayHigh: r?.high != null ? r.high * mult : null,
+          dayLow: r?.low != null ? r.low * mult : null,
+          prevClose: r?.previousClose != null ? r.previousClose * mult : null,
         };
       });
 

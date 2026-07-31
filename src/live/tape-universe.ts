@@ -27,6 +27,18 @@ export interface TapeSymbol {
   proxyTicker: string | null;
   isProxy: boolean;
   note: string | null;
+  /**
+   * Index-level ≈ proxyTicker's price × multiplier. Polygon's real index
+   * snapshot (`I:NDX`/`I:SPX`/…) is confirmed NOT_AUTHORIZED on this plan
+   * (re-verified 2026-07-31), so this is the best available approximation —
+   * only set where the ETF has a well-defined, stable share-to-index ratio
+   * (SPY/DIA are literally structured as fixed fractions of their index; QQQ/
+   * IWM are close enough to be far better than showing the raw ETF price).
+   * Omitted (defaults to 1×) for GOLD/WTI/DXY/VIX, where the proxy ETF/ETN
+   * has no reliable fixed ratio to the benchmark it tracks — a wrong-looking
+   * multiplier there would be worse than an honest 1:1 proxy price.
+   */
+  multiplier?: number;
 }
 
 /** Index tiles, via ETF proxies — the current plan does not include indices. */
@@ -38,6 +50,7 @@ export const TAPE_INDICES: TapeSymbol[] = [
     proxyTicker: 'SPY',
     isProxy: true,
     note: 'ETF proxy for the S&P 500 index',
+    multiplier: 10, // SPY is structured as ~1/10th of the S&P 500 by design.
   },
   {
     id: 'NDX',
@@ -46,6 +59,10 @@ export const TAPE_INDICES: TapeSymbol[] = [
     proxyTicker: 'QQQ',
     isProxy: true,
     note: 'ETF proxy for the Nasdaq-100 index',
+    // QQQ launched at 1/40th of NDX (1999) but has drifted since (expense
+    // ratio drag) — 36.3 is the current ratio, verified against a live NDX
+    // print (25,122.18) on 2026-07-31. Re-verify periodically; this drifts.
+    multiplier: 36.3,
   },
   {
     id: 'DJI',
@@ -54,6 +71,7 @@ export const TAPE_INDICES: TapeSymbol[] = [
     proxyTicker: 'DIA',
     isProxy: true,
     note: 'ETF proxy for the Dow Jones index',
+    multiplier: 100, // DIA is structured as ~1/100th of the DJIA by design.
   },
   {
     id: 'RUT',
@@ -62,6 +80,7 @@ export const TAPE_INDICES: TapeSymbol[] = [
     proxyTicker: 'IWM',
     isProxy: true,
     note: 'ETF proxy for the Russell 2000 index',
+    multiplier: 10, // Standard IWM≈RUT/10 approximation.
   },
   {
     id: 'VIX',
