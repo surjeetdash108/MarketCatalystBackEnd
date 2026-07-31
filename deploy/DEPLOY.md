@@ -183,7 +183,7 @@ gcloud run deploy market-catalyst-live \
   --concurrency=200 \
   --memory=1Gi \
   --timeout=3600 \
-  --set-env-vars="APP_ROLE=live,NODE_ENV=production,FIREBASE_PROJECT_ID=market-catalyst-502415,POLYGON_API_BASE_URL=https://api.massive.com,CORS_ORIGINS=https://marketcatalyst.web.app" \
+  --set-env-vars="APP_ROLE=live,NODE_ENV=production,FIREBASE_PROJECT_ID=market-catalyst-502415,POLYGON_API_BASE_URL=https://api.massive.com,CORS_ORIGINS=https://marketcatalyst.web.app,POLYGON_PAGE_DELAY_MS=0" \
   --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest"
 ```
 
@@ -194,6 +194,17 @@ gcloud run deploy market-catalyst-live \
 > `--allow-unauthenticated` service — the exact combination that grants
 > anonymous `/purge`. The list above is short precisely because the live role
 > needs almost nothing.
+>
+> ⚠ **`POLYGON_PAGE_DELAY_MS=0` is required here too, not just on the worker.**
+> `TickerSearchService` (backing `GET /live/search`, the app's ticker-search box
+> everywhere it appears) calls `PolygonService.getAllTickers()` on this service
+> to lazily load the ~10k-ticker universe on first search per instance. Omitting
+> this var — as an earlier version of this command did — leaves it on the code
+> default of 12,500ms **per page**; at ~10-11 pages for the full universe that's
+> 2+ minutes of silent hang on every cold start (this service runs
+> `--min-instances=0`, so that's not rare). Confirmed and fixed in production
+> 2026-07-31: search went from >120s to ~2s once this var was added via
+> `gcloud run services update market-catalyst-live --update-env-vars=POLYGON_PAGE_DELAY_MS=0`.
 
 Three of these settings are load-bearing; the defaults silently break SSE:
 
