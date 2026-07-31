@@ -39,7 +39,7 @@
 >
 > **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
 > static build works in every environment without a rebuild:
-> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4100`;
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
 > · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
 >   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
 >   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,
@@ -250,7 +250,7 @@ v1.5 | June 2026
 > at `min-instances=0`, so the `@Cron` decorators never fire — **no sync job has
 > ever run automatically in production**; all data came from manual runs.
 > **(2)** The **browser cannot reach the backend** (`NEXT_PUBLIC_BACKEND_URL`
-> unset → `http://localhost:4100` baked into the production bundle, blocked as
+> unset → `http://localhost:4400` baked into the production bundle, blocked as
 > mixed content). See T-148a–d.
 
 **Status:** Not Started | In Progress | In Review | Done  
@@ -347,7 +347,7 @@ v1.5 | June 2026
 | ID | Task | Type | Est. | Pri | Assignee | Sprint | Status | Notes |
 |---|---|---|---|---|---|---|---|---|
 | T-148a | Run `create-scheduler-jobs.sh`: create Cloud Scheduler jobs for all sync jobs + create the `scheduler-invoker` service account + grant it `run.invoker` | Infra | 0.5d | P0 | Infra Eng | S-13 | Not Started | 🔴 **Nothing refreshes automatically in production.** No Cloud Scheduler jobs exist in **any** region and no `scheduler-invoker` SA exists — the script was never run. With `min-instances=0` the in-process `@Cron` decorators never fire. Every populated collection is frozen at its last **manual** run. |
-| T-148b | Firebase Hosting rewrite → Cloud Run so the browser can reach the backend; set `NEXT_PUBLIC_BACKEND_URL` and rebuild the bundle | Infra | 0.5d | P0 | Infra Eng | S-13 | Not Started | 🔴 `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4100` is baked into the production bundle and blocked as mixed content. Disables in prod: admin **Monitor** tab, extended-hours moves, market-status pill, all `/plans` + `/admin/*` endpoints, and any future Stripe checkout/webhook. **Blocked on T-148c — do not do this first.** |
+| T-148b | Firebase Hosting rewrite → Cloud Run so the browser can reach the backend; set `NEXT_PUBLIC_BACKEND_URL` and rebuild the bundle | Infra | 0.5d | P0 | Infra Eng | S-13 | Not Started | 🔴 `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4400` is baked into the production bundle and blocked as mixed content. Disables in prod: admin **Monitor** tab, extended-hours moves, market-status pill, all `/plans` + `/admin/*` endpoints, and any future Stripe checkout/webhook. **Blocked on T-148c — do not do this first.** |
 | T-148c | Set `ADMIN_GUARD_TRUST_IAM=false` **before** T-148b | Infra | 0.25d | P0 | Infra Eng | S-13 | Not Started | ⚠ **Ordering is a security requirement.** Cloud Run currently runs `--no-allow-unauthenticated`, so IAM is the guard. The moment a Hosting rewrite fronts it, `/sync/:job/run`, `/purge` and `/retention` become world-callable unless this flag is flipped first. |
 | T-148d | Rotate `POLYGON_API_KEY` (exposed in chat, never rotated) | Infra | 0.25d | P0 | Infra Eng | S-13 | Not Started | Secret Manager version 4 is enabled. `deploy/rotate-polygon-key.sh` automates everything **except** generating the replacement key at Polygon — that step is manual and must be done by the account holder. |
 

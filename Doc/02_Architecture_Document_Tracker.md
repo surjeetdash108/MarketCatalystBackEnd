@@ -34,7 +34,7 @@
 >
 > **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
 > static build works in every environment without a rebuild:
-> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4100`;
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
 > · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
 >   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
 >   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,
@@ -261,7 +261,7 @@ System Architecture Document \| v1.1 \| June 2026
 > `GET /users/:uid/entitlements`, `GET /admin/users|subscriptions|revenue`
 > (`src/plans/`), `GET /live/market-status`, `GET /live/snapshot` — but the
 > browser **cannot reach any of them in production**: `NEXT_PUBLIC_BACKEND_URL`
-> is unset, so `http://localhost:4100` is baked into the static bundle and
+> is unset, so `http://localhost:4400` is baked into the static bundle and
 > blocked as mixed content. Everything the app renders today therefore still
 > arrives via the Firestore client SDK. See §7 Known Gaps.
 >

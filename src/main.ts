@@ -47,7 +47,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableCors(corsOptions());
   app.enableShutdownHooks();
-  const port = process.env.PORT ?? 4100;
+  const port = process.env.PORT ?? 4400;
   await app.listen(port);
   const role = (process.env.APP_ROLE ?? 'worker').trim().toLowerCase();
   logger.log(`market-catalyst-backend listening on port ${port} (APP_ROLE=${role})`);

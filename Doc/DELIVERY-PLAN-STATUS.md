@@ -1,5 +1,42 @@
 # Weekly Delivery Plan — Completion Status
 
+> ## ⏱ State sync — 2026-07-30 · CLIENT-SIDE MOCK-DATA REMOVAL (see `screen-data-sources.md` for detail)
+>
+> _Another correction note, not a rescore. Same shape as the 2026-07-29 block
+> below: no row's % changes, but several rows' evidence quietly rotted between
+> "written" and "still true" — this time on the UI's client-side data
+> sourcing rather than backend topology. Full detail lives in
+> `screen-data-sources.md`'s 2026-07-30 block; this is the pointer for anyone
+> scoring rows against `app/iq/screens/*.tsx`._
+>
+> **What changed.** Every screen was rewired off `app/iq/data.ts`'s mock
+> exports onto `useApiList`(`/market-data/*`)/`useApiResource`(`/live/*`),
+> with the shared `NotAvailable`/`DataState` primitives filling any field that
+> genuinely has no live source — UI structure (tables, tabs, filters, cards)
+> stays in place either way, only the data values change. A follow-on audit
+> the same day found several spots that had been marked done but weren't:
+> the shared `RsiPane` chart (Stock Detail + the `stock-panel.tsx` `ChartCard`
+> used by Screener/Watchlist/Portfolio/Themes) was still a fabricated random
+> walk; those same four screens' candlestick charts were still the synthetic
+> `genOHLC()` generator despite a prior note claiming otherwise (`realBars`
+> was never actually being passed through); Earnings Hub's selected-company
+> detail card, 10-quarter EPS chart, and income-statement chart were still
+> built on the old static `EARN_CAL`/`stockInfo` mocks; `CALLS_DATA` (~20
+> fabricated earnings-call summaries/transcripts with invented figures for
+> real companies) has been deleted; the sector heatmap (Heatmap screen +
+> Dashboard widget) was silently falling back to a hardcoded per-sector %
+> change whenever the live sector feed had no match for a fine-grained
+> sub-sector — now fixed to average the sector's own real per-company changes
+> instead, with the trend label recomputed from that same real number rather
+> than a permanently-stale one.
+>
+> **No deliverable row is being rescored here** — this affects presentation
+> polish/data-freshness on already-"done" rows (chart authenticity, earnings
+> detail accuracy, heatmap correctness), not whether the underlying feature
+> exists. A full row-by-row re-check against current `app/iq/screens/*` is
+> still owed and not attempted here — see the note at the end of
+> `screen-data-sources.md`'s 2026-07-30 block.
+
 > ## ⏱ State sync — 2026-07-29 · ROW-TABLE EVIDENCE CORRECTION (stale citations from the on-demand redesign)
 >
 > _This is a correction note, not a rescore. The row-by-row table below (last
@@ -82,7 +119,7 @@
 >
 > **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
 > static build works in every environment without a rebuild:
-> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4100`;
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
 > · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
 >   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
 >   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,

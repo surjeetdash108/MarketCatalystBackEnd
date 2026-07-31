@@ -7,7 +7,7 @@
 > holds per-environment; the concrete changes are: (a) the backend Firestore/Auth
 > project is chosen by `FIREBASE_PROJECT_ID` (stage = `market-catalyst-stage`),
 > not pinned; (b) the UI's `NEXT_PUBLIC_BACKEND_URL` is no longer the mechanism —
-> the base URL is resolved at runtime (`localhost:4100` in dev, same-origin when
+> the base URL is resolved at runtime (`localhost:4400` in dev, same-origin when
 > deployed, via `firebase.json` rewrites to `market-catalyst-live`), with
 > `NEXT_PUBLIC_BACKEND_URL` kept only as an optional non-localhost override.
 

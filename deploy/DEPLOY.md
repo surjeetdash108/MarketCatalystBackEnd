@@ -215,7 +215,7 @@ the process and starts on the first viewer. Do not add one to
 `create-scheduler-jobs.sh`.
 
 **Frontend wiring — no per-deploy URL step.** The UI resolves its backend base
-URL at runtime (`app/iq/backend.ts`): `localhost:4100` in dev, **same-origin**
+URL at runtime (`app/iq/backend.ts`): `localhost:4400` in dev, **same-origin**
 when deployed. `firebase.json` rewrites `/api/**`, `/market-data/**` and
 `/live/**` to this `market-catalyst-live` service, so nothing hardcodes the
 Cloud Run URL. Requirements: the UI's Hosting site and this service live in the
@@ -311,7 +311,7 @@ UI making **zero** vendor/API calls.
 ```bash
 cp .env.example .env      # fill in real keys + keep service-account.json for local ADC
 npm install
-npm run start:dev         # http://localhost:4100  (monitor at /, ops API at /sync/*)
+npm run start:dev         # http://localhost:4400  (monitor at /, ops API at /sync/*)
 ```
 
 ## Cost / ops notes

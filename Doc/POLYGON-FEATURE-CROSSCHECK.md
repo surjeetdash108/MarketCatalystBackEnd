@@ -39,7 +39,7 @@
 >
 > **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
 > static build works in every environment without a rebuild:
-> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4100`;
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
 > · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
 >   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
 >   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,
@@ -370,7 +370,7 @@ One table, grouped by domain, covering both what already worked and the 18 items
 
 Items 12 and 13 are the only two features here served by an HTTP endpoint rather than Firestore, and **neither works in production today.**
 
-`NEXT_PUBLIC_BACKEND_URL` is unset, so all four backend callers — `market-status.ts`, `useSnapshotQuote`, `useLiveQuote`, `useExtendedHours` — fall back to their `http://localhost:4100` default, and that literal is baked into the exported static bundle. On an HTTPS Hosting origin a plain-HTTP `localhost` request is blocked as mixed content before it leaves the browser. Both call sites catch the failure and degrade quietly — the pill falls back to the local-clock computation, the extended-hours strip renders nothing — so there is no visible error, which is exactly why this needed checking rather than assuming.
+`NEXT_PUBLIC_BACKEND_URL` is unset, so all four backend callers — `market-status.ts`, `useSnapshotQuote`, `useLiveQuote`, `useExtendedHours` — fall back to their `http://localhost:4400` default, and that literal is baked into the exported static bundle. On an HTTPS Hosting origin a plain-HTTP `localhost` request is blocked as mixed content before it leaves the browser. Both call sites catch the failure and degrade quietly — the pill falls back to the local-clock computation, the extended-hours strip renders nothing — so there is no visible error, which is exactly why this needed checking rather than assuming.
 
 This predates the current work (`useSnapshotQuote` and `useLiveQuote` have always had it); items 12 and 13 simply inherit it.
 

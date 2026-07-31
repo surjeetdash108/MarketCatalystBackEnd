@@ -39,7 +39,7 @@
 >
 > **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
 > static build works in every environment without a rebuild:
-> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4100`;
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
 > · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
 >   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
 >   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,
@@ -252,7 +252,7 @@ An evaluation surface on the **Search** screen (`/menu/stock`) rendering both ap
 
 ```bash
 # 1. backend (holds the Polygon key and the single upstream socket)
-cd MarketCatalystBackEnd && npm run start:dev     # :4100
+cd MarketCatalystBackEnd && npm run start:dev     # :4400
 
 # 2. frontend
 cd MarketCatalystUI && npm run dev                # :3000
@@ -321,4 +321,4 @@ If ~15-minute-delayed data is acceptable, **polling the REST snapshot every 15�
 
 ## Local `.env`
 
-The backend needs `POLYGON_API_KEY` and `POLYGON_API_BASE_URL=https://api.massive.com`. `.env` is gitignored; it was populated from Secret Manager. `NEXT_PUBLIC_BACKEND_URL=http://localhost:4100` is set in the UI's `.env.local` — it holds no key, only a URL.
+The backend needs `POLYGON_API_KEY` and `POLYGON_API_BASE_URL=https://api.massive.com`. `.env` is gitignored; it was populated from Secret Manager. `NEXT_PUBLIC_BACKEND_URL=http://localhost:4400` is set in the UI's `.env.local` — it holds no key, only a URL.

@@ -39,7 +39,7 @@
 >
 > **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
 > static build works in every environment without a rebuild:
-> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4100`;
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
 > · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
 >   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
 >   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,
@@ -306,7 +306,7 @@ Listed here so the intent is recorded, **not** because anything is wired. State 
 - The `payments` and `subscriptions` Firestore collections exist and are **empty**, because nothing writes to them.
 - `users.stripeCustomerId` / `stripeSubId` appear in the §5.16 schema below as forward-looking fields only; they are null on every document.
 - The `plans` collection (3 plans, seeded from `plans.registry.ts`) is real and live, and the entitlement layer that reads it works — but plan assignment is currently manual. Amounts are stored in **minor units** (`4999` = $49.99), which is Stripe's own convention, so the data is shaped for an eventual integration.
-- **Integration is blocked on a prerequisite**, not just on effort: the browser cannot reach the backend in production (`NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4100` is baked into the static bundle and blocked as mixed content). Checkout redirects and webhook confirmation both require a reachable backend origin.
+- **Integration is blocked on a prerequisite**, not just on effort: the browser cannot reach the backend in production (`NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4400` is baked into the static bundle and blocked as mixed content). Checkout redirects and webhook confirmation both require a reachable backend origin.
 - Consequently the admin console's Revenue and Subscriptions views read zero. The console's fabricated MRR history chart and trend deltas are **suppressed** when running against real data rather than carried forward, since invented revenue figures shown beside real users would read as authoritative.
 
 ---

@@ -39,7 +39,7 @@
 >
 > **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
 > static build works in every environment without a rebuild:
-> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4100`;
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
 > · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
 >   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
 >   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,
@@ -248,7 +248,7 @@ Project Plan \| v1.2 \| July 2026
 > the yield it was labelled as).
 >
 > **Two deployment facts materially qualify every "done" claim below.**
-> (1) `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4100` is baked
+> (1) `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4400` is baked
 > into the production bundle and blocked as mixed content — **the browser cannot
 > reach the backend at all** in production. (2) **No Cloud Scheduler jobs exist
 > in any region** and there is no `scheduler-invoker` service account
@@ -542,7 +542,7 @@ These are stated plainly rather than folded into status percentages. Items 1
 and 2 are infrastructure and gate several \"finished\" features.
 
 1.  **The browser cannot reach the backend.** `NEXT_PUBLIC_BACKEND_URL` is
-    unset, so `http://localhost:4100` is compiled into the production bundle
+    unset, so `http://localhost:4400` is compiled into the production bundle
     and blocked as mixed content. This disables in production: the admin
     Monitor tab, extended-hours moves, the vendor market-status pill, and any
     future Stripe checkout/webhook. The fix is a Firebase Hosting rewrite →

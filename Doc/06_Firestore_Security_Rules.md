@@ -39,7 +39,7 @@
 >
 > **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
 > static build works in every environment without a rebuild:
-> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4100`;
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
 > · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
 >   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
 >   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,
@@ -803,7 +803,7 @@ identifiable people, not market data.
 One document per `(feature, user)`, id `{feature}__{uid}`.
 
 **Why it is client-written.** The browser cannot currently reach the backend
-(`NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4100` is baked into
+(`NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4400` is baked into
 the production bundle and blocked as mixed content). A server-mediated write
 is therefore not available, and the alternative was to ship no adoption data
 at all.

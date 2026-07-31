@@ -38,7 +38,7 @@
 >
 > **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
 > static build works in every environment without a rebuild:
-> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4100`;
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
 > · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
 >   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
 >   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,
@@ -1531,7 +1531,7 @@ The Stock screen carried the highest concentration of fabrication in the app. Fo
 | 5 | Before the Bell | STATIC + 🆕 live moves | hardcoded copy; **`useExtendedHours` supplies real pre-market % — localhost only** | Polygon | `/v3/snapshot` → backend `/live/*` | Anthropic API over `news` for the narrative |
 | 6 | After the Close | STATIC + 🆕 live moves | same, `lateTradingChangePct` | Polygon | `/v3/snapshot` | Anthropic API |
 
-🔴 **#5/#6 do not work in production.** `useExtendedHours` reads the backend, and the production bundle has `NEXT_PUBLIC_BACKEND_URL` unset — it calls `http://localhost:4100`, blocked as mixed content from an HTTPS origin. **On https://marketcatalyst.web.app these two cards show the hardcoded copy only.** The extended-hours wiring is real and verified on localhost; do not describe it as shipped to users until §D.4 gap 1 is closed. The surrounding narrative copy is hardcoded in either environment.
+🔴 **#5/#6 do not work in production.** `useExtendedHours` reads the backend, and the production bundle has `NEXT_PUBLIC_BACKEND_URL` unset — it calls `http://localhost:4400`, blocked as mixed content from an HTTPS origin. **On https://marketcatalyst.web.app these two cards show the hardcoded copy only.** The extended-hours wiring is real and verified on localhost; do not describe it as shipped to users until §D.4 gap 1 is closed. The surrounding narrative copy is hardcoded in either environment.
 | 7 | General perspective | STATIC | hardcoded "Risk-On Rally… VIX at 14" | — | — | `market_indices` ✅ + Anthropic |
 | 8 | News history drawer ✅labeled | HYBRID | `news` + `buildNewsHistory()` generated | Polygon + Finnhub | `/company-news` | Widen the news lookback |
 | 9 | "No company associated" drawer | NONE | informational | — | — | — |
@@ -1979,7 +1979,7 @@ Everything in this section is verified against the live Cloud Run revision (`mar
 
 | # | Gap | Effect |
 |---|---|---|
-| 1 | 🔴 **The browser cannot reach the backend.** `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4100` is baked into the production bundle and blocked as mixed content from an HTTPS origin. | Disables in production: the admin **Monitor** tab, **extended-hours moves** (B.15 #5/#6), the **vendor market-status pill** overlay (B.20 #8), and any future Stripe checkout/webhook. Fix = Firebase Hosting rewrite → Cloud Run, which **requires** `ADMIN_GUARD_TRUST_IAM=false` first or `/sync/:job/run`, `/purge` and `/retention` become world-callable. |
+| 1 | 🔴 **The browser cannot reach the backend.** `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4400` is baked into the production bundle and blocked as mixed content from an HTTPS origin. | Disables in production: the admin **Monitor** tab, **extended-hours moves** (B.15 #5/#6), the **vendor market-status pill** overlay (B.20 #8), and any future Stripe checkout/webhook. Fix = Firebase Hosting rewrite → Cloud Run, which **requires** `ADMIN_GUARD_TRUST_IAM=false` first or `/sync/:job/run`, `/purge` and `/retention` become world-callable. |
 | 2 | 🔴 **No Cloud Scheduler jobs exist in any region**, and no `scheduler-invoker` service account — `create-scheduler-jobs.sh` was never run. With `min-instances=0` the in-process `@Cron` decorators never fire. | **No sync job has ever run automatically in production.** All data in Firestore came from manual runs. Every cron in §A.7 describes intent, not observed behaviour. |
 | 3 | 🔴 **`POLYGON_API_KEY` is un-rotated** (exposed in chat). Secret Manager version 4 is enabled. | `deploy/rotate-polygon-key.sh` automates everything except generating the replacement key. |
 | 4 | 🔴 **Stripe is not implemented.** No Stripe code exists in either repo. | `payments` and `subscriptions` are empty; every revenue figure in the admin console reads 0. Checkout and webhooks are blocked on gap 1. |

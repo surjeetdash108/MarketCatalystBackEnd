@@ -41,7 +41,7 @@
 >
 > **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
 > static build works in every environment without a rebuild:
-> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4100`;
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
 > · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
 >   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
 >   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,
@@ -292,7 +292,7 @@ Changes (2026-07-22) — subscriptions, entitlements, admin analytics:
 
 Stated plainly, because each one limits what the deployed system can do:
 
-1. **~~The browser cannot reach the backend~~ — RESOLVED.** The UI now resolves its backend base URL at runtime (`app/iq/backend.ts`): `localhost:4100` in dev, **same-origin** when deployed, with `firebase.json` rewriting `/api`, `/market-data` and `/live` to the public `market-catalyst-live` service (no CORS, CDN-cached). A localhost `NEXT_PUBLIC_BACKEND_URL` is ignored on a deployed host. Remaining prerequisites: keep `ADMIN_GUARD_TRUST_IAM=false` on any public route, and on **stage** the rewrites need billing (Cloud Run API) before they can deploy.
+1. **~~The browser cannot reach the backend~~ — RESOLVED.** The UI now resolves its backend base URL at runtime (`app/iq/backend.ts`): `localhost:4400` in dev, **same-origin** when deployed, with `firebase.json` rewriting `/api`, `/market-data` and `/live` to the public `market-catalyst-live` service (no CORS, CDN-cached). A localhost `NEXT_PUBLIC_BACKEND_URL` is ignored on a deployed host. Remaining prerequisites: keep `ADMIN_GUARD_TRUST_IAM=false` on any public route, and on **stage** the rewrites need billing (Cloud Run API) before they can deploy.
 2. **No Cloud Scheduler jobs exist in any region**, and there is no `scheduler-invoker` service account — `create-scheduler-jobs.sh` was never run. With `min-instances=0` the in-process `@Cron` decorators never fire, so **no sync job has ever run automatically in production**; every row currently in Firestore came from a manual run.
 3. **`POLYGON_API_KEY` is un-rotated** (exposed in chat). Secret Manager version 4 is enabled; `deploy/rotate-polygon-key.sh` automates everything except generating the replacement key.
 4. **Stripe is not implemented.** No Stripe code exists in either repo, `stripePriceId` is `null` on every plan (which keeps them non-purchasable), and `payments`/`subscriptions` are empty. Checkout and webhooks are blocked on gap 1.
