@@ -84,7 +84,12 @@ export class NewsJob implements OnModuleInit {
         const agg = await col.where('ticker', '==', ticker).count().get();
         writes.push({
           ref: this.firebase.firestore.collection('companies').doc(ticker),
-          data: { newsCount: agg.data().count, newsCountAt: now },
+          // `ticker` included even though the doc ID already is one: this
+          // merge-write can be the FIRST write for a ticker outside the
+          // primary sync universe, and a doc missing `ticker` crashes any
+          // frontend code that assumes the field (CompanyDoc types it
+          // non-nullable) — e.g. the ticker-search dropdown, 2026-08-01.
+          data: { ticker, newsCount: agg.data().count, newsCountAt: now },
         });
       } catch (err) {
         // A transient failure must not fail the news sync itself — the articles

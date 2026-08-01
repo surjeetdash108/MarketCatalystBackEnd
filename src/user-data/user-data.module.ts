@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { FeatureRequestsController } from './feature-requests.controller';
 import { NotificationsController } from './notifications.controller';
 import { PortfolioController } from './portfolio.controller';
 import { ProfileController } from './profile.controller';
@@ -20,6 +21,7 @@ import { WhoamiUserController } from './whoami-user.controller';
     SettingsController,
     ProfileController,
     NotificationsController,
+    FeatureRequestsController,
   ],
 })
 export class UserDataModule {}

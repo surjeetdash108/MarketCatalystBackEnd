@@ -90,7 +90,12 @@ export class FundamentalsGrowthJob implements OnModuleInit {
         const pendingWrites: PendingWrite[] = [];
         const col = this.firebase.firestore.collection('companies');
         for (const w of writes)
-          pendingWrites.push({ ref: col.doc(w.ticker), data: w.data });
+          // `ticker` included in the write itself: this merge-write can be
+          // the FIRST write for a ticker outside the primary sync universe,
+          // and a doc missing `ticker` crashes frontend code that assumes
+          // the field is always present (CompanyDoc types it non-nullable)
+          // — e.g. the ticker-search dropdown, 2026-08-01.
+          pendingWrites.push({ ref: col.doc(w.ticker), data: { ticker: w.ticker, ...w.data } });
         await batchSetWithCreatedAt(this.firebase.firestore, pendingWrites);
       }
       await this.meta.setCursor(JOB_NAME, (cursor + BATCH_SIZE) % universe.length);
