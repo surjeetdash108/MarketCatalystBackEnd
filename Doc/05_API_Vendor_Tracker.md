@@ -1,5 +1,32 @@
 # Market Intelligence Platform — API Vendor Tracker
 
+> ## ⏱ State sync — 2026-08-03 · VENDOR-KEY AUDIT (only Polygon is funded in the inspected `.env`)
+>
+> _Read alongside the 2026-07-27 block below: keys are supposed to come from
+> **Secret Manager via ADC**, so the local `.env` is not the production source of
+> truth. But the `.env` inspected on 2026-08-03 has **only `POLYGON_API_KEY` set**
+> (len 32) — `FMP_API_KEY`, `FINNHUB_API_KEY`, `FRED_API_KEY`, `BENZINGA_API_KEY`,
+> `TRADIER_ACCESS_TOKEN`, `UNUSUAL_WHALES_API_KEY` and `ANTHROPIC_API_KEY` are all
+> **present-as-name but EMPTY** (values never printed; audited by length)._
+>
+> **Why it matters for this tracker.** Every §2 requirement whose Primary/Fallback
+> vendor is FMP, Finnhub, Benzinga, Tradier, UnusualWhales or Anthropic will
+> return **nothing at runtime** unless the corresponding key is populated in the
+> environment the backend actually runs in. Concretely this makes the interim
+> feeds for **R41** (FMP analyst consensus), **R42** (FMP earnings calendar),
+> **R47** (FMP earnings side) and **R29**'s estimate join **data-dead right now**,
+> and it means the "token/key already provisioned" notes for **Tradier (R32)** and
+> **Finnhub (R42)** in the delivery tracker are **not** true in this `.env`.
+>
+> **Action (do not assume prod is broken):** confirm each key against **prod
+> Secret Manager**. If a key is set there, the runtime is fine and only the local
+> `.env` is empty — annotate accordingly. If it is unset in prod too, fund the key
+> (or accept the gap and keep the dependent rows honestly labeled). Tracked as
+> **O6** in `DELIVERY-PLAN-STATUS.md`. Note also: the 2026-08-02 request to move
+> **Analyst Actions** from FMP to **Polygon** is **not yet implemented** — no
+> Polygon analyst/ratings endpoint is wired (`PolygonService` has no such method),
+> so Analyst Actions still resolves from FMP consensus.
+
 > ## ⏱ State sync — 2026-07-27 · TWO ENVIRONMENTS (stage + prod), env-driven config
 >
 > _This block is newest and authoritative where it differs from the blocks

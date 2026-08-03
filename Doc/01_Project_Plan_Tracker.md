@@ -541,6 +541,19 @@ implementation behind them at all.
 These are stated plainly rather than folded into status percentages. Items 1
 and 2 are infrastructure and gate several \"finished\" features.
 
+> ⚠ **Re-verified 2026-08-03.** A code re-check added a gap not listed below:
+> in the inspected `.env`, only `POLYGON_API_KEY` is funded --- `FMP`,
+> `FINNHUB`, `FRED`, `BENZINGA`, `TRADIER_ACCESS_TOKEN`, `UNUSUAL_WHALES` and
+> `ANTHROPIC` keys are present-but-empty, so every non-Polygon vendor feed and
+> all AI surfaces return nothing at runtime until funded (verify against prod
+> Secret Manager --- this may be a local `.env`). Also confirmed still-open:
+> the `POLYGON_API_KEY` rotation and the `firestore.rules` drift (both R49),
+> and the 2026-08-02 \"Analyst Actions on Polygon not FMP\" request, which is a
+> to-do note only --- no code migration exists (Analyst Actions still resolves
+> from FMP consensus). Item 2 below (\"no scheduled refresh\") predates the
+> 2026-07-26 move to a single `sync-premarket` cron; treat it as superseded and
+> re-verify against live production before relying on it.
+
 1.  **The browser cannot reach the backend.** `NEXT_PUBLIC_BACKEND_URL` is
     unset, so `http://localhost:4400` is compiled into the production bundle
     and blocked as mixed content. This disables in production: the admin

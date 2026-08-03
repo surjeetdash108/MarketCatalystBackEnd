@@ -875,6 +875,15 @@ copying either over the other loses rules:
 with everything else in the second row. The backend file now carries a
 `⚠ DO NOT DEPLOY THIS FILE` header saying exactly this.
 
+> ⚠ **2026-08-03 re-verify — drift still open.** Confirmed against the current
+> repo: `MarketCatalystBackEnd/firestore.rules` still carries the DO-NOT-DEPLOY
+> header and `firebase.json` still references it, and the two files remain
+> diverged. This is one of the three open **R49** security items (with the
+> un-rotated `POLYGON_API_KEY` and the missing launch-checklist doc). Closing it
+> = reconcile the two rulesets into the live UI copy, then point the backend's
+> `firebase.json` at the same file (or delete the stale copy) so they can't drift
+> again.
+
 `sync_meta` and `sync_watermarks` appear in the backend copy but **not** in the
 live ruleset, so client reads of them are currently denied by the catch-all.
 That is harmless if only the Admin SDK touches them — the Admin SDK bypasses
