@@ -75,12 +75,15 @@ export class AdminAnalyticsService {
         .map(async (d) => {
         const u = d.data();
         // Engagement counts are read server-side (new architecture: the browser
-        // never lists another user's sub-collections). apiCalls/alerts have no
-        // collection yet (api_usage unimplemented, alerts not built) → honest 0.
-        const [sub, watchlists, holdings] = await Promise.all([
+        // never lists another user's sub-collections). apiCalls is fed by the
+        // ApiUsageService metering; alerts reads users/{uid}/alerts (0 until the
+        // alerts engine — R44 — writes there).
+        const [sub, watchlists, holdings, apiCalls, alerts] = await Promise.all([
           this.subscriptions.resolve(d.id, u),
           this.countWatchlistTickers(d.id),
           this.countHoldings(d.id),
+          this.countApiCalls(d.id),
+          this.countAlerts(d.id),
         ]);
         return {
           uid: d.id,
@@ -100,11 +103,34 @@ export class AdminAnalyticsService {
           lastLogin: u.lastLoginAt ?? null,
           watchlists,
           holdings,
-          apiCalls: 0,
-          alerts: 0,
+          apiCalls,
+          alerts,
         };
       }),
     );
+  }
+
+  /** Total metered API calls for a user (`api_usage/{uid}.count`, set by ApiUsageService). */
+  private async countApiCalls(uid: string): Promise<number> {
+    try {
+      const snap = await this.firebase.firestore.doc(`api_usage/${uid}`).get();
+      const count = snap.data()?.count;
+      return typeof count === 'number' ? count : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Number of alert rules a user has (`users/{uid}/alerts/*`). 0 until R44 writes there. */
+  private async countAlerts(uid: string): Promise<number> {
+    try {
+      const snap = await this.firebase.firestore
+        .collection(`users/${uid}/alerts`)
+        .get();
+      return snap.size;
+    } catch {
+      return 0;
+    }
   }
 
   /** Number of tickers on a user's watchlist (`users/{uid}/watchlists/default`). */
