@@ -15,6 +15,7 @@ import { MarketDataModule } from './market-data/market-data.module';
 import { PurgeModule } from './purge/purge.module';
 import { SyncModule } from './sync/sync.module';
 import { Wave3Module } from './vendors/wave3.module';
+import { ApiHealthModule } from './api-health/api-health.module';
 
 /**
  * TWO DEPLOYMENTS, ONE IMAGE.
@@ -83,6 +84,9 @@ const workerModules = isLiveRole
     // requires a verified Firebase admin token — a header-less request is
     // refused there, not trusted. (PlansModule brings FeatureFlagsModule.)
     PlansModule,
+    // GET /admin/api-health (AdminGuard): route inventory + self-probe for the
+    // console's Monitor tab. Both roles so the live service serves it too.
+    ApiHealthModule,
     ...workerModules,
   ],
   controllers: [HealthController],
