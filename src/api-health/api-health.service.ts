@@ -25,9 +25,26 @@ export interface EndpointRow {
   guarded: boolean;
   probe: EndpointProbe | { skipped: true; reason: string };
 }
+export interface VendorHealth {
+  /** Vendor display name, e.g. "Polygon". */
+  name: string;
+  /** The env var that holds its key/token. */
+  keyName: string;
+  /** Whether a key is configured at all. */
+  keyPresent: boolean;
+  /** true when the test call returned 2xx WITH the key → "online". */
+  online: boolean;
+  status: number | null;
+  ms: number | null;
+  /** "online" | "no key configured" | "HTTP 401" | error message. */
+  note: string;
+}
+
 export interface ApiHealthReport {
   service: string;
   generatedAt: string;
+  /** External data-vendor reachability — each called with its configured key. */
+  vendors: VendorHealth[];
   summary: {
     total: number;
     byMethod: Record<string, number>;
@@ -111,6 +128,129 @@ export class ApiHealthService {
     );
   }
 
+  /**
+   * Probes each external data vendor with its configured key and reports
+   * online (2xx) / offline. A missing key is reported as offline with
+   * "no key configured" rather than a failed call. Cheap, read-only endpoints
+   * with an 8s timeout; runs all vendors in parallel.
+   */
+  async vendorHealth(): Promise<VendorHealth[]> {
+    const polyBase = String(
+      this.config.get('POLYGON_API_BASE_URL', 'https://api.polygon.io'),
+    ).replace(/\/$/, '');
+
+    const probes: Array<{
+      name: string;
+      keyName: string;
+      make: (key: string) => { url: string; headers?: Record<string, string> };
+    }> = [
+      {
+        name: 'Polygon',
+        keyName: 'POLYGON_API_KEY',
+        make: (k) => ({ url: `${polyBase}/v1/marketstatus/now?apiKey=${k}` }),
+      },
+      {
+        name: 'FMP',
+        keyName: 'FMP_API_KEY',
+        make: (k) => ({
+          url: `https://financialmodelingprep.com/stable/quote?symbol=AAPL&apikey=${k}`,
+        }),
+      },
+      {
+        name: 'Finnhub',
+        keyName: 'FINNHUB_API_KEY',
+        make: (k) => ({ url: `https://finnhub.io/api/v1/quote?symbol=AAPL&token=${k}` }),
+      },
+      {
+        name: 'FRED',
+        keyName: 'FRED_API_KEY',
+        make: (k) => ({
+          url: `https://api.stlouisfed.org/fred/series?series_id=GDP&api_key=${k}&file_type=json`,
+        }),
+      },
+      {
+        name: 'Benzinga',
+        keyName: 'BENZINGA_API_KEY',
+        make: (k) => ({
+          url: `https://api.benzinga.com/api/v2.1/calendar/ratings?token=${k}&pagesize=1`,
+        }),
+      },
+      {
+        name: 'Tradier',
+        keyName: 'TRADIER_ACCESS_TOKEN',
+        make: (k) => ({
+          url: 'https://api.tradier.com/v1/markets/quotes?symbols=AAPL',
+          headers: { Authorization: `Bearer ${k}`, Accept: 'application/json' },
+        }),
+      },
+      {
+        name: 'Unusual Whales',
+        keyName: 'UNUSUAL_WHALES_API_KEY',
+        make: (k) => ({
+          url: 'https://api.unusualwhales.com/api/market/market-tide',
+          headers: { Authorization: `Bearer ${k}`, Accept: 'application/json' },
+        }),
+      },
+      {
+        name: 'Anthropic',
+        keyName: 'ANTHROPIC_API_KEY',
+        make: (k) => ({
+          url: 'https://api.anthropic.com/v1/models',
+          headers: { 'x-api-key': k, 'anthropic-version': '2023-06-01' },
+        }),
+      },
+    ];
+
+    return Promise.all(
+      probes.map(async (p): Promise<VendorHealth> => {
+        const key = String(this.config.get(p.keyName, '')).trim();
+        if (!key) {
+          return {
+            name: p.name,
+            keyName: p.keyName,
+            keyPresent: false,
+            online: false,
+            status: null,
+            ms: null,
+            note: 'no key configured',
+          };
+        }
+        const req = p.make(key);
+        const started = Date.now();
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        try {
+          const res = await fetch(req.url, {
+            headers: req.headers,
+            signal: controller.signal,
+          });
+          const ms = Date.now() - started;
+          return {
+            name: p.name,
+            keyName: p.keyName,
+            keyPresent: true,
+            online: res.ok,
+            status: res.status,
+            ms,
+            note: res.ok ? 'online' : `HTTP ${res.status}`,
+          };
+        } catch (err) {
+          return {
+            name: p.name,
+            keyName: p.keyName,
+            keyPresent: true,
+            online: false,
+            status: 0,
+            ms: Date.now() - started,
+            note: (err as Error).name === 'AbortError' ? 'timeout' : (err as Error).message,
+          };
+        } finally {
+          clearTimeout(timer);
+        }
+      }),
+    );
+  }
+
   private joinPath(a: string, b: string): string {
     const strip = (s: string) => (s || '').replace(/^\/+|\/+$/g, '');
     const joined = [strip(a), strip(b)].filter(Boolean).join('/');
@@ -121,6 +261,9 @@ export class ApiHealthService {
     const endpoints = this.listEndpoints();
     const port = Number(this.config.get('PORT', 4400)) || 4400;
     const base = `http://127.0.0.1:${port}`;
+
+    // External vendor probes run in parallel with the internal route probing.
+    const vendorsPromise = this.vendorHealth();
 
     const rows: EndpointRow[] = await Promise.all(
       endpoints.map(async (e): Promise<EndpointRow> => {
@@ -178,10 +321,12 @@ export class ApiHealthService {
     const okCount = probedRows.filter((r) => (r.probe as EndpointProbe).ok).length;
     const upCount = probedRows.filter((r) => (r.probe as EndpointProbe).up).length;
 
+    const vendors = await vendorsPromise;
     const role = String(this.config.get('APP_ROLE', 'worker')).toLowerCase();
     return {
       service: role === 'live' ? 'market-catalyst-live' : 'market-catalyst-backend',
       generatedAt: new Date().toISOString(),
+      vendors,
       summary: {
         total: endpoints.length,
         byMethod,
