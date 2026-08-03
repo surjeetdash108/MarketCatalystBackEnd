@@ -149,6 +149,7 @@ export class NewsJob implements OnModuleInit {
                   source: a.source,
                   url: a.url,
                   publishedAt: a.publishedAt,
+                  direction: verdict.direction,
                   reasons: verdict.reasons,
                 });
               }

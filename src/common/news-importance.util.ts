@@ -40,10 +40,60 @@ const HIGH_IMPACT: Array<{ re: RegExp; label: string }> = [
   { re: /\b(soar|plunge|surge|tumble|crash|spike)[sd]?\b/i, label: 'large-move' },
 ];
 
+/**
+ * Directional headline patterns — which way the event moves the stock. Used to
+ * infer a +ve/-ve direction when the vendor gives no directional sentiment
+ * (Finnhub, ~80% of the feed, always sends sentiment: null), so downside and
+ * upside alerts both carry a colour, not just Polygon's subset.
+ */
+const POSITIVE_HEADLINE: RegExp[] = [
+  /\b(beat|beats|tops?|topped|surpass\w*)\b.{0,24}\b(estimate|expectation|consensus|eps|revenue|forecast)/i,
+  /\bguidance\b.{0,28}\b(rais|hik|boost|increas|lift)/i,
+  /\b(rais|hik|boost|increas|lift)\w*\b.{0,28}\bguidance\b/i,
+  /\bupgrade[sd]?\b/i,
+  /\bprice target\b.{0,24}\b(rais|hik|boost|increas)/i,
+  /\b(rais|hik|boost|increas)\w*\b.{0,24}\bprice target\b/i,
+  /\b(fda)\b.{0,30}\b(approv|clearance|authoriz)/i,
+  /\b(soar|surge|spike|jump|rally|rallie|climb|gain|rocket|jumps?)\w*\b/i,
+  /\b(dividend|buyback|repurchase)\b.{0,20}\b(increas|rais|declar|announce|boost|hik)/i,
+  /\b(record|strong|robust|blowout)\b.{0,16}\b(revenue|profit|earnings|sales|quarter|results?)/i,
+];
+const NEGATIVE_HEADLINE: RegExp[] = [
+  /\b(miss|misses|missed|fell short|shortfall|disappoint\w*)\b.{0,24}\b(estimate|expectation|consensus|eps|revenue|forecast)/i,
+  /\bguidance\b.{0,28}\b(cut|lower|slash|withdraw|reduc|trim)/i,
+  /\b(cut|lower|slash|withdraw|reduc|trim)\w*\b.{0,28}\bguidance\b/i,
+  /\bdowngrade[sd]?\b/i,
+  /\bprice target\b.{0,24}\b(cut|lower|slash|reduc)/i,
+  /\b(cut|lower|slash|reduc)\w*\b.{0,24}\bprice target\b/i,
+  /\b(fda)\b.{0,30}\b(reject|declin|refus|crl|complete response)/i,
+  /\b(plunge|tumble|crash|slump|sink|slide|plummet|sell-?off|drop)\w*\b/i,
+  /\b(bankrupt|chapter 11|insolvenc|default)/i,
+  /\b(lawsuit|sues?|sued|investigation|probe|subpoena|fraud|recall|delist|halt(ed|s)?\b.{0,12}trading)/i,
+  /\b(ceo|cfo)\b.{0,24}\b(step[s]? down|resign|depart|oust|fire[ds]?)/i,
+  /\bdividend\b.{0,20}\b(cut|suspend|slash|omit)/i,
+  /\b(layoff|job cut|restructur|writedown|write-down|impairment|warn(s|ing)?)\b/i,
+];
+
+export type NewsDirection = 'positive' | 'negative' | 'neutral';
+
 export interface ImportanceVerdict {
   important: boolean;
+  /** Whether the news reads +ve, -ve or neutral for the stock — vendor
+   *  sentiment first, then directional headline keywords. */
+  direction: NewsDirection;
   /** Why it fired — stored on the notification so a human can audit the rule. */
   reasons: string[];
+}
+
+/** +ve/-ve/neutral: vendor sentiment when directional, else headline keywords. */
+function scoreDirection(sentiment: string | null | undefined, headline: string): NewsDirection {
+  if (sentiment === 'positive') return 'positive';
+  if (sentiment === 'negative') return 'negative';
+  const pos = POSITIVE_HEADLINE.some((re) => re.test(headline));
+  const neg = NEGATIVE_HEADLINE.some((re) => re.test(headline));
+  if (pos && !neg) return 'positive';
+  if (neg && !pos) return 'negative';
+  return 'neutral'; // mixed signals or none — don't guess a direction
 }
 
 /**
@@ -66,5 +116,8 @@ export function scoreImportance(a: CanonicalNewsArticle): ImportanceVerdict {
     if (re.test(headline)) reasons.push(`keyword:${label}`);
   }
 
-  return { important: reasons.length > 0, reasons };
+  const direction = scoreDirection(a.sentiment, headline);
+  if (direction !== 'neutral') reasons.push(`direction:${direction}`);
+
+  return { important: reasons.length > 0, direction, reasons };
 }

@@ -18,6 +18,9 @@ export interface NotificationInput {
   source: string | null;
   url: string | null;
   publishedAt: string;
+  /** How the news reads for the stock: +ve, -ve or neutral. Drives the bell's
+   *  colour so a user sees at a glance whether their holding got good/bad news. */
+  direction: 'positive' | 'negative' | 'neutral';
   /** Which importance rule(s) fired — keeps the heuristic auditable from data. */
   reasons: string[];
 }
@@ -125,6 +128,7 @@ export class NotificationsService {
             source: n.source,
             url: n.url,
             publishedAt: n.publishedAt,
+            direction: n.direction,
             reasons: n.reasons,
             read: false,
             updatedAt: new Date().toISOString(),
