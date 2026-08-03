@@ -38,6 +38,10 @@ export interface VendorHealth {
   ms: number | null;
   /** "online" | "no key configured" | "HTTP 401" | error message. */
   note: string;
+  /** The exact call made, key redacted — so the admin sees the request. */
+  request: { method: string; url: string } | null;
+  /** First ~300 chars of the vendor's response body (success OR error). */
+  response: string | null;
 }
 
 export interface ApiHealthReport {
@@ -213,9 +217,18 @@ export class ApiHealthService {
             status: null,
             ms: null,
             note: 'no key configured',
+            request: null,
+            response: null,
           };
         }
         const req = p.make(key);
+        // Redact the key/token from the displayed URL (query-param vendors);
+        // header-auth vendors (Tradier/UW/Anthropic) keep the secret off the URL.
+        const redactedUrl = req.url.replace(
+          /(apikey|apiKey|api_key|token)=[^&]+/gi,
+          '$1=***',
+        );
+        const request = { method: 'GET', url: redactedUrl };
         const started = Date.now();
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 8000);
@@ -225,6 +238,7 @@ export class ApiHealthService {
             signal: controller.signal,
           });
           const ms = Date.now() - started;
+          const body = await res.text().catch(() => '');
           return {
             name: p.name,
             keyName: p.keyName,
@@ -233,6 +247,8 @@ export class ApiHealthService {
             status: res.status,
             ms,
             note: res.ok ? 'online' : `HTTP ${res.status}`,
+            request,
+            response: body.slice(0, 300),
           };
         } catch (err) {
           return {
@@ -243,6 +259,8 @@ export class ApiHealthService {
             status: 0,
             ms: Date.now() - started,
             note: (err as Error).name === 'AbortError' ? 'timeout' : (err as Error).message,
+            request,
+            response: null,
           };
         } finally {
           clearTimeout(timer);
