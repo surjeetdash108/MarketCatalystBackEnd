@@ -39,14 +39,13 @@ import { Wave3Module } from './vendors/wave3.module';
  */
 const isLiveRole = (process.env.APP_ROLE ?? 'worker').trim().toLowerCase() === 'live';
 
-/** Batch and admin surface — worker role only. */
+/** Batch surface — worker role only. */
 const workerModules = isLiveRole
   ? []
   : [
       SyncModule,
       PurgeModule,
       FeatureFlagsModule,
-      PlansModule,
       RetentionModule,
       AutoPurgeModule,
       Wave3Module,
@@ -77,6 +76,13 @@ const workerModules = isLiveRole
     LiveModule,
     MarketDataModule,
     UserDataModule,
+    // Mounted in BOTH roles: the public `live` service must serve the admin
+    // console's backend (/admin/* read-models, /plans, PATCH /admin/plans/:id).
+    // Safe to expose publicly ONLY because the live service runs
+    // ADMIN_GUARD_TRUST_IAM=false, so every /admin/* and /feature-flags/* call
+    // requires a verified Firebase admin token — a header-less request is
+    // refused there, not trusted. (PlansModule brings FeatureFlagsModule.)
+    PlansModule,
     ...workerModules,
   ],
   controllers: [HealthController],

@@ -28,4 +28,9 @@ export class AdminAnalyticsController {
   async revenue() {
     return this.analytics.revenue();
   }
+
+  @Get('feature-adoption')
+  async featureAdoption() {
+    return { adoption: await this.analytics.featureAdoption() };
+  }
 }

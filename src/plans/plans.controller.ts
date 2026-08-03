@@ -1,8 +1,12 @@
 import {
+  BadRequestException,
+  Body,
   Controller,
   Get,
   Logger,
+  NotFoundException,
   Param,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -74,6 +78,35 @@ export class PlansController {
   @Post('plans/seed')
   async seed() {
     return this.plans.seed();
+  }
+
+  /**
+   * PATCH /admin/plans/:id — admin console's per-plan entitlement editor.
+   *
+   * The browser used to write `plans/{id}.featureFlags` directly; under the
+   * new architecture that write lives here (UI → backend → Firebase). AdminGuard
+   * gates it, and the service only ever writes `featureFlags.*` + `updatedAt`,
+   * so price/currency/cycle can never be changed through this route.
+   */
+  @UseGuards(AdminGuard)
+  @Patch('admin/plans/:id')
+  async updatePlan(
+    @Param('id') id: string,
+    @Body() body: { featureFlags?: Record<string, unknown> },
+  ) {
+    const featureFlags = body?.featureFlags;
+    if (!featureFlags || typeof featureFlags !== 'object') {
+      throw new BadRequestException('body.featureFlags (object) is required');
+    }
+    try {
+      return await this.plans.updateFeatureFlags(id, featureFlags);
+    } catch (err) {
+      const message = (err as Error).message;
+      if (message.startsWith('Plan not found')) {
+        throw new NotFoundException(message);
+      }
+      throw new BadRequestException(message);
+    }
   }
 
   /**

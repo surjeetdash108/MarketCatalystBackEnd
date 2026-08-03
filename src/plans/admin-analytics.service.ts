@@ -74,7 +74,14 @@ export class AdminAnalyticsService {
         .filter((d) => !this.isStaff(d.data().email))
         .map(async (d) => {
         const u = d.data();
-        const sub = await this.subscriptions.resolve(d.id, u);
+        // Engagement counts are read server-side (new architecture: the browser
+        // never lists another user's sub-collections). apiCalls/alerts have no
+        // collection yet (api_usage unimplemented, alerts not built) → honest 0.
+        const [sub, watchlists, holdings] = await Promise.all([
+          this.subscriptions.resolve(d.id, u),
+          this.countWatchlistTickers(d.id),
+          this.countHoldings(d.id),
+        ]);
         return {
           uid: d.id,
           name: u.name ?? u.displayName ?? null,
@@ -91,9 +98,92 @@ export class AdminAnalyticsService {
           daysRemaining: sub.daysRemaining,
           joinedDate: u.createdAt ?? null,
           lastLogin: u.lastLoginAt ?? null,
+          watchlists,
+          holdings,
+          apiCalls: 0,
+          alerts: 0,
         };
       }),
     );
+  }
+
+  /** Number of tickers on a user's watchlist (`users/{uid}/watchlists/default`). */
+  private async countWatchlistTickers(uid: string): Promise<number> {
+    try {
+      const snap = await this.firebase.firestore
+        .doc(`users/${uid}/watchlists/default`)
+        .get();
+      const tickers = snap.data()?.tickers;
+      return Array.isArray(tickers) ? tickers.length : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Number of holdings (`users/{uid}/portfolios/default/holdings/*`). */
+  private async countHoldings(uid: string): Promise<number> {
+    try {
+      const snap = await this.firebase.firestore
+        .collection(`users/${uid}/portfolios/default/holdings`)
+        .get();
+      return snap.size;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Feature-adoption roll-up from the top-level `feature_adoption` collection
+   * (doc id `${feature}__${uid}`, fields feature/userId/openCount/lastOpened).
+   *
+   * Aggregated server-side and with staff opens excluded — an admin clicking
+   * through every screen to test must not read as genuine product adoption. The
+   * label/group naming stays in the client catalog (TRACKED_FEATURES); this only
+   * returns the numbers, so a feature renamed in the nav still keeps its history.
+   */
+  async featureAdoption(): Promise<
+    Array<{ feature: string; opens: number; users: number; lastOpened: string | null }>
+  > {
+    const [adoptSnap, userSnap] = await Promise.all([
+      this.firebase.firestore.collection('feature_adoption').get().catch(() => null),
+      this.firebase.firestore.collection('users').get(),
+    ]);
+
+    const staffUids = new Set(
+      userSnap.docs.filter((d) => this.isStaff(d.data().email)).map((d) => d.id),
+    );
+
+    const byFeature = new Map<
+      string,
+      { opens: number; users: Set<string>; last: string | null }
+    >();
+    for (const doc of adoptSnap?.docs ?? []) {
+      const a = doc.data();
+      const feature: string =
+        typeof a.feature === 'string' ? a.feature : doc.id.split('__')[0];
+      if (!feature) continue;
+      if (typeof a.userId === 'string' && staffUids.has(a.userId)) continue;
+
+      const cur = byFeature.get(feature) ?? {
+        opens: 0,
+        users: new Set<string>(),
+        last: null,
+      };
+      cur.opens += typeof a.openCount === 'number' ? a.openCount : 0;
+      if (typeof a.userId === 'string') cur.users.add(a.userId);
+      const lastOpened = typeof a.lastOpened === 'string' ? a.lastOpened : null;
+      if (lastOpened && (!cur.last || lastOpened > cur.last)) cur.last = lastOpened;
+      byFeature.set(feature, cur);
+    }
+
+    return [...byFeature.entries()]
+      .map(([feature, v]) => ({
+        feature,
+        opens: v.opens,
+        users: v.users.size,
+        lastOpened: v.last,
+      }))
+      .sort((a, b) => b.opens - a.opens);
   }
 
   /** One row per payment, joined to its user. */
