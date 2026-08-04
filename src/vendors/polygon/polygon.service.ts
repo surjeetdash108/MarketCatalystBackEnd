@@ -324,6 +324,113 @@ export class PolygonService {
     }));
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Additional AUTHORIZED Polygon endpoints — vendor layer kept complete so any
+  // future feature can wire them without touching this file. Not yet consumed
+  // by a controller/UI (independent data); see Doc/POLYGON-FEATURE-CROSSCHECK.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /** CPI inflation series — GET /fed/v1/inflation. Returns raw dated rows. */
+  async getInflation(limit = 13): Promise<Array<Record<string, unknown>>> {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/fed/v1/inflation?limit=${limit}&sort=date.desc&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []) as Array<Record<string, unknown>>;
+  }
+
+  /** Model-implied inflation expectations — GET /fed/v1/inflation-expectations. */
+  async getInflationExpectations(limit = 13): Promise<Array<Record<string, unknown>>> {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/fed/v1/inflation-expectations?limit=${limit}&sort=date.desc&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []) as Array<Record<string, unknown>>;
+  }
+
+  /**
+   * FX previous-day aggregate — GET /v2/aggs/ticker/C:{pair}/prev.
+   * `pair` is a currency pair like "EURUSD" or "USDJPY".
+   */
+  async getFxPrevClose(pair: string): Promise<{
+    pair: string;
+    close: number | null;
+    open: number | null;
+    high: number | null;
+    low: number | null;
+    volume: number | null;
+  } | null> {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v2/aggs/ticker/C:${pair}/prev?adjusted=true&apiKey=${this.apiKey}`,
+    );
+    const r = res.results?.[0];
+    if (!r) return null;
+    return {
+      pair,
+      close: r.c ?? null,
+      open: r.o ?? null,
+      high: r.h ?? null,
+      low: r.l ?? null,
+      volume: r.v ?? null,
+    };
+  }
+
+  /** Daily open/close/high/low for one ticker — GET /v1/open-close/{ticker}/{date}. */
+  async getDailyOpenClose(ticker: string, date: string): Promise<Record<string, unknown> | null> {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v1/open-close/${ticker}/${date}?adjusted=true&apiKey=${this.apiKey}`,
+    );
+    return (res ?? null) as Record<string, unknown> | null;
+  }
+
+  /** Corporate/name-change events for a ticker — GET /vX/reference/tickers/{ticker}/events. */
+  async getTickerEvents(ticker: string): Promise<Array<Record<string, unknown>>> {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/vX/reference/tickers/${ticker}/events?apiKey=${this.apiKey}`,
+    );
+    return (res.results?.events ?? []) as Array<Record<string, unknown>>;
+  }
+
+  /**
+   * Vendor-computed technical indicator — GET /v1/indicators/{indicator}/{ticker}.
+   * We normally compute our own (technical-indicators.job); this is here for
+   * completeness / cross-checking. `indicator` ∈ sma | ema | rsi | macd.
+   */
+  async getIndicator(
+    indicator: 'sma' | 'ema' | 'rsi' | 'macd',
+    ticker: string,
+    params: { window?: number; timespan?: string; limit?: number } = {},
+  ): Promise<Array<Record<string, unknown>>> {
+    const { window = 14, timespan = 'day', limit = 50 } = params;
+    const win = indicator === 'macd' ? '' : `&window=${window}`;
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v1/indicators/${indicator}/${ticker}?timespan=${timespan}${win}&series_type=close&order=desc&limit=${limit}&apiKey=${this.apiKey}`,
+    );
+    return (res.results?.values ?? []) as Array<Record<string, unknown>>;
+  }
+
+  /** Reference: stock exchanges — GET /v3/reference/exchanges?asset_class=stocks. */
+  async getExchanges(): Promise<Array<Record<string, unknown>>> {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v3/reference/exchanges?asset_class=stocks&locale=us&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []) as Array<Record<string, unknown>>;
+  }
+
+  /** Reference: trade/quote conditions — GET /v3/reference/conditions. */
+  async getConditions(): Promise<Array<Record<string, unknown>>> {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v3/reference/conditions?asset_class=stocks&limit=200&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []) as Array<Record<string, unknown>>;
+  }
+
+  /** Reference: ticker types — GET /v3/reference/tickers/types. */
+  async getTickerTypes(): Promise<Array<Record<string, unknown>>> {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v3/reference/tickers/types?asset_class=stocks&locale=us&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []) as Array<Record<string, unknown>>;
+  }
+
   /**
    * Universal snapshot. Carries the extended-hours fields the delayed
    * per-ticker snapshot does not: `early_trading_change_percent` and
