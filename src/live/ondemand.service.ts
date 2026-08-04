@@ -348,7 +348,10 @@ export class OnDemandService implements OnModuleDestroy {
     if (snap.exists) {
       const data = snap.data() as Record<string, unknown>;
       const created = typeof data.createdAt === 'string' ? Date.parse(data.createdAt) : NaN;
-      if (Number.isFinite(created) && Date.now() - created < COMPANY_TTL_MS && data.price != null) {
+      // 'description' in data → the doc was written by a build that includes the
+      // company profile blurb; older docs lack the key, so fall through to a
+      // refetch to backfill it rather than serving a description-less doc.
+      if (Number.isFinite(created) && Date.now() - created < COMPANY_TTL_MS && data.price != null && 'description' in data) {
         this.memCompany.set(ticker, { data, at: Date.now() });
         return data;
       }
@@ -374,6 +377,8 @@ export class OnDemandService implements OnModuleDestroy {
       const doc: Record<string, unknown> = {
         ticker,
         name: (details?.name as string) ?? ticker,
+        description: (details?.description as string) ?? null,
+        homepageUrl: (details?.homepage_url as string) ?? null,
         sector: (details?.sic_description as string) ?? null,
         marketCap: (details?.market_cap as number) ?? null,
         exchange: (details?.primary_exchange as string) ?? null,
