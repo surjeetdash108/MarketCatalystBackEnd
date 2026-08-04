@@ -90,8 +90,8 @@ interface BarsDoc {
   source: string;
 }
 
-/** Company profile TTL — refreshed by the premarket warm for hot tickers. */
-const COMPANY_TTL_MS = 20 * 3600_000;
+/** Company profile TTL — matches the vendor's own 15-minute delay. */
+const COMPANY_TTL_MS = 15 * 60_000;
 /** Daily bars: at most one vendor refresh per ticker per day. */
 const DAILY_TTL_MS = 20 * 3600_000;
 /** Intraday bars during the extended session (04:00–20:00 ET weekdays). */

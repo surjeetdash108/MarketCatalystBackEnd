@@ -12,7 +12,10 @@ import { ApiHealthService } from './api-health.service';
 export class ApiHealthController {
   constructor(private readonly health: ApiHealthService) {}
 
-  @Get('api-health')
+  // Path is 'apihealth' (no hyphen), NOT 'api-health': the hyphenated path was
+  // poisoned in Firebase Hosting's edge cache with SPA HTML before its rewrite
+  // existed, and there is no CLI purge — a fresh path sidesteps the stale cache.
+  @Get('apihealth')
   async apiHealth() {
     return this.health.check();
   }
