@@ -262,6 +262,38 @@ export class PolygonService {
   }
 
   /**
+   * Every split executing in a date window, across all tickers, in one call.
+   * Used to detect the reverse-split artifact in close-to-close %change: when a
+   * split takes effect between the two comparison days, the prior close is
+   * pre-split and today's is post-split, so the ratio explodes into a fake
+   * hundreds-of-percent "move".
+   *
+   * `afterDate` is exclusive and `throughDate` inclusive — pass the prior
+   * trading day and today, so a split dated on the prior day (already reflected
+   * in that day's close) is not counted. A single page with a high limit is
+   * enough: even a busy day has only a handful of market-wide splits, far below
+   * the 1000 cap, so pagination is intentionally not followed here.
+   */
+  async getSplitsInRange(
+    afterDate: string,
+    throughDate: string,
+  ): Promise<
+    Array<{ ticker: string; executionDate: string; splitFrom: number; splitTo: number }>
+  > {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v3/reference/splits` +
+        `?execution_date.gt=${afterDate}&execution_date.lte=${throughDate}` +
+        `&order=desc&sort=execution_date&limit=1000&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []).map((s: any) => ({
+      ticker: s.ticker,
+      executionDate: s.execution_date,
+      splitFrom: s.split_from,
+      splitTo: s.split_to,
+    }));
+  }
+
+  /**
    * Live session state straight from the exchange feed, replacing the
    * hand-maintained holiday set the header pill computed from a local clock.
    */

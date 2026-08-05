@@ -135,7 +135,12 @@ export interface CanonicalIncomeStatement {
 }
 
 export interface AdapterWarning {
-  code: 'SUB_REQUEST_FAILED' | 'FIELD_NOT_SUPPORTED' | 'FALLBACK_USED' | 'STALE_DATA';
+  code:
+    | 'SUB_REQUEST_FAILED'
+    | 'FIELD_NOT_SUPPORTED'
+    | 'FALLBACK_USED'
+    | 'STALE_DATA'
+    | 'DATA_QUARANTINED';
   message: string;
   field?: string;
 }
