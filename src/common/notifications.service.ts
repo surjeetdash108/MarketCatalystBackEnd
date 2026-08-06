@@ -59,11 +59,15 @@ export class NotificationsService {
     for (const u of users.docs) {
       const tickers = new Set<string>();
 
-      const wl = await this.firebase.firestore
-        .doc(`users/${u.id}/watchlists/default`)
+      // Union of every watchlist the user has (a user can keep several named
+      // lists now, each a doc under users/{uid}/watchlists/{id}).
+      const watchlists = await this.firebase.firestore
+        .collection(`users/${u.id}/watchlists`)
         .get();
-      for (const t of (wl.data()?.tickers as string[] | undefined) ?? []) {
-        if (t) tickers.add(t.toUpperCase());
+      for (const wl of watchlists.docs) {
+        for (const t of (wl.data()?.tickers as string[] | undefined) ?? []) {
+          if (t) tickers.add(t.toUpperCase());
+        }
       }
 
       const holdings = await this.firebase.firestore

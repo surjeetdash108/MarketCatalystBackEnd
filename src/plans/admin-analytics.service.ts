@@ -133,14 +133,19 @@ export class AdminAnalyticsService {
     }
   }
 
-  /** Number of tickers on a user's watchlist (`users/{uid}/watchlists/default`). */
+  /** Distinct tickers across all of a user's watchlists (`users/{uid}/watchlists/*`). */
   private async countWatchlistTickers(uid: string): Promise<number> {
     try {
       const snap = await this.firebase.firestore
-        .doc(`users/${uid}/watchlists/default`)
+        .collection(`users/${uid}/watchlists`)
         .get();
-      const tickers = snap.data()?.tickers;
-      return Array.isArray(tickers) ? tickers.length : 0;
+      const tickers = new Set<string>();
+      for (const d of snap.docs) {
+        for (const t of (d.data()?.tickers as string[] | undefined) ?? []) {
+          if (t) tickers.add(t.toUpperCase());
+        }
+      }
+      return tickers.size;
     } catch {
       return 0;
     }
