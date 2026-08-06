@@ -112,6 +112,23 @@ export class MarketMoversJob implements OnModuleInit {
       gainers.forEach((g) => writeMover(g, 'gainer'));
       losers.forEach((l) => writeMover(l, 'loser'));
       await batchSetWithCreatedAt(this.firebase.firestore, writes);
+
+      // Full refresh of the CURRENT board: `market_movers` is keyed by
+      // `${direction}_${ticker}`, and the top tickers change every run, so
+      // without this the collection accumulates every past run's movers — old
+      // pre-quarantine extremes (e.g. a stale +600%) then headline the board.
+      // Only this run's ~40 rows survive. (market_movers_history is meant to
+      // accumulate, so it is deliberately left alone.)
+      const keepIds = new Set([
+        ...gainers.map((g) => `gainer_${g.ticker}`),
+        ...losers.map((l) => `loser_${l.ticker}`),
+      ]);
+      const stale = (await col.listDocuments()).filter((ref) => !keepIds.has(ref.id));
+      for (let i = 0; i < stale.length; i += 400) {
+        const batch = this.firebase.firestore.batch();
+        for (const ref of stale.slice(i, i + 400)) batch.delete(ref);
+        await batch.commit();
+      }
       await this.meta.record(JOB_NAME, {
         ok: true,
         count: gainers.length + losers.length,
