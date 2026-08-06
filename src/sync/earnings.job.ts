@@ -71,9 +71,26 @@ export class EarningsJob implements OnModuleInit {
           },
         }));
       await chunkedBatchSet(this.firebase.firestore, 'earnings_events', docs);
+
+      // Full refresh: Polygon is the sole source, so the collection must hold
+      // exactly this run's reported rows. Delete any doc not in the new set —
+      // notably legacy FMP calendar docs that carried epsEstimate but no actual
+      // (they'd otherwise surface as "EPS estimate $X / actual Pending", which
+      // Polygon can never produce).
+      const keep = new Set(docs.map((d) => d.id));
+      const col = this.firebase.firestore.collection('earnings_events');
+      const stale = (await col.listDocuments()).filter((ref) => !keep.has(ref.id));
+      for (let i = 0; i < stale.length; i += 400) {
+        const batch = this.firebase.firestore.batch();
+        for (const ref of stale.slice(i, i + 400)) batch.delete(ref);
+        await batch.commit();
+      }
+
       await this.meta.record(JOB_NAME, { ok: true, count: docs.length });
-      this.logger.log(`earnings: wrote ${docs.length} reported quarters (${from}..${to})`);
-      return { count: docs.length };
+      this.logger.log(
+        `earnings: wrote ${docs.length} reported quarters (${from}..${to}), removed ${stale.length} stale`,
+      );
+      return { count: docs.length, removed: stale.length };
     } catch (err) {
       await this.meta.record(JOB_NAME, {
         ok: false,
