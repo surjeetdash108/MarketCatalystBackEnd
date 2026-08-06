@@ -157,10 +157,15 @@ export class WatchlistController {
   @Post('watchlist/tickers')
   async add(@CurrentUser() uid: string, @Body() body: { ticker?: string }): Promise<{ tickers: string[] }> {
     const ticker = this.cleanTicker(body.ticker);
-    await setWithCreatedAt(this.firebase.firestore, this.col(uid).doc(DEFAULT_ID), {
-      name: DEFAULT_NAME,
-      tickers: FieldValue.arrayUnion(ticker),
-    });
+    const ref = this.col(uid).doc(DEFAULT_ID);
+    const snap = await ref.get();
+    if (snap.exists) {
+      // Never write `name` here — the user may have renamed the default list,
+      // and this legacy endpoint must not clobber that rename.
+      await ref.set({ tickers: FieldValue.arrayUnion(ticker), updatedAt: new Date().toISOString() }, { merge: true });
+    } else {
+      await setWithCreatedAt(this.firebase.firestore, ref, { name: DEFAULT_NAME, tickers: FieldValue.arrayUnion(ticker) });
+    }
     return this.get(uid);
   }
 
