@@ -71,10 +71,6 @@ export const RETENTION_RULES: RetentionRule[] = [
   },
 ];
 
-export const RETENTION_BY_COLLECTION = new Map(
-  RETENTION_RULES.map((r) => [r.collection, r]),
-);
-
 /** Cutoff string for a rule, `retentionDays` before `now`. */
 export function cutoffFor(rule: RetentionRule, now: Date): string {
   const d = new Date(now.getTime() - rule.retentionDays * 86_400_000);

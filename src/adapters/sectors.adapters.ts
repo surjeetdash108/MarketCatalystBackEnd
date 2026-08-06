@@ -1,6 +1,4 @@
 import { Logger } from '@nestjs/common';
-import { candidateTradingDays } from '../common/trading-days.util';
-import { FmpService } from '../vendors/fmp/fmp.service';
 import { PolygonService } from '../vendors/polygon/polygon.service';
 import type {
   AdapterResult,
@@ -8,8 +6,6 @@ import type {
   SectorsAdapter,
 } from './types';
 import { withFallback } from './with-fallback.util';
-
-const MAX_LOOKBACK_DAYS = 5;
 
 export class PolygonSectorsAdapter implements SectorsAdapter {
   readonly sourceName = 'polygon';
@@ -37,31 +33,6 @@ export class PolygonSectorsAdapter implements SectorsAdapter {
         },
       ],
     };
-  }
-}
-
-export class FmpSectorsAdapter implements SectorsAdapter {
-  private readonly logger = new Logger(FmpSectorsAdapter.name);
-  readonly sourceName = 'fmp';
-  constructor(private readonly fmp: FmpService) {}
-
-  async fetchSectorPerformance(): Promise<
-    AdapterResult<CanonicalSectorPerformance[]>
-  > {
-    // FMP's snapshot is date-keyed and returns nothing on holidays, so walk
-    // backwards through candidate trading days until one has data.
-    for (const date of candidateTradingDays(new Date(), MAX_LOOKBACK_DAYS)) {
-      const data = await this.fmp.getSectorPerformanceSnapshot(date);
-      if (data.length > 0) {
-        return { data, source: this.sourceName, warnings: [] };
-      }
-      this.logger.log(
-        `No sector performance data for ${date} — trying prior day`,
-      );
-    }
-    throw new Error(
-      `FMP returned no sector performance in the last ${MAX_LOOKBACK_DAYS} trading days`,
-    );
   }
 }
 

@@ -139,7 +139,7 @@ export interface PlanDefinition {
   /**
    * Minor units (cents for USD), matching Stripe's convention. Storing 4999
    * rather than 49.99 avoids float rounding on every revenue sum, and is what
-   * Stripe will charge — see formatAmount() for the units warning.
+   * Stripe will charge. Format as major units (÷100) only at display time.
    */
   amount: number;
   currency: string;
@@ -169,11 +169,6 @@ function allEntitlements(value: boolean): Record<EntitlementKey, boolean> {
 const STAFF_ONLY: EntitlementKey[] = ENTITLEMENTS.filter((e) => e.staffOnly).map(
   (e) => e.key,
 );
-
-/** Keys with no implementation — surfaced so the UI says "coming soon", not "upgrade". */
-export const UNBUILT_KEYS: EntitlementKey[] = ENTITLEMENTS.filter(
-  (e) => e.unbuilt,
-).map((e) => e.key);
 
 /**
  * The tier ladder — what each plan actually includes.
@@ -278,34 +273,6 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
     stripePriceId: null,
   },
 ];
-
-export const PLAN_IDS = new Set(PLAN_DEFINITIONS.map((p) => p.id));
-
-/**
- * Formats a minor-unit amount for display (4999 → "$49.99").
- *
- * ⚠ UNITS. Every amount in `plans` and `payments` is MINOR units (cents),
- * matching Stripe's API. The requirement's `"amount": 4999` is exactly $49.99
- * under this convention — the figure was right, only its `"currency": "INR"`
- * label was not. Storing major units instead would bill 100× wrong on the
- * first real charge, so nothing may bypass this function for display.
- */
-export function formatAmount(minor: number, currency: string): string {
-  const major = minor / 100;
-  try {
-    return new Intl.NumberFormat(currency === 'INR' ? 'en-IN' : 'en-US', {
-      style: 'currency',
-      currency,
-      // Always 2dp for money. Trimming to 0dp on whole amounts made $30.00 and
-      // $29.99 render at different widths in the same column.
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(major);
-  } catch {
-    // Unknown currency code — still better than rendering raw cents.
-    return `${currency} ${major.toFixed(2)}`;
-  }
-}
 
 /** The plan assigned to a user who has never paid. */
 export const DEFAULT_PLAN_ID = 'free';

@@ -68,7 +68,7 @@ export class PlansController {
     private readonly flags: FeatureFlagsService,
   ) {}
 
-  /** Public pricing table. Amounts are MINOR units — see formatAmount(). */
+  /** Public pricing table. Amounts are MINOR units (cents), matching Stripe. */
   @Get('plans')
   async listPlans() {
     return { plans: await this.plans.list() };

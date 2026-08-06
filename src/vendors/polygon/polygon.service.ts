@@ -531,6 +531,72 @@ export class PolygonService {
     return typeof eps === 'number' ? eps : null;
   }
 
+  /**
+   * Market-wide reported financials filed within a date range, paginated — the
+   * source for the PAST earnings calendar. Polygon has no earnings-calendar or
+   * estimate feed, so `filing_date` (when the 10-Q/10-K reached the SEC) is the
+   * reporting date, and only actuals are returned (no estimates / beat-miss).
+   */
+  async getFinancialsByFilingDate(
+    from: string,
+    to: string,
+  ): Promise<
+    Array<{
+      ticker: string;
+      companyName: string | null;
+      filingDate: string | null;
+      periodEnd: string | null;
+      fiscalPeriod: string | null;
+      fiscalYear: string | null;
+      epsActual: number | null;
+      revenueActual: number | null;
+      netIncome: number | null;
+    }>
+  > {
+    type Row = {
+      ticker: string;
+      companyName: string | null;
+      filingDate: string | null;
+      periodEnd: string | null;
+      fiscalPeriod: string | null;
+      fiscalYear: string | null;
+      epsActual: number | null;
+      revenueActual: number | null;
+      netIncome: number | null;
+    };
+    const out: Row[] = [];
+    // financials caps `limit` at 100 (unlike the 1000 other reference endpoints allow).
+    let url =
+      `${this.baseUrl}/vX/reference/financials?filing_date.gte=${from}` +
+      `&filing_date.lte=${to}&timeframe=quarterly&order=asc&sort=filing_date` +
+      `&limit=100&apiKey=${this.apiKey}`;
+    while (url) {
+      const res = await fetchJson<any>(url);
+      for (const p of res.results ?? []) {
+        const ticker = p.tickers?.[0];
+        if (!ticker) continue;
+        const inc = p.financials?.income_statement ?? {};
+        const v = (k: string) =>
+          typeof inc[k]?.value === 'number' ? (inc[k].value as number) : null;
+        out.push({
+          ticker,
+          companyName: p.company_name ?? null,
+          filingDate: p.filing_date ?? null,
+          periodEnd: p.end_date ?? null,
+          fiscalPeriod: p.fiscal_period ?? null,
+          fiscalYear: p.fiscal_year ?? null,
+          epsActual:
+            v('diluted_earnings_per_share') ?? v('basic_earnings_per_share'),
+          revenueActual: v('revenues'),
+          netIncome: v('net_income_loss'),
+        });
+      }
+      url = res.next_url ? `${res.next_url}&apiKey=${this.apiKey}` : null;
+      if (url) await sleep(this.pageDelayMs);
+    }
+    return out;
+  }
+
   async getIncomeStatements(
     ticker: string,
     timeframe = 'annual',

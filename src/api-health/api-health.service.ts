@@ -154,13 +154,6 @@ export class ApiHealthService {
         make: (k) => ({ url: `${polyBase}/v1/marketstatus/now?apiKey=${k}` }),
       },
       {
-        name: 'FMP',
-        keyName: 'FMP_API_KEY',
-        make: (k) => ({
-          url: `https://financialmodelingprep.com/stable/quote?symbol=AAPL&apikey=${k}`,
-        }),
-      },
-      {
         name: 'Finnhub',
         keyName: 'FINNHUB_API_KEY',
         make: (k) => ({ url: `https://finnhub.io/api/v1/quote?symbol=AAPL&token=${k}` }),

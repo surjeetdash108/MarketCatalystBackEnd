@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AdaptersModule } from '../adapters/adapters.module';
 import { FinnhubModule } from '../vendors/finnhub/finnhub.module';
-import { FmpModule } from '../vendors/fmp/fmp.module';
 import { FredModule } from '../vendors/fred/fred.module';
 import { PolygonModule } from '../vendors/polygon/polygon.module';
 import { SecEdgarModule } from '../vendors/sec-edgar/sec-edgar.module';
@@ -38,7 +37,6 @@ import { LiveModule } from '../live/live.module';
 @Module({
   imports: [
     PolygonModule,
-    FmpModule,
     FinnhubModule,
     FredModule,
     SecEdgarModule,

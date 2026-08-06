@@ -1,5 +1,4 @@
 import { Logger } from '@nestjs/common';
-import { FmpService } from '../vendors/fmp/fmp.service';
 import { PolygonService } from '../vendors/polygon/polygon.service';
 import type {
   AdapterResult,
@@ -38,22 +37,6 @@ export class PolygonDividendsAdapter implements DividendsAdapter {
             },
           ]
         : [],
-    };
-  }
-}
-
-export class FmpDividendsAdapter implements DividendsAdapter {
-  readonly sourceName = 'fmp';
-  constructor(private readonly fmp: FmpService) {}
-
-  async fetchDividends(
-    from: string,
-    to: string,
-  ): Promise<AdapterResult<CanonicalDividendEvent[]>> {
-    return {
-      data: await this.fmp.getDividendsCalendar(from, to),
-      source: this.sourceName,
-      warnings: [],
     };
   }
 }
