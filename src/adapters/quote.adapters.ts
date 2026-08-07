@@ -4,7 +4,6 @@ import {
   isRetryableVendorError,
   SourceAttempt,
 } from './adapter-error';
-import { FinnhubService } from '../vendors/finnhub/finnhub.service';
 import { PolygonService } from '../vendors/polygon/polygon.service';
 import type { AdapterResult, CanonicalQuote, QuoteAdapter } from './types';
 
@@ -17,21 +16,6 @@ export class PolygonQuoteAdapter implements QuoteAdapter {
   ): Promise<AdapterResult<CanonicalQuote> | null> {
     const quote = await this.polygon.getDailyQuote(ticker);
     if (!quote) return null;
-    return { data: quote, source: this.sourceName, warnings: [] };
-  }
-}
-
-export class FinnhubQuoteAdapter implements QuoteAdapter {
-  readonly sourceName = 'finnhub';
-  constructor(private readonly finnhub: FinnhubService) {}
-
-  async fetchQuote(
-    ticker: string,
-  ): Promise<AdapterResult<CanonicalQuote> | null> {
-    const quote = await this.finnhub.getQuote(ticker);
-    // Finnhub answers 200 with an all-zero body for unknown symbols rather than
-    // erroring, so treat a zero close as "no quote" instead of a real price.
-    if (!quote || !quote.c) return null;
     return { data: quote, source: this.sourceName, warnings: [] };
   }
 }

@@ -28,10 +28,9 @@ export class AnalystActionsJob implements OnModuleInit {
   async run() {
     // Analyst ratings have NO Polygon source — Polygon exposes no analyst /
     // ratings / consensus endpoint on any tier — and the interim ratings source has
-    // been removed. Benzinga is the intended vendor (see BenzingaService) but is
-    // not yet implemented, so this job is a no-op until a ratings vendor is
-    // wired. Existing `analyst_actions` docs are left untouched rather than
-    // cleared, so the screen keeps showing the last synced consensus.
+    // been removed. No analyst-ratings vendor is wired, so this job is a no-op
+    // until one is added. Existing `analyst_actions` docs are left untouched
+    // rather than cleared, so the screen keeps showing the last synced consensus.
     this.logger.warn(
       'analyst-actions: no ratings vendor configured (Polygon has no analyst endpoint) — skipping.',
     );

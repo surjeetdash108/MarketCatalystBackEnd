@@ -5,7 +5,6 @@ import { SyncMetaService } from '../common/sync-meta.service';
 import { SyncRegistry } from '../common/sync-registry.service';
 import { activeUniverse } from '../common/ticker-universe';
 import { PolygonService } from '../vendors/polygon/polygon.service';
-import { FinnhubService } from '../vendors/finnhub/finnhub.service';
 
 /**
  * 10-quarter quarterly financials → `financials/{ticker}` (delivery-plan R29).
@@ -168,7 +167,6 @@ export class FinancialsJob implements OnModuleInit {
 
   constructor(
     private readonly polygon: PolygonService,
-    private readonly finnhub: FinnhubService,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
@@ -187,15 +185,14 @@ export class FinancialsJob implements OnModuleInit {
   }
 
   /**
-   * epsEstimate keyed by `TICKER_YYYY-MM-DD` (report date). Merges two sources:
-   *   1. synced earnings_events (Polygon) — sparse
-   *   2. Finnhub /calendar/earnings over the trailing ~3y — far better coverage,
-   *      which is what fills the EPS-history estimate line that was mostly blank.
+   * epsEstimate keyed by `TICKER_YYYY-MM-DD` (report date), sourced from the
+   * synced earnings_events (Polygon) collection — sparse, since Polygon carries
+   * no forward EPS estimates, so the estimate line degrades where none exists.
    */
   private async estimatesFor(tickers: string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
 
-    // Source 1: Polygon-derived earnings_events already in Firestore.
+    // Polygon-derived earnings_events already in Firestore.
     const snaps = await Promise.all(
       tickers.map((t) =>
         this.firebase.firestore
@@ -213,24 +210,6 @@ export class FinancialsJob implements OnModuleInit {
       }
     }
 
-    // Source 2: Finnhub earnings estimates over the trailing ~3 years. A blank
-    // `from` end is set well back so all 10 quarters can find a match.
-    const to = new Date().toISOString().slice(0, 10);
-    const fromD = new Date(Date.now() - 1150 * 86400_000).toISOString().slice(0, 10);
-    for (const t of tickers) {
-      try {
-        const rows = await this.finnhub.getEarningsCalendar(fromD, to, t);
-        for (const r of rows) {
-          if (r.epsEstimate != null && r.date) {
-            // earnings_events wins when both exist (source 1 set first); only fill gaps.
-            const key = `${t}_${r.date}`;
-            if (!out.has(key)) out.set(key, r.epsEstimate);
-          }
-        }
-      } catch {
-        // Finnhub is best-effort enrichment; a failure leaves earnings_events estimates intact.
-      }
-    }
     return out;
   }
 
@@ -288,7 +267,7 @@ export class FinancialsJob implements OnModuleInit {
           // ── Annual (fiscal-year) history — actuals only, Polygon ──────────
           // Same endpoint, timeframe=annual. Drives the Yearly tab's EPS +
           // Sales columns. Forward analyst estimates are NOT sourced here
-          // (they need the Benzinga add-on) — this is reported actuals only.
+          // (no estimates vendor is wired) — this is reported actuals only.
           let annual: AnnualFinancials[] = [];
           try {
             const yr = await this.polygon.getFinancialStatements(

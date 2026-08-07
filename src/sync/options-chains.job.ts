@@ -90,7 +90,7 @@ export class OptionsChainsJob implements OnModuleInit {
             underlyingTicker: ticker,
             contracts: enriched,
             source: 'polygon',
-            note: 'Strikes, expirations and per-contract OHLCV/VWAP/volume are real (delayed). Bid/ask, IV, greeks and open interest return NOT_AUTHORIZED on the current Polygon plan — they need the Options add-on or Tradier.',
+            note: 'Strikes, expirations and per-contract OHLCV/VWAP/volume are real (delayed). Bid/ask, IV, greeks and open interest return NOT_AUTHORIZED on the current Polygon plan — they need the Options add-on.',
             updatedAt: new Date().toISOString(),
           });
         tickersWritten++;

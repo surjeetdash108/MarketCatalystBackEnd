@@ -14,7 +14,6 @@ import { LiveModule } from './live/live.module';
 import { MarketDataModule } from './market-data/market-data.module';
 import { PurgeModule } from './purge/purge.module';
 import { SyncModule } from './sync/sync.module';
-import { Wave3Module } from './vendors/wave3.module';
 import { ApiHealthModule } from './api-health/api-health.module';
 
 /**
@@ -49,7 +48,6 @@ const workerModules = isLiveRole
       FeatureFlagsModule,
       RetentionModule,
       AutoPurgeModule,
-      Wave3Module,
       // The ops monitor (public/index.html) drives the admin endpoints above, so
       // it belongs on the private service with them. Serving it from the public
       // live service would publish the internal ops surface to anyone who loads

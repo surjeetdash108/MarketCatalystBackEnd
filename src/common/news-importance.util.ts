@@ -5,10 +5,8 @@ import type { CanonicalNewsArticle } from '../adapters/types';
  *
  * WHY THIS IS DERIVED RATHER THAN READ FROM THE VENDOR
  * No configured source supplies an importance flag. Polygon's news carries
- * sentiment/keywords but no score; Finnhub carries neither (it is ~80% of the
- * aggregate feed, and every one of its articles arrives with sentiment: null).
- * Benzinga publishes a real editorial `importance` 0-5, but that endpoint
- * returns 403 on the current plan. So importance is inferred from two signals:
+ * sentiment/keywords but no numeric score. So importance is inferred from two
+ * signals:
  *
  *   1. Vendor sentiment, when present and not neutral.
  *   2. Headline pattern match against events that reliably move a stock.
@@ -42,9 +40,9 @@ const HIGH_IMPACT: Array<{ re: RegExp; label: string }> = [
 
 /**
  * Directional headline patterns — which way the event moves the stock. Used to
- * infer a +ve/-ve direction when the vendor gives no directional sentiment
- * (Finnhub, ~80% of the feed, always sends sentiment: null), so downside and
- * upside alerts both carry a colour, not just Polygon's subset.
+ * infer a +ve/-ve direction when the vendor gives no directional sentiment, so
+ * downside and upside alerts both carry a colour, not just the sentiment-tagged
+ * subset of the feed.
  */
 const POSITIVE_HEADLINE: RegExp[] = [
   /\b(beat|beats|tops?|topped|surpass\w*)\b.{0,24}\b(estimate|expectation|consensus|eps|revenue|forecast)/i,

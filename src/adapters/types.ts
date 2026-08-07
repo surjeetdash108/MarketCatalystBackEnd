@@ -86,7 +86,7 @@ export interface CanonicalSectorPerformance {
   averageChange: number;
 }
 
-/** Finnhub's quote shape, which Polygon's getDailyQuote already conforms to. */
+/** Canonical quote shape, which Polygon's getDailyQuote conforms to. */
 export interface CanonicalQuote {
   c: number;
   d: number;

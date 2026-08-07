@@ -154,38 +154,10 @@ export class ApiHealthService {
         make: (k) => ({ url: `${polyBase}/v1/marketstatus/now?apiKey=${k}` }),
       },
       {
-        name: 'Finnhub',
-        keyName: 'FINNHUB_API_KEY',
-        make: (k) => ({ url: `https://finnhub.io/api/v1/quote?symbol=AAPL&token=${k}` }),
-      },
-      {
         name: 'FRED',
         keyName: 'FRED_API_KEY',
         make: (k) => ({
           url: `https://api.stlouisfed.org/fred/series?series_id=GDP&api_key=${k}&file_type=json`,
-        }),
-      },
-      {
-        name: 'Benzinga',
-        keyName: 'BENZINGA_API_KEY',
-        make: (k) => ({
-          url: `https://api.benzinga.com/api/v2.1/calendar/ratings?token=${k}&pagesize=1`,
-        }),
-      },
-      {
-        name: 'Tradier',
-        keyName: 'TRADIER_ACCESS_TOKEN',
-        make: (k) => ({
-          url: 'https://api.tradier.com/v1/markets/quotes?symbols=AAPL',
-          headers: { Authorization: `Bearer ${k}`, Accept: 'application/json' },
-        }),
-      },
-      {
-        name: 'Unusual Whales',
-        keyName: 'UNUSUAL_WHALES_API_KEY',
-        make: (k) => ({
-          url: 'https://api.unusualwhales.com/api/market/market-tide',
-          headers: { Authorization: `Bearer ${k}`, Accept: 'application/json' },
         }),
       },
       {
@@ -216,7 +188,7 @@ export class ApiHealthService {
         }
         const req = p.make(key);
         // Redact the key/token from the displayed URL (query-param vendors);
-        // header-auth vendors (Tradier/UW/Anthropic) keep the secret off the URL.
+        // header-auth vendors (Anthropic) keep the secret off the URL.
         const redactedUrl = req.url.replace(
           /(apikey|apiKey|api_key|token)=[^&]+/gi,
           '$1=***',

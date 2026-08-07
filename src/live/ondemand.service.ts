@@ -517,11 +517,9 @@ export class OnDemandService implements OnModuleDestroy {
 
   /**
    * Per-ticker quarterly+annual financials, cache-aside on `financials/{ticker}`
-   * (same shape financials.job.ts's bulk cursor sweep writes). EPS estimates
-   * are matched against synced `earnings_events` only — unlike the bulk job,
-   * this skips the Finnhub cross-reference to avoid a second vendor
-   * dependency on a request-latency-sensitive path; a ticker the bulk sweep
-   * later reaches gets the richer Finnhub-enriched estimate instead.
+   * (same shape financials.job.ts's bulk cursor sweep writes). EPS estimates are
+   * matched against synced `earnings_events` only — Polygon carries no forward
+   * EPS estimates, so the estimate line degrades where none exists.
    */
   async getFinancials(ticker: string): Promise<Record<string, unknown> | null> {
     const mem = this.memFinancials.get(ticker);
@@ -570,7 +568,7 @@ export class OnDemandService implements OnModuleDestroy {
     return p;
   }
 
-  /** Raw {reportDate, epsEstimate} pairs for one ticker's synced earnings_events (see getFinancials doc-comment: skips Finnhub, unlike the bulk job). */
+  /** Raw {reportDate, epsEstimate} pairs for one ticker's synced earnings_events. */
   private async earningsEstimatesFor(ticker: string): Promise<Array<{ date: string; epsEstimate: number }>> {
     const snap = await this.firebase.firestore
       .collection('earnings_events')
@@ -750,7 +748,7 @@ export class OnDemandService implements OnModuleDestroy {
         underlyingTicker: ticker,
         contracts: enriched,
         source: 'polygon-ondemand',
-        note: 'Strikes, expirations and per-contract OHLCV/VWAP/volume are real (delayed). Bid/ask, IV, greeks and open interest return NOT_AUTHORIZED on the current Polygon plan — they need the Options add-on or Tradier.',
+        note: 'Strikes, expirations and per-contract OHLCV/VWAP/volume are real (delayed). Bid/ask, IV, greeks and open interest return NOT_AUTHORIZED on the current Polygon plan — they need the Options add-on.',
         createdAt: now,
         updatedAt: now,
       };
