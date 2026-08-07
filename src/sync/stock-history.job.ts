@@ -127,7 +127,14 @@ export class StockHistoryJob implements OnModuleInit {
           const bars = [...byDate.values()].sort((a, b) =>
             a.date < b.date ? -1 : 1,
           );
-          if (needsDeepFill) {
+          // Only record the deep-fill as done when it actually returned bars.
+          // Marking it on an empty/failed fetch (the previous behaviour) stranded
+          // the ticker forever: it would never re-attempt the deep window and
+          // would only ever accrue the ~daily forward increment, so it never
+          // reached the ≥65 bars rs-rating needs — leaving most companies
+          // unranked. On an empty fetch we leave it un-marked so a later run
+          // retries the deep window.
+          if (needsDeepFill && bars.length > 0) {
             await this.meta.setEarliestSynced(JOB_NAME, ticker, floor);
           }
           if (bars.length > 0) {
