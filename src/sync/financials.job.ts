@@ -188,14 +188,14 @@ export class FinancialsJob implements OnModuleInit {
 
   /**
    * epsEstimate keyed by `TICKER_YYYY-MM-DD` (report date). Merges two sources:
-   *   1. synced earnings_events (FMP) — sparse
+   *   1. synced earnings_events (Polygon) — sparse
    *   2. Finnhub /calendar/earnings over the trailing ~3y — far better coverage,
    *      which is what fills the EPS-history estimate line that was mostly blank.
    */
   private async estimatesFor(tickers: string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
 
-    // Source 1: FMP-derived earnings_events already in Firestore.
+    // Source 1: Polygon-derived earnings_events already in Firestore.
     const snaps = await Promise.all(
       tickers.map((t) =>
         this.firebase.firestore
@@ -222,13 +222,13 @@ export class FinancialsJob implements OnModuleInit {
         const rows = await this.finnhub.getEarningsCalendar(fromD, to, t);
         for (const r of rows) {
           if (r.epsEstimate != null && r.date) {
-            // FMP wins when both exist (source 1 set first); only fill gaps.
+            // earnings_events wins when both exist (source 1 set first); only fill gaps.
             const key = `${t}_${r.date}`;
             if (!out.has(key)) out.set(key, r.epsEstimate);
           }
         }
       } catch {
-        // Finnhub is best-effort enrichment; a failure leaves FMP estimates intact.
+        // Finnhub is best-effort enrichment; a failure leaves earnings_events estimates intact.
       }
     }
     return out;

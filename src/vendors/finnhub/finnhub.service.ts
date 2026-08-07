@@ -74,8 +74,8 @@ export class FinnhubService {
   }
 
   /**
-   * Earnings calendar for a date range. Far richer than the FMP calendar the
-   * `earnings` job uses (verified 488 rows/week vs FMP's 10) and — crucially for
+   * Earnings calendar for a date range. Far richer than the filing-date calendar the
+   * `earnings` job uses (verified 488 rows/week vs 10 from filing dates) and — crucially for
    * the EPS-history estimate line — carries `epsEstimate` per report date plus
    * the BMO/AMC session `hour`.
    */

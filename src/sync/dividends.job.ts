@@ -21,8 +21,8 @@ function isoDate(d: Date): string {
  * vendor: JBSS 2026-08-17 has CD $0.95 and SC $1.05, HRZN has CD $0.06 and
  * SC $0.03. Polygon supplies a stable per-event id, so a short slice of it is
  * appended as the discriminator; the symbol/date prefix is kept so IDs stay
- * readable in the console. Falls back gracefully for a vendor with no event id
- * (FMP), where symbol+date has been sufficient.
+ * readable in the console. Falls back gracefully for a vendor with no event id,
+ * where symbol+date has been sufficient.
  */
 function dividendDocId(e: {
   symbol: string;

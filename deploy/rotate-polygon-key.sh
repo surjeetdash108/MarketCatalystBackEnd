@@ -99,7 +99,7 @@ gcloud run deploy "$SERVICE" \
   --memory=512Mi \
   --timeout=900 \
   --env-vars-file=deploy/env.production.yaml \
-  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FMP_API_KEY=FMP_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
+  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
 
 # ── 5. Retire the old secret version ─────────────────────────────────────────
 if [ -n "$OLD_VERSION" ] && [ "$OLD_VERSION" != "$NEW_VERSION" ]; then

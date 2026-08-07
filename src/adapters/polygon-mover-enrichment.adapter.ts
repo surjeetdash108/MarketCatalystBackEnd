@@ -31,7 +31,7 @@ export class PolygonMoverEnrichmentAdapter implements MoverEnrichmentAdapter {
           code: 'FIELD_NOT_SUPPORTED',
           field: 'sector',
           message:
-            "Polygon reports a free-text SIC description, not FMP's sector taxonomy — treat as approximate.",
+            "Polygon reports a free-text SIC description, not a normalized sector taxonomy — treat as approximate.",
         },
       ],
     };

@@ -7,7 +7,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Query parameters that carry a credential. Vendors differ: Polygon/Massive use
- * `apiKey`, FMP uses `apikey`, Finnhub uses `token`, FRED uses `api_key`.
+ * `apiKey`, Finnhub uses `token`, FRED uses `api_key`.
  */
 const SECRET_PARAMS = /^(api_?key|token|access_token|apitoken|key)$/i;
 

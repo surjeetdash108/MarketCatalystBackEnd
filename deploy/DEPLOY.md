@@ -90,7 +90,7 @@ low-risk: an index that matches no documents cannot be load-bearing.
 Never bake keys into the image. Create a secret per key (values from your `.env`):
 
 ```bash
-for K in POLYGON_API_KEY FMP_API_KEY FINNHUB_API_KEY FRED_API_KEY \
+for K in POLYGON_API_KEY FINNHUB_API_KEY FRED_API_KEY \
          BENZINGA_API_KEY TRADIER_ACCESS_TOKEN UNUSUAL_WHALES_API_KEY SENTRY_DSN; do
   printf "%s" "PASTE_${K}_VALUE" | gcloud secrets create "$K" --data-file=- 2>/dev/null \
     || printf "%s" "PASTE_${K}_VALUE" | gcloud secrets versions add "$K" --data-file=-
@@ -151,7 +151,7 @@ gcloud run deploy market-catalyst-backend \
   --memory=512Mi \
   --timeout=900 \
   --env-vars-file="$ENV_FILE" \
-  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FMP_API_KEY=FMP_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
+  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
 ```
 
 > ⚠ **`POLYGON_PAGE_DELAY_MS=0` is required, not optional.** It lives in

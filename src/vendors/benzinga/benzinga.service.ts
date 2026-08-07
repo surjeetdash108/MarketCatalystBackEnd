@@ -13,7 +13,7 @@ export class BenzingaService implements OnModuleInit {
   onModuleInit(): void {
     if (!this.apiKey) {
       this.logger.warn(
-        'BENZINGA_API_KEY not configured — Analyst Actions and News run on FMP/Finnhub interim sources instead. Set BENZINGA_API_KEY in backend/.env to activate.',
+        'BENZINGA_API_KEY not configured — Analyst Actions and News run on interim sources instead. Set BENZINGA_API_KEY in backend/.env to activate.',
       );
     }
   }

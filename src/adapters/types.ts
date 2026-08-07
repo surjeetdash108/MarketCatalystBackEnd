@@ -52,7 +52,7 @@ export interface CanonicalNewsArticle {
 }
 
 export interface CanonicalDividendEvent {
-  /** Vendor's stable per-event id; null when the vendor supplies none (FMP). */
+  /** Vendor's stable per-event id; null when the vendor supplies none. */
   vendorEventId?: string | null;
   /** e.g. 'CD' regular cash, 'SC' special cash. Distinguishes same-day events. */
   dividendType?: string | null;

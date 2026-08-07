@@ -74,7 +74,7 @@ export class EarningsJob implements OnModuleInit {
 
       // Full refresh: Polygon is the sole source, so the collection must hold
       // exactly this run's reported rows. Delete any doc not in the new set —
-      // notably legacy FMP calendar docs that carried epsEstimate but no actual
+      // notably legacy calendar docs that carried epsEstimate but no actual
       // (they'd otherwise surface as "EPS estimate $X / actual Pending", which
       // Polygon can never produce).
       const keep = new Set(docs.map((d) => d.id));
