@@ -3,6 +3,7 @@ import { FirebaseAdminService } from '../common/firebase-admin.provider';
 import { chunkedBatchSet } from '../common/firestore-batch.util';
 import { SyncMetaService } from '../common/sync-meta.service';
 import { FinnhubService } from '../vendors/finnhub/finnhub.service';
+import { PolygonService } from '../vendors/polygon/polygon.service';
 import { SyncRegistry } from '../common/sync-registry.service';
 
 const JOB_NAME = 'earnings';
@@ -39,6 +40,7 @@ export class EarningsJob implements OnModuleInit {
 
   constructor(
     private readonly finnhub: FinnhubService,
+    private readonly polygon: PolygonService,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
@@ -58,19 +60,22 @@ export class EarningsJob implements OnModuleInit {
 
   async run() {
     try {
-      const from = isoDate(addDays(new Date(), -LOOKBACK_DAYS));
-      const to = isoDate(addDays(new Date(), LOOKAHEAD_DAYS));
-      const rows = await this.finnhub.getEarningsCalendar(from, to);
+      const now = new Date();
+      const from = isoDate(addDays(now, -LOOKBACK_DAYS));
+      const to = isoDate(addDays(now, LOOKAHEAD_DAYS));
 
-      const docs = rows
+      // Primary: Finnhub calendar (announcement dates + estimates + session).
+      const fhRows = await this.finnhub.getEarningsCalendar(from, to);
+      const updatedAt = new Date().toISOString();
+
+      const docs = fhRows
         .filter((r) => r.symbol && r.date)
         .map((r) => ({
           id: `${r.symbol}_${r.date}`,
           data: {
             ticker: r.symbol,
             companyName: null,
-            // Reporting date = earnings announcement date (Finnhub).
-            date: r.date,
+            date: r.date, // earnings announcement date
             periodEnd: null,
             fiscalPeriod: r.quarter ? `Q${r.quarter}` : null,
             fiscalYear: r.year ? String(r.year) : null,
@@ -79,9 +84,47 @@ export class EarningsJob implements OnModuleInit {
             epsActual: r.epsActual,
             revenueEstimate: r.revenueEstimate,
             revenueActual: r.revenueActual,
-            updatedAt: new Date().toISOString(),
+            updatedAt,
           },
         }));
+
+      // Gap-fill: Finnhub's calendar can be blank for the current week even
+      // though companies filed. For any past date Finnhub returned NO rows for,
+      // add Polygon's SEC-filing actuals so those days aren't empty (Polygon has
+      // no estimates, so these show actual-only — still better than blank). We
+      // only touch dates Finnhub left empty, so covered days aren't duplicated.
+      const fhDates = new Set(docs.map((d) => d.data.date as string));
+      const polyFrom = isoDate(addDays(now, -LOOKBACK_DAYS));
+      const polyTo = isoDate(now);
+      let filled = 0;
+      try {
+        const polyRows = await this.polygon.getFinancialsByFilingDate(polyFrom, polyTo);
+        for (const r of polyRows) {
+          if (!r.filingDate || !r.ticker) continue;
+          if (fhDates.has(r.filingDate)) continue; // Finnhub already covers this day
+          const id = `${r.ticker}_${r.filingDate}`;
+          docs.push({
+            id,
+            data: {
+              ticker: r.ticker,
+              companyName: r.companyName,
+              date: r.filingDate, // SEC filing date
+              periodEnd: r.periodEnd,
+              fiscalPeriod: r.fiscalPeriod,
+              fiscalYear: r.fiscalYear,
+              session: null,
+              epsEstimate: null,
+              epsActual: r.epsActual,
+              revenueEstimate: null,
+              revenueActual: r.revenueActual,
+              updatedAt,
+            },
+          });
+          filled++;
+        }
+      } catch (e) {
+        this.logger.warn(`earnings: Polygon gap-fill skipped: ${(e as Error).message}`);
+      }
 
       await chunkedBatchSet(this.firebase.firestore, 'earnings_events', docs);
 
@@ -98,7 +141,7 @@ export class EarningsJob implements OnModuleInit {
 
       await this.meta.record(JOB_NAME, { ok: true, count: docs.length });
       this.logger.log(
-        `earnings: wrote ${docs.length} calendar rows (${from}..${to}), removed ${stale.length} stale`,
+        `earnings: wrote ${docs.length} rows (${from}..${to}; ${filled} Polygon gap-fill), removed ${stale.length} stale`,
       );
       return { count: docs.length, removed: stale.length };
     } catch (err) {
