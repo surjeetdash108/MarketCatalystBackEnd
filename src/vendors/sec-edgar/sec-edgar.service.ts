@@ -19,6 +19,15 @@ export interface SecFiling {
   filingDate: string;
   accessionNumber: string;
   primaryDocument: string;
+  /** SEC acceptance timestamp, e.g. "2026-02-04T16:05:31.000Z"-ish local ET
+   *  string "2026-02-04T16:05:31.000Z". Used to derive BMO/AMC session. */
+  acceptanceDateTime?: string;
+  /** 8-K item codes as a comma/space string, e.g. "2.02,9.01". */
+  items?: string;
+  /** Period-of-report (event date) for the filing when present. */
+  reportDate?: string;
+  /** Short human description of the primary document, when present. */
+  primaryDocDescription?: string;
 }
 
 @Injectable()
@@ -62,6 +71,12 @@ export class SecEdgarService {
       filingDate: r.filingDate[i],
       accessionNumber: r.accessionNumber[i],
       primaryDocument: r.primaryDocument[i],
+      // These arrays are always present on the submissions payload; guard anyway
+      // so a shape change degrades to undefined rather than throwing.
+      acceptanceDateTime: r.acceptanceDateTime?.[i],
+      items: r.items?.[i],
+      reportDate: r.reportDate?.[i],
+      primaryDocDescription: r.primaryDocDescription?.[i],
     }));
     return { name: data.name, recentFilings };
   }

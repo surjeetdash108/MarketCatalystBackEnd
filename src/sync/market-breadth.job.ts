@@ -85,6 +85,23 @@ export class MarketBreadthJob implements OnModuleInit {
         }
       }
 
+      // McClellan Oscillator = EMA(19) − EMA(39) of daily net advances. Computed
+      // over the ordered day series (unadjusted, fixed universe). Stabilises after
+      // ~39 sessions; the backfill window (260d) leaves recent values reliable.
+      const orderedDates = [...byDate.keys()].sort();
+      const k19 = 2 / (19 + 1);
+      const k39 = 2 / (39 + 1);
+      let ema19: number | null = null;
+      let ema39: number | null = null;
+      const mcclellanByDate = new Map<string, number>();
+      for (const date of orderedDates) {
+        const a = byDate.get(date)!;
+        const net = a.adv - a.dec;
+        ema19 = ema19 == null ? net : ema19 + k19 * (net - ema19);
+        ema39 = ema39 == null ? net : ema39 + k39 * (net - ema39);
+        mcclellanByDate.set(date, ema19 - ema39);
+      }
+
       const now = new Date().toISOString();
       const docs = [...byDate.entries()].map(([date, a]) => {
         const total = a.adv + a.dec;
@@ -95,6 +112,7 @@ export class MarketBreadthJob implements OnModuleInit {
           a.dec > 0 && a.downVol > 0 && a.upVol > 0
             ? (a.adv / a.dec) / (a.upVol / a.downVol)
             : null;
+        const mcclellan = mcclellanByDate.get(date);
         return {
           id: date,
           data: {
@@ -109,6 +127,7 @@ export class MarketBreadthJob implements OnModuleInit {
             // 0–100 sentiment proxy from breadth — feeds the F&G history line.
             breadthSentiment: Math.round(breadthPct * 100),
             trin: trin == null ? null : Math.round(trin * 100) / 100,
+            mcclellan: mcclellan == null ? null : Math.round(mcclellan * 100) / 100,
             updatedAt: now,
           },
         };

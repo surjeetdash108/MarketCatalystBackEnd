@@ -39,6 +39,9 @@ const ALLOWED = new Set<string>([
   'insider_transactions',
   'dividends',
   'fund_holdings',
+  'filings_wire',
+  'earnings_announcements',
+  'ipo_pipeline',
 ]);
 
 const TTL_MS = 5 * 60 * 1000; // 5 minutes — these collections change daily

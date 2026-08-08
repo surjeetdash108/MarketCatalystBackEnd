@@ -4,6 +4,9 @@ import { AnalystActionsController } from './analyst-actions.controller';
 import { CompaniesController } from './companies.controller';
 import { DividendsController } from './dividends.controller';
 import { EarningsController } from './earnings.controller';
+import { EarningsAnnouncementsController } from './earnings-announcements.controller';
+import { FilingsWireController } from './filings-wire.controller';
+import { IpoPipelineController } from './ipo-pipeline.controller';
 import { InsiderPositionsController } from './insider-positions.controller';
 import { InsiderTransactionsController } from './insider-transactions.controller';
 import { IposController } from './ipos.controller';
@@ -39,6 +42,9 @@ import { SectorsController } from './sectors.controller';
     CompaniesController,
     AnalystActionsController,
     EarningsController,
+    EarningsAnnouncementsController,
+    FilingsWireController,
+    IpoPipelineController,
     IposController,
     MacroEventsController,
     DividendsController,

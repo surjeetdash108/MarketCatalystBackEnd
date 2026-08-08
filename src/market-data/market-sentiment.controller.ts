@@ -21,4 +21,17 @@ export class MarketSentimentController {
     const { market_sentiment } = await this.cached.get(['market_sentiment']);
     return market_sentiment;
   }
+
+  /**
+   * GET /market-data/market-sentiment-history — the composite Fear & Greed
+   * value per past trading day (`market_sentiment_history/{date}`), written by
+   * the same `fear-greed` job. Backs the Dashboard's F&G history line.
+   */
+  @Get('market-sentiment-history')
+  @Header('Cache-Control', 'public, max-age=300, s-maxage=300, stale-while-revalidate=600')
+  async marketSentimentHistory() {
+    await this.marketData.ensureFresh('fear-greed');
+    const { market_sentiment_history } = await this.cached.get(['market_sentiment_history']);
+    return market_sentiment_history;
+  }
 }

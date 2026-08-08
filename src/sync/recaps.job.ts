@@ -56,12 +56,16 @@ export class RecapsJob implements OnModuleInit {
   async run() {
     try {
       const db = this.firebase.firestore;
-      const [indicesSnap, moversSnap, sectorsSnap, breadthSnap] = await Promise.all([
-        db.collection('market_indices').get(),
-        db.collection('market_movers').get(),
-        db.collection('sectors').get(),
-        db.collection('market_breadth').get(),
-      ]);
+      const weekAgo = isoDate(new Date(Date.now() - 7 * 86_400_000));
+      const [indicesSnap, moversSnap, sectorsSnap, breadthSnap, idxHistSnap, secHistSnap] =
+        await Promise.all([
+          db.collection('market_indices').get(),
+          db.collection('market_movers').get(),
+          db.collection('sectors').get(),
+          db.collection('market_breadth').get(),
+          db.collection('market_indices_history').where('asOfDate', '>=', weekAgo).get(),
+          db.collection('sectors_history').where('asOfDate', '>=', weekAgo).get(),
+        ]);
 
       // Indices (SPX/NDX/DJI/RUT/VIX/US10Y/…) — label, value, % move.
       const indices = indicesSnap.docs.map((d) => {
@@ -122,10 +126,56 @@ export class RecapsJob implements OnModuleInit {
             netAdvancers: this.num(breadth.netAdvancers),
             breadthPct: this.num(breadth.breadthPct),
             trin: this.num(breadth.trin),
+            mcclellan: this.num(breadth.mcclellan),
             upVolume: this.num(breadth.upVolume),
             downVolume: this.num(breadth.downVolume),
           }
         : null;
+
+      // ── Weekly aggregates (delivery-plan R28 weekly tab) ──
+      // Index weekly % = price move from the first to the last history row this
+      // week (values are already scaled to the index level). Sector weekly % =
+      // the daily sector %s compounded across the week (sectors carry no level).
+      const idxByLabel = new Map<string, { asOfDate: string; value: number | null }[]>();
+      for (const d of idxHistSnap.docs) {
+        const x = d.data();
+        const label = (x.label as string) ?? d.id;
+        const arr = idxByLabel.get(label) ?? [];
+        arr.push({ asOfDate: x.asOfDate as string, value: this.num(x.value) });
+        idxByLabel.set(label, arr);
+      }
+      const weeklyIndices = [...idxByLabel.entries()].map(([label, rows]) => {
+        const sorted = rows
+          .filter((r) => r.value != null && r.asOfDate)
+          .sort((a, b) => a.asOfDate.localeCompare(b.asOfDate));
+        if (sorted.length < 2) return { label, pctChange: null };
+        const first = sorted[0].value as number;
+        const last = sorted[sorted.length - 1].value as number;
+        const pct = first !== 0 ? ((last - first) / first) * 100 : null;
+        return { label, pctChange: pct == null ? null : Math.round(pct * 100) / 100 };
+      });
+
+      const secByName = new Map<string, number[]>();
+      for (const d of secHistSnap.docs) {
+        const x = d.data();
+        const name = (x.sector as string) ?? d.id;
+        const pc = this.num(x.pctChange);
+        if (pc == null) continue;
+        const arr = secByName.get(name) ?? [];
+        arr.push(pc);
+        secByName.set(name, arr);
+      }
+      const weeklySectors = [...secByName.entries()]
+        .map(([sector, pcts]) => {
+          const compound = (pcts.reduce((acc, p) => acc * (1 + p / 100), 1) - 1) * 100;
+          return { sector, pctChange: Math.round(compound * 100) / 100 };
+        })
+        .sort((a, b) => b.pctChange - a.pctChange);
+      const weekly = {
+        indices: weeklyIndices,
+        sectorLeaders: weeklySectors.slice(0, 3),
+        sectorLaggards: weeklySectors.slice(-3).reverse(),
+      };
 
       const date = breadthId ?? isoDate(new Date());
       await setWithCreatedAt(db, db.collection('recaps').doc(date), {
@@ -136,6 +186,7 @@ export class RecapsJob implements OnModuleInit {
         sectorLeaders,
         sectorLaggards,
         internals,
+        weekly,
         // Narrative is R36 (Anthropic) — this job intentionally leaves it null.
         narrative: null,
         source: 'polygon-derived',
