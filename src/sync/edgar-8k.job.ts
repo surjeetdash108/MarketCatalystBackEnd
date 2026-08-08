@@ -88,39 +88,50 @@ export class Edgar8KJob implements OnModuleInit {
     await this.registry.get(JOB_NAME)();
   }
 
-  /** Post-announcement % move around `announceDate`, direction-aware by session. */
+  /**
+   * Post-announcement % move around `announceDate`, direction-aware by session.
+   * Uses the EXISTING (ticker ASC, barDate DESC) composite index — `barDate <=`
+   * + `orderBy barDate desc`, then reversed in memory — so no new index is
+   * required. Any query failure degrades to null rather than dropping the whole
+   * announcement.
+   */
   private async reactionPct(
     ticker: string,
     announceDate: string,
     session: 'BMO' | 'AMC' | 'Intraday' | null,
   ): Promise<number | null> {
-    const from = isoDate(addDays(new Date(announceDate), -7));
-    const to = isoDate(addDays(new Date(announceDate), 7));
-    const snap = await this.firebase.firestore
-      .collection('ohlcv_bars')
-      .where('ticker', '==', ticker)
-      .where('barDate', '>=', from)
-      .where('barDate', '<=', to)
-      .orderBy('barDate', 'asc')
-      .get();
-    const bars = snap.docs
-      .map((d) => d.data())
-      .filter((b) => typeof b.close === 'number') as { barDate: string; close: number }[];
-    if (bars.length < 2) return null;
-    let idx = bars.findIndex((b) => b.barDate >= announceDate);
-    if (idx === -1) idx = bars.length - 1;
-    // AMC news lands after the close → next session reacts. Otherwise the move
-    // is prior-close → announcement-day close.
-    if (session === 'AMC') {
-      const base = bars[idx]?.close;
-      const next = bars[idx + 1]?.close;
-      if (base != null && base > 0 && next != null) return ((next - base) / base) * 100;
+    try {
+      const to = isoDate(addDays(new Date(announceDate), 7));
+      const snap = await this.firebase.firestore
+        .collection('ohlcv_bars')
+        .where('ticker', '==', ticker)
+        .where('barDate', '<=', to)
+        .orderBy('barDate', 'desc')
+        .limit(20)
+        .get();
+      const bars = (snap.docs
+        .map((d) => d.data())
+        .filter((b) => typeof b.close === 'number') as { barDate: string; close: number }[])
+        .reverse(); // ascending
+      if (bars.length < 2) return null;
+      let idx = bars.findIndex((b) => b.barDate >= announceDate);
+      if (idx === -1) idx = bars.length - 1;
+      // AMC news lands after the close → next session reacts. Otherwise the move
+      // is prior-close → announcement-day close.
+      if (session === 'AMC') {
+        const base = bars[idx]?.close;
+        const next = bars[idx + 1]?.close;
+        if (base != null && base > 0 && next != null) return ((next - base) / base) * 100;
+        return null;
+      }
+      const prev = bars[idx - 1]?.close;
+      const cur = bars[idx]?.close;
+      if (prev != null && prev > 0 && cur != null) return ((cur - prev) / prev) * 100;
+      return null;
+    } catch (err) {
+      this.logger.warn(`reaction calc failed for ${ticker} ${announceDate}: ${(err as Error).message}`);
       return null;
     }
-    const prev = bars[idx - 1]?.close;
-    const cur = bars[idx]?.close;
-    if (prev != null && prev > 0 && cur != null) return ((cur - prev) / prev) * 100;
-    return null;
   }
 
   async run() {
