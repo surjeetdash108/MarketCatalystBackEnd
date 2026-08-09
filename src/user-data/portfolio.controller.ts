@@ -15,6 +15,9 @@ interface HoldingDoc {
   shares: number;
   positionSize: PositionSize;
   conviction: Conviction;
+  /** Average purchase price per share. Null when the user hasn't entered one —
+   *  unrealized P&L is only shown for holdings that carry a basis. */
+  costBasis: number | null;
 }
 
 /**
@@ -50,6 +53,7 @@ export class PortfolioController {
           shares: (data.shares as number) ?? 0,
           positionSize: (data.positionSize as PositionSize) ?? 'Medium',
           conviction: (data.conviction as Conviction) ?? 'Medium',
+          costBasis: typeof data.costBasis === 'number' ? (data.costBasis as number) : null,
         };
       }),
     };
@@ -58,7 +62,7 @@ export class PortfolioController {
   @Post('portfolio/holdings')
   async add(
     @CurrentUser() uid: string,
-    @Body() body: { ticker?: string; shares?: number; positionSize?: string; conviction?: string },
+    @Body() body: { ticker?: string; shares?: number; positionSize?: string; conviction?: string; costBasis?: number },
   ): Promise<HoldingDoc> {
     const ticker = (body.ticker ?? '').toUpperCase().trim();
     if (!TICKER_RE.test(ticker)) throw new BadRequestException('ticker must be 1-10 chars, A-Z0-9.-');
@@ -71,15 +75,18 @@ export class PortfolioController {
     // No shares input exists in the UI's Add Holding form yet — 10 matches the
     // hardcoded default the frontend has always written.
     const shares = typeof body.shares === 'number' && body.shares > 0 ? body.shares : 10;
+    // Optional average cost per share; absent/invalid → null (no basis stored).
+    const costBasis = typeof body.costBasis === 'number' && body.costBasis > 0 ? body.costBasis : null;
 
     await this.holdingsCol(uid).doc(ticker).set({
       ticker,
       shares,
       positionSize,
       conviction,
+      costBasis,
       addedAt: new Date().toISOString(),
     });
-    return { id: ticker, ticker, shares, positionSize, conviction };
+    return { id: ticker, ticker, shares, positionSize, conviction, costBasis };
   }
 
   @Delete('portfolio/holdings/:ticker')
