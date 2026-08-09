@@ -42,6 +42,7 @@ const ALLOWED = new Set<string>([
   'filings_wire',
   'earnings_announcements',
   'ipo_pipeline',
+  'macro_regime',
 ]);
 
 const TTL_MS = 5 * 60 * 1000; // 5 minutes — these collections change daily

@@ -28,6 +28,7 @@ import { Sec13FJob } from './sec-13f.job';
 import { SecForm4Job } from './sec-form4.job';
 import { Edgar8KJob } from './edgar-8k.job';
 import { EdgarIpoPipelineJob } from './edgar-ipo-pipeline.job';
+import { MacroRegimeJob } from './macro-regime.job';
 import { SectorsJob } from './sectors.job';
 import { StockHistoryJob } from './stock-history.job';
 import { SyncController } from './sync.controller';
@@ -58,6 +59,7 @@ import { LiveModule } from '../live/live.module';
     SecForm4Job,
     Edgar8KJob,
     EdgarIpoPipelineJob,
+    MacroRegimeJob,
     TickerUniverseJob,
     MacroEventsJob,
     IposJob,

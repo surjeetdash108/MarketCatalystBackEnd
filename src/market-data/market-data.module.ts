@@ -7,6 +7,7 @@ import { EarningsController } from './earnings.controller';
 import { EarningsAnnouncementsController } from './earnings-announcements.controller';
 import { FilingsWireController } from './filings-wire.controller';
 import { IpoPipelineController } from './ipo-pipeline.controller';
+import { MacroRegimeController } from './macro-regime.controller';
 import { InsiderPositionsController } from './insider-positions.controller';
 import { InsiderTransactionsController } from './insider-transactions.controller';
 import { IposController } from './ipos.controller';
@@ -45,6 +46,7 @@ import { SectorsController } from './sectors.controller';
     EarningsAnnouncementsController,
     FilingsWireController,
     IpoPipelineController,
+    MacroRegimeController,
     IposController,
     MacroEventsController,
     DividendsController,
