@@ -183,10 +183,19 @@ gcloud run deploy market-catalyst-live \
   --concurrency=200 \
   --memory=1Gi \
   --timeout=3600 \
-  --set-env-vars="APP_ROLE=live,NODE_ENV=production,FIREBASE_PROJECT_ID=market-catalyst-502415,POLYGON_API_BASE_URL=https://api.massive.com,CORS_ORIGINS=https://marketcatalyst.web.app,POLYGON_PAGE_DELAY_MS=0" \
+  --set-env-vars="APP_ROLE=live,NODE_ENV=production,FIREBASE_PROJECT_ID=market-catalyst-502415,POLYGON_API_BASE_URL=https://api.massive.com,CORS_ORIGINS=https://marketcatalyst.web.app,POLYGON_PAGE_DELAY_MS=0,ADMIN_GUARD_TRUST_IAM=false" \
   --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest"
 ```
 
+> ⚠ **`ADMIN_GUARD_TRUST_IAM=false` is REQUIRED here — omitting it is a data
+> leak.** Admin read-models are mounted on the live role (commit b73851a), and
+> `admin.guard.ts` defaults `ADMIN_GUARD_TRUST_IAM` to `true` ("trust that Cloud
+> Run IAM already vetted the caller"). This service is `--allow-unauthenticated`
+> — there is no IAM in front — so with the default, every `/admin/*` call is
+> served to ANYONE (revenue, user counts, subscriptions). `false` forces a
+> verified Firebase admin token instead. It is NOT in the current service env by
+> default; verify with the `/admin/revenue -> 401` check below after every deploy.
+>
 > ⚠ **`--set-env-vars`, NOT `--env-vars-file`.** `deploy/env.production.yaml` is
 > the *worker's* env and carries `APP_ROLE=worker` plus
 > `ADMIN_GUARD_TRUST_IAM=true`. Pointing the public service at it would both
@@ -245,7 +254,7 @@ Verify after deploying:
 ```bash
 LIVE=$(gcloud run services describe market-catalyst-live --region "$REGION" --format='value(status.url)')
 curl -s "$LIVE/live/tape" | jq '.items | length'      # -> 21
-curl -s -o /dev/null -w '%{http_code}\n' "$LIVE/admin/revenue"   # -> 404, NOT 200
+curl -s -o /dev/null -w '%{http_code}\n' "$LIVE/admin/revenue"   # -> 401 (admin IS mounted on live since b73851a, but guard-protected); NEVER 200-with-data
 curl -s "$LIVE/live/tape/stats"   # upstreamCalls must stay ~1/min as clients grows
 ```
 
