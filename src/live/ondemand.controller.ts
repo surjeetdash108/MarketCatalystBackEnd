@@ -99,6 +99,29 @@ export class OnDemandController {
     sendWithEtag(req, res, doc);
   }
 
+  @Get("quotes")
+  @Header(
+    "Cache-Control",
+    "public, max-age=60, s-maxage=60, stale-while-revalidate=120",
+  )
+  async quotes(
+    @Query("tickers") tickers: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const syms = (tickers ?? "")
+      .split(",")
+      .map((t) => t.toUpperCase().trim())
+      .filter((t) => TICKER_RE.test(t))
+      .slice(0, 25);
+    if (syms.length === 0) {
+      sendWithEtag(req, res, []);
+      return;
+    }
+    const data = await this.ondemand.getQuotes(syms);
+    sendWithEtag(req, res, data);
+  }
+
   @Get("dividend-history")
   @Header(
     "Cache-Control",

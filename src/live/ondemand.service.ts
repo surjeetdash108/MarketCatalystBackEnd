@@ -399,6 +399,27 @@ export class OnDemandService implements OnModuleDestroy {
     return p;
   }
 
+  /**
+   * Lightweight multi-ticker quotes (price + %change) in ONE Polygon
+   * universal-snapshot call. Used to price peer tickers that aren't in the
+   * synced companies universe, so the peers list can show every ticker Polygon
+   * returned, on demand — no per-ticker company fetch needed.
+   */
+  async getQuotes(
+    tickers: string[],
+  ): Promise<Array<{ ticker: string; name: string | null; price: number | null; pctChange: number | null }>> {
+    const syms = [...new Set(tickers.map((t) => t.toUpperCase().trim()).filter(Boolean))].slice(0, 25);
+    if (syms.length === 0) return [];
+    syms.forEach((t) => this.recordUsage(t));
+    const snaps = await this.polygon.getUniversalSnapshot(syms).catch(() => []);
+    return (snaps as Array<Record<string, unknown>>).map((s) => ({
+      ticker: String(s.ticker),
+      name: (s.name as string) ?? null,
+      price: (s.price as number) ?? null,
+      pctChange: (s.changePercent as number) ?? null,
+    }));
+  }
+
   // ── Dividend history ────────────────────────────────────────────────────
 
   /**
