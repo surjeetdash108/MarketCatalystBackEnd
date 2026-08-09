@@ -51,6 +51,95 @@ export function rsi(closes: number[], period = 14) {
   return 100 - 100 / (1 + avgGain / avgLoss);
 }
 
+/** Stochastic %K over `period` — where the last close sits in the period range. */
+function stochK(highs: number[], lows: number[], closes: number[], period = 14): number | null {
+  if (closes.length < period) return null;
+  const hh = Math.max(...highs.slice(-period));
+  const ll = Math.min(...lows.slice(-period));
+  const c = closes[closes.length - 1];
+  if (!Number.isFinite(hh) || !Number.isFinite(ll) || hh === ll) return null;
+  return ((c - ll) / (hh - ll)) * 100;
+}
+
+/** Wilder ADX(14) — trend strength from smoothed +DI/-DI. */
+function adx(highs: number[], lows: number[], closes: number[], period = 14): number | null {
+  const n = closes.length;
+  if (n < period * 2 + 1) return null;
+  const tr: number[] = [];
+  const plusDM: number[] = [];
+  const minusDM: number[] = [];
+  for (let i = 1; i < n; i++) {
+    const up = highs[i] - highs[i - 1];
+    const dn = lows[i - 1] - lows[i];
+    plusDM.push(up > dn && up > 0 ? up : 0);
+    minusDM.push(dn > up && dn > 0 ? dn : 0);
+    tr.push(
+      Math.max(
+        highs[i] - lows[i],
+        Math.abs(highs[i] - closes[i - 1]),
+        Math.abs(lows[i] - closes[i - 1]),
+      ),
+    );
+  }
+  // Wilder smoothing (running sum, not simple average).
+  const smooth = (arr: number[]): number[] => {
+    let s = arr.slice(0, period).reduce((a, b) => a + b, 0);
+    const out = [s];
+    for (let i = period; i < arr.length; i++) {
+      s = s - s / period + arr[i];
+      out.push(s);
+    }
+    return out;
+  };
+  const trS = smooth(tr);
+  const pS = smooth(plusDM);
+  const mS = smooth(minusDM);
+  const dx: number[] = [];
+  for (let i = 0; i < trS.length; i++) {
+    if (trS[i] === 0) { dx.push(0); continue; }
+    const pdi = (100 * pS[i]) / trS[i];
+    const mdi = (100 * mS[i]) / trS[i];
+    const sum = pdi + mdi;
+    dx.push(sum === 0 ? 0 : (100 * Math.abs(pdi - mdi)) / sum);
+  }
+  if (dx.length < period) return null;
+  let adxVal = dx.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < dx.length; i++) adxVal = (adxVal * (period - 1) + dx[i]) / period;
+  return adxVal;
+}
+
+/** Beta vs a benchmark: cov(ticker, mkt) / var(mkt) over date-aligned daily returns. */
+function betaVs(
+  bars: { barDate: string; close: number }[],
+  mktByDate: Map<string, number>,
+): number | null {
+  const rt: number[] = [];
+  const rm: number[] = [];
+  for (let i = 1; i < bars.length; i++) {
+    const s = mktByDate.get(bars[i].barDate);
+    const sPrev = mktByDate.get(bars[i - 1].barDate);
+    const c = bars[i].close;
+    const cPrev = bars[i - 1].close;
+    if (s == null || sPrev == null || sPrev <= 0 || cPrev == null || cPrev <= 0 || c == null) continue;
+    rt.push((c - cPrev) / cPrev);
+    rm.push((s - sPrev) / sPrev);
+  }
+  const N = Math.min(rt.length, 252);
+  if (N < 60) return null;
+  const a = rt.slice(-N);
+  const b = rm.slice(-N);
+  const ma = a.reduce((x, y) => x + y, 0) / N;
+  const mb = b.reduce((x, y) => x + y, 0) / N;
+  let cov = 0;
+  let varb = 0;
+  for (let i = 0; i < N; i++) {
+    cov += (a[i] - ma) * (b[i] - mb);
+    varb += (b[i] - mb) ** 2;
+  }
+  if (varb === 0) return null;
+  return cov / varb;
+}
+
 function macd(closes: number[]) {
   if (closes.length < 35)
     return null;
@@ -148,7 +237,23 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
     await this.registry.get(JOB_NAME)();
   }
 
-  private async computeFor(ticker: string) {
+  /** SPY closes keyed by barDate — the benchmark for beta. */
+  private async loadMarketCloses(): Promise<Map<string, number>> {
+    const snap = await this.firebase.firestore
+      .collection('ohlcv_bars')
+      .where('ticker', '==', 'SPY')
+      .orderBy('barDate', 'desc')
+      .limit(BARS_TO_READ)
+      .get();
+    const m = new Map<string, number>();
+    for (const d of snap.docs) {
+      const x = d.data();
+      if (typeof x.close === 'number') m.set(x.barDate as string, x.close);
+    }
+    return m;
+  }
+
+  private async computeFor(ticker: string, mktByDate: Map<string, number>) {
     const snap = await this.firebase.firestore
       .collection('ohlcv_bars')
       .where('ticker', '==', ticker)
@@ -193,9 +298,17 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
 
     const latestBar = bars[bars.length - 1];
     const rsiHistory = rsiSeries(closes).slice(-RSI_SERIES_LEN);
+    const stochKVal = stochK(highs, lows, closes);
+    const adxVal = adx(highs, lows, closes);
+    const betaVal = betaVs(bars as { barDate: string; close: number }[], mktByDate);
 
     return {
       rsi14: Math.round(rsiVal * 100) / 100,
+      // Stochastic %K, Wilder ADX(14) and beta vs SPY — computed from the same
+      // bars as RSI/MACD (previously rendered N/A for lack of a "technicals vendor").
+      stochK: stochKVal == null ? null : Math.round(stochKVal * 100) / 100,
+      adx14: adxVal == null ? null : Math.round(adxVal * 100) / 100,
+      beta: betaVal == null ? null : Math.round(betaVal * 1000) / 1000,
       macd: Math.round(macdVal.macd * 10000) / 10000,
       macdSignal: Math.round(macdVal.signal * 10000) / 10000,
       macdHistogram: Math.round(macdVal.histogram * 10000) / 10000,
@@ -246,11 +359,12 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
         await this.meta.record(JOB_NAME, { ok: true, count: 0 });
         return { computed: 0, skipped: 0, note: 'no active tickers yet' };
       }
+      const mktByDate = await this.loadMarketCloses();
       const results = [];
       let skipped = 0;
       for (const ticker of universe) {
         try {
-          const ind = await this.computeFor(ticker);
+          const ind = await this.computeFor(ticker, mktByDate);
           if (!ind) {
             skipped++;
             continue;
