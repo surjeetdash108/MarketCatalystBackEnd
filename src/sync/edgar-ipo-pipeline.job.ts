@@ -42,7 +42,7 @@ export class EdgarIpoPipelineJob implements OnModuleInit {
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
       collections: ['ipo_pipeline'],
-      cronExpression: '30 5 * * *',
+      cronExpression: '0 8 * * 1-5', // runs inside premarket orchestration
       timeZone: 'America/New_York',
     });
   }

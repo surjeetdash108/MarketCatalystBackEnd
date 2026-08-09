@@ -79,7 +79,7 @@ export class Edgar8KJob implements OnModuleInit {
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
       collections: ['filings_wire', 'earnings_announcements'],
-      cronExpression: '0 2 * * *',
+      cronExpression: '0 8 * * 1-5', // runs inside premarket orchestration
       timeZone: 'America/New_York',
     });
   }

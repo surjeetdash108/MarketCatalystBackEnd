@@ -47,8 +47,10 @@ const MARKET_WIDE: string[] = [
   'market-breadth',
   'fear-greed',        // reads market-breadth output
   'macro-events',
+  'macro-regime',      // FRED-only, self-contained regime label
   'earnings',
   'ipos',
+  'edgar-ipo-pipeline',// SEC S-1/424B registrations; no Firestore deps
   'news',
   'analyst-actions',
   'sec-form4',
@@ -61,6 +63,7 @@ const MARKET_WIDE: string[] = [
 const PER_TICKER: string[] = [
   'companies',             // refresh profiles of the active set
   'stock-history',         // ohlcv_bars substrate the compute jobs read
+  'edgar-8k',              // earnings 8-Ks; reads ohlcv_bars for reaction
   'technical-indicators',
   'rs-rating',
   'tech-rating',

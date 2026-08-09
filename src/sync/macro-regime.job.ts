@@ -41,7 +41,7 @@ export class MacroRegimeJob implements OnModuleInit {
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
       collections: ['macro_regime'],
-      cronExpression: '0 7 * * *',
+      cronExpression: '0 8 * * 1-5', // runs inside premarket orchestration
       timeZone: 'America/New_York',
     });
   }
