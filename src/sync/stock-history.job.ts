@@ -67,7 +67,12 @@ export class StockHistoryJob implements OnModuleInit {
       // Batch never larger than the active universe, so a small
       // universe is fully covered in one premarket run.
       const cursor = await this.meta.getCursor(JOB_NAME);
-      const batch = Array.from({ length: Math.min(BATCH_SIZE, universe.length) }, (_, i) => universe[(cursor + i) % universe.length]);
+      const rotating = Array.from({ length: Math.min(BATCH_SIZE, universe.length) }, (_, i) => universe[(cursor + i) % universe.length]);
+      // Always sync SPY: it's the benchmark the technical-indicators job needs to
+      // compute beta (loadMarketCloses reads SPY from ohlcv_bars). SPY is an ETF,
+      // not in the company universe, so it would otherwise never get bars and beta
+      // would stay null for every ticker.
+      const batch = rotating.includes('SPY') ? rotating : ['SPY', ...rotating];
       const today = isoDate(new Date());
       const floor = planHistoryFloor();
       let barsWritten = 0;
