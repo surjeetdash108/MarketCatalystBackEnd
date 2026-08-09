@@ -14,8 +14,14 @@
 # (repeat for FMP_API_KEY, FINNHUB_API_KEY, FRED_API_KEY)
 
 runConfig:
-  minInstances: 0
-  maxInstances: 3
+  # Worker must stay warm 24/7 or the in-process @Cron scheduler (SyncModule,
+  # APP_ROLE=worker) never fires — overnight jobs then only run when a request
+  # happens to trigger ensureFresh. This is the low-traffic worker backend (the
+  # public read API is the separate `live` service), so 1 warm instance means
+  # the daily crons fire exactly once. maxInstances:1 also prevents a second
+  # instance from double-firing cursor jobs (edgar-8k / sec-form4).
+  minInstances: 1
+  maxInstances: 1
   concurrency: 80
   cpuMiB: 1000
   memoryMiB: 512
