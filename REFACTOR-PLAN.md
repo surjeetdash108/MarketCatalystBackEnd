@@ -98,9 +98,17 @@ endpoint to live first; keep the job until its collection has no more readers.
         (8-K + Form 4). reactionPct degraded null. Verified real.
   - [x] news — live from Polygon market-wide reference/news (60 articles, sentiment).
         Turned out NON-FMP (NEWS_SOURCE=polygon), so not quota-blocked.
+  - [x] companies — live per request: dynamic universe (tape+watchlists+holdings+
+        usage, cap 250) + 1 universal-snapshot + ticker-details fan-out. Computed
+        metrics (RS/tech/technicals/growth/peers) null → filled per-ticker by
+        /live/company. Verified real.
   - [ ] /live/financials EPS join → FMP, then delete earnings.job  (FMP-blocked, see below)
-  - [ ] companies → lightweight reference (boot + lazy refresh)    (non-FMP; next)
   - [x] market-sentiment-history — already live (Tier B)
+
+ALL /market-data/* endpoints are now LIVE. Remaining: the FMP EPS join (blocked)
+and the worker teardown (now unblocked — nothing reads the market-data
+collections anymore except the companies computation pipeline, which comes out
+in the teardown).
 - [ ] worker/deploy teardown (delete SyncModule+Purge+Retention+AutoPurge, collapse roles)
 
 ### ⚠ FMP daily quota blocker (2026-08-13)
