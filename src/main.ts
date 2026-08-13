@@ -1,6 +1,7 @@
 import { Logger } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import * as Sentry from "@sentry/node";
+import { json, urlencoded } from "express";
 import { AppModule } from "./app.module";
 
 Sentry.init({
@@ -49,7 +50,12 @@ function corsOptions() {
 
 async function bootstrap() {
   const logger = new Logger("Bootstrap");
-  const app = await NestFactory.create(AppModule);
+  // Disable Nest's default body parser (100kb limit) and register Express's
+  // with a larger cap — blog content converted from multi-page Word/PDF uploads
+  // exceeds 100kb and was 413'ing on POST/PATCH /admin/blogs.
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
+  app.use(json({ limit: "10mb" }));
+  app.use(urlencoded({ limit: "10mb", extended: true }));
   app.enableCors(corsOptions());
   app.enableShutdownHooks();
   const port = process.env.PORT ?? 4400;
