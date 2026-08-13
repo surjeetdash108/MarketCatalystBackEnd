@@ -3,7 +3,6 @@ import { AdaptersModule } from "../adapters/adapters.module";
 import { FredModule } from "../vendors/fred/fred.module";
 import { PolygonModule } from "../vendors/polygon/polygon.module";
 import { SecEdgarModule } from "../vendors/sec-edgar/sec-edgar.module";
-import { AnalystActionsJob } from "./analyst-actions.job";
 import { CompaniesJob } from "./companies.job";
 import { EarningsJob } from "./earnings.job";
 import { MarketIndicesJob } from "./market-indices.job";
@@ -44,7 +43,6 @@ import { LiveModule } from "../live/live.module";
   providers: [
     CompaniesJob,
     EarningsJob,
-    AnalystActionsJob,
     MarketIndicesJob,
     NewsJob,
     SecForm4Job,

@@ -14,6 +14,7 @@ import { LiveEarningsService } from "./live-earnings.service";
 import { LiveIposService } from "./live-ipos.service";
 import { LiveDividendsService } from "./live-dividends.service";
 import { LiveFundHoldingsService } from "./live-fund-holdings.service";
+import { LiveAnalystActionsService } from "./live-analyst-actions.service";
 import { AnalystActionsController } from "./analyst-actions.controller";
 import { CompaniesController } from "./companies.controller";
 import { DividendsController } from "./dividends.controller";
@@ -81,6 +82,7 @@ import { SectorsController } from "./sectors.controller";
     LiveIposService,
     LiveDividendsService,
     LiveFundHoldingsService,
+    LiveAnalystActionsService,
   ],
 })
 export class MarketDataModule {}
