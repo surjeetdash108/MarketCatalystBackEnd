@@ -52,7 +52,6 @@ const MARKET_WIDE: string[] = [
   "ipos",
   "news",
   "analyst-actions",
-  "sec-form4",
   "sec-13f",
   "dividends",
   "options-chains", // its own small OPTIONS_UNIVERSE
@@ -62,7 +61,6 @@ const MARKET_WIDE: string[] = [
 const PER_TICKER: string[] = [
   "companies", // refresh profiles of the active set
   "stock-history", // ohlcv_bars substrate the compute jobs read
-  "edgar-8k", // earnings 8-Ks; reads ohlcv_bars for reaction
   "technical-indicators",
   "rs-rating",
   "tech-rating",

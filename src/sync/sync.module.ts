@@ -17,8 +17,6 @@ import { MarketBreadthJob } from "./market-breadth.job";
 import { RsRatingJob } from "./rs-rating.job";
 import { TechRatingJob } from "./tech-rating.job";
 import { TechnicalIndicatorsJob } from "./technical-indicators.job";
-import { SecForm4Job } from "./sec-form4.job";
-import { Edgar8KJob } from "./edgar-8k.job";
 // SectorsJob removed — /market-data/sectors is now served live per request by
 // LiveSectorsService (see market-data/live-sectors.service.ts).
 import { StockHistoryJob } from "./stock-history.job";
@@ -43,8 +41,6 @@ import { LiveModule } from "../live/live.module";
     EarningsJob,
     MarketIndicesJob,
     NewsJob,
-    SecForm4Job,
-    Edgar8KJob,
     TickerUniverseJob,
     OptionsChainsJob,
     StockHistoryJob,

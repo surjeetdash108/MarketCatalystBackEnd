@@ -12,6 +12,28 @@ const xmlParser = new XMLParser({
   parseTagValue: false,
 });
 
+// The getcurrent "latest filings" atom embeds each filing's summary as
+// HTML-ENTITY-ENCODED markup (&lt;b&gt;Filed:&lt;/b&gt; …). Across 100 entries
+// that blows fast-xml-parser's default entity-expansion guard (1000). We don't
+// need those entities expanded — the summary fields are pulled out by regex —
+// so this parser leaves entities untouched (processEntities: false).
+const atomParser = new XMLParser({
+  ignoreAttributes: false,
+  parseTagValue: false,
+  processEntities: false,
+});
+
+/** Decode the handful of XML entities that can appear in a company name. */
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'");
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export interface SecFiling {
@@ -30,11 +52,30 @@ export interface SecFiling {
   primaryDocDescription?: string;
 }
 
+/** One filing from the EDGAR "latest filings" (getcurrent) market-wide feed. */
+export interface LatestFiling {
+  companyName: string;
+  cik: string;
+  form: string;
+  accessionNumber: string;
+  filingDate: string;
+  /** ET acceptance timestamp string, e.g. "2026-08-13T10:00:14-04:00". */
+  acceptanceDateTime: string | null;
+  /** 8-K item codes as a comma string, e.g. "2.02,9.01" (empty when none). */
+  items: string;
+  /** EDGAR filing-index HTML page. */
+  indexUrl: string;
+}
+
+const CIK_TICKER_TTL_MS = 24 * 60 * 60 * 1000;
+
 @Injectable()
 export class SecEdgarService {
   private readonly logger = new Logger(SecEdgarService.name);
   private readonly userAgent: string;
   private lastRequestAt = 0;
+  private cikTickerCache: { at: number; map: Map<string, string> } | null = null;
+  private cikTickerInflight: Promise<Map<string, string>> | null = null;
 
   constructor(private readonly config: ConfigService) {
     this.userAgent = this.config.get(
@@ -204,5 +245,109 @@ export class SecEdgarService {
       },
       transactions,
     };
+  }
+
+  /**
+   * CIK → primary ticker map, from SEC's `company_tickers.json` (~10k traded
+   * companies). Reference data that changes rarely, so it's lazily fetched once
+   * and reused for 24h (in-memory, shared across callers). The getcurrent feed
+   * carries CIK but not ticker, so 8-K/filings-wire consumers resolve tickers
+   * through this; a filer with no ticker here (untraded shell/SPAC) is dropped.
+   */
+  async getCikToTicker(): Promise<Map<string, string>> {
+    const now = Date.now();
+    if (this.cikTickerCache && now - this.cikTickerCache.at < CIK_TICKER_TTL_MS) {
+      return this.cikTickerCache.map;
+    }
+    if (this.cikTickerInflight) return this.cikTickerInflight;
+
+    this.cikTickerInflight = (async () => {
+      const data = await this.throttledFetch(
+        "https://www.sec.gov/files/company_tickers.json",
+      );
+      const map = new Map<string, string>();
+      for (const entry of Object.values(data) as any[]) {
+        // Numeric CIK, no zero-pad (matches the getcurrent feed's CIK). First
+        // ticker for a CIK wins (share classes share a CIK).
+        const cik = String(entry.cik_str);
+        if (!map.has(cik)) map.set(cik, String(entry.ticker).toUpperCase());
+      }
+      this.cikTickerCache = { at: Date.now(), map };
+      return map;
+    })().finally(() => (this.cikTickerInflight = null));
+
+    return this.cikTickerInflight;
+  }
+
+  /**
+   * EDGAR "latest filings" (getcurrent) — the market-wide real-time stream of a
+   * given form type across ALL filers, newest first. This is the live analog of
+   * crawling every company's submissions: one call yields the most recent N
+   * filings market-wide. Shares this service's global SEC throttle + User-Agent.
+   */
+  async fetchLatestFilings(
+    formType: string,
+    count = 100,
+  ): Promise<LatestFiling[]> {
+    const url =
+      `https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent` +
+      `&type=${encodeURIComponent(formType)}&company=&dateb=&owner=include` +
+      `&count=${count}&output=atom`;
+    const xml = await this.throttledFetchText(url);
+    const parsed = atomParser.parse(xml);
+    const rawEntries = parsed?.feed?.entry ?? [];
+    const entries = Array.isArray(rawEntries) ? rawEntries : [rawEntries];
+
+    const out: LatestFiling[] = [];
+    for (const e of entries) {
+      const title = String(e?.title ?? "");
+      // "8-K - Company Name (0001668010) (Filer)"
+      const m = title.match(/^(\S+)\s*-\s*(.+?)\s*\((\d+)\)/);
+      if (!m) continue;
+      const form = m[1].trim();
+      const companyName = decodeEntities(m[2].trim());
+      // The atom zero-pads CIK to 10 digits ("0001668010"); company_tickers.json
+      // keys are unpadded ("1668010"). Normalize so cik→ticker lookups hit (and
+      // getForm4Transactions re-pads as needed).
+      const cik = m[3].replace(/^0+/, "") || m[3];
+
+      // Summary carries Filed date, AccNo and any "Item X.YZ" codes wrapped in
+      // entity-encoded (and sometimes raw) HTML tags — strip both forms so the
+      // label→value regexes below aren't split by "<b>Filed:</b> DATE" junk.
+      const summary = String(e?.summary?.["#text"] ?? e?.summary ?? "")
+        .replace(/&lt;[^&]*?&gt;/g, " ")
+        .replace(/<[^>]+>/g, " ");
+      const filed = summary.match(/Filed:\s*(\d{4}-\d{2}-\d{2})/)?.[1];
+      const accFromSummary = summary.match(/AccNo:\s*([\d-]+)/)?.[1];
+      const items = [...summary.matchAll(/Item\s+(\d+\.\d+)/g)]
+        .map((x) => x[1])
+        .join(",");
+
+      const accFromId = String(e?.id ?? "").match(
+        /accession-number=([\d-]+)/,
+      )?.[1];
+      const accessionNumber = accFromSummary ?? accFromId ?? "";
+
+      const href =
+        (Array.isArray(e?.link) ? e.link[0]?.["@_href"] : e?.link?.["@_href"]) ??
+        "";
+      const indexUrl = href.startsWith("http")
+        ? href
+        : `https://www.sec.gov${href}`;
+
+      const updated = e?.updated ? String(e.updated) : null;
+
+      out.push({
+        companyName,
+        cik,
+        form,
+        accessionNumber,
+        filingDate: filed ?? (updated ? updated.slice(0, 10) : ""),
+        acceptanceDateTime: updated,
+        items,
+        indexUrl,
+      });
+    }
+    return out;
   }
 }
