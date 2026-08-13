@@ -1,29 +1,19 @@
-import { Controller, Get, Header } from "@nestjs/common";
-import { CachedCollectionsService } from "../live/cached-collections.service";
-import { MarketDataService } from "./market-data.service";
+import { Controller, Get } from "@nestjs/common";
+import { LiveMoversService } from "./live-movers.service";
 
 /**
- * GET /market-data/movers — backs the Movers screen and the Dashboard/shell
- * "Movers" widgets. Shapes straight off `market_movers` (already the
- * `LiveMoverDoc` shape the UI expects — see cached-collections.service.ts's
- * `{ id: d.id, ...d.data() }` mapping), triggering the `market-movers` sync
- * job on demand when stale/empty per decision #3a — no cron populates this.
+ * GET /market-data/movers — the Movers screen + Dashboard/shell "Movers"
+ * widgets (`LiveMoverDoc` shape). Served LIVE per request: whole-market
+ * grouped-daily diff + parallel name/sector/cap enrichment, coalesced for a few
+ * seconds. No cache, no job. (The optional `?limit` the widget sends is ignored,
+ * same as before — the UI slices; the coalescer shares one board across callers.)
  */
 @Controller("market-data")
 export class MarketMoversController {
-  constructor(
-    private readonly marketData: MarketDataService,
-    private readonly cached: CachedCollectionsService,
-  ) {}
+  constructor(private readonly liveMovers: LiveMoversService) {}
 
   @Get("movers")
-  @Header(
-    "Cache-Control",
-    "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
-  )
   async movers() {
-    await this.marketData.ensureFresh("market-movers");
-    const { market_movers } = await this.cached.get(["market_movers"]);
-    return market_movers;
+    return this.liveMovers.getMovers();
   }
 }

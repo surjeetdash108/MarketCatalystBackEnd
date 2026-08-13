@@ -7,6 +7,7 @@ import { LiveSectorsService } from "./live-sectors.service";
 import { LiveMacroEventsService } from "./live-macro-events.service";
 import { LiveMacroRegimeService } from "./live-macro-regime.service";
 import { LiveMarketSentimentService } from "./live-market-sentiment.service";
+import { LiveMoversService } from "./live-movers.service";
 import { AnalystActionsController } from "./analyst-actions.controller";
 import { CompaniesController } from "./companies.controller";
 import { DividendsController } from "./dividends.controller";
@@ -69,6 +70,7 @@ import { SectorsController } from "./sectors.controller";
     LiveMacroEventsService,
     LiveMacroRegimeService,
     LiveMarketSentimentService,
+    LiveMoversService,
   ],
 })
 export class MarketDataModule {}

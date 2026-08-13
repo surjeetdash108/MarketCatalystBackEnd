@@ -9,7 +9,6 @@ import { DividendsJob } from "./dividends.job";
 import { EarningsJob } from "./earnings.job";
 import { IposJob } from "./ipos.job";
 import { MarketIndicesJob } from "./market-indices.job";
-import { MarketMoversJob } from "./market-movers.job";
 import { MarketQuotesJob } from "./market-quotes.job";
 import { NewsJob } from "./news.job";
 import { OptionsChainsJob } from "./options-chains.job";
@@ -46,7 +45,6 @@ import { LiveModule } from "../live/live.module";
   ],
   controllers: [SyncController],
   providers: [
-    MarketMoversJob,
     CompaniesJob,
     EarningsJob,
     AnalystActionsJob,
