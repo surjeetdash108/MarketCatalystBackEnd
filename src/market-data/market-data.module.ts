@@ -1,5 +1,7 @@
 import { Module } from "@nestjs/common";
 import { LiveModule } from "../live/live.module";
+import { AdaptersModule } from "../adapters/adapters.module";
+import { LiveSectorsService } from "./live-sectors.service";
 import { AnalystActionsController } from "./analyst-actions.controller";
 import { CompaniesController } from "./companies.controller";
 import { DividendsController } from "./dividends.controller";
@@ -36,7 +38,7 @@ import { SectorsController } from "./sectors.controller";
  * a follow-up, not a blocker for local verification.
  */
 @Module({
-  imports: [LiveModule],
+  imports: [LiveModule, AdaptersModule],
   controllers: [
     MarketMoversController,
     SectorsController,
@@ -56,6 +58,6 @@ import { SectorsController } from "./sectors.controller";
     NewsController,
     RecapsController,
   ],
-  providers: [MarketDataService],
+  providers: [MarketDataService, LiveSectorsService],
 })
 export class MarketDataModule {}

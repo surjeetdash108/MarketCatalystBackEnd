@@ -29,7 +29,8 @@ import { SecForm4Job } from "./sec-form4.job";
 import { Edgar8KJob } from "./edgar-8k.job";
 import { EdgarIpoPipelineJob } from "./edgar-ipo-pipeline.job";
 import { MacroRegimeJob } from "./macro-regime.job";
-import { SectorsJob } from "./sectors.job";
+// SectorsJob removed — /market-data/sectors is now served live per request by
+// LiveSectorsService (see market-data/live-sectors.service.ts).
 import { StockHistoryJob } from "./stock-history.job";
 import { SyncController } from "./sync.controller";
 import { TickerUniverseJob } from "./ticker-universe.job";
@@ -51,7 +52,6 @@ import { LiveModule } from "../live/live.module";
     MarketMoversJob,
     CompaniesJob,
     EarningsJob,
-    SectorsJob,
     AnalystActionsJob,
     MarketIndicesJob,
     NewsJob,
