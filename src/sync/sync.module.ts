@@ -19,7 +19,6 @@ import { MarketBreadthJob } from "./market-breadth.job";
 import { RsRatingJob } from "./rs-rating.job";
 import { TechRatingJob } from "./tech-rating.job";
 import { TechnicalIndicatorsJob } from "./technical-indicators.job";
-import { Sec13FJob } from "./sec-13f.job";
 import { SecForm4Job } from "./sec-form4.job";
 import { Edgar8KJob } from "./edgar-8k.job";
 import { EdgarIpoPipelineJob } from "./edgar-ipo-pipeline.job";
@@ -48,7 +47,6 @@ import { LiveModule } from "../live/live.module";
     AnalystActionsJob,
     MarketIndicesJob,
     NewsJob,
-    Sec13FJob,
     SecForm4Job,
     Edgar8KJob,
     EdgarIpoPipelineJob,
