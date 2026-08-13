@@ -72,7 +72,16 @@ news, options-chain, market-status, tape). They already use `OnDemandService`/
 - [x] movers — live (Polygon grouped-daily + parallel enrichment), verified.
       ~6-7s (2 whole-market pulls); spinner + coalescer cover it. recaps.job still
       reads the now-stale market_movers collection until recaps is converted.
-- [ ] earnings (→ FMP, first FMP adapter) / ipos / dividends / fund-holdings
+- [x] earnings — live via FMP earnings-calendar (estimates + future dates!), verified.
+      NOTE: earnings sync job KEPT — earnings_events is still read by /live/financials
+      (EPS-estimate join), dividends.job, financials.job. Delete once those convert.
+- [ ] ipos / dividends / fund-holdings
+
+### Refactor-ordering rule (learned)
+A sync job can only be DELETED once nothing else reads its collection. Several
+market-data collections are cross-read by other jobs / the /live/* endpoints
+(e.g. earnings_events ← /live/financials; market_movers ← recaps). Convert the
+endpoint to live first; keep the job until its collection has no more readers.
 - [ ] Tier C (companies, news, recaps, SEC feeds per-ticker, ipo-pipeline, analyst→FMP, sentiment-history)
 - [ ] worker/deploy teardown (delete SyncModule+Purge+Retention+AutoPurge, collapse roles)
 
