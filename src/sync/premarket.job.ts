@@ -50,7 +50,6 @@ const MARKET_WIDE: string[] = [
   "macro-regime", // FRED-only, self-contained regime label
   "earnings",
   "ipos",
-  "edgar-ipo-pipeline", // SEC S-1/424B registrations; no Firestore deps
   "news",
   "analyst-actions",
   "sec-form4",

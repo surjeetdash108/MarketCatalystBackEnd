@@ -63,6 +63,31 @@ export class SecEdgarService {
     return cik.replace(/\D/g, "").padStart(10, "0");
   }
 
+  /**
+   * EDGAR quarterly full-index `master.idx` — the pipe-delimited
+   * `CIK|Company|Form|Date Filed|Filename` listing of EVERY filing in a quarter.
+   * Used by the IPO pipeline to reach S-1/424B registrants that aren't in our
+   * traded-ticker universe (so the per-CIK submissions API can't find them).
+   * Shares this service's global SEC throttle + User-Agent. Returns null when a
+   * quarter's index isn't available (e.g. a not-yet-started quarter) rather than
+   * throwing, so a caller spanning two quarters degrades to the one that exists.
+   */
+  async fetchFullIndexMasterIdx(
+    year: number,
+    qtr: number,
+  ): Promise<string | null> {
+    const url = `https://www.sec.gov/Archives/edgar/full-index/${year}/QTR${qtr}/master.idx`;
+    const elapsed = Date.now() - this.lastRequestAt;
+    if (elapsed < MIN_DELAY_MS) await sleep(MIN_DELAY_MS - elapsed);
+    this.lastRequestAt = Date.now();
+    const res = await fetch(url, { headers: { "User-Agent": this.userAgent } });
+    if (!res.ok) {
+      this.logger.warn(`master.idx ${year} QTR${qtr} -> ${res.status}`);
+      return null;
+    }
+    return res.text();
+  }
+
   async getSubmissions(
     cik: string,
   ): Promise<{ name: string; recentFilings: SecFiling[] }> {
