@@ -50,7 +50,6 @@ const MARKET_WIDE: string[] = [
   "macro-regime", // FRED-only, self-contained regime label
   "earnings",
   "ipos",
-  "news",
   "analyst-actions",
   "sec-13f",
   "dividends",

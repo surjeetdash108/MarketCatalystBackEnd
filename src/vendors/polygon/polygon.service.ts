@@ -835,4 +835,19 @@ export class PolygonService {
     );
     return res.results ?? [];
   }
+
+  /**
+   * MARKET-WIDE latest news — the same reference/news endpoint WITHOUT a ticker
+   * filter, so Polygon returns the most recent articles across every ticker.
+   * Backs the global "most recent across every ticker" feed (commentary Live
+   * tab, Dashboard Live Market Feed, recap). Each article still carries its own
+   * `tickers[]`.
+   */
+  async getMarketNews(limit = 60): Promise<PolygonNewsArticle[]> {
+    const res = await fetchJson<{ results?: PolygonNewsArticle[] }>(
+      `${this.baseUrl}/v2/reference/news` +
+        `?order=desc&sort=published_utc&limit=${limit}&apiKey=${this.apiKey}`,
+    );
+    return res.results ?? [];
+  }
 }
