@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AdaptersModule } from '../adapters/adapters.module';
+import { FmpModule } from '../vendors/fmp/fmp.module';
 import { FredModule } from '../vendors/fred/fred.module';
 import { LiveModule } from '../live/live.module';
 import { PolygonModule } from '../vendors/polygon/polygon.module';
@@ -41,7 +42,7 @@ import { SectorsController } from './sectors.controller';
  * a follow-up, not a blocker for local verification.
  */
 @Module({
-  imports: [LiveModule, AdaptersModule, FredModule, PolygonModule, SecEdgarModule],
+  imports: [LiveModule, AdaptersModule, FredModule, PolygonModule, SecEdgarModule, FmpModule],
   controllers: [
     MarketMoversController,
     SectorsController,
