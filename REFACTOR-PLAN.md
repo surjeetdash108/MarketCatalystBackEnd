@@ -69,8 +69,10 @@ news, options-chain, market-status, tape). They already use `OnDemandService`/
 - [x] macro-regime — live (FRED), verified; degrades gracefully
 - [x] market-sentiment (+ history) — live (Polygon), verified. History dropped the
       market_breadth join (3 price components/day; today keeps live breadth).
-- [ ] movers (Tier B, flagship — next)
-- [ ] earnings (FMP) / ipos / dividends / fund-holdings
+- [x] movers — live (Polygon grouped-daily + parallel enrichment), verified.
+      ~6-7s (2 whole-market pulls); spinner + coalescer cover it. recaps.job still
+      reads the now-stale market_movers collection until recaps is converted.
+- [ ] earnings (→ FMP, first FMP adapter) / ipos / dividends / fund-holdings
 - [ ] Tier C (companies, news, recaps, SEC feeds per-ticker, ipo-pipeline, analyst→FMP, sentiment-history)
 - [ ] worker/deploy teardown (delete SyncModule+Purge+Retention+AutoPurge, collapse roles)
 
