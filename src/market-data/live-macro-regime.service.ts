@@ -108,6 +108,8 @@ export class LiveMacroRegimeService {
     const asOfDate =
       curveObs[0]?.date ?? vixObs[0]?.date ?? sp500Obs[0]?.date ?? new Date().toISOString().slice(0, 10);
 
-    return { regime, score, maxScore: counted, components, asOfDate, source: "fred-derived" };
+    // id: "current" matches the old Firestore doc id (CachedCollectionsService
+    // exposed it), which commentary.tsx looks up via `r.id === "current"`.
+    return { id: "current", regime, score, maxScore: counted, components, asOfDate, source: "fred-derived" };
   }
 }
