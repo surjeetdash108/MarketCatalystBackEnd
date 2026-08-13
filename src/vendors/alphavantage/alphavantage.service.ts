@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { fetchText } from '../../common/http.util';
+import { fetchJson, fetchText } from '../../common/http.util';
 
 const BASE_URL = 'https://www.alphavantage.co/query';
 
@@ -11,6 +11,30 @@ export interface AlphaVantageEarningsRow {
   fiscalDateEnding: string;
   estimate: number | null;
   currency: string;
+}
+
+export interface AlphaVantageAnalystRatings {
+  symbol: string;
+  strongBuy: number;
+  buy: number;
+  hold: number;
+  sell: number;
+  strongSell: number;
+}
+
+/**
+ * Thrown when Alpha Vantage answers with its 200-OK rate-limit/quota
+ * envelope (`Note`/`Information`) instead of real data — every endpoint on
+ * this vendor does this instead of a proper 429, so callers that fan out
+ * per-ticker (analyst-actions) can catch this specifically and stop early
+ * rather than burning the rest of the daily quota on calls doomed to fail
+ * the same way.
+ */
+export class AlphaVantageRateLimitError extends Error {}
+
+/** Extracts Alpha Vantage's `Note`/`Information`/`Error Message` envelope, if present. */
+function alphaVantageErrorMessage(obj: Record<string, unknown>): string | null {
+  return (obj['Note'] ?? obj['Information'] ?? obj['Error Message']) as string | undefined ?? null;
 }
 
 /**
@@ -93,12 +117,11 @@ export class AlphaVantageService {
     if (trimmed.startsWith('{')) {
       let message = trimmed;
       try {
-        const parsed = JSON.parse(trimmed);
-        message = parsed['Error Message'] ?? parsed['Note'] ?? parsed['Information'] ?? trimmed;
+        message = alphaVantageErrorMessage(JSON.parse(trimmed)) ?? trimmed;
       } catch {
         // keep raw text
       }
-      throw new Error(`Alpha Vantage EARNINGS_CALENDAR error: ${message}`);
+      throw new AlphaVantageRateLimitError(`Alpha Vantage EARNINGS_CALENDAR error: ${message}`);
     }
 
     const [header, ...rows] = parseCsv(trimmed);
@@ -120,5 +143,33 @@ export class AlphaVantageService {
         estimate: r[estimateIdx] ? Number(r[estimateIdx]) : null,
         currency: r[currencyIdx] || 'USD',
       }));
+  }
+
+  /**
+   * Per-symbol analyst rating vote count (Strong Buy/Buy/Hold/Sell/Strong
+   * Sell), from the OVERVIEW endpoint's `AnalystRating*` fields — Alpha
+   * Vantage has no market-wide consensus feed, only this fundamentals
+   * endpoint, which happens to carry the same rating snapshot per ticker.
+   * Returns null for a symbol Alpha Vantage has no analyst coverage for
+   * (unknown symbol -> `{}`; covered symbol with no analysts -> profile
+   * fields present but no `AnalystRating*` keys at all).
+   */
+  async getCompanyOverview(symbol: string): Promise<AlphaVantageAnalystRatings | null> {
+    const data = await fetchJson<Record<string, string>>(
+      `${BASE_URL}?function=OVERVIEW&symbol=${symbol}&apikey=${this.apiKey}`,
+    );
+    const errorMessage = alphaVantageErrorMessage(data);
+    if (errorMessage) {
+      throw new AlphaVantageRateLimitError(`Alpha Vantage OVERVIEW error: ${errorMessage}`);
+    }
+    if (data['AnalystRatingStrongBuy'] == null) return null;
+    return {
+      symbol,
+      strongBuy: Number(data['AnalystRatingStrongBuy'] ?? 0),
+      buy: Number(data['AnalystRatingBuy'] ?? 0),
+      hold: Number(data['AnalystRatingHold'] ?? 0),
+      sell: Number(data['AnalystRatingSell'] ?? 0),
+      strongSell: Number(data['AnalystRatingStrongSell'] ?? 0),
+    };
   }
 }
