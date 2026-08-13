@@ -15,12 +15,12 @@ import type { BlogAdminBody } from "./blogs-admin.service";
 /**
  * Admin CRUD for the public `blogs` collection, behind AdminGuard (verified
  * Firebase admin token, or Cloud-Run-IAM-vetted request — see AdminGuard).
- * Mirrors ApiHealthController's `@Controller("admin")` shape. The console's
+ * Mirrors ApiHealthController's `@Controller("api/admin")` shape. The console's
  * blog board drives these; every write lands in the same collection the public
  * site (marketcatalyst.ai/posts) renders from.
  */
 @UseGuards(AdminGuard)
-@Controller("admin")
+@Controller("api/admin")
 export class BlogsAdminController {
   constructor(private readonly blogs: BlogsAdminService) {}
 

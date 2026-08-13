@@ -8,7 +8,7 @@ import { AdminAnalyticsService } from "./admin-analytics.service";
  * reachable by an ordinary signed-in account.
  */
 @UseGuards(AdminGuard)
-@Controller("admin")
+@Controller("api/admin")
 export class AdminAnalyticsController {
   constructor(private readonly analytics: AdminAnalyticsService) {}
 

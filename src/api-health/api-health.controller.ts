@@ -8,7 +8,7 @@ import { ApiHealthService } from "./api-health.service";
  * ADMIN_GUARD_TRUST_IAM=false) can enumerate and probe the API.
  */
 @UseGuards(AdminGuard)
-@Controller("admin")
+@Controller("api/admin")
 export class ApiHealthController {
   constructor(private readonly health: ApiHealthService) {}
 

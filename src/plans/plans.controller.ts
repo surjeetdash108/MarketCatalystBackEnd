@@ -89,7 +89,7 @@ export class PlansController {
    * so price/currency/cycle can never be changed through this route.
    */
   @UseGuards(AdminGuard)
-  @Patch("admin/plans/:id")
+  @Patch("api/admin/plans/:id")
   async updatePlan(
     @Param("id") id: string,
     @Body() body: { featureFlags?: Record<string, unknown> },
