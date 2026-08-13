@@ -15,6 +15,7 @@ import { MarketDataModule } from "./market-data/market-data.module";
 import { PurgeModule } from "./purge/purge.module";
 import { SyncModule } from "./sync/sync.module";
 import { ApiHealthModule } from "./api-health/api-health.module";
+import { BlogsModule } from "./blogs/blogs.module";
 
 /**
  * TWO DEPLOYMENTS, ONE IMAGE.
@@ -86,6 +87,10 @@ const workerModules = isLiveRole
     // GET /admin/api-health (AdminGuard): route inventory + self-probe for the
     // console's Monitor tab. Both roles so the live service serves it too.
     ApiHealthModule,
+    // /admin/blogs CRUD (AdminGuard): reads/writes the SAME public `blogs`
+    // collection the website renders (marketcatalyst.ai/posts). Both roles so
+    // the console — served by the live service — can drive it.
+    BlogsModule,
     ...workerModules,
   ],
   controllers: [HealthController],
