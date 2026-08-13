@@ -90,13 +90,17 @@ endpoint to live first; keep the job until its collection has no more readers.
   - [x] analyst-actions — live via FMP grades-consensus over a curated large-cap
         universe (job was a no-op; deleted). Reuse window 120s (daily-cadence data,
         kinder to FMP quota). Happy path verified real; degrades to [] under FMP 429.
+  - [x] recaps — live per request (degraded internals/weekly=null; no vendor call).
+        Removed the last `market_movers` reader.
+  - [x] ipo-pipeline — live from EDGAR full-index master.idx (400 filings, ~1.9s).
+  - [x] filings-wire + earnings-announcements + insider-transactions — KEPT
+        MARKET-WIDE (no UI change) via EDGAR getcurrent "latest filings" feed
+        (8-K + Form 4). reactionPct degraded null. Verified real.
+  - [x] news — live from Polygon market-wide reference/news (60 articles, sentiment).
+        Turned out NON-FMP (NEWS_SOURCE=polygon), so not quota-blocked.
   - [ ] /live/financials EPS join → FMP, then delete earnings.job  (FMP-blocked, see below)
-  - [ ] recaps → live (movers/sectors/indices via Polygon)         (non-FMP; next)
-  - [ ] news → live scoped to ticker set                           (FMP-blocked)
-  - [ ] companies → lightweight reference (boot + lazy refresh)
-  - [ ] earnings-announcements / filings-wire / insider-transactions → per-ticker on-demand (SEC/EDGAR)
-  - [ ] ipo-pipeline → live SEC master.idx                         (non-FMP)
-  - [ ] market-sentiment-history — already live (Tier B)
+  - [ ] companies → lightweight reference (boot + lazy refresh)    (non-FMP; next)
+  - [x] market-sentiment-history — already live (Tier B)
 - [ ] worker/deploy teardown (delete SyncModule+Purge+Retention+AutoPurge, collapse roles)
 
 ### ⚠ FMP daily quota blocker (2026-08-13)
