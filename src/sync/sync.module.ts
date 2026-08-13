@@ -8,7 +8,6 @@ import { CompaniesJob } from "./companies.job";
 import { DividendsJob } from "./dividends.job";
 import { EarningsJob } from "./earnings.job";
 import { IposJob } from "./ipos.job";
-import { MacroEventsJob } from "./macro-events.job";
 import { MarketIndicesJob } from "./market-indices.job";
 import { MarketMoversJob } from "./market-movers.job";
 import { MarketQuotesJob } from "./market-quotes.job";
@@ -28,7 +27,6 @@ import { Sec13FJob } from "./sec-13f.job";
 import { SecForm4Job } from "./sec-form4.job";
 import { Edgar8KJob } from "./edgar-8k.job";
 import { EdgarIpoPipelineJob } from "./edgar-ipo-pipeline.job";
-import { MacroRegimeJob } from "./macro-regime.job";
 // SectorsJob removed — /market-data/sectors is now served live per request by
 // LiveSectorsService (see market-data/live-sectors.service.ts).
 import { StockHistoryJob } from "./stock-history.job";
@@ -59,9 +57,7 @@ import { LiveModule } from "../live/live.module";
     SecForm4Job,
     Edgar8KJob,
     EdgarIpoPipelineJob,
-    MacroRegimeJob,
     TickerUniverseJob,
-    MacroEventsJob,
     IposJob,
     OptionsChainsJob,
     DividendsJob,

@@ -1,27 +1,17 @@
-import { Controller, Get, Header } from "@nestjs/common";
-import { CachedCollectionsService } from "../live/cached-collections.service";
-import { MarketDataService } from "./market-data.service";
+import { Controller, Get } from "@nestjs/common";
+import { LiveMacroRegimeService } from "./live-macro-regime.service";
 
 /**
- * GET /market-data/macro-regime — the rules-based FRED-derived market regime
- * label (`macro_regime/current`, written by the `macro-regime` job). Backs the
- * commentary "General perspective" / macro regime read.
+ * GET /market-data/macro-regime — the rules-based FRED-derived market-regime
+ * read (curve, VIX, credit, trend, jobs). Served LIVE per request (no cache, no
+ * job). Returns a single-element list to match the prior collection shape.
  */
 @Controller("market-data")
 export class MacroRegimeController {
-  constructor(
-    private readonly marketData: MarketDataService,
-    private readonly cached: CachedCollectionsService,
-  ) {}
+  constructor(private readonly liveMacroRegime: LiveMacroRegimeService) {}
 
   @Get("macro-regime")
-  @Header(
-    "Cache-Control",
-    "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
-  )
   async macroRegime() {
-    await this.marketData.ensureFresh("macro-regime");
-    const { macro_regime } = await this.cached.get(["macro_regime"]);
-    return macro_regime;
+    return this.liveMacroRegime.getMacroRegime();
   }
 }
