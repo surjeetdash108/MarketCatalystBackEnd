@@ -5,9 +5,7 @@ import { PolygonModule } from "../vendors/polygon/polygon.module";
 import { SecEdgarModule } from "../vendors/sec-edgar/sec-edgar.module";
 import { AnalystActionsJob } from "./analyst-actions.job";
 import { CompaniesJob } from "./companies.job";
-import { DividendsJob } from "./dividends.job";
 import { EarningsJob } from "./earnings.job";
-import { IposJob } from "./ipos.job";
 import { MarketIndicesJob } from "./market-indices.job";
 import { MarketQuotesJob } from "./market-quotes.job";
 import { NewsJob } from "./news.job";
@@ -55,9 +53,7 @@ import { LiveModule } from "../live/live.module";
     Edgar8KJob,
     EdgarIpoPipelineJob,
     TickerUniverseJob,
-    IposJob,
     OptionsChainsJob,
-    DividendsJob,
     StockHistoryJob,
     IntradayBarsJob,
     CorporateActionsJob,
