@@ -58,3 +58,29 @@ export async function fetchJson<T = unknown>(
   }
   throw new Error(`${redactUrl(url)} exceeded retry budget`);
 }
+
+/**
+ * Same retry/redact behavior as `fetchJson`, for vendors (e.g. Alpha
+ * Vantage's CSV-only endpoints) that don't return JSON.
+ */
+export async function fetchText(
+  url: string,
+  opts: FetchJsonOptions = {},
+): Promise<string> {
+  const { retries = 3, retryDelayMs = 1000, ...init } = opts;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const res = await fetch(url, init);
+    if (res.status === 429 && attempt < retries) {
+      await sleep(retryDelayMs * 2 ** attempt);
+      continue;
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(
+        `${init.method ?? 'GET'} ${redactUrl(url)} -> ${res.status}: ${body.slice(0, 300)}`,
+      );
+    }
+    return res.text();
+  }
+  throw new Error(`${redactUrl(url)} exceeded retry budget`);
+}
