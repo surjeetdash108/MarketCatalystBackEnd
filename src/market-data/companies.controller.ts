@@ -1,28 +1,23 @@
-import { Controller, Get, Header } from "@nestjs/common";
-import { CachedCollectionsService } from "../live/cached-collections.service";
-import { MarketDataService } from "./market-data.service";
+import { Controller, Get } from "@nestjs/common";
+import { LiveCompaniesService } from "./live-companies.service";
 
 /**
- * GET /market-data/companies — the bulk `companies` collection (per-ticker
- * price/pctChange/marketCap/rvol), shared by Movers (rvol enrichment),
- * Heatmap (tile price/marketCap) and, later, Dashboard. Triggers the
- * `companies` sync job on demand when stale/empty per decision #3a.
+ * GET /market-data/companies — the bulk per-ticker reference (name/sector/price/
+ * pctChange/marketCap) shared by Movers, Heatmap, Themes, Screener, watchlist/
+ * portfolio and the Dashboard. Served LIVE per request over a dynamically
+ * resolved universe (tape + watchlists + holdings + usage) — no Firestore
+ * cache, no sync job; coalesced in the service.
+ *
+ * Whole-universe COMPUTED metrics (RS/tech ratings, technicals, growth, sector
+ * ranks, peers) are null here — they're an inherent batch and are filled
+ * on-demand per ticker by GET /live/company when a stock is opened.
  */
 @Controller("market-data")
 export class CompaniesController {
-  constructor(
-    private readonly marketData: MarketDataService,
-    private readonly cached: CachedCollectionsService,
-  ) {}
+  constructor(private readonly liveCompanies: LiveCompaniesService) {}
 
   @Get("companies")
-  @Header(
-    "Cache-Control",
-    "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
-  )
   async companies() {
-    await this.marketData.ensureFresh("companies");
-    const { companies } = await this.cached.get(["companies"]);
-    return companies;
+    return this.liveCompanies.getCompanies();
   }
 }

@@ -19,6 +19,7 @@ import { LiveIpoPipelineService } from "./live-ipo-pipeline.service";
 import { Edgar8kFeedService } from "./edgar-8k-feed.service";
 import { LiveInsiderTransactionsService } from "./live-insider-transactions.service";
 import { LiveNewsService } from "./live-news.service";
+import { LiveCompaniesService } from "./live-companies.service";
 import { AnalystActionsController } from "./analyst-actions.controller";
 import { CompaniesController } from "./companies.controller";
 import { DividendsController } from "./dividends.controller";
@@ -91,6 +92,7 @@ import { SectorsController } from "./sectors.controller";
     Edgar8kFeedService,
     LiveInsiderTransactionsService,
     LiveNewsService,
+    LiveCompaniesService,
   ],
 })
 export class MarketDataModule {}
