@@ -86,8 +86,32 @@ A sync job can only be DELETED once nothing else reads its collection. Several
 market-data collections are cross-read by other jobs / the /live/* endpoints
 (e.g. earnings_events ← /live/financials; market_movers ← recaps). Convert the
 endpoint to live first; keep the job until its collection has no more readers.
-- [ ] Tier C (companies, news, recaps, SEC feeds per-ticker, ipo-pipeline, analyst→FMP, sentiment-history)
+- Tier C (in progress):
+  - [x] analyst-actions — live via FMP grades-consensus over a curated large-cap
+        universe (job was a no-op; deleted). Reuse window 120s (daily-cadence data,
+        kinder to FMP quota). Happy path verified real; degrades to [] under FMP 429.
+  - [ ] /live/financials EPS join → FMP, then delete earnings.job  (FMP-blocked, see below)
+  - [ ] recaps → live (movers/sectors/indices via Polygon)         (non-FMP; next)
+  - [ ] news → live scoped to ticker set                           (FMP-blocked)
+  - [ ] companies → lightweight reference (boot + lazy refresh)
+  - [ ] earnings-announcements / filings-wire / insider-transactions → per-ticker on-demand (SEC/EDGAR)
+  - [ ] ipo-pipeline → live SEC master.idx                         (non-FMP)
+  - [ ] market-sentiment-history — already live (Tier B)
 - [ ] worker/deploy teardown (delete SyncModule+Purge+Retention+AutoPurge, collapse roles)
+
+### ⚠ FMP daily quota blocker (2026-08-13)
+The stage FMP key hit its DAILY cap during today's testing: EVERY FMP endpoint —
+including the already-shipped `/market-data/earnings` — returns HTTP 429
+`"Limit Reach"`, and a single call after a 90s cooldown still 429s (so it is a
+daily quota, not a per-minute throttle). Implications:
+- Cannot verify FMP-backed work with real data until the daily reset: analyst
+  (shipped, happy-path already seen), news, `/live/financials` EPS join.
+- Architectural risk: a live-per-request design that fires FMP calls per view can
+  blow a capped plan fast. Mitigations added: 120s reuse for slow-cadence data;
+  best-effort/fail-fast so a capped FMP degrades instead of hanging. Still needs a
+  higher-limit FMP plan (or a non-FMP source) to be production-safe.
+- Meanwhile: proceed with the NON-FMP Tier C modules (recaps via Polygon,
+  ipo-pipeline + SEC feeds via EDGAR, companies).
 
 ## Env notes (stage .env, gitignored)
 - FMP_API_KEY, FRED_API_KEY, POLYGON_API_KEY set. POLYGON_PAGE_DELAY_MS=0.
