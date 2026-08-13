@@ -142,10 +142,22 @@ export class PolygonService {
   }
 
   async getGroupedDaily(date: string): Promise<PolygonAggBar[]> {
-    const res = await fetchJson<{ results?: PolygonAggBar[] }>(
-      `${this.baseUrl}/v2/aggs/grouped/locale/us/market/stocks/${date}?apiKey=${this.apiKey}`,
-    );
-    return res.results ?? [];
+    try {
+      const res = await fetchJson<{ results?: PolygonAggBar[] }>(
+        `${this.baseUrl}/v2/aggs/grouped/locale/us/market/stocks/${date}?apiKey=${this.apiKey}`,
+      );
+      return res.results ?? [];
+    } catch (err) {
+      // The vendor's calendar day can already be "today" in UTC while the US
+      // session is still open (UTC rolls over mid-afternoon Eastern) — it
+      // 403s rather than serving a still-open session. That's not a real
+      // failure, just "not finalized yet"; treat it as no data so the caller
+      // falls back to the last completed trading day.
+      if (err.message?.includes('before end of day')) {
+        return [];
+      }
+      throw err;
+    }
   }
 
   async getLatestGroupedDaily(
@@ -156,7 +168,7 @@ export class PolygonService {
       if (bars.length > 0) {
         return { date, bars };
       }
-      this.logger.log(`No grouped-daily data for ${date} (holiday/weekend) — trying prior day`);
+      this.logger.log(`No grouped-daily data for ${date} (holiday/weekend or not yet finalized) — trying prior day`);
     }
     return null;
   }
