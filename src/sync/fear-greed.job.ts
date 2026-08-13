@@ -1,15 +1,7 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
-import { FirebaseAdminService } from "../common/firebase-admin.provider";
-import {
-  batchSetWithCreatedAt,
-  setWithCreatedAt,
-} from "../common/firestore-batch.util";
-import { SyncMetaService } from "../common/sync-meta.service";
+import { Injectable, Logger } from "@nestjs/common";
 import { candidateTradingDays } from "../common/trading-days.util";
 import { PolygonService } from "../vendors/polygon/polygon.service";
-import { SyncRegistry } from "../common/sync-registry.service";
 
-const JOB_NAME = "fear-greed";
 const LOOKBACK_DAYS = 5;
 const clamp = (n: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n));
 const sma = (v: number[], n: number) =>
@@ -28,27 +20,10 @@ function label(v: number): string {
 }
 
 @Injectable()
-export class FearGreedJob implements OnModuleInit {
+export class FearGreedJob {
   private readonly logger = new Logger(FearGreedJob.name);
 
-  constructor(
-    private readonly polygon: PolygonService,
-    private readonly firebase: FirebaseAdminService,
-    private readonly meta: SyncMetaService,
-    private readonly registry: SyncRegistry,
-  ) {}
-
-  onModuleInit() {
-    this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ["market_sentiment", "market_sentiment_history"],
-      cronExpression: "15 18 * * 1-5",
-      timeZone: "America/New_York",
-    });
-  }
-
-  async scheduled() {
-    await this.registry.get(JOB_NAME)();
-  }
+  constructor(private readonly polygon: PolygonService) {}
 
   /** Daily closes WITH their trading date, so the history backfill can align them. */
   private async series(ticker: string): Promise<{ d: string; c: number }[]> {
@@ -86,119 +61,125 @@ export class FearGreedJob implements OnModuleInit {
     return c;
   }
 
-  async run() {
-    try {
-      const [spySer, tltSer, vixySer] = await Promise.all([
-        this.series("SPY"),
-        this.series("TLT"),
-        this.series("VIXY"),
-      ]);
-      const spy = spySer.map((x) => x.c);
-      const tlt = tltSer.map((x) => x.c);
-      const vixy = vixySer.map((x) => x.c);
+  private async priceSeries(): Promise<{
+    spySer: { d: string; c: number }[];
+    tltSer: { d: string; c: number }[];
+    vixySer: { d: string; c: number }[];
+  }> {
+    const [spySer, tltSer, vixySer] = await Promise.all([
+      this.series("SPY"),
+      this.series("TLT"),
+      this.series("VIXY"),
+    ]);
+    return { spySer, tltSer, vixySer };
+  }
 
-      // Today's value — unchanged 4-component composite.
-      const components = this.componentsAt(spy, tlt, vixy, spy.length - 1);
-      const latest = await this.polygon.getLatestGroupedDaily(
-        candidateTradingDays(new Date(), LOOKBACK_DAYS),
-      );
-      if (latest && latest.bars.length) {
-        let up = 0;
-        let total = 0;
-        for (const b of latest.bars) {
-          if (b.o > 0) {
-            total++;
-            if (b.c > b.o) up++;
-          }
+  /** Today's 4-component composite doc (`market_sentiment/fear_greed` shape). */
+  private async computeLatest(ser: {
+    spySer: { d: string; c: number }[];
+    tltSer: { d: string; c: number }[];
+    vixySer: { d: string; c: number }[];
+  }): Promise<{ id: string; data: Record<string, unknown> }> {
+    const spy = ser.spySer.map((x) => x.c);
+    const tlt = ser.tltSer.map((x) => x.c);
+    const vixy = ser.vixySer.map((x) => x.c);
+    const components = this.componentsAt(spy, tlt, vixy, spy.length - 1);
+    const latest = await this.polygon.getLatestGroupedDaily(
+      candidateTradingDays(new Date(), LOOKBACK_DAYS),
+    );
+    if (latest && latest.bars.length) {
+      let up = 0;
+      let total = 0;
+      for (const b of latest.bars) {
+        if (b.o > 0) {
+          total++;
+          if (b.c > b.o) up++;
         }
-        if (total > 0) components.breadth = clamp((up / total) * 100);
       }
-      const vals = Object.values(components);
-      if (vals.length === 0) {
-        throw new Error("No Fear & Greed components could be computed");
-      }
-      const value = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
-      await setWithCreatedAt(
-        this.firebase.firestore,
-        this.firebase.firestore
-          .collection("market_sentiment")
-          .doc("fear_greed"),
-        {
-          value,
-          label: label(value),
+      if (total > 0) components.breadth = clamp((up / total) * 100);
+    }
+    const vals = Object.values(components);
+    if (vals.length === 0) {
+      throw new Error("No Fear & Greed components could be computed");
+    }
+    const value = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+    return {
+      id: "fear_greed",
+      data: {
+        value,
+        label: label(value),
+        components: Object.fromEntries(
+          Object.entries(components).map(([k, v]) => [k, Math.round(v)]),
+        ),
+        asOfDate: latest?.date ?? null,
+        source: "polygon",
+        updatedAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  /**
+   * The composite HISTORY (`market_sentiment_history/{date}` shape) from the 3
+   * price-based components, computed live from Polygon per request.
+   *
+   * DEGRADED vs. the cache era: the per-day breadth input came from the
+   * `market_breadth` collection (no single-call vendor source reproduces per-day
+   * breadth history), which is no longer written. That component is dropped from
+   * the historical composite to keep the request path Firestore-free; each day's
+   * value is now the mean of momentum/safe-haven/volatility only. The LATEST
+   * value (fetchLatestLive) still includes a live-computed breadth component.
+   */
+  private computeHistory(ser: {
+    spySer: { d: string; c: number }[];
+    tltSer: { d: string; c: number }[];
+    vixySer: { d: string; c: number }[];
+  }): { id: string; data: Record<string, unknown> }[] {
+    const spy = ser.spySer.map((x) => x.c);
+    const tlt = ser.tltSer.map((x) => x.c);
+    const vixy = ser.vixySer.map((x) => x.c);
+    const hist: { id: string; data: Record<string, unknown> }[] = [];
+    // Start once the 125-day momentum window is available.
+    for (let i = 125; i < ser.spySer.length; i++) {
+      const date = ser.spySer[i].d;
+      const comp = this.componentsAt(spy, tlt, vixy, i);
+      const cv = Object.values(comp);
+      if (cv.length === 0) continue;
+      const v = Math.round(cv.reduce((a, b) => a + b, 0) / cv.length);
+      hist.push({
+        id: date,
+        data: {
+          value: v,
+          label: label(v),
           components: Object.fromEntries(
-            Object.entries(components).map(([k, v]) => [k, Math.round(v)]),
+            Object.entries(comp).map(([k, val]) => [k, Math.round(val)]),
           ),
-          asOfDate: latest?.date ?? null,
+          asOfDate: date,
           source: "polygon",
           updatedAt: new Date().toISOString(),
         },
-      );
-
-      // ── R26: backfill the real composite HISTORY ──────────────────────────
-      // The dashboard's F&G history line was reading market_breadth.breadthSentiment
-      // (a breadth-ONLY proxy) because no historical composite existed. Compute the
-      // 3 price-based components as of each past trading day and join the stored
-      // per-day breadth (market_breadth.breadthPct) — the same four inputs as the
-      // live value — and write market_sentiment_history/{date}.
-      const breadthByDate = new Map<string, number>();
-      const bsnap = await this.firebase.firestore
-        .collection("market_breadth")
-        .get();
-      for (const d of bsnap.docs) {
-        const b = d.data();
-        if (typeof b.breadthPct === "number")
-          breadthByDate.set(d.id, clamp(b.breadthPct * 100));
-      }
-      const hist: { id: string; data: Record<string, unknown> }[] = [];
-      // Start once the 125-day momentum window is available.
-      for (let i = 125; i < spySer.length; i++) {
-        const date = spySer[i].d;
-        const comp = this.componentsAt(spy, tlt, vixy, i);
-        const br = breadthByDate.get(date);
-        if (br != null) comp.breadth = br;
-        const cv = Object.values(comp);
-        if (cv.length === 0) continue;
-        const v = Math.round(cv.reduce((a, b) => a + b, 0) / cv.length);
-        hist.push({
-          id: date,
-          data: {
-            value: v,
-            label: label(v),
-            components: Object.fromEntries(
-              Object.entries(comp).map(([k, val]) => [k, Math.round(val)]),
-            ),
-            asOfDate: date,
-            source: "polygon",
-            updatedAt: new Date().toISOString(),
-          },
-        });
-      }
-      // Chunked batch write (Firestore caps at 500 ops/batch).
-      const col = this.firebase.firestore.collection(
-        "market_sentiment_history",
-      );
-      await batchSetWithCreatedAt(
-        this.firebase.firestore,
-        hist.map((h) => ({ ref: col.doc(h.id), data: h.data })),
-      );
-
-      await this.meta.record(JOB_NAME, { ok: true, count: 1 });
-      this.logger.log(
-        `fear-greed: value ${value}; backfilled ${hist.length} history day(s)`,
-      );
-      return {
-        value,
-        label: label(value),
-        components,
-        historyDays: hist.length,
-      };
-    } catch (err) {
-      await this.meta.record(JOB_NAME, {
-        ok: false,
-        error: err.message,
       });
-      throw err;
     }
+    return hist;
+  }
+
+  /**
+   * Live-direct: today's Fear & Greed composite (`market_sentiment` shape,
+   * single `fear_greed` doc) computed fresh from Polygon per request WITHOUT
+   * writing Firestore. Backs GET /market-data/market-sentiment.
+   */
+  async fetchLatestLive(): Promise<Record<string, unknown>[]> {
+    const doc = await this.computeLatest(await this.priceSeries());
+    return [{ id: doc.id, ...doc.data }];
+  }
+
+  /**
+   * Live-direct: the composite Fear & Greed history (`market_sentiment_history`
+   * shape). Price components come live from Polygon; the per-day breadth input
+   * (formerly joined from `market_breadth`) is dropped — see computeHistory.
+   * Backs GET /market-data/market-sentiment-history.
+   */
+  async fetchHistoryLive(): Promise<Record<string, unknown>[]> {
+    const hist = this.computeHistory(await this.priceSeries());
+    return hist.map((h) => ({ id: h.id, ...h.data }));
   }
 }

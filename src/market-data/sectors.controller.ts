@@ -1,18 +1,14 @@
 import { Controller, Get, Header } from "@nestjs/common";
-import { CachedCollectionsService } from "../live/cached-collections.service";
-import { MarketDataService } from "./market-data.service";
+import { SectorsJob } from "../sync/sectors.job";
 
 /**
  * GET /market-data/sectors — backs the Market Heatmap screen's per-sector
- * `pctChange` (the `SectorApiDoc` shape). Triggers the `sectors` sync job on
- * demand when stale/empty per decision #3a.
+ * `pctChange` (the `SectorApiDoc` shape). Live-direct: fetched per request from
+ * the vendor via the source job, no Firestore cache.
  */
 @Controller("market-data")
 export class SectorsController {
-  constructor(
-    private readonly marketData: MarketDataService,
-    private readonly cached: CachedCollectionsService,
-  ) {}
+  constructor(private readonly job: SectorsJob) {}
 
   @Get("sectors")
   @Header(
@@ -20,8 +16,6 @@ export class SectorsController {
     "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
   )
   async sectors() {
-    await this.marketData.ensureFresh("sectors");
-    const { sectors } = await this.cached.get(["sectors"]);
-    return sectors;
+    return this.job.fetchLive();
   }
 }

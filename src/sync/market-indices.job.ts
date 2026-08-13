@@ -1,24 +1,10 @@
-import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
-import { FirebaseAdminService } from "../common/firebase-admin.provider";
-import {
-  batchSetWithCreatedAt,
-  type PendingWrite,
-} from "../common/firestore-batch.util";
-import { SyncMetaService } from "../common/sync-meta.service";
-import { QUOTE_ADAPTER, type QuoteAdapter } from "../adapters/types";
-import { SyncRegistry } from "../common/sync-registry.service";
+import { Injectable, Logger } from "@nestjs/common";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 
-const JOB_NAME = "market-indices";
-
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
 // Same multiplier convention as TAPE_INDICES in tape-universe.ts — kept in
-// sync deliberately (see that file's docblock: this job and the tape render
-// the same instruments from two independent code paths; any divergence in
-// value shows up as two tiles disagreeing about "S&P 500" on the same screen).
+// sync deliberately (this job and the tape render the same instruments from two
+// independent code paths; any divergence shows up as two tiles disagreeing
+// about "S&P 500" on the same screen).
 const INDEX_PROXIES = [
   {
     symbol: "SPX",
@@ -83,147 +69,89 @@ const INDEX_PROXIES = [
 ];
 
 @Injectable()
-export class MarketIndicesJob implements OnModuleInit {
+export class MarketIndicesJob {
   private readonly logger = new Logger(MarketIndicesJob.name);
 
-  constructor(
-    @Inject(QUOTE_ADAPTER) private readonly quotes: QuoteAdapter,
-    private readonly polygon: PolygonService,
-    private readonly firebase: FirebaseAdminService,
-    private readonly meta: SyncMetaService,
-    private readonly registry: SyncRegistry,
-  ) {}
+  constructor(private readonly polygon: PolygonService) {}
 
-  onModuleInit() {
-    this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ["market_indices", "market_indices_history"],
-      cronExpression: "5 18 * * 1-5",
-      timeZone: "America/New_York",
-    });
-  }
+  /**
+   * Live-direct: the current index proxies (+ the US10Y treasury yield) computed
+   * fresh from Polygon per request, WITHOUT reading or writing Firestore.
+   * Returns the same `{id: symbol, ...data}` shape a `market_indices` doc read
+   * yielded. ONE universal-snapshot call for the proxies plus one treasury call.
+   */
+  async fetchLive(): Promise<Record<string, unknown>[]> {
+    const now = new Date().toISOString();
+    const out: Record<string, unknown>[] = [];
 
-  async scheduled() {
-    await this.registry.get(JOB_NAME)();
-  }
-
-  async run() {
     try {
-      const writes: PendingWrite[] = [];
-      const col = this.firebase.firestore.collection("market_indices");
-      const historyCol = this.firebase.firestore.collection(
-        "market_indices_history",
+      const rows = await this.polygon.getUniversalSnapshot(
+        INDEX_PROXIES.map((i) => i.proxyTicker),
       );
-      const today = isoDate(new Date());
-      let written = 0;
+      const bySymbol = new Map(rows.map((r) => [r.ticker, r]));
       for (const idx of INDEX_PROXIES) {
-        try {
-          const quoteResult = await this.quotes.fetchQuote(idx.proxyTicker);
-          if (!quoteResult) {
-            this.logger.warn(
-              `No quote for ${idx.symbol} (${idx.proxyTicker}) from any source — skipping`,
-            );
-            continue;
-          }
-          const quote = quoteResult.data;
-          const source = quoteResult.source;
-          // value/change/open/prevClose/dayHigh/dayLow are price-level fields
-          // and scale with the index; pctChange is scale-invariant.
-          const mult = idx.multiplier ?? 1;
-          const doc = {
-            label: idx.label,
-            proxyTicker: idx.proxyTicker,
-            isProxy: idx.isProxy,
-            note: idx.note ?? null,
-            value: quote.c * mult,
-            change: quote.d * mult,
-            pctChange: quote.dp,
-            open: quote.o * mult,
-            dayHigh: quote.h * mult,
-            dayLow: quote.l * mult,
-            prevClose: quote.pc * mult,
-            source,
-            updatedAt: new Date().toISOString(),
-          };
-          writes.push({ ref: col.doc(idx.symbol), data: doc });
-          // merge:false preserves this call site's original plain set() — history
-          // rows are a full snapshot, not an accumulation of partial updates.
-          writes.push({
-            ref: historyCol.doc(`${today}_${idx.symbol}`),
-            data: {
-              ...doc,
-              asOfDate: today,
-            },
-            merge: false,
-          });
-          written++;
-        } catch (err) {
-          this.logger.error(
-            `Failed fetching proxy quote for ${idx.symbol} (${idx.proxyTicker}): ${err.message}`,
-          );
-        }
+        const r = bySymbol.get(idx.proxyTicker);
+        if (!r) continue;
+        const mult = idx.multiplier ?? 1;
+        out.push({
+          id: idx.symbol,
+          label: idx.label,
+          proxyTicker: idx.proxyTicker,
+          isProxy: idx.isProxy,
+          note: idx.note ?? null,
+          value: r.price != null ? r.price * mult : null,
+          change: r.change != null ? r.change * mult : null,
+          pctChange: r.changePercent,
+          open: r.open != null ? r.open * mult : null,
+          dayHigh: r.high != null ? r.high * mult : null,
+          dayLow: r.low != null ? r.low * mult : null,
+          prevClose: r.previousClose != null ? r.previousClose * mult : null,
+          source: "polygon",
+          updatedAt: now,
+        });
       }
-      // US10Y is NOT an ETF proxy any more. It used to be TLT — a long-treasury
-      // fund that moves INVERSELY to the yield it was labelled as, so a falling
-      // 10Y rendered as a falling "10Y Yield" tile when the yield was rising.
-      // Polygon's /fed/v1/treasury-yields is authorized on this plan and gives
-      // the actual constant-maturity yield, plus the rest of the curve for the
-      // Macro screen.
-      try {
-        const curve = await this.polygon.getTreasuryYields(2);
-        const latest = curve[0];
-        const prior = curve[1];
-        if (latest?.yield10Year != null) {
-          const value = latest.yield10Year;
-          const pc = prior?.yield10Year ?? null;
-          // Yields are quoted in percentage POINTS, so `change` is a basis-point
-          // move and `pctChange` is its relative size — not the same number.
-          const change =
-            pc == null ? null : Math.round((value - pc) * 1000) / 1000;
-          const doc = {
-            label: "10Y Yield",
-            proxyTicker: null,
-            isProxy: false,
-            note: "US Treasury 10-year constant-maturity yield, in percent",
-            unit: "percent",
-            value,
-            change,
-            pctChange:
-              pc && pc !== 0 && change != null
-                ? Math.round(((value - pc) / pc) * 10000) / 100
-                : null,
-            open: null,
-            prevClose: pc,
-            asOfDate: latest.date,
-            curve: latest,
-            source: "polygon-fed",
-            updatedAt: new Date().toISOString(),
-          };
-          const curveWrites: PendingWrite[] = [
-            { ref: col.doc("US10Y"), data: doc },
-            {
-              ref: historyCol.doc(`${today}_US10Y`),
-              data: { ...doc, asOfDate: today },
-              merge: false,
-            },
-          ];
-          await batchSetWithCreatedAt(this.firebase.firestore, curveWrites);
-          written++;
-        }
-      } catch (err) {
-        this.logger.error(
-          `Failed fetching treasury yields for US10Y: ${err.message}`,
-        );
-      }
-
-      await batchSetWithCreatedAt(this.firebase.firestore, writes);
-      await this.meta.record(JOB_NAME, { ok: true, count: written });
-      return { written };
     } catch (err) {
-      await this.meta.record(JOB_NAME, {
-        ok: false,
-        error: err.message,
-      });
-      throw err;
+      this.logger.error(
+        `Failed fetching index proxy snapshot: ${(err as Error).message}`,
+      );
     }
+
+    // US10Y — the actual constant-maturity yield from Polygon's treasury feed.
+    try {
+      const curve = await this.polygon.getTreasuryYields(2);
+      const latest = curve[0];
+      const prior = curve[1];
+      if (latest?.yield10Year != null) {
+        const value = latest.yield10Year;
+        const pc = prior?.yield10Year ?? null;
+        const change = pc == null ? null : Math.round((value - pc) * 1000) / 1000;
+        out.push({
+          id: "US10Y",
+          label: "10Y Yield",
+          proxyTicker: null,
+          isProxy: false,
+          note: "US Treasury 10-year constant-maturity yield, in percent",
+          unit: "percent",
+          value,
+          change,
+          pctChange:
+            pc && pc !== 0 && change != null
+              ? Math.round(((value - pc) / pc) * 10000) / 100
+              : null,
+          open: null,
+          prevClose: pc,
+          asOfDate: latest.date,
+          curve: latest,
+          source: "polygon-fed",
+          updatedAt: now,
+        });
+      }
+    } catch (err) {
+      this.logger.error(
+        `Failed fetching treasury yields for US10Y: ${(err as Error).message}`,
+      );
+    }
+
+    return out;
   }
 }

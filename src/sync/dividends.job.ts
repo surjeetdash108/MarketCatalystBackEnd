@@ -1,12 +1,9 @@
-import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
-import { FirebaseAdminService } from "../common/firebase-admin.provider";
-import { chunkedBatchSet } from "../common/firestore-batch.util";
-import { SyncMetaService } from "../common/sync-meta.service";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { DIVIDENDS_ADAPTER, type DividendsAdapter } from "../adapters/types";
-import { SyncRegistry } from "../common/sync-registry.service";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 
-const JOB_NAME = "dividends";
 const LOOKAHEAD_DAYS = 30;
+const SNAPSHOT_CHUNK = 250;
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -34,116 +31,95 @@ function dividendDocId(e: {
 }
 
 @Injectable()
-export class DividendsJob implements OnModuleInit {
+export class DividendsJob {
   private readonly logger = new Logger(DividendsJob.name);
 
   constructor(
     @Inject(DIVIDENDS_ADAPTER) private readonly dividends: DividendsAdapter,
-    private readonly firebase: FirebaseAdminService,
-    private readonly meta: SyncMetaService,
-    private readonly registry: SyncRegistry,
+    private readonly polygon: PolygonService,
   ) {}
 
-  onModuleInit() {
-    this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ["dividends"],
-      cronExpression: "20 6 * * *",
-      timeZone: "America/New_York",
-    });
+  /**
+   * Live-direct: fetch + shape the dividend calendar WITHOUT reading or writing
+   * Firestore, returning the exact `{id, ...data}` shape the `dividends`
+   * collection read used to yield. Backs GET /market-data/dividends.
+   */
+  async fetchLive(): Promise<Record<string, unknown>[]> {
+    const docs = await this.buildDocs();
+    return docs.map((d) => ({ id: d.id, ...d.data }));
   }
 
-  async scheduled() {
-    await this.registry.get(JOB_NAME)();
-  }
-
-  async run() {
-    try {
-      const from = isoDate(new Date());
-      const to = new Date();
-      to.setUTCDate(to.getUTCDate() + LOOKAHEAD_DAYS);
-      const toStr = isoDate(to);
-      const result = await this.dividends.fetchDividends(from, toStr);
-      const events = result.data;
-      const source = result.source;
-      if (result.warnings.length > 0) {
-        this.logger.log(
-          `dividends: ${result.warnings.map((w) => w.code).join(", ")}`,
-        );
-      }
-      // Annualized yield per row. Polygon has no yield field (it arrives null),
-      // which left the Macro screen's high-yield vs growth buckets unable to
-      // bucket anything and every row rendering "n/a". amount x payments-per-year
-      // over the last close is the same figure a vendor would supply, and the
-      // price is already synced on the company doc.
-      const symbols = [...new Set(events.map((e) => e.symbol).filter(Boolean))];
-      const priceByTicker = new Map<string, number>();
-      for (let i = 0; i < symbols.length; i += 300) {
-        const refs = symbols
-          .slice(i, i + 300)
-          .map((s) => this.firebase.firestore.collection("companies").doc(s));
-        const docs = await this.firebase.firestore
-          .getAll(...refs)
-          .catch(() => []);
-        for (const d of docs) {
-          const price = d.data()?.price;
-          if (typeof price === "number" && price > 0)
-            priceByTicker.set(d.id, price);
-        }
-      }
-      const PAYMENTS_PER_YEAR: Record<string, number> = {
-        Annual: 1,
-        "Semi-Annual": 2,
-        Quarterly: 4,
-        Monthly: 12,
-      };
-      const annualizedYield = (e: (typeof events)[number]): number | null => {
-        const price = priceByTicker.get(e.symbol);
-        // A one-time/special dividend has no annual cadence to project, so it
-        // gets no yield rather than a fabricated 4x annualization.
-        const perYear = e.frequency
-          ? PAYMENTS_PER_YEAR[e.frequency]
-          : undefined;
-        if (!price || !perYear || !e.dividend) return null;
-        return Math.round(((e.dividend * perYear) / price) * 10000) / 100;
-      };
-
-      // Doc ID is symbol + ex-dividend date, NOT symbol alone. A company can have
-      // more than one dividend event inside the lookahead window (a regular
-      // quarterly plus a special dividend, or two ex-dates spanning a quarter
-      // boundary). Keying on symbol alone made the second event overwrite the
-      // first — 1119 events collapsed to 1062 documents, so 57 were silently
-      // lost. Matches the scheme already used by ohlcv_bars ({ticker}_{barDate})
-      // and earnings_events ({ticker}_{date}). Events with no ex-date fall back
-      // to symbol alone rather than producing an "undefined"-suffixed key.
-      await chunkedBatchSet(
-        this.firebase.firestore,
-        "dividends",
-        events.map((e) => ({
-          id: dividendDocId(e),
-          data: {
-            ticker: e.symbol,
-            exDividendDate: e.date,
-            recordDate: e.recordDate,
-            paymentDate: e.paymentDate,
-            declarationDate: e.declarationDate,
-            dividendAmount: e.dividend,
-            yieldPct: e.yield ?? annualizedYield(e),
-            yieldIsDerived: e.yield == null,
-            frequency: e.frequency,
-            source,
-            warnings: result.warnings,
-            updatedAt: new Date().toISOString(),
-          },
-        })),
+  private async buildDocs(): Promise<
+    { id: string; data: Record<string, unknown> }[]
+  > {
+    const from = isoDate(new Date());
+    const to = new Date();
+    to.setUTCDate(to.getUTCDate() + LOOKAHEAD_DAYS);
+    const toStr = isoDate(to);
+    const result = await this.dividends.fetchDividends(from, toStr);
+    const events = result.data;
+    const source = result.source;
+    if (result.warnings.length > 0) {
+      this.logger.log(
+        `dividends: ${result.warnings.map((w) => w.code).join(", ")}`,
       );
-      await this.meta.record(JOB_NAME, { ok: true, count: events.length });
-      return { count: events.length };
-    } catch (err) {
-      await this.meta.record(JOB_NAME, {
-        ok: false,
-        error: err.message,
-      });
-      throw err;
     }
+    // Annualized yield per row. Polygon has no yield field (it arrives null),
+    // which left the Macro screen's high-yield vs growth buckets unable to
+    // bucket anything and every row rendering "n/a". amount x payments-per-year
+    // over the last price is the same figure a vendor would supply. Prices are
+    // pulled LIVE from Polygon's universal snapshot (the `companies` cache is
+    // gone), batched at up to 250 tickers per call.
+    const symbols = [...new Set(events.map((e) => e.symbol).filter(Boolean))];
+    const priceByTicker = new Map<string, number>();
+    for (let i = 0; i < symbols.length; i += SNAPSHOT_CHUNK) {
+      const chunk = symbols.slice(i, i + SNAPSHOT_CHUNK);
+      const snaps = await this.polygon
+        .getUniversalSnapshot(chunk)
+        .catch(() => []);
+      for (const s of snaps) {
+        if (typeof s.price === "number" && s.price > 0)
+          priceByTicker.set(s.ticker, s.price);
+      }
+    }
+    const PAYMENTS_PER_YEAR: Record<string, number> = {
+      Annual: 1,
+      "Semi-Annual": 2,
+      Quarterly: 4,
+      Monthly: 12,
+    };
+    const annualizedYield = (e: (typeof events)[number]): number | null => {
+      const price = priceByTicker.get(e.symbol);
+      // A one-time/special dividend has no annual cadence to project, so it
+      // gets no yield rather than a fabricated 4x annualization.
+      const perYear = e.frequency ? PAYMENTS_PER_YEAR[e.frequency] : undefined;
+      if (!price || !perYear || !e.dividend) return null;
+      return Math.round(((e.dividend * perYear) / price) * 10000) / 100;
+    };
+
+    // Doc ID is symbol + ex-dividend date, NOT symbol alone. A company can have
+    // more than one dividend event inside the lookahead window (a regular
+    // quarterly plus a special dividend, or two ex-dates spanning a quarter
+    // boundary). Keying on symbol alone made the second event overwrite the
+    // first — 1119 events collapsed to 1062 documents, so 57 were silently
+    // lost. Events with no ex-date fall back to symbol alone rather than
+    // producing an "undefined"-suffixed key.
+    return events.map((e) => ({
+      id: dividendDocId(e),
+      data: {
+        ticker: e.symbol,
+        exDividendDate: e.date,
+        recordDate: e.recordDate,
+        paymentDate: e.paymentDate,
+        declarationDate: e.declarationDate,
+        dividendAmount: e.dividend,
+        yieldPct: e.yield ?? annualizedYield(e),
+        yieldIsDerived: e.yield == null,
+        frequency: e.frequency,
+        source,
+        warnings: result.warnings,
+        updatedAt: new Date().toISOString(),
+      },
+    }));
   }
 }

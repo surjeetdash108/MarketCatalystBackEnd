@@ -8,7 +8,7 @@ import {
   Res,
 } from "@nestjs/common";
 import type { Request, Response } from "express";
-import { SnapshotCacheService } from "./snapshot-cache.service";
+import { SnapshotService } from "./snapshot.service";
 import { MarketStatusService } from "./market-status.service";
 
 /**
@@ -30,7 +30,7 @@ const MAX_TICKERS = 50;
 @Controller("live")
 export class SnapshotController {
   constructor(
-    private readonly snapshots: SnapshotCacheService,
+    private readonly snapshots: SnapshotService,
     private readonly marketStatus: MarketStatusService,
   ) {}
 
@@ -94,15 +94,12 @@ export class SnapshotController {
     });
   }
 
-  /**
-   * Proves the scaling property: upstreamCalls stays flat as servedRequests
-   * grows. If these two ever track each other, caching has broken.
-   */
+  /** Snapshot path is live-direct — no server-side cache to report on. */
   @Get("stats")
   stats() {
     return {
-      ...this.snapshots.stats,
-      note: "upstreamCalls should stay flat while servedRequests grows.",
+      mode: "live-direct",
+      note: "The snapshot path calls the vendor per request; there is no server-side cache.",
     };
   }
 }

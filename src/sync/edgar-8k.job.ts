@@ -1,30 +1,23 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
-import { FirebaseAdminService } from "../common/firebase-admin.provider";
-import { chunkedBatchSet } from "../common/firestore-batch.util";
-import { SyncMetaService } from "../common/sync-meta.service";
+import { Injectable, Logger } from "@nestjs/common";
 import { TICKER_UNIVERSE } from "../common/ticker-universe";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
-import { SyncRegistry } from "../common/sync-registry.service";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 
 /**
- * SEC-EDGAR 8-K ingestion → two collections, from ONE per-company submissions
+ * SEC-EDGAR 8-K ingestion → two live feeds, from ONE per-company submissions
  * fetch (same per-CIK pattern as sec-form4):
  *
- *  • `filings_wire/{accession}`      — every recent 8-K as a filings "newswire"
- *                                      item (delivery-plan: News → filings wire).
- *  • `earnings_announcements/{ticker}_{date}` — 8-Ks carrying item 2.02 (Results
- *                                      of Operations), the real earnings
- *                                      announcement. Adds the session (BMO/AMC,
- *                                      from the SEC acceptance time) and the
- *                                      post-announcement price reaction (from
- *                                      ohlcv_bars) that Polygon alone can't give.
+ *  • filings "newswire"      — every recent 8-K (delivery-plan: News → wire).
+ *  • earnings announcements  — 8-Ks carrying item 2.02 (Results of Operations),
+ *                              the real earnings announcement. Adds the session
+ *                              (BMO/AMC, from the SEC acceptance time) and the
+ *                              post-announcement price reaction (computed live
+ *                              from Polygon daily bars) that Polygon alone can't
+ *                              give from the filing.
  *
- * Cursor-batched across the ticker universe so each run is bounded; docs are
- * keyed idempotently (accession / ticker_date), so re-runs upsert.
+ * Live-direct: swept across the full ticker universe per request, no Firestore.
  */
 
-const JOB_NAME = "edgar-8k";
-const BATCH_SIZE = 20;
 const FILINGS_PER_COMPANY = 8;
 const LOOKBACK_DAYS = 120;
 
@@ -70,34 +63,19 @@ async function fetchTickerToCik(
 }
 
 @Injectable()
-export class Edgar8KJob implements OnModuleInit {
+export class Edgar8KJob {
   private readonly logger = new Logger(Edgar8KJob.name);
 
   constructor(
     private readonly secEdgar: SecEdgarService,
-    private readonly firebase: FirebaseAdminService,
-    private readonly meta: SyncMetaService,
-    private readonly registry: SyncRegistry,
+    private readonly polygon: PolygonService,
   ) {}
-
-  onModuleInit() {
-    this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ["filings_wire", "earnings_announcements"],
-      cronExpression: "0 8 * * 1-5", // runs inside premarket orchestration
-      timeZone: "America/New_York",
-    });
-  }
-
-  async scheduled() {
-    await this.registry.get(JOB_NAME)();
-  }
 
   /**
    * Post-announcement % move around `announceDate`, direction-aware by session.
-   * Uses the EXISTING (ticker ASC, barDate DESC) composite index — `barDate <=`
-   * + `orderBy barDate desc`, then reversed in memory — so no new index is
-   * required. Any query failure degrades to null rather than dropping the whole
-   * announcement.
+   * Computed LIVE from Polygon daily bars in a window bracketing the
+   * announcement (the served `ohlcv_bars` cache is gone). Any failure degrades
+   * to null rather than dropping the whole announcement.
    */
   private async reactionPct(
     ticker: string,
@@ -105,22 +83,13 @@ export class Edgar8KJob implements OnModuleInit {
     session: "BMO" | "AMC" | "Intraday" | null,
   ): Promise<number | null> {
     try {
+      const from = isoDate(addDays(new Date(announceDate), -7));
       const to = isoDate(addDays(new Date(announceDate), 7));
-      const snap = await this.firebase.firestore
-        .collection("ohlcv_bars")
-        .where("ticker", "==", ticker)
-        .where("barDate", "<=", to)
-        .orderBy("barDate", "desc")
-        .limit(20)
-        .get();
-      const bars = (
-        snap.docs
-          .map((d) => d.data())
-          .filter((b) => typeof b.close === "number") as {
-          barDate: string;
-          close: number;
-        }[]
-      ).reverse(); // ascending
+      const raw = await this.polygon.getAggsRange(ticker, from, to);
+      const bars = raw
+        .map((b) => ({ barDate: isoDate(new Date(b.t)), close: b.c }))
+        .filter((b) => typeof b.close === "number")
+        .sort((a, b) => a.barDate.localeCompare(b.barDate)); // ascending
       if (bars.length < 2) return null;
       let idx = bars.findIndex((b) => b.barDate >= announceDate);
       if (idx === -1) idx = bars.length - 1;
@@ -146,106 +115,126 @@ export class Edgar8KJob implements OnModuleInit {
     }
   }
 
-  async run() {
+  /** Build the 8-K wire + earnings-announcement docs for ONE company. */
+  private async processTicker(
+    ticker: string,
+    cik: string,
+    cutoff: string,
+  ): Promise<{
+    wire: { id: string; data: Record<string, unknown> }[];
+    ann: { id: string; data: Record<string, unknown> }[];
+  }> {
+    const wire: { id: string; data: Record<string, unknown> }[] = [];
+    const ann: { id: string; data: Record<string, unknown> }[] = [];
     try {
-      const cursor = await this.meta.getCursor(JOB_NAME);
-      const batch = Array.from(
-        { length: BATCH_SIZE },
-        (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
-      );
-      const tickerToCik = await fetchTickerToCik(
-        "Market Catalyst Backend hello@inc108.com",
-      );
-      const cutoff = isoDate(addDays(new Date(), -LOOKBACK_DAYS));
+      const { name, recentFilings } = await this.secEdgar.getSubmissions(cik);
+      const eightKs = recentFilings
+        .filter((f) => f.form === "8-K" && f.filingDate >= cutoff)
+        .slice(0, FILINGS_PER_COMPANY);
+      for (const f of eightKs) {
+        const announceDate = f.reportDate || f.filingDate;
+        const session = sessionFromAcceptance(f.acceptanceDateTime);
+        const items = f.items ?? "";
+        const hasResults = /(^|[^\d])2\.02([^\d]|$)/.test(items);
+        const accNoDash = f.accessionNumber.replace(/-/g, "");
+        const url = `https://www.sec.gov/Archives/edgar/data/${cik.replace(/\D/g, "")}/${accNoDash}/${f.primaryDocument}`;
 
-      const wireDocs: { id: string; data: Record<string, unknown> }[] = [];
-      const annDocs: { id: string; data: Record<string, unknown> }[] = [];
+        wire.push({
+          id: f.accessionNumber,
+          data: {
+            ticker,
+            companyName: name ?? ticker,
+            form: f.form,
+            filingDate: f.filingDate,
+            announceDate,
+            acceptanceDateTime: f.acceptanceDateTime ?? null,
+            items: items || null,
+            session,
+            isEarnings: hasResults,
+            description: f.primaryDocDescription ?? "8-K",
+            url,
+            updatedAt: new Date().toISOString(),
+          },
+        });
 
-      for (const ticker of batch) {
-        const cik = tickerToCik.get(ticker);
-        if (!cik) {
-          this.logger.warn(`No CIK found for ${ticker} — skipping 8-K lookup`);
-          continue;
-        }
-        try {
-          const { name, recentFilings } =
-            await this.secEdgar.getSubmissions(cik);
-          const eightKs = recentFilings
-            .filter((f) => f.form === "8-K" && f.filingDate >= cutoff)
-            .slice(0, FILINGS_PER_COMPANY);
-          for (const f of eightKs) {
-            const announceDate = f.reportDate || f.filingDate;
-            const session = sessionFromAcceptance(f.acceptanceDateTime);
-            const items = f.items ?? "";
-            const hasResults = /(^|[^\d])2\.02([^\d]|$)/.test(items);
-            const accNoDash = f.accessionNumber.replace(/-/g, "");
-            const url = `https://www.sec.gov/Archives/edgar/data/${cik.replace(/\D/g, "")}/${accNoDash}/${f.primaryDocument}`;
-
-            wireDocs.push({
-              id: f.accessionNumber,
-              data: {
-                ticker,
-                companyName: name ?? ticker,
-                form: f.form,
-                filingDate: f.filingDate,
-                announceDate,
-                acceptanceDateTime: f.acceptanceDateTime ?? null,
-                items: items || null,
-                session,
-                isEarnings: hasResults,
-                description: f.primaryDocDescription ?? "8-K",
-                url,
-                updatedAt: new Date().toISOString(),
-              },
-            });
-
-            if (hasResults) {
-              const reactionPct = await this.reactionPct(
-                ticker,
-                announceDate,
-                session,
-              );
-              annDocs.push({
-                id: `${ticker}_${announceDate}`,
-                data: {
-                  ticker,
-                  companyName: name ?? ticker,
-                  announceDate,
-                  session,
-                  reactionPct:
-                    reactionPct == null
-                      ? null
-                      : Math.round(reactionPct * 100) / 100,
-                  accessionNumber: f.accessionNumber,
-                  url,
-                  updatedAt: new Date().toISOString(),
-                },
-              });
-            }
-          }
-        } catch (err) {
-          this.logger.error(`Failed syncing 8-K for ${ticker}: ${err.message}`);
+        if (hasResults) {
+          const reactionPct = await this.reactionPct(
+            ticker,
+            announceDate,
+            session,
+          );
+          ann.push({
+            id: `${ticker}_${announceDate}`,
+            data: {
+              ticker,
+              companyName: name ?? ticker,
+              announceDate,
+              session,
+              reactionPct:
+                reactionPct == null
+                  ? null
+                  : Math.round(reactionPct * 100) / 100,
+              accessionNumber: f.accessionNumber,
+              url,
+              updatedAt: new Date().toISOString(),
+            },
+          });
         }
       }
-
-      await chunkedBatchSet(this.firebase.firestore, "filings_wire", wireDocs);
-      await chunkedBatchSet(
-        this.firebase.firestore,
-        "earnings_announcements",
-        annDocs,
-      );
-      await this.meta.setCursor(
-        JOB_NAME,
-        (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length,
-      );
-      await this.meta.record(JOB_NAME, { ok: true, count: wireDocs.length });
-      this.logger.log(
-        `edgar-8k: ${wireDocs.length} filings, ${annDocs.length} earnings announcements (cursor ${cursor})`,
-      );
-      return { filings: wireDocs.length, announcements: annDocs.length };
     } catch (err) {
-      await this.meta.record(JOB_NAME, { ok: false, error: err.message });
-      throw err;
+      this.logger.error(
+        `Failed syncing 8-K for ${ticker}: ${(err as Error).message}`,
+      );
     }
+    return { wire, ann };
+  }
+
+  /**
+   * Sweep a list of tickers and return both 8-K outputs. Used by `run()`
+   * (cursor batch) and the live-direct fetch (full universe).
+   */
+  private async sweep(tickers: string[]): Promise<{
+    wireDocs: { id: string; data: Record<string, unknown> }[];
+    annDocs: { id: string; data: Record<string, unknown> }[];
+  }> {
+    const tickerToCik = await fetchTickerToCik(
+      "Market Catalyst Backend hello@inc108.com",
+    );
+    const cutoff = isoDate(addDays(new Date(), -LOOKBACK_DAYS));
+    const wireDocs: { id: string; data: Record<string, unknown> }[] = [];
+    const annDocs: { id: string; data: Record<string, unknown> }[] = [];
+    for (const ticker of tickers) {
+      const cik = tickerToCik.get(ticker);
+      if (!cik) {
+        this.logger.warn(`No CIK found for ${ticker} — skipping 8-K lookup`);
+        continue;
+      }
+      const { wire, ann } = await this.processTicker(ticker, cik, cutoff);
+      wireDocs.push(...wire);
+      annDocs.push(...ann);
+    }
+    return { wireDocs, annDocs };
+  }
+
+  /**
+   * Live-direct: the recent-8-K filings "newswire" (`filings_wire` shape),
+   * swept across the FULL ticker universe per request WITHOUT writing Firestore.
+   * Backs GET /market-data/filings-wire. (A full SEC sweep is slow — accepted
+   * for a live read that must reproduce the whole collection.)
+   */
+  async fetchFilingsWireLive(): Promise<Record<string, unknown>[]> {
+    const { wireDocs } = await this.sweep([...TICKER_UNIVERSE]);
+    return wireDocs.map((d) => ({ id: d.id, ...d.data }));
+  }
+
+  /**
+   * Live-direct: 8-K item-2.02 earnings announcements (`earnings_announcements`
+   * shape), swept across the FULL ticker universe per request WITHOUT writing
+   * Firestore. Backs GET /market-data/earnings-announcements. The reaction %
+   * still reads `ohlcv_bars` (an existing enrichment, not the served cache).
+   */
+  async fetchEarningsAnnouncementsLive(): Promise<Record<string, unknown>[]> {
+    const { annDocs } = await this.sweep([...TICKER_UNIVERSE]);
+    return annDocs.map((d) => ({ id: d.id, ...d.data }));
   }
 }

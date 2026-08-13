@@ -1,18 +1,15 @@
 import { Controller, Get, Header } from "@nestjs/common";
-import { CachedCollectionsService } from "../live/cached-collections.service";
-import { MarketDataService } from "./market-data.service";
+import { AnalystActionsJob } from "../sync/analyst-actions.job";
 
 /**
  * GET /market-data/analyst-actions — backs the Analyst Actions screen's live
- * consensus card (the `AnalystConsensusDoc` shape). Triggers the
- * `analyst-actions` sync job on demand when stale/empty per decision #3a.
+ * consensus card (the `AnalystConsensusDoc` shape). Live-direct: fetched per
+ * request from the source job, no Firestore cache. There is no analyst-ratings
+ * vendor wired (Polygon has no analyst endpoint), so the live response is [].
  */
 @Controller("market-data")
 export class AnalystActionsController {
-  constructor(
-    private readonly marketData: MarketDataService,
-    private readonly cached: CachedCollectionsService,
-  ) {}
+  constructor(private readonly job: AnalystActionsJob) {}
 
   @Get("analyst-actions")
   @Header(
@@ -20,8 +17,6 @@ export class AnalystActionsController {
     "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
   )
   async analystActions() {
-    await this.marketData.ensureFresh("analyst-actions");
-    const { analyst_actions } = await this.cached.get(["analyst_actions"]);
-    return analyst_actions;
+    return this.job.fetchLive();
   }
 }

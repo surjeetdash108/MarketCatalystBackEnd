@@ -13,7 +13,6 @@ import { AutoPurgeModule } from "./auto-purge/auto-purge.module";
 import { LiveModule } from "./live/live.module";
 import { MarketDataModule } from "./market-data/market-data.module";
 import { PurgeModule } from "./purge/purge.module";
-import { SyncModule } from "./sync/sync.module";
 import { ApiHealthModule } from "./api-health/api-health.module";
 
 /**
@@ -44,7 +43,6 @@ const isLiveRole =
 const workerModules = isLiveRole
   ? []
   : [
-      SyncModule,
       PurgeModule,
       FeatureFlagsModule,
       RetentionModule,

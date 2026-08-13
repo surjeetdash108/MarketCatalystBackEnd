@@ -1,26 +1,28 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
-import { FirebaseAdminService } from "../common/firebase-admin.provider";
-import { setWithCreatedAt } from "../common/firestore-batch.util";
-import { SyncMetaService } from "../common/sync-meta.service";
-import { SyncRegistry } from "../common/sync-registry.service";
+import { Injectable } from "@nestjs/common";
+import { FmpService } from "../vendors/fmp/fmp.service";
+import { MarketIndicesJob } from "./market-indices.job";
+import { SectorsJob } from "./sectors.job";
 
 /**
- * End-of-Day recap → `recaps/{date}` (delivery-plan R28).
+ * Recap → the numeric fields the Recap screen renders (indices, top movers,
+ * sector leaders/laggards).
  *
- * A recap is a frozen EOD SNAPSHOT of data that already lives in other synced
- * collections — indices, movers, sectors and breadth. It composes them (it does
- * not call any vendor) into one document so `recap.tsx` can render a real,
- * date-stamped recap instead of the hardcoded "Tuesday May 21" it shipped with.
+ * Live-direct: composed fresh per request from the live fetchers, WITHOUT
+ * reading or writing Firestore. Backs GET /market-data/recaps.
  *
- * Deliberately snapshot-per-day rather than a live read: the recap for a past
- * session must not change when the underlying collections advance. It runs after
- * the 18:00 ET EOD jobs (market-movers / sectors / market-breadth), at 18:45 ET.
+ * A recap used to be an EOD snapshot composed from the synced `market_indices`,
+ * `market_movers`, `sectors` and `market_breadth` collections plus their
+ * histories. Those collections are no longer written, so the recap is now
+ * recomposed from the corresponding LIVE sources:
+ *   - indices        ← MarketIndicesJob.fetchLive() (Polygon snapshot)
+ *   - top gainers/losers ← FMP biggest gainers/losers (same source as /movers)
+ *   - sector leaders/laggards ← SectorsJob.fetchLive()
  *
- * The NARRATIVE lead (the prose "stocks closed higher because…") is NOT produced
- * here — that is AI copy tracked under R36 (Anthropic). This job owns the DATA.
+ * DEGRADED: `internals` (per-day market breadth) and the `weekly` aggregates
+ * required accumulated per-day history with no single live vendor call, so they
+ * are dropped (null) rather than reading a now-empty Firestore collection.
  */
 
-const JOB_NAME = "recaps";
 const TOP_N = 6;
 
 function isoDate(d: Date): string {
@@ -28,198 +30,97 @@ function isoDate(d: Date): string {
 }
 
 @Injectable()
-export class RecapsJob implements OnModuleInit {
-  private readonly logger = new Logger(RecapsJob.name);
-
+export class RecapsJob {
   constructor(
-    private readonly firebase: FirebaseAdminService,
-    private readonly meta: SyncMetaService,
-    private readonly registry: SyncRegistry,
+    private readonly fmp: FmpService,
+    private readonly indices: MarketIndicesJob,
+    private readonly sectorsJob: SectorsJob,
   ) {}
-
-  onModuleInit() {
-    this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ["recaps"],
-      cronExpression: "45 18 * * 1-5",
-      timeZone: "America/New_York",
-    });
-  }
-
-  async scheduled() {
-    await this.registry.get(JOB_NAME)();
-  }
 
   private num(v: unknown): number | null {
     return typeof v === "number" && Number.isFinite(v) ? v : null;
   }
 
-  async run() {
-    try {
-      const db = this.firebase.firestore;
-      const weekAgo = isoDate(new Date(Date.now() - 7 * 86_400_000));
-      const [
-        indicesSnap,
-        moversSnap,
-        sectorsSnap,
-        breadthSnap,
-        idxHistSnap,
-        secHistSnap,
-      ] = await Promise.all([
-        db.collection("market_indices").get(),
-        db.collection("market_movers").get(),
-        db.collection("sectors").get(),
-        db.collection("market_breadth").get(),
-        db
-          .collection("market_indices_history")
-          .where("asOfDate", ">=", weekAgo)
-          .get(),
-        db.collection("sectors_history").where("asOfDate", ">=", weekAgo).get(),
-      ]);
+  /**
+   * Live-direct: compose today's recap fresh per request as a single-element
+   * array (the current session's recap), matching the `{id, ...data}` shape a
+   * `recaps` doc read yielded.
+   */
+  async fetchLive(): Promise<Record<string, unknown>[]> {
+    const doc = await this.buildRecap();
+    return [{ id: doc.id, ...doc.data }];
+  }
 
-      // Indices (SPX/NDX/DJI/RUT/VIX/US10Y/…) — label, value, % move.
-      const indices = indicesSnap.docs.map((d) => {
-        const x = d.data();
-        return {
-          id: d.id,
-          label: x.label ?? d.id,
-          value: this.num(x.value),
-          pctChange: this.num(x.pctChange),
-          change: this.num(x.change),
-          isProxy: !!x.isProxy,
-          proxyTicker: x.proxyTicker ?? null,
-          unit: x.unit ?? null,
-        };
-      });
+  private async buildRecap(): Promise<{
+    id: string;
+    data: Record<string, unknown>;
+  }> {
+    const [indexRows, gainers, losers, sectorRows] = await Promise.all([
+      this.indices.fetchLive(),
+      this.fmp.getGainers().catch(() => []),
+      this.fmp.getLosers().catch(() => []),
+      this.sectorsJob.fetchLive(),
+    ]);
 
-      // Movers → top gainers / losers by % change.
-      const movers = moversSnap.docs
-        .map((d) => {
-          const x = d.data();
-          return {
-            ticker: x.ticker ?? d.id,
-            name: x.name ?? x.ticker ?? d.id,
-            price: this.num(x.price),
-            pctChange: this.num(x.pctChange),
-            sector: x.sector ?? null,
-            cap: x.cap ?? null,
-          };
-        })
-        .filter((m) => m.pctChange != null);
-      const byPct = [...movers].sort(
-        (a, b) => (b.pctChange ?? 0) - (a.pctChange ?? 0),
-      );
-      const topGainers = byPct.slice(0, TOP_N);
-      const topLosers = byPct.slice(-TOP_N).reverse();
+    // Indices (SPX/NDX/DJI/RUT/VIX/US10Y/…) — label, value, % move.
+    const indices = indexRows.map((x) => ({
+      id: x.id,
+      label: x.label ?? x.id,
+      value: this.num(x.value),
+      pctChange: this.num(x.pctChange),
+      change: this.num(x.change),
+      isProxy: !!x.isProxy,
+      proxyTicker: x.proxyTicker ?? null,
+      unit: x.unit ?? null,
+    }));
 
-      // Sectors → leaders / laggards by % change.
-      const sectors = sectorsSnap.docs
-        .map((d) => {
-          const x = d.data();
-          return { sector: x.sector ?? d.id, pctChange: this.num(x.pctChange) };
-        })
-        .filter((s) => s.pctChange != null)
-        .sort((a, b) => (b.pctChange ?? 0) - (a.pctChange ?? 0));
-      const sectorLeaders = sectors.slice(0, 3);
-      const sectorLaggards = sectors.slice(-3).reverse();
+    // Movers → top gainers / losers by % change (live FMP feed).
+    const toMover = (m: {
+      symbol: string;
+      name?: string | null;
+      price?: number | null;
+      changesPercentage?: number | null;
+    }) => ({
+      ticker: m.symbol,
+      name: m.name ?? m.symbol,
+      price: this.num(m.price),
+      pctChange: this.num(m.changesPercentage),
+      sector: null as string | null,
+      cap: null as string | null,
+    });
+    const topGainers = gainers.slice(0, TOP_N).map(toMover);
+    const topLosers = losers.slice(0, TOP_N).map(toMover);
 
-      // Internals → the latest breadth day.
-      const breadth = breadthSnap.docs
-        .map((d) => ({ id: d.id, data: d.data() }))
-        .sort((a, b) => b.id.localeCompare(a.id))[0]?.data;
-      const breadthId = breadthSnap.docs
-        .map((d) => d.id)
-        .sort((a, b) => b.localeCompare(a))[0];
-      const internals = breadth
-        ? {
-            date: breadthId,
-            advancers: this.num(breadth.advancers),
-            decliners: this.num(breadth.decliners),
-            netAdvancers: this.num(breadth.netAdvancers),
-            breadthPct: this.num(breadth.breadthPct),
-            trin: this.num(breadth.trin),
-            mcclellan: this.num(breadth.mcclellan),
-            upVolume: this.num(breadth.upVolume),
-            downVolume: this.num(breadth.downVolume),
-          }
-        : null;
+    // Sectors → leaders / laggards by % change (live).
+    const sectors = sectorRows
+      .map((d) => ({
+        sector: (d.sector as string) ?? d.id,
+        pctChange: this.num(d.pctChange),
+      }))
+      .filter((s) => s.pctChange != null)
+      .sort((a, b) => (b.pctChange ?? 0) - (a.pctChange ?? 0));
+    const sectorLeaders = sectors.slice(0, 3);
+    const sectorLaggards = sectors.slice(-3).reverse();
 
-      // ── Weekly aggregates (delivery-plan R28 weekly tab) ──
-      // Index weekly % = price move from the first to the last history row this
-      // week (values are already scaled to the index level). Sector weekly % =
-      // the daily sector %s compounded across the week (sectors carry no level).
-      const idxByLabel = new Map<
-        string,
-        { asOfDate: string; value: number | null }[]
-      >();
-      for (const d of idxHistSnap.docs) {
-        const x = d.data();
-        const label = (x.label as string) ?? d.id;
-        const arr = idxByLabel.get(label) ?? [];
-        arr.push({ asOfDate: x.asOfDate as string, value: this.num(x.value) });
-        idxByLabel.set(label, arr);
-      }
-      const weeklyIndices = [...idxByLabel.entries()].map(([label, rows]) => {
-        const sorted = rows
-          .filter((r) => r.value != null && r.asOfDate)
-          .sort((a, b) => a.asOfDate.localeCompare(b.asOfDate));
-        if (sorted.length < 2) return { label, pctChange: null };
-        const first = sorted[0].value;
-        const last = sorted[sorted.length - 1].value;
-        const pct = first !== 0 ? ((last - first) / first) * 100 : null;
-        return {
-          label,
-          pctChange: pct == null ? null : Math.round(pct * 100) / 100,
-        };
-      });
-
-      const secByName = new Map<string, number[]>();
-      for (const d of secHistSnap.docs) {
-        const x = d.data();
-        const name = (x.sector as string) ?? d.id;
-        const pc = this.num(x.pctChange);
-        if (pc == null) continue;
-        const arr = secByName.get(name) ?? [];
-        arr.push(pc);
-        secByName.set(name, arr);
-      }
-      const weeklySectors = [...secByName.entries()]
-        .map(([sector, pcts]) => {
-          const compound =
-            (pcts.reduce((acc, p) => acc * (1 + p / 100), 1) - 1) * 100;
-          return { sector, pctChange: Math.round(compound * 100) / 100 };
-        })
-        .sort((a, b) => b.pctChange - a.pctChange);
-      const weekly = {
-        indices: weeklyIndices,
-        sectorLeaders: weeklySectors.slice(0, 3),
-        sectorLaggards: weeklySectors.slice(-3).reverse(),
-      };
-
-      const date = breadthId ?? isoDate(new Date());
-      await setWithCreatedAt(db, db.collection("recaps").doc(date), {
+    const date = isoDate(new Date());
+    return {
+      id: date,
+      data: {
         date,
         indices,
         topGainers,
         topLosers,
         sectorLeaders,
         sectorLaggards,
-        internals,
-        weekly,
-        // Narrative is R36 (Anthropic) — this job intentionally leaves it null.
+        // DEGRADED: per-day market breadth and weekly aggregates required
+        // accumulated history no single live call provides — dropped.
+        internals: null,
+        weekly: null,
+        // Narrative is R36 (Anthropic) — intentionally null.
         narrative: null,
         source: "polygon-derived",
         updatedAt: new Date().toISOString(),
-      });
-
-      await this.meta.record(JOB_NAME, { ok: true, count: 1 });
-      this.logger.log(
-        `recap ${date}: ${indices.length} indices, ${topGainers.length}/${topLosers.length} movers, ` +
-          `${sectorLeaders.length}/${sectorLaggards.length} sector lead/lag, internals ${internals ? "yes" : "no"}`,
-      );
-      return { date, gainers: topGainers.length, losers: topLosers.length };
-    } catch (err) {
-      await this.meta.record(JOB_NAME, { ok: false, error: err.message });
-      throw err;
-    }
+      },
+    };
   }
 }

@@ -1,18 +1,14 @@
 import { Controller, Get, Header } from "@nestjs/common";
-import { CachedCollectionsService } from "../live/cached-collections.service";
-import { MarketDataService } from "./market-data.service";
+import { DividendsJob } from "../sync/dividends.job";
 
 /**
  * GET /market-data/dividends — backs the Macro & VIX screen's live dividend
- * calendar (the `DividendDoc` shape). Triggers the `dividends` sync job on
- * demand when stale/empty per decision #3a.
+ * calendar (the `DividendDoc` shape). Live-direct: fetched per request from the
+ * vendor via the source job, no Firestore cache.
  */
 @Controller("market-data")
 export class DividendsController {
-  constructor(
-    private readonly marketData: MarketDataService,
-    private readonly cached: CachedCollectionsService,
-  ) {}
+  constructor(private readonly job: DividendsJob) {}
 
   @Get("dividends")
   @Header(
@@ -20,8 +16,6 @@ export class DividendsController {
     "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
   )
   async dividends() {
-    await this.marketData.ensureFresh("dividends");
-    const { dividends } = await this.cached.get(["dividends"]);
-    return dividends;
+    return this.job.fetchLive();
   }
 }

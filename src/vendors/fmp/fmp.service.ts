@@ -41,4 +41,28 @@ export class FmpService {
   > {
     return this.get(`earnings-calendar?from=${from}&to=${to}`);
   }
+
+  /** Biggest gaining stocks of the current session. */
+  async getGainers(): Promise<FmpMover[]> {
+    return this.get('biggest-gainers');
+  }
+
+  /** Biggest losing stocks of the current session. */
+  async getLosers(): Promise<FmpMover[]> {
+    return this.get('biggest-losers');
+  }
+
+  /** Most-active stocks of the current session (by volume). */
+  async getMostActive(): Promise<FmpMover[]> {
+    return this.get('most-actives');
+  }
+}
+
+/** One row from FMP's biggest-gainers / biggest-losers / most-actives feeds. */
+export interface FmpMover {
+  symbol: string;
+  name: string;
+  price: number;
+  change: number;
+  changesPercentage: number;
 }

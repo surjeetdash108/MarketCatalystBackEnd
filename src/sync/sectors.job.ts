@@ -1,14 +1,5 @@
-import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
-import { FirebaseAdminService } from "../common/firebase-admin.provider";
-import {
-  batchSetWithCreatedAt,
-  type PendingWrite,
-} from "../common/firestore-batch.util";
-import { SyncMetaService } from "../common/sync-meta.service";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { SECTORS_ADAPTER, type SectorsAdapter } from "../adapters/types";
-import { SyncRegistry } from "../common/sync-registry.service";
-
-const JOB_NAME = "sectors";
 
 function slug(sector: string): string {
   return sector
@@ -18,69 +9,50 @@ function slug(sector: string): string {
 }
 
 @Injectable()
-export class SectorsJob implements OnModuleInit {
+export class SectorsJob {
   private readonly logger = new Logger(SectorsJob.name);
 
   constructor(
     @Inject(SECTORS_ADAPTER) private readonly sectors: SectorsAdapter,
-    private readonly firebase: FirebaseAdminService,
-    private readonly meta: SyncMetaService,
-    private readonly registry: SyncRegistry,
   ) {}
 
-  onModuleInit() {
-    this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ["sectors", "sectors_history"],
-      cronExpression: "0 18 * * 1-5",
-      timeZone: "America/New_York",
-    });
+  /**
+   * Live-direct: fetch + shape per-sector performance WITHOUT writing Firestore,
+   * returning the exact `{id, ...data}` shape the `sectors` collection read used
+   * to yield. Backs GET /market-data/sectors.
+   */
+  async fetchLive(): Promise<Record<string, unknown>[]> {
+    const { current } = await this.buildDocs();
+    return current.map((d) => ({ id: d.id, ...d.data }));
   }
 
-  async scheduled() {
-    await this.registry.get(JOB_NAME)();
-  }
-
-  async run() {
-    try {
-      const result = await this.sectors.fetchSectorPerformance();
-      const rows = result.data;
-      const source = result.source;
-      if (result.warnings.length > 0) {
-        this.logger.log(
-          `sectors: ${result.warnings.map((w) => w.code).join(", ")}`,
-        );
-      }
-      const writes: PendingWrite[] = [];
-      const col = this.firebase.firestore.collection("sectors");
-      const historyCol = this.firebase.firestore.collection("sectors_history");
-      for (const row of rows) {
-        const doc = {
-          sector: row.sector,
-          exchange: row.exchange,
-          pctChange: Math.round(row.averageChange * 100) / 100,
-          asOfDate: row.date,
-          source,
-          warnings: result.warnings,
-          updatedAt: new Date().toISOString(),
-        };
-        writes.push({ ref: col.doc(slug(row.sector)), data: doc });
-        // merge:false preserves this call site's original plain set() — history
-        // rows are a full snapshot, not an accumulation of partial updates.
-        writes.push({
-          ref: historyCol.doc(`${row.date}_${slug(row.sector)}`),
-          data: doc,
-          merge: false,
-        });
-      }
-      await batchSetWithCreatedAt(this.firebase.firestore, writes);
-      await this.meta.record(JOB_NAME, { ok: true, count: rows.length });
-      return { count: rows.length };
-    } catch (err) {
-      await this.meta.record(JOB_NAME, {
-        ok: false,
-        error: err.message,
-      });
-      throw err;
+  private async buildDocs(): Promise<{
+    current: { id: string; data: Record<string, unknown> }[];
+    history: { id: string; data: Record<string, unknown> }[];
+  }> {
+    const result = await this.sectors.fetchSectorPerformance();
+    const rows = result.data;
+    const source = result.source;
+    if (result.warnings.length > 0) {
+      this.logger.log(
+        `sectors: ${result.warnings.map((w) => w.code).join(", ")}`,
+      );
     }
+    const current: { id: string; data: Record<string, unknown> }[] = [];
+    const history: { id: string; data: Record<string, unknown> }[] = [];
+    for (const row of rows) {
+      const doc = {
+        sector: row.sector,
+        exchange: row.exchange,
+        pctChange: Math.round(row.averageChange * 100) / 100,
+        asOfDate: row.date,
+        source,
+        warnings: result.warnings,
+        updatedAt: new Date().toISOString(),
+      };
+      current.push({ id: slug(row.sector), data: doc });
+      history.push({ id: `${row.date}_${slug(row.sector)}`, data: doc });
+    }
+    return { current, history };
   }
 }

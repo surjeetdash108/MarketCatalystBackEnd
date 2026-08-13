@@ -1,9 +1,5 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
-import { FirebaseAdminService } from "../common/firebase-admin.provider";
-import { setWithCreatedAt } from "../common/firestore-batch.util";
-import { SyncMetaService } from "../common/sync-meta.service";
+import { Injectable, Logger } from "@nestjs/common";
 import { FredService } from "../vendors/fred/fred.service";
-import { SyncRegistry } from "../common/sync-registry.service";
 
 /**
  * Macro regime label → `macro_regime/current`. A rules-based, graded read
@@ -12,8 +8,6 @@ import { SyncRegistry } from "../common/sync-registry.service";
  * 0 (neutral) or -1 (risk-off); the sum maps to Risk-On / Neutral / Risk-Off.
  * Components are stored so the UI can show the "why", not just the label.
  */
-
-const JOB_NAME = "macro-regime";
 
 interface Comp {
   value: number | null;
@@ -28,31 +22,27 @@ function num(v: string | undefined): number | null {
 }
 
 @Injectable()
-export class MacroRegimeJob implements OnModuleInit {
+export class MacroRegimeJob {
   private readonly logger = new Logger(MacroRegimeJob.name);
 
-  constructor(
-    private readonly fred: FredService,
-    private readonly firebase: FirebaseAdminService,
-    private readonly meta: SyncMetaService,
-    private readonly registry: SyncRegistry,
-  ) {}
+  constructor(private readonly fred: FredService) {}
 
-  onModuleInit() {
-    this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ["macro_regime"],
-      cronExpression: "0 8 * * 1-5", // runs inside premarket orchestration
-      timeZone: "America/New_York",
-    });
+  /**
+   * Live-direct: compute the FRED-derived macro regime WITHOUT writing
+   * Firestore, returning the exact `{id, ...data}` shape the `macro_regime`
+   * collection read used to yield (the single `current` doc). Backs
+   * GET /market-data/macro-regime.
+   */
+  async fetchLive(): Promise<Record<string, unknown>[]> {
+    const doc = await this.buildDoc();
+    return [{ id: doc.id, ...doc.data }];
   }
 
-  async scheduled() {
-    await this.registry.get(JOB_NAME)();
-  }
-
-  async run() {
-    try {
-      const [curveObs, vixObs, creditObs, sp500Obs, unrateObs] =
+  private async buildDoc(): Promise<{
+    id: string;
+    data: Record<string, unknown>;
+  }> {
+    const [curveObs, vixObs, creditObs, sp500Obs, unrateObs] =
         await Promise.all([
           this.fred.getLatestObservations("T10Y2Y", 1), // 10Y-2Y spread
           this.fred.getLatestObservations("VIXCLS", 1), // VIX close
@@ -171,28 +161,17 @@ export class MacroRegimeJob implements OnModuleInit {
         sp500Obs[0]?.date ??
         new Date().toISOString().slice(0, 10);
 
-      await setWithCreatedAt(
-        this.firebase.firestore,
-        this.firebase.firestore.collection("macro_regime").doc("current"),
-        {
-          regime,
-          score,
-          maxScore: counted,
-          components,
-          asOfDate,
-          source: "fred-derived",
-          updatedAt: new Date().toISOString(),
-        },
-      );
-
-      await this.meta.record(JOB_NAME, { ok: true, count: 1 });
-      this.logger.log(
-        `macro-regime: ${regime} (score ${score}/${counted}) as of ${asOfDate}`,
-      );
-      return { regime, score, counted };
-    } catch (err) {
-      await this.meta.record(JOB_NAME, { ok: false, error: err.message });
-      throw err;
-    }
+    return {
+      id: "current",
+      data: {
+        regime,
+        score,
+        maxScore: counted,
+        components,
+        asOfDate,
+        source: "fred-derived",
+        updatedAt: new Date().toISOString(),
+      },
+    };
   }
 }

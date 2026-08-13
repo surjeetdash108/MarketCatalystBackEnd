@@ -1,19 +1,17 @@
 import { Controller, Get, Header } from "@nestjs/common";
-import { CachedCollectionsService } from "../live/cached-collections.service";
-import { MarketDataService } from "./market-data.service";
+import { RecapsJob } from "../sync/recaps.job";
 
 /**
  * GET /market-data/recaps — backs the Recap screen's numeric fields
- * (indices/gainers/losers/sector leaders-laggards/internals). `recaps.job.ts`
- * writes `narrative: null` — the headline/story prose isn't produced by any
- * job yet, so the screen's hardcoded headline copy stays as-is.
+ * (indices/gainers/losers/sector leaders-laggards/internals). Live-direct: the
+ * CURRENT session's recap is composed fresh per request via the source job, no
+ * Firestore cache. A recap is a composition of the other synced collections and
+ * their history, so it still reads those upstream collections; only the current
+ * recap is reproduced live. `narrative` stays null (no job produces prose yet).
  */
 @Controller("market-data")
 export class RecapsController {
-  constructor(
-    private readonly marketData: MarketDataService,
-    private readonly cached: CachedCollectionsService,
-  ) {}
+  constructor(private readonly job: RecapsJob) {}
 
   @Get("recaps")
   @Header(
@@ -21,8 +19,6 @@ export class RecapsController {
     "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
   )
   async recaps() {
-    await this.marketData.ensureFresh("recaps");
-    const { recaps } = await this.cached.get(["recaps"]);
-    return recaps;
+    return this.job.fetchLive();
   }
 }
