@@ -75,7 +75,11 @@ news, options-chain, market-status, tape). They already use `OnDemandService`/
 - [x] earnings — live via FMP earnings-calendar (estimates + future dates!), verified.
       NOTE: earnings sync job KEPT — earnings_events is still read by /live/financials
       (EPS-estimate join), dividends.job, financials.job. Delete once those convert.
-- [ ] ipos / dividends / fund-holdings
+- [x] ipos — live (Polygon calendar + parallel aftermarket bars), verified ~3.8s.
+- [x] dividends — live (Polygon calendar + snapshot-price yield), verified ~4.6s.
+- [x] fund-holdings (+ drill-down) — live (SEC 13F), verified ~4.7s.
+      TIER B COMPLETE. Jobs deleted: sectors, macro-events, macro-regime, fear-greed,
+      market-movers, ipos, dividends, sec-13f (8). earnings job kept (see rule).
 
 ### Refactor-ordering rule (learned)
 A sync job can only be DELETED once nothing else reads its collection. Several
