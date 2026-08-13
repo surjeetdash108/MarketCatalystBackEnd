@@ -9,7 +9,6 @@ import { MarketIndicesJob } from "./market-indices.job";
 import { MarketQuotesJob } from "./market-quotes.job";
 import { NewsJob } from "./news.job";
 import { OptionsChainsJob } from "./options-chains.job";
-import { RecapsJob } from "./recaps.job";
 import { FundamentalsGrowthJob } from "./fundamentals-growth.job";
 import { FinancialsJob } from "./financials.job";
 import { IntradayBarsJob } from "./intraday-bars.job";
@@ -60,7 +59,6 @@ import { LiveModule } from "../live/live.module";
     FundamentalsGrowthJob,
     FinancialsJob,
     MarketBreadthJob,
-    RecapsJob,
     PremarketJob,
   ],
 })

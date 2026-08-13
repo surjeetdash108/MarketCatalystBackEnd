@@ -72,7 +72,8 @@ const PER_TICKER: string[] = [
   "corporate-actions",
 ];
 
-const FINAL: string[] = ["recaps"];
+// recaps is served live per request now (no job) — nothing to orchestrate here.
+const FINAL: string[] = [];
 
 /** Warm concurrency — enough to finish a few hundred tickers premarket. */
 const WARM_CONCURRENCY = 4;
