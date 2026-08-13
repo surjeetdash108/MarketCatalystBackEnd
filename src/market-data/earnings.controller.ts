@@ -1,27 +1,17 @@
-import { Controller, Get, Header } from "@nestjs/common";
-import { CachedCollectionsService } from "../live/cached-collections.service";
-import { MarketDataService } from "./market-data.service";
+import { Controller, Get } from "@nestjs/common";
+import { LiveEarningsService } from "./live-earnings.service";
 
 /**
- * GET /market-data/earnings — backs the Earnings Hub screen's live calendar
- * (the `LiveEarningsDoc` shape). Triggers the `earnings` sync job on demand
- * when stale/empty per decision #3a.
+ * GET /market-data/earnings — the Earnings Hub calendar (`LiveEarningsDoc`).
+ * Served LIVE per request from FMP's earnings-calendar (past + future, with
+ * estimates). No cache, no job.
  */
 @Controller("market-data")
 export class EarningsController {
-  constructor(
-    private readonly marketData: MarketDataService,
-    private readonly cached: CachedCollectionsService,
-  ) {}
+  constructor(private readonly liveEarnings: LiveEarningsService) {}
 
   @Get("earnings")
-  @Header(
-    "Cache-Control",
-    "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
-  )
   async earnings() {
-    await this.marketData.ensureFresh("earnings");
-    const { earnings_events } = await this.cached.get(["earnings_events"]);
-    return earnings_events;
+    return this.liveEarnings.getEarnings();
   }
 }
