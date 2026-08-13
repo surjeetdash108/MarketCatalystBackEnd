@@ -1,24 +1,16 @@
-import { Controller, Get, Header } from '@nestjs/common';
-import { CachedCollectionsService } from '../live/cached-collections.service';
-import { MarketDataService } from './market-data.service';
+import { Controller, Get, NotImplementedException } from '@nestjs/common';
 
 /**
- * GET /market-data/analyst-actions — backs the Analyst Actions screen's live
- * consensus card (the `AnalystConsensusDoc` shape). Triggers the
- * `analyst-actions` sync job on demand when stale/empty per decision #3a.
+ * GET /market-data/analyst-actions — no analyst-ratings vendor is wired
+ * (Polygon exposes no analyst/ratings/consensus endpoint on any tier, and the
+ * interim ratings source has been removed — see analyst-actions.job.ts).
+ * There is no source left to call directly, so this returns 501 rather than
+ * silently serving stale/empty cached data.
  */
 @Controller('market-data')
 export class AnalystActionsController {
-  constructor(
-    private readonly marketData: MarketDataService,
-    private readonly cached: CachedCollectionsService,
-  ) {}
-
   @Get('analyst-actions')
-  @Header('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600')
-  async analystActions() {
-    await this.marketData.ensureFresh('analyst-actions');
-    const { analyst_actions } = await this.cached.get(['analyst_actions']);
-    return analyst_actions;
+  analystActions(): never {
+    throw new NotImplementedException('not implemented');
   }
 }

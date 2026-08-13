@@ -1,49 +1,79 @@
-import { Controller, Get, Header } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { MarketDataService } from './market-data.service';
+import { Controller, Get, Header, Inject, Logger } from '@nestjs/common';
+import { AllSourcesFailedError } from '../adapters/adapter-error';
+import { NEWS_ADAPTER, type NewsAdapter } from '../adapters/types';
+import { TICKER_UNIVERSE } from '../common/ticker-universe';
 
-// A bounded, sorted view of `news` — NOT routed through CachedCollectionsService's
-// allow-list, since that does a full unfiltered collection().get() per entry;
-// `news` fans out to thousands of docs across the whole ticker universe (one
-// per ticker per article), so a flat cache-aside read there would ship the
-// entire collection into memory just to show the 30-60 most recent items two
-// screens actually want. This keeps its own small cache instead.
 const NEWS_FEED_LIMIT = 60;
-const NEWS_FEED_CACHE_MS = 2 * 60_000;
-// news.job.ts's own cron runs every 30 min — ensureFresh only needs to trigger
-// a refresh when nothing has synced in roughly that window, not MarketDataService's
-// default 20h (built for ~daily jobs).
-const NEWS_STALE_MS = 15 * 60_000;
+const LOOKBACK_DAYS = 2;
+const PER_TICKER_LIMIT = 5;
+const CONCURRENCY = 25;
+
+function isoDate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
 
 /**
  * GET /market-data/news — the global "most recent across every ticker" feed
  * that commentary.tsx's Live tab and Dashboard's Live Market Feed both want.
- * Per-ticker news (Stock Detail, commentary's per-symbol drawer) is served by
- * GET /live/news?ticker=X (src/live/ondemand.controller.ts) instead — that's a
- * cache-aside fill against the same `news` collection, scoped to one ticker.
+ * Calls the news adapter directly on every request (no Firestore cache, no
+ * sync job, no in-memory cache) — mirrors news.job.ts's per-ticker fetch,
+ * fanned out with a concurrency cap (same reasoning as companies.controller.ts:
+ * the vendor isn't rate-limited on a paid key, so sequential-with-sleep is
+ * unnecessary latency). Drops the job's notification-publish pass and
+ * `companies.newsCount` denormalization write — both are side effects of a
+ * write path, not part of what a GET should do.
  */
 @Controller('market-data')
 export class NewsController {
-  private cache: { data: Record<string, unknown>[]; at: number } | null = null;
+  private readonly logger = new Logger(NewsController.name);
 
-  constructor(
-    private readonly marketData: MarketDataService,
-    private readonly firebase: FirebaseAdminService,
-  ) {}
+  constructor(@Inject(NEWS_ADAPTER) private readonly newsAdapter: NewsAdapter) {}
 
   @Get('news')
-  @Header('Cache-Control', 'public, max-age=60, s-maxage=120, stale-while-revalidate=300')
+  @Header('Cache-Control', 'no-store')
   async news(): Promise<Record<string, unknown>[]> {
-    if (this.cache && Date.now() - this.cache.at < NEWS_FEED_CACHE_MS) return this.cache.data;
+    const to = new Date();
+    const from = new Date();
+    from.setUTCDate(from.getUTCDate() - LOOKBACK_DAYS);
+    const fromIso = isoDate(from);
+    const toIso = isoDate(to);
 
-    await this.marketData.ensureFresh('news', NEWS_STALE_MS);
-    const snap = await this.firebase.firestore
-      .collection('news')
-      .orderBy('publishedAt', 'desc')
-      .limit(NEWS_FEED_LIMIT)
-      .get();
-    const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    this.cache = { data, at: Date.now() };
-    return data;
+    const docs: Record<string, unknown>[] = [];
+    for (let i = 0; i < TICKER_UNIVERSE.length; i += CONCURRENCY) {
+      const chunk = TICKER_UNIVERSE.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(
+        chunk.map(async (symbol) => {
+          try {
+            const result = await this.newsAdapter.fetchNews(symbol, fromIso, toIso);
+            return result.data.slice(0, PER_TICKER_LIMIT).map((a) => ({
+              id: `${symbol}_${a.id}`,
+              ticker: a.ticker,
+              headline: a.headline,
+              summary: a.summary,
+              source: a.source,
+              url: a.url,
+              category: a.category,
+              sentiment: a.sentiment,
+              sentimentReasoning: a.sentimentReasoning,
+              keywords: a.keywords,
+              imageUrl: a.imageUrl,
+              publishedAt: a.publishedAt,
+              updatedAt: new Date().toISOString(),
+            }));
+          } catch (err) {
+            if (err instanceof AllSourcesFailedError) {
+              this.logger.error(`${symbol}: every configured news source failed`);
+            } else {
+              this.logger.error(`Failed fetching news for ${symbol}: ${(err as Error).message}`);
+            }
+            return [];
+          }
+        }),
+      );
+      docs.push(...results.flat());
+    }
+
+    docs.sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)));
+    return docs.slice(0, NEWS_FEED_LIMIT);
   }
 }

@@ -1,24 +1,20 @@
 import { Controller, Get, Header } from '@nestjs/common';
-import { CachedCollectionsService } from '../live/cached-collections.service';
-import { MarketDataService } from './market-data.service';
+import { Edgar8kFeedService } from './edgar-8k-feed.service';
 
 /**
- * GET /market-data/filings-wire — recent SEC-EDGAR 8-K filings as a filings
- * "newswire" feed (`filings_wire`, written by the `edgar-8k` job). Backs the
- * commentary/news filings-wire card.
+ * GET /market-data/filings-wire — the 8-K filings "newswire" feed. Calls SEC
+ * EDGAR directly on every request (no Firestore cache, no sync job) via
+ * Edgar8kFeedService — mirrors edgar-8k.job.ts's fetch, minus persistence.
+ * See Edgar8kFeedService for the SEC rate-limit tradeoff this implies.
  */
 @Controller('market-data')
 export class FilingsWireController {
-  constructor(
-    private readonly marketData: MarketDataService,
-    private readonly cached: CachedCollectionsService,
-  ) {}
+  constructor(private readonly edgar8k: Edgar8kFeedService) {}
 
   @Get('filings-wire')
-  @Header('Cache-Control', 'public, max-age=300, s-maxage=300, stale-while-revalidate=600')
+  @Header('Cache-Control', 'no-store')
   async filingsWire() {
-    await this.marketData.ensureFresh('edgar-8k');
-    const { filings_wire } = await this.cached.get(['filings_wire']);
-    return filings_wire;
+    const { wireDocs } = await this.edgar8k.fetchAll();
+    return wireDocs;
   }
 }
