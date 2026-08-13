@@ -7,6 +7,7 @@ import {
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { marked } from "marked";
 import TurndownService from "turndown";
+import { randomUUID } from "crypto";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 
 /**
@@ -117,6 +118,70 @@ export class BlogsAdminService {
   private htmlToMarkdown(html: string): string {
     if (!html) return "";
     return this.turndown.turndown(html);
+  }
+
+  /**
+   * Firestore caps a single document at 1 MB. The console embeds uploaded
+   * images as base64 `data:` URIs inside the blog `content`, so an image-heavy
+   * post (a 9 MB Word doc becomes ~3.1 MB of content) exceeds that cap and the
+   * write throws. This extracts every embedded image, uploads it to Firebase
+   * Storage under `blog-images/{blogId}/`, and rewrites each data URI to a
+   * public download URL — leaving `content` as just text + URLs, safely under
+   * 1 MB, with no ceiling on image size.
+   */
+  private async externalizeImages(
+    content: string,
+    blogId: string,
+  ): Promise<string> {
+    if (!content) return content;
+
+    // data:image/<subtype>;base64,<base64data>
+    const re = /data:image\/(png|jpeg|jpg|gif|webp|svg\+xml);base64,([A-Za-z0-9+/=]+)/g;
+
+    const matches = [...content.matchAll(re)];
+    if (matches.length === 0) return content;
+
+    const replacements = await Promise.all(
+      matches.map(async (m, i) => {
+        const dataUri = m[0];
+        const subtype = m[1];
+        const base64 = m[2];
+        const ext =
+          subtype === "jpeg"
+            ? "jpg"
+            : subtype === "svg+xml"
+              ? "svg"
+              : subtype;
+        const buf = Buffer.from(base64, "base64");
+        const token = randomUUID();
+        const path = `blog-images/${blogId}/${i}-${randomUUID()}.${ext}`;
+        try {
+          await this.firebase.bucket.file(path).save(buf, {
+            contentType: `image/${subtype}`,
+            metadata: {
+              metadata: { firebaseStorageDownloadTokens: token },
+            },
+            resumable: false,
+          });
+        } catch (err) {
+          throw new Error(
+            `image_upload_failed: ${path}: ${(err as Error).message}`,
+          );
+        }
+        const url = `https://firebasestorage.googleapis.com/v0/b/market-catalyst-502415.firebasestorage.app/o/${encodeURIComponent(
+          path,
+        )}?alt=media&token=${token}`;
+        return { dataUri, url };
+      }),
+    );
+
+    let out = content;
+    for (const { dataUri, url } of replacements) {
+      // Replace this exact data URI occurrence. split/join replaces every
+      // identical copy (duplicated images share one upload's URL — fine).
+      out = out.split(dataUri).join(url);
+    }
+    return out;
   }
 
   private formatDate(ts: Timestamp | null | undefined): string {
@@ -246,11 +311,18 @@ export class BlogsAdminService {
     const ref = this.col.doc();
     const slug = await this.generateUniqueSlug(title);
 
+    // Convert to Markdown, then hoist any embedded base64 images out to Storage
+    // so the stored `content` never contains a data URI (Firestore 1 MB cap).
+    const content = await this.externalizeImages(
+      this.htmlToMarkdown(typeof body.html === "string" ? body.html : ""),
+      ref.id,
+    );
+
     await ref.set({
       title,
       slug,
       excerpt: typeof body.dek === "string" ? body.dek : "",
-      content: this.htmlToMarkdown(typeof body.html === "string" ? body.html : ""),
+      content,
       status: published ? "published" : "draft",
       type,
       rank: rank ?? 999,
@@ -304,7 +376,10 @@ export class BlogsAdminService {
     if (rank !== undefined) update.rank = rank;
     if (body.dek !== undefined) update.excerpt = String(body.dek ?? "");
     if (body.html !== undefined) {
-      update.content = this.htmlToMarkdown(String(body.html ?? ""));
+      update.content = await this.externalizeImages(
+        this.htmlToMarkdown(String(body.html ?? "")),
+        id,
+      );
     }
     if (body.kick !== undefined) {
       const kick = String(body.kick ?? "");
@@ -334,6 +409,10 @@ export class BlogsAdminService {
     const slug = snap.data()?.slug as string | undefined;
 
     await ref.delete();
+    // Remove any externalized blog images for this post (best-effort).
+    await this.firebase.bucket
+      .deleteFiles({ prefix: `blog-images/${id}/` })
+      .catch(() => undefined);
     // Release the slug index doc so the slug can be reused.
     if (slug) {
       await this.firebase.firestore

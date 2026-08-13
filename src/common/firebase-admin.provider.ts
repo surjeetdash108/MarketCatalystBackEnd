@@ -15,6 +15,7 @@ import {
 } from "firebase-admin/app";
 import { Firestore, getFirestore } from "firebase-admin/firestore";
 import { Auth, getAuth } from "firebase-admin/auth";
+import { getStorage } from "firebase-admin/storage";
 
 @Injectable()
 export class FirebaseAdminService implements OnModuleInit {
@@ -125,5 +126,21 @@ export class FirebaseAdminService implements OnModuleInit {
       throw new Error("FirebaseAdminService used before initialisation");
     }
     return getAuth(this.app);
+  }
+
+  /**
+   * Default Storage bucket — used to externalize blog images so image-heavy
+   * `content` doesn't blow past Firestore's 1 MB/document limit.
+   */
+  get bucket() {
+    if (!this.app) {
+      throw new ServiceUnavailableException(
+        "Firebase Admin is not initialized — no FIREBASE_* credential env vars and no Application " +
+          "Default Credentials found. See backend/.env.example.",
+      );
+    }
+    return getStorage(this.app).bucket(
+      "market-catalyst-502415.firebasestorage.app",
+    );
   }
 }
