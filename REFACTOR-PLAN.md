@@ -63,10 +63,19 @@ news, options-chain, market-status, tape). They already use `OnDemandService`/
 5. Delete worker stack, collapse deploy, empty stale Firestore market-data collections.
 
 ## Status log
-- [ ] UI spinner fix
-- [ ] sectors
-- [ ] macro-events / macro-regime / market-sentiment
-- [ ] movers
+- [x] UI spinner fix (useApiResource loading-on-path-change)
+- [x] sectors — live (Polygon), verified
+- [x] macro-events — live (FRED), verified; needs FRED_API_KEY (now set in .env)
+- [x] macro-regime — live (FRED), verified; degrades gracefully
+- [x] market-sentiment (+ history) — live (Polygon), verified. History dropped the
+      market_breadth join (3 price components/day; today keeps live breadth).
+- [ ] movers (Tier B, flagship — next)
 - [ ] earnings (FMP) / ipos / dividends / fund-holdings
-- [ ] Tier C
-- [ ] worker/deploy teardown
+- [ ] Tier C (companies, news, recaps, SEC feeds per-ticker, ipo-pipeline, analyst→FMP, sentiment-history)
+- [ ] worker/deploy teardown (delete SyncModule+Purge+Retention+AutoPurge, collapse roles)
+
+## Env notes (stage .env, gitignored)
+- FMP_API_KEY, FRED_API_KEY, POLYGON_API_KEY set. POLYGON_PAGE_DELAY_MS=0.
+- Reverted aspirational source values that the polygon-only AdaptersModule rejects
+  (MOVERS_SOURCE, *_FALLBACK_SOURCE=fmp/finnhub → polygon/none). Re-enable `fmp`
+  per-domain as each FMP adapter is built (earnings/analyst first).
