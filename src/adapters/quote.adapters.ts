@@ -1,14 +1,14 @@
-import { Logger } from '@nestjs/common';
+import { Logger } from "@nestjs/common";
 import {
   AllSourcesFailedError,
   isRetryableVendorError,
   SourceAttempt,
-} from './adapter-error';
-import { PolygonService } from '../vendors/polygon/polygon.service';
-import type { AdapterResult, CanonicalQuote, QuoteAdapter } from './types';
+} from "./adapter-error";
+import { PolygonService } from "../vendors/polygon/polygon.service";
+import type { AdapterResult, CanonicalQuote, QuoteAdapter } from "./types";
 
 export class PolygonQuoteAdapter implements QuoteAdapter {
-  readonly sourceName = 'polygon';
+  readonly sourceName = "polygon";
   constructor(private readonly polygon: PolygonService) {}
 
   async fetchQuote(
@@ -73,7 +73,7 @@ export class CompositeQuoteAdapter implements QuoteAdapter {
         warnings: [
           ...res.warnings,
           {
-            code: 'FALLBACK_USED',
+            code: "FALLBACK_USED",
             message: primaryEmpty
               ? `${this.primary.sourceName} had no quote for ${ticker} — served by ${this.secondary.sourceName}.`
               : `${this.primary.sourceName} failed (${attempts[0].error}) — served by ${this.secondary.sourceName}.`,

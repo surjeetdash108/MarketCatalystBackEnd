@@ -1,5 +1,5 @@
-import { Module } from '@nestjs/common';
-import { FredService } from './fred.service';
+import { Module } from "@nestjs/common";
+import { FredService } from "./fred.service";
 
 @Module({
   providers: [FredService],

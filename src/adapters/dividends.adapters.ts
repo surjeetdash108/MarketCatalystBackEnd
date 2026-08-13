@@ -1,11 +1,11 @@
-import { Logger } from '@nestjs/common';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { Logger } from "@nestjs/common";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 import type {
   AdapterResult,
   CanonicalDividendEvent,
   DividendsAdapter,
-} from './types';
-import { withFallback } from './with-fallback.util';
+} from "./types";
+import { withFallback } from "./with-fallback.util";
 
 /**
  * Dividend-calendar adapters. Grouped one file per domain rather than one class
@@ -15,7 +15,7 @@ import { withFallback } from './with-fallback.util';
  */
 
 export class PolygonDividendsAdapter implements DividendsAdapter {
-  readonly sourceName = 'polygon';
+  readonly sourceName = "polygon";
   constructor(private readonly polygon: PolygonService) {}
 
   async fetchDividends(
@@ -31,9 +31,10 @@ export class PolygonDividendsAdapter implements DividendsAdapter {
       warnings: data.some((d) => d.yield == null)
         ? [
             {
-              code: 'FIELD_NOT_SUPPORTED',
-              field: 'yieldPct',
-              message: 'Polygon does not return dividend yield; yieldPct is null.',
+              code: "FIELD_NOT_SUPPORTED",
+              field: "yieldPct",
+              message:
+                "Polygon does not return dividend yield; yieldPct is null.",
             },
           ]
         : [],
@@ -56,7 +57,7 @@ export class CompositeDividendsAdapter implements DividendsAdapter {
 
   fetchDividends(from: string, to: string) {
     return withFallback(
-      'dividends',
+      "dividends",
       this.logger,
       this.primary,
       this.secondary,

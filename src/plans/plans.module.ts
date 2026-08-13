@@ -1,10 +1,10 @@
-import { Module } from '@nestjs/common';
-import { FeatureFlagsModule } from '../feature-flags/feature-flags.module';
-import { PlansController } from './plans.controller';
-import { PlansService } from './plans.service';
-import { SubscriptionsService } from './subscriptions.service';
-import { AdminAnalyticsController } from './admin-analytics.controller';
-import { AdminAnalyticsService } from './admin-analytics.service';
+import { Module } from "@nestjs/common";
+import { FeatureFlagsModule } from "../feature-flags/feature-flags.module";
+import { PlansController } from "./plans.controller";
+import { PlansService } from "./plans.service";
+import { SubscriptionsService } from "./subscriptions.service";
+import { AdminAnalyticsController } from "./admin-analytics.controller";
+import { AdminAnalyticsService } from "./admin-analytics.service";
 
 /**
  * Subscription plans, per-user entitlement resolution, and the admin

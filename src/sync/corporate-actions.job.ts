@@ -1,10 +1,10 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { chunkedBatchSet } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { SyncRegistry } from '../common/sync-registry.service';
-import { activeUniverse } from '../common/ticker-universe';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { chunkedBatchSet } from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { SyncRegistry } from "../common/sync-registry.service";
+import { activeUniverse } from "../common/ticker-universe";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 
 /**
  * Per-ticker dividend history → `dividend_history/{ticker}`
@@ -22,7 +22,7 @@ import { PolygonService } from '../vendors/polygon/polygon.service';
  * `adjusted=true`, so a split silently rewrites history with no record of why.
  */
 
-const JOB_NAME = 'corporate-actions';
+const JOB_NAME = "corporate-actions";
 const BATCH_SIZE = 40;
 const HISTORY_LIMIT = 200;
 const ANNUAL_YEARS = 10;
@@ -68,7 +68,10 @@ export function annualTotals(
  * is excluded — it is partial by definition, and including it reads as a ~75%
  * dividend cut every January.
  */
-export function dividendCagr(totals: AnnualTotal[], years: number): number | null {
+export function dividendCagr(
+  totals: AnnualTotal[],
+  years: number,
+): number | null {
   const thisYear = new Date().getUTCFullYear();
   const complete = totals.filter((t) => t.year < thisYear);
   if (complete.length < years + 1) return null;
@@ -107,9 +110,9 @@ export class CorporateActionsJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['dividend_history', 'splits'],
-      cronExpression: '40 6 * * *',
-      timeZone: 'America/New_York',
+      collections: ["dividend_history", "splits"],
+      cronExpression: "40 6 * * *",
+      timeZone: "America/New_York",
     });
   }
 
@@ -122,7 +125,7 @@ export class CorporateActionsJob implements OnModuleInit {
       const universe = await activeUniverse(this.firebase.firestore);
       if (universe.length === 0) {
         await this.meta.record(JOB_NAME, { ok: true, count: 0 });
-        return { count: 0, note: 'no active tickers yet' };
+        return { count: 0, note: "no active tickers yet" };
       }
       // Batch never larger than the active universe, so a small
       // universe is fully covered in one premarket run.
@@ -137,12 +140,15 @@ export class CorporateActionsJob implements OnModuleInit {
       const priceByTicker = new Map<string, number>();
       const companyDocs = await this.firebase.firestore
         .getAll(
-          ...batch.map((t) => this.firebase.firestore.collection('companies').doc(t)),
+          ...batch.map((t) =>
+            this.firebase.firestore.collection("companies").doc(t),
+          ),
         )
         .catch(() => []);
       for (const doc of companyDocs) {
         const price = doc.data()?.price;
-        if (typeof price === 'number' && price > 0) priceByTicker.set(doc.id, price);
+        if (typeof price === "number" && price > 0)
+          priceByTicker.set(doc.id, price);
       }
 
       const divDocs: { id: string; data: Record<string, unknown> }[] = [];
@@ -151,7 +157,10 @@ export class CorporateActionsJob implements OnModuleInit {
 
       for (const ticker of batch) {
         try {
-          const history = await this.polygon.getDividendHistory(ticker, HISTORY_LIMIT);
+          const history = await this.polygon.getDividendHistory(
+            ticker,
+            HISTORY_LIMIT,
+          );
           const totals = annualTotals(history);
           const cutoff = new Date();
           cutoff.setUTCFullYear(cutoff.getUTCFullYear() - 1);
@@ -178,7 +187,8 @@ export class CorporateActionsJob implements OnModuleInit {
                 frequency: d.frequency,
               })),
               annualTotals: totals.slice(0, ANNUAL_YEARS),
-              ttmTotal: ttm.length > 0 ? Math.round(ttmTotal * 10000) / 10000 : null,
+              ttmTotal:
+                ttm.length > 0 ? Math.round(ttmTotal * 10000) / 10000 : null,
               ttmPayments: ttm.length,
               yieldPct:
                 price != null && ttm.length > 0
@@ -189,7 +199,7 @@ export class CorporateActionsJob implements OnModuleInit {
               increaseStreakYears: increaseStreak(totals),
               frequency: history[0]?.frequency ?? null,
               isPayer: history.length > 0,
-              source: 'polygon',
+              source: "polygon",
               updatedAt: new Date().toISOString(),
             },
           });
@@ -201,25 +211,35 @@ export class CorporateActionsJob implements OnModuleInit {
               ticker,
               splits,
               latestSplit: splits[0] ?? null,
-              source: 'polygon',
+              source: "polygon",
               updatedAt: new Date().toISOString(),
             },
           });
         } catch (err) {
-          this.logger.error(`corporate actions failed for ${ticker}: ${err.message}`);
+          this.logger.error(
+            `corporate actions failed for ${ticker}: ${err.message}`,
+          );
           failed++;
         }
         await sleep(DELAY_MS);
       }
 
-      await chunkedBatchSet(this.firebase.firestore, 'dividend_history', divDocs);
-      await chunkedBatchSet(this.firebase.firestore, 'splits', splitDocs);
+      await chunkedBatchSet(
+        this.firebase.firestore,
+        "dividend_history",
+        divDocs,
+      );
+      await chunkedBatchSet(this.firebase.firestore, "splits", splitDocs);
       await this.meta.setCursor(
         JOB_NAME,
         (cursor + BATCH_SIZE) % universe.length,
       );
       await this.meta.record(JOB_NAME, { ok: true, count: divDocs.length });
-      return { dividendDocs: divDocs.length, splitDocs: splitDocs.length, failed };
+      return {
+        dividendDocs: divDocs.length,
+        splitDocs: splitDocs.length,
+        failed,
+      };
     } catch (err) {
       await this.meta.record(JOB_NAME, { ok: false, error: err.message });
       throw err;

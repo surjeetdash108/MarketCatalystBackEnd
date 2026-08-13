@@ -122,6 +122,31 @@ export class OnDemandController {
     sendWithEtag(req, res, data);
   }
 
+  /** Company logo bytes proxied from Polygon branding (key stays server-side). */
+  @Get("logo")
+  async logo(
+    @Query("ticker") ticker: string | undefined,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? "").toUpperCase().trim();
+    if (!TICKER_RE.test(sym))
+      throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+    const img = await this.ondemand.getLogo(sym);
+    if (!img) {
+      // No Polygon branding for this ticker → let the client fall back to its
+      // letter tile. Short cache so a newly-covered ticker recovers quickly.
+      res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=3600");
+      res.status(404).end();
+      return;
+    }
+    res.setHeader("Content-Type", img.contentType);
+    res.setHeader(
+      "Cache-Control",
+      "public, max-age=604800, s-maxage=604800, immutable",
+    );
+    res.send(img.data);
+  }
+
   @Get("dividend-history")
   @Header(
     "Cache-Control",

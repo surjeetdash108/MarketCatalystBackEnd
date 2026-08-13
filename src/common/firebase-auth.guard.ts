@@ -4,8 +4,8 @@ import {
   Injectable,
   Logger,
   UnauthorizedException,
-} from '@nestjs/common';
-import { FirebaseAdminService } from './firebase-admin.provider';
+} from "@nestjs/common";
+import { FirebaseAdminService } from "./firebase-admin.provider";
 
 /**
  * Authorises any signed-in Firebase user (not just the admin account — see
@@ -26,11 +26,13 @@ export class FirebaseAuthGuard implements CanActivate {
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = ctx.switchToHttp().getRequest();
-    const header: string = req.headers?.authorization ?? '';
-    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    const header: string = req.headers?.authorization ?? "";
+    const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
 
     if (!token) {
-      throw new UnauthorizedException('Missing Authorization: Bearer <Firebase ID token>.');
+      throw new UnauthorizedException(
+        "Missing Authorization: Bearer <Firebase ID token>.",
+      );
     }
 
     try {
@@ -39,7 +41,7 @@ export class FirebaseAuthGuard implements CanActivate {
       return true;
     } catch (err) {
       this.logger.warn(`rejected invalid ID token: ${(err as Error).message}`);
-      throw new UnauthorizedException('Invalid or expired ID token.');
+      throw new UnauthorizedException("Invalid or expired ID token.");
     }
   }
 }

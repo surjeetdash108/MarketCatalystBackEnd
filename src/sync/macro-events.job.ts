@@ -1,12 +1,15 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { MACRO_SERIES } from '../common/macro-series';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { FredService } from '../vendors/fred/fred.service';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { MACRO_SERIES } from "../common/macro-series";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import {
+  batchSetWithCreatedAt,
+  type PendingWrite,
+} from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { FredService } from "../vendors/fred/fred.service";
+import { SyncRegistry } from "../common/sync-registry.service";
 
-const JOB_NAME = 'macro-events';
+const JOB_NAME = "macro-events";
 
 @Injectable()
 export class MacroEventsJob implements OnModuleInit {
@@ -21,9 +24,9 @@ export class MacroEventsJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['macro_events'],
-      cronExpression: '10 18 * * 1-5',
-      timeZone: 'America/New_York',
+      collections: ["macro_events"],
+      cronExpression: "10 18 * * 1-5",
+      timeZone: "America/New_York",
     });
   }
 
@@ -34,18 +37,21 @@ export class MacroEventsJob implements OnModuleInit {
   async run() {
     try {
       const writes: PendingWrite[] = [];
-      const col = this.firebase.firestore.collection('macro_events');
+      const col = this.firebase.firestore.collection("macro_events");
       let written = 0;
       for (const series of MACRO_SERIES) {
         try {
           const obs = await this.fred.getLatestObservations(series.seriesId, 2);
           const [latest, prior] = obs;
           if (!latest) {
-            this.logger.warn(`No observations returned for ${series.name} (${series.seriesId})`);
+            this.logger.warn(
+              `No observations returned for ${series.name} (${series.seriesId})`,
+            );
             continue;
           }
-          const actual = latest.value === '.' ? null : Number(latest.value);
-          const previous = prior && prior.value !== '.' ? Number(prior.value) : null;
+          const actual = latest.value === "." ? null : Number(latest.value);
+          const previous =
+            prior && prior.value !== "." ? Number(prior.value) : null;
           writes.push({
             ref: col.doc(series.seriesId),
             data: {
@@ -58,13 +64,15 @@ export class MacroEventsJob implements OnModuleInit {
               actual,
               previous,
               estimate: null,
-              source: 'fred',
+              source: "fred",
               updatedAt: new Date().toISOString(),
             },
           });
           written++;
         } catch (err) {
-          this.logger.error(`Failed syncing ${series.name} (${series.seriesId}): ${err.message}`);
+          this.logger.error(
+            `Failed syncing ${series.name} (${series.seriesId}): ${err.message}`,
+          );
         }
       }
       await batchSetWithCreatedAt(this.firebase.firestore, writes);

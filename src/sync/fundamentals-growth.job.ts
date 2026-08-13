@@ -1,12 +1,15 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { activeUniverse } from '../common/ticker-universe';
-import { FINANCIALS_ADAPTER, type FinancialsAdapter } from '../adapters/types';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import {
+  batchSetWithCreatedAt,
+  type PendingWrite,
+} from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { activeUniverse } from "../common/ticker-universe";
+import { FINANCIALS_ADAPTER, type FinancialsAdapter } from "../adapters/types";
+import { SyncRegistry } from "../common/sync-registry.service";
 
-const JOB_NAME = 'fundamentals-growth';
+const JOB_NAME = "fundamentals-growth";
 const BATCH_SIZE = 60;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const round = (n: number, p = 4) => Math.round(n * 10 ** p) / 10 ** p;
@@ -24,9 +27,9 @@ export class FundamentalsGrowthJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['companies'],
-      cronExpression: '30 4 * * *',
-      timeZone: 'America/New_York',
+      collections: ["companies"],
+      cronExpression: "30 4 * * *",
+      timeZone: "America/New_York",
     });
   }
 
@@ -39,17 +42,24 @@ export class FundamentalsGrowthJob implements OnModuleInit {
       const universe = await activeUniverse(this.firebase.firestore);
       if (universe.length === 0) {
         await this.meta.record(JOB_NAME, { ok: true, count: 0 });
-        return { count: 0, note: 'no active tickers yet' };
+        return { count: 0, note: "no active tickers yet" };
       }
       // Batch never larger than the active universe, so a small
       // universe is fully covered in one premarket run.
       const cursor = await this.meta.getCursor(JOB_NAME);
-      const batch = Array.from({ length: Math.min(BATCH_SIZE, universe.length) }, (_, i) => universe[(cursor + i) % universe.length]);
+      const batch = Array.from(
+        { length: Math.min(BATCH_SIZE, universe.length) },
+        (_, i) => universe[(cursor + i) % universe.length],
+      );
       const writes = [];
       let skipped = 0;
       for (const ticker of batch) {
         try {
-          const result = await this.financials.fetchIncomeStatements(ticker, 'annual', 2);
+          const result = await this.financials.fetchIncomeStatements(
+            ticker,
+            "annual",
+            2,
+          );
           const periods = result.data;
           const [latest, prior] = periods;
           if (!latest) {
@@ -57,19 +67,29 @@ export class FundamentalsGrowthJob implements OnModuleInit {
             await sleep(this.financials.requestDelayMs);
             continue;
           }
-          const revGrowth = prior && prior.revenue != null && prior.revenue > 0 && latest.revenue != null
-            ? (latest.revenue - prior.revenue) / prior.revenue
-            : null;
-          const epsGrowth = prior && prior.dilutedEps != null && prior.dilutedEps > 0 && latest.dilutedEps != null
-            ? (latest.dilutedEps - prior.dilutedEps) / prior.dilutedEps
-            : null;
-          const gp = latest.grossProfit ??
+          const revGrowth =
+            prior &&
+            prior.revenue != null &&
+            prior.revenue > 0 &&
+            latest.revenue != null
+              ? (latest.revenue - prior.revenue) / prior.revenue
+              : null;
+          const epsGrowth =
+            prior &&
+            prior.dilutedEps != null &&
+            prior.dilutedEps > 0 &&
+            latest.dilutedEps != null
+              ? (latest.dilutedEps - prior.dilutedEps) / prior.dilutedEps
+              : null;
+          const gp =
+            latest.grossProfit ??
             (latest.revenue != null && latest.costOfRevenue != null
               ? latest.revenue - latest.costOfRevenue
               : null);
-          const grossMargin = gp != null && latest.revenue != null && latest.revenue > 0
-            ? gp / latest.revenue
-            : null;
+          const grossMargin =
+            gp != null && latest.revenue != null && latest.revenue > 0
+              ? gp / latest.revenue
+              : null;
           writes.push({
             ticker,
             data: {
@@ -81,24 +101,32 @@ export class FundamentalsGrowthJob implements OnModuleInit {
             },
           });
         } catch (err) {
-          this.logger.error(`Failed fundamentals for ${ticker}: ${err.message}`);
+          this.logger.error(
+            `Failed fundamentals for ${ticker}: ${err.message}`,
+          );
           skipped++;
         }
         await sleep(this.financials.requestDelayMs);
       }
       if (writes.length > 0) {
         const pendingWrites: PendingWrite[] = [];
-        const col = this.firebase.firestore.collection('companies');
+        const col = this.firebase.firestore.collection("companies");
         for (const w of writes)
           // `ticker` included in the write itself: this merge-write can be
           // the FIRST write for a ticker outside the primary sync universe,
           // and a doc missing `ticker` crashes frontend code that assumes
           // the field is always present (CompanyDoc types it non-nullable)
           // — e.g. the ticker-search dropdown, 2026-08-01.
-          pendingWrites.push({ ref: col.doc(w.ticker), data: { ticker: w.ticker, ...w.data } });
+          pendingWrites.push({
+            ref: col.doc(w.ticker),
+            data: { ticker: w.ticker, ...w.data },
+          });
         await batchSetWithCreatedAt(this.firebase.firestore, pendingWrites);
       }
-      await this.meta.setCursor(JOB_NAME, (cursor + BATCH_SIZE) % universe.length);
+      await this.meta.setCursor(
+        JOB_NAME,
+        (cursor + BATCH_SIZE) % universe.length,
+      );
       await this.meta.record(JOB_NAME, { ok: true, count: writes.length });
       return { updated: writes.length, skipped };
     } catch (err) {

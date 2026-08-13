@@ -1,4 +1,4 @@
-import type { CanonicalNewsArticle } from '../adapters/types';
+import type { CanonicalNewsArticle } from "../adapters/types";
 
 /**
  * Decides whether a news article is "important" enough to raise a notification.
@@ -20,22 +20,52 @@ import type { CanonicalNewsArticle } from '../adapters/types';
 
 /** Headline patterns that reliably indicate a market-moving event. */
 const HIGH_IMPACT: Array<{ re: RegExp; label: string }> = [
-  { re: /\b(beats?|misses?|tops?)\b.{0,24}\b(estimate|expectation|consensus|eps|revenue)/i, label: 'earnings-surprise' },
-  { re: /\b(earnings|q[1-4]|quarterly)\b.{0,20}\b(beat|miss|result|report)/i, label: 'earnings' },
+  {
+    re: /\b(beats?|misses?|tops?)\b.{0,24}\b(estimate|expectation|consensus|eps|revenue)/i,
+    label: "earnings-surprise",
+  },
+  {
+    re: /\b(earnings|q[1-4]|quarterly)\b.{0,20}\b(beat|miss|result|report)/i,
+    label: "earnings",
+  },
   // Both word orders: "guidance raised" AND "cuts full-year guidance". Real
   // headlines overwhelmingly use the verb-first form, which a noun-first-only
   // pattern silently missed.
-  { re: /\b(rais|cut|lower|withdraw|reaffirm|slash|hike)\w*\b.{0,28}\bguidance\b|\bguidance\b.{0,28}\b(rais|cut|lower|withdraw|reaffirm|slash|hike)/i, label: 'guidance' },
-  { re: /\b(upgrade[sd]?|downgrade[sd]?)\b/i, label: 'analyst-action' },
-  { re: /\b(rais|cut|lower|hike|boost|trim)\w*\b.{0,24}\bprice target\b|\bprice target\b.{0,24}\b(rais|cut|lower|hike|boost|trim)/i, label: 'price-target' },
-  { re: /\b(acquire[sd]?|acquisition|merger|takeover|buyout)\b/i, label: 'm-and-a' },
-  { re: /\b(fda)\b.{0,30}\b(approv|reject|clearance|decision)/i, label: 'fda' },
-  { re: /\b(bankrupt|chapter 11|insolvenc)/i, label: 'distress' },
-  { re: /\b(ceo|cfo)\b.{0,24}\b(step[s]? down|resign|depart|out|appoint|nam(e|ing))/i, label: 'leadership' },
-  { re: /\b(lawsuit|sues?|settlement|investigation|probe|subpoena)\b/i, label: 'legal' },
-  { re: /\b(recall|halt(ed|s)?\b.{0,12}trading|delist)/i, label: 'trading-event' },
-  { re: /\b(split|dividend)\b.{0,20}\b(announce|declar|increas|cut|suspend)/i, label: 'capital-return' },
-  { re: /\b(soar|plunge|surge|tumble|crash|spike)[sd]?\b/i, label: 'large-move' },
+  {
+    re: /\b(rais|cut|lower|withdraw|reaffirm|slash|hike)\w*\b.{0,28}\bguidance\b|\bguidance\b.{0,28}\b(rais|cut|lower|withdraw|reaffirm|slash|hike)/i,
+    label: "guidance",
+  },
+  { re: /\b(upgrade[sd]?|downgrade[sd]?)\b/i, label: "analyst-action" },
+  {
+    re: /\b(rais|cut|lower|hike|boost|trim)\w*\b.{0,24}\bprice target\b|\bprice target\b.{0,24}\b(rais|cut|lower|hike|boost|trim)/i,
+    label: "price-target",
+  },
+  {
+    re: /\b(acquire[sd]?|acquisition|merger|takeover|buyout)\b/i,
+    label: "m-and-a",
+  },
+  { re: /\b(fda)\b.{0,30}\b(approv|reject|clearance|decision)/i, label: "fda" },
+  { re: /\b(bankrupt|chapter 11|insolvenc)/i, label: "distress" },
+  {
+    re: /\b(ceo|cfo)\b.{0,24}\b(step[s]? down|resign|depart|out|appoint|nam(e|ing))/i,
+    label: "leadership",
+  },
+  {
+    re: /\b(lawsuit|sues?|settlement|investigation|probe|subpoena)\b/i,
+    label: "legal",
+  },
+  {
+    re: /\b(recall|halt(ed|s)?\b.{0,12}trading|delist)/i,
+    label: "trading-event",
+  },
+  {
+    re: /\b(split|dividend)\b.{0,20}\b(announce|declar|increas|cut|suspend)/i,
+    label: "capital-return",
+  },
+  {
+    re: /\b(soar|plunge|surge|tumble|crash|spike)[sd]?\b/i,
+    label: "large-move",
+  },
 ];
 
 /**
@@ -72,7 +102,7 @@ const NEGATIVE_HEADLINE: RegExp[] = [
   /\b(layoff|job cut|restructur|writedown|write-down|impairment|warn(s|ing)?)\b/i,
 ];
 
-export type NewsDirection = 'positive' | 'negative' | 'neutral';
+export type NewsDirection = "positive" | "negative" | "neutral";
 
 export interface ImportanceVerdict {
   important: boolean;
@@ -84,14 +114,17 @@ export interface ImportanceVerdict {
 }
 
 /** +ve/-ve/neutral: vendor sentiment when directional, else headline keywords. */
-function scoreDirection(sentiment: string | null | undefined, headline: string): NewsDirection {
-  if (sentiment === 'positive') return 'positive';
-  if (sentiment === 'negative') return 'negative';
+function scoreDirection(
+  sentiment: string | null | undefined,
+  headline: string,
+): NewsDirection {
+  if (sentiment === "positive") return "positive";
+  if (sentiment === "negative") return "negative";
   const pos = POSITIVE_HEADLINE.some((re) => re.test(headline));
   const neg = NEGATIVE_HEADLINE.some((re) => re.test(headline));
-  if (pos && !neg) return 'positive';
-  if (neg && !pos) return 'negative';
-  return 'neutral'; // mixed signals or none — don't guess a direction
+  if (pos && !neg) return "positive";
+  if (neg && !pos) return "negative";
+  return "neutral"; // mixed signals or none — don't guess a direction
 }
 
 /**
@@ -102,20 +135,20 @@ export function scoreImportance(a: CanonicalNewsArticle): ImportanceVerdict {
   const reasons: string[] = [];
 
   // 1. Vendor sentiment — only meaningful when present AND directional.
-  if (a.sentiment === 'positive' || a.sentiment === 'negative') {
+  if (a.sentiment === "positive" || a.sentiment === "negative") {
     reasons.push(`sentiment:${a.sentiment}`);
   }
 
   // 2. Headline patterns. Summary is deliberately NOT searched: it is long,
   //    frequently boilerplate, and matching it produced far more noise than
   //    signal in practice.
-  const headline = a.headline ?? '';
+  const headline = a.headline ?? "";
   for (const { re, label } of HIGH_IMPACT) {
     if (re.test(headline)) reasons.push(`keyword:${label}`);
   }
 
   const direction = scoreDirection(a.sentiment, headline);
-  if (direction !== 'neutral') reasons.push(`direction:${direction}`);
+  if (direction !== "neutral") reasons.push(`direction:${direction}`);
 
   return { important: reasons.length > 0, direction, reasons };
 }

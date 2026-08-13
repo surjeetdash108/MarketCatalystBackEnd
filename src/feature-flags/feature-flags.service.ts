@@ -1,28 +1,29 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import {
   FEATURE_FLAGS,
   FEATURE_FLAG_KEYS,
   parseFlag,
   type FeatureFlagDef,
-} from './feature-flags.registry';
+} from "./feature-flags.registry";
 
 /** The single Firestore doc holding runtime overrides. */
-const FLAGS_DOC = 'feature_flags/default';
+const FLAGS_DOC = "feature_flags/default";
 /** Cache TTL — the doc is tiny and rarely changes; avoid a read per request. */
 const CACHE_TTL_MS = 15_000;
 
 export interface ResolvedFlag extends FeatureFlagDef {
   enabled: boolean;
   /** Where the winning value came from — makes the resolution auditable. */
-  source: 'firestore' | 'env' | 'default';
+  source: "firestore" | "env" | "default";
 }
 
 @Injectable()
 export class FeatureFlagsService implements OnModuleInit {
   private readonly logger = new Logger(FeatureFlagsService.name);
-  private cache: { at: number; overrides: Record<string, boolean> } | null = null;
+  private cache: { at: number; overrides: Record<string, boolean> } | null =
+    null;
 
   constructor(
     private readonly firebase: FirebaseAdminService,
@@ -39,7 +40,9 @@ export class FeatureFlagsService implements OnModuleInit {
     try {
       const { written } = await this.seed();
       if (written.length > 0) {
-        this.logger.log(`feature_flags seeded ${written.length} flag(s) on boot`);
+        this.logger.log(
+          `feature_flags seeded ${written.length} flag(s) on boot`,
+        );
       }
     } catch (err) {
       this.logger.warn(`feature_flags auto-seed skipped: ${err.message}`);
@@ -58,12 +61,15 @@ export class FeatureFlagsService implements OnModuleInit {
       for (const [k, v] of Object.entries(data)) {
         // Ignore anything not in the registry, and any non-boolean value —
         // a stray field must never silently become a flag.
-        if (FEATURE_FLAG_KEYS.has(k) && typeof v === 'boolean') overrides[k] = v;
+        if (FEATURE_FLAG_KEYS.has(k) && typeof v === "boolean")
+          overrides[k] = v;
       }
     } catch (err) {
       // Fail OPEN to code/env defaults rather than dark: a Firestore blip must
       // not black out every gated screen at once.
-      this.logger.warn(`feature_flags read failed, using defaults: ${err.message}`);
+      this.logger.warn(
+        `feature_flags read failed, using defaults: ${err.message}`,
+      );
       overrides = this.cache?.overrides ?? {};
     }
     this.cache = { at: Date.now(), overrides };
@@ -71,13 +77,16 @@ export class FeatureFlagsService implements OnModuleInit {
   }
 
   /** Resolve one flag through default → env → Firestore. */
-  private resolveOne(def: FeatureFlagDef, overrides: Record<string, boolean>): ResolvedFlag {
+  private resolveOne(
+    def: FeatureFlagDef,
+    overrides: Record<string, boolean>,
+  ): ResolvedFlag {
     if (Object.prototype.hasOwnProperty.call(overrides, def.key)) {
-      return { ...def, enabled: overrides[def.key], source: 'firestore' };
+      return { ...def, enabled: overrides[def.key], source: "firestore" };
     }
     const envVal = parseFlag(this.config.get<string>(def.key));
-    if (envVal !== null) return { ...def, enabled: envVal, source: 'env' };
-    return { ...def, enabled: def.defaultOn, source: 'default' };
+    if (envVal !== null) return { ...def, enabled: envVal, source: "env" };
+    return { ...def, enabled: def.defaultOn, source: "default" };
   }
 
   /** Every flag, resolved. */
@@ -110,7 +119,7 @@ export class FeatureFlagsService implements OnModuleInit {
     }
     const ref = this.firebase.firestore.doc(FLAGS_DOC);
     if (value === null) {
-      const { FieldValue } = await import('firebase-admin/firestore');
+      const { FieldValue } = await import("firebase-admin/firestore");
       await ref.set({ flags: { [key]: FieldValue.delete() } }, { merge: true });
     } else {
       await ref.set(

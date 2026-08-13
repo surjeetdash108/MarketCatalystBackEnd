@@ -1,11 +1,14 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { activeUniverse } from '../common/ticker-universe';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import {
+  batchSetWithCreatedAt,
+  type PendingWrite,
+} from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { activeUniverse } from "../common/ticker-universe";
+import { SyncRegistry } from "../common/sync-registry.service";
 
-const JOB_NAME = 'technical-indicators';
+const JOB_NAME = "technical-indicators";
 // >=252 so the 52-week high/low is a real rolling year rather than "whatever
 // history happens to be loaded". 200-DMA needs 200; the binding constraint is
 // the 52-week window, so this is 252 plus a margin for holidays/halts.
@@ -28,16 +31,13 @@ function ema(values: number[], period: number) {
 }
 
 export function rsi(closes: number[], period = 14) {
-  if (closes.length < period + 1)
-    return null;
+  if (closes.length < period + 1) return null;
   let gain = 0;
   let loss = 0;
   for (let i = 1; i <= period; i++) {
     const d = closes[i] - closes[i - 1];
-    if (d >= 0)
-      gain += d;
-    else
-      loss -= d;
+    if (d >= 0) gain += d;
+    else loss -= d;
   }
   let avgGain = gain / period;
   let avgLoss = loss / period;
@@ -46,13 +46,17 @@ export function rsi(closes: number[], period = 14) {
     avgGain = (avgGain * (period - 1) + Math.max(d, 0)) / period;
     avgLoss = (avgLoss * (period - 1) + Math.max(-d, 0)) / period;
   }
-  if (avgLoss === 0)
-    return 100;
+  if (avgLoss === 0) return 100;
   return 100 - 100 / (1 + avgGain / avgLoss);
 }
 
 /** Stochastic %K over `period` — where the last close sits in the period range. */
-function stochK(highs: number[], lows: number[], closes: number[], period = 14): number | null {
+function stochK(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+  period = 14,
+): number | null {
   if (closes.length < period) return null;
   const hh = Math.max(...highs.slice(-period));
   const ll = Math.min(...lows.slice(-period));
@@ -62,7 +66,12 @@ function stochK(highs: number[], lows: number[], closes: number[], period = 14):
 }
 
 /** Wilder ADX(14) — trend strength from smoothed +DI/-DI. */
-function adx(highs: number[], lows: number[], closes: number[], period = 14): number | null {
+function adx(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+  period = 14,
+): number | null {
   const n = closes.length;
   if (n < period * 2 + 1) return null;
   const tr: number[] = [];
@@ -96,7 +105,10 @@ function adx(highs: number[], lows: number[], closes: number[], period = 14): nu
   const mS = smooth(minusDM);
   const dx: number[] = [];
   for (let i = 0; i < trS.length; i++) {
-    if (trS[i] === 0) { dx.push(0); continue; }
+    if (trS[i] === 0) {
+      dx.push(0);
+      continue;
+    }
     const pdi = (100 * pS[i]) / trS[i];
     const mdi = (100 * mS[i]) / trS[i];
     const sum = pdi + mdi;
@@ -104,7 +116,8 @@ function adx(highs: number[], lows: number[], closes: number[], period = 14): nu
   }
   if (dx.length < period) return null;
   let adxVal = dx.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  for (let i = period; i < dx.length; i++) adxVal = (adxVal * (period - 1) + dx[i]) / period;
+  for (let i = period; i < dx.length; i++)
+    adxVal = (adxVal * (period - 1) + dx[i]) / period;
   return adxVal;
 }
 
@@ -120,7 +133,15 @@ function betaVs(
     const sPrev = mktByDate.get(bars[i - 1].barDate);
     const c = bars[i].close;
     const cPrev = bars[i - 1].close;
-    if (s == null || sPrev == null || sPrev <= 0 || cPrev == null || cPrev <= 0 || c == null) continue;
+    if (
+      s == null ||
+      sPrev == null ||
+      sPrev <= 0 ||
+      cPrev == null ||
+      cPrev <= 0 ||
+      c == null
+    )
+      continue;
     rt.push((c - cPrev) / cPrev);
     rm.push((s - sPrev) / sPrev);
   }
@@ -141,8 +162,7 @@ function betaVs(
 }
 
 function macd(closes: number[]) {
-  if (closes.length < 35)
-    return null;
+  if (closes.length < 35) return null;
   const ema12 = ema(closes, 12);
   const ema26 = ema(closes, 26);
   const line = closes.map((_, i) => ema12[i] - ema26[i]);
@@ -156,8 +176,7 @@ function macd(closes: number[]) {
 }
 
 function rvol(volumes: number[], window = RVOL_WINDOW) {
-  if (volumes.length < window + 1)
-    return null;
+  if (volumes.length < window + 1) return null;
   const latest = volumes[volumes.length - 1];
   const prior = volumes.slice(-window - 1, -1);
   const avg = prior.reduce((a, b) => a + b, 0) / prior.length;
@@ -188,7 +207,9 @@ export function rsiSeries(closes: number[], period = 14): number[] {
   }
   let avgGain = gain / period;
   let avgLoss = loss / period;
-  const out: number[] = [avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss)];
+  const out: number[] = [
+    avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss),
+  ];
   for (let i = period + 1; i < closes.length; i++) {
     const d = closes[i] - closes[i - 1];
     avgGain = (avgGain * (period - 1) + Math.max(d, 0)) / period;
@@ -227,9 +248,9 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['companies'],
-      cronExpression: '10 4 * * *',
-      timeZone: 'America/New_York',
+      collections: ["companies"],
+      cronExpression: "10 4 * * *",
+      timeZone: "America/New_York",
     });
   }
 
@@ -240,28 +261,27 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
   /** SPY closes keyed by barDate — the benchmark for beta. */
   private async loadMarketCloses(): Promise<Map<string, number>> {
     const snap = await this.firebase.firestore
-      .collection('ohlcv_bars')
-      .where('ticker', '==', 'SPY')
-      .orderBy('barDate', 'desc')
+      .collection("ohlcv_bars")
+      .where("ticker", "==", "SPY")
+      .orderBy("barDate", "desc")
       .limit(BARS_TO_READ)
       .get();
     const m = new Map<string, number>();
     for (const d of snap.docs) {
       const x = d.data();
-      if (typeof x.close === 'number') m.set(x.barDate as string, x.close);
+      if (typeof x.close === "number") m.set(x.barDate as string, x.close);
     }
     return m;
   }
 
   private async computeFor(ticker: string, mktByDate: Map<string, number>) {
     const snap = await this.firebase.firestore
-      .collection('ohlcv_bars')
-      .where('ticker', '==', ticker)
-      .orderBy('barDate', 'desc')
+      .collection("ohlcv_bars")
+      .where("ticker", "==", ticker)
+      .orderBy("barDate", "desc")
       .limit(BARS_TO_READ)
       .get();
-    if (snap.size < MIN_BARS)
-      return null;
+    if (snap.size < MIN_BARS) return null;
     const bars = snap.docs.map((d) => d.data()).reverse();
     const closes = bars.map((b) => b.close);
     const volumes = bars.map((b) => b.volume);
@@ -269,8 +289,7 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
     const lows = bars.map((b) => b.low);
     const rsiVal = rsi(closes);
     const macdVal = macd(closes);
-    if (rsiVal == null || macdVal == null)
-      return null;
+    if (rsiVal == null || macdVal == null) return null;
     const sma50 = sma(closes, 50);
     const sma200 = sma(closes, 200);
     const week5ChangePct = changeOverSessions(closes, 5);
@@ -300,7 +319,10 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
     const rsiHistory = rsiSeries(closes).slice(-RSI_SERIES_LEN);
     const stochKVal = stochK(highs, lows, closes);
     const adxVal = adx(highs, lows, closes);
-    const betaVal = betaVs(bars as { barDate: string; close: number }[], mktByDate);
+    const betaVal = betaVs(
+      bars as { barDate: string; close: number }[],
+      mktByDate,
+    );
 
     return {
       rsi14: Math.round(rsiVal * 100) / 100,
@@ -324,7 +346,8 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
       aboveSma50: sma50 == null ? null : latestClose >= sma50,
       aboveSma200: sma200 == null ? null : latestClose >= sma200,
       // True 5-session change — replaces the movers "week %" that reused the day move.
-      week5ChangePct: week5ChangePct == null ? null : Math.round(week5ChangePct * 100) / 100,
+      week5ChangePct:
+        week5ChangePct == null ? null : Math.round(week5ChangePct * 100) / 100,
 
       // ── Fields below replace values the UI was fabricating ──
 
@@ -339,9 +362,13 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
       high52,
       low52,
       pctFromHigh52:
-        high52 && high52 > 0 ? round2(((latestClose - high52) / high52) * 100) : null,
+        high52 && high52 > 0
+          ? round2(((latestClose - high52) / high52) * 100)
+          : null,
       pctFromLow52:
-        low52 && low52 > 0 ? round2(((latestClose - low52) / low52) * 100) : null,
+        low52 && low52 > 0
+          ? round2(((latestClose - low52) / low52) * 100)
+          : null,
       /** Average daily volume — the keystats tile derived this from a formula. */
       avgVolume20: round2(trailingAvg(volumes, 20)),
       avgVolume50: round2(trailingAvg(volumes, 50)),
@@ -357,7 +384,7 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
       const universe = await activeUniverse(this.firebase.firestore);
       if (universe.length === 0) {
         await this.meta.record(JOB_NAME, { ok: true, count: 0 });
-        return { computed: 0, skipped: 0, note: 'no active tickers yet' };
+        return { computed: 0, skipped: 0, note: "no active tickers yet" };
       }
       const mktByDate = await this.loadMarketCloses();
       const results = [];
@@ -374,17 +401,21 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
             data: { ...ind, technicalsUpdatedAt: new Date().toISOString() },
           });
         } catch (err) {
-          this.logger.error(`Failed computing indicators for ${ticker}: ${err.message}`);
+          this.logger.error(
+            `Failed computing indicators for ${ticker}: ${err.message}`,
+          );
           skipped++;
         }
       }
       if (results.length === 0) {
-        this.logger.warn(`No tickers had enough ohlcv_bars to compute indicators (${skipped}/${universe.length} skipped) — has stock-history.job.ts run yet?`);
+        this.logger.warn(
+          `No tickers had enough ohlcv_bars to compute indicators (${skipped}/${universe.length} skipped) — has stock-history.job.ts run yet?`,
+        );
         await this.meta.record(JOB_NAME, { ok: true, count: 0 });
         return { computed: 0, skipped };
       }
       const writes: PendingWrite[] = [];
-      const col = this.firebase.firestore.collection('companies');
+      const col = this.firebase.firestore.collection("companies");
       for (const r of results) {
         writes.push({ ref: col.doc(r.ticker), data: r.data });
       }

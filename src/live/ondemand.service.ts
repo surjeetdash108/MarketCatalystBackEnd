@@ -1,10 +1,17 @@
-import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { FieldValue } from 'firebase-admin/firestore';
-import { NEWS_ADAPTER, type NewsAdapter } from '../adapters/types';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { annualTotals, dividendCagr, increaseStreak } from '../sync/corporate-actions.job';
-import { mapAnnualRow, mapQuarterRow } from '../sync/financials.job';
-import { PolygonService, PolygonAggBar } from '../vendors/polygon/polygon.service';
+import { Inject, Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
+import { FieldValue } from "firebase-admin/firestore";
+import { NEWS_ADAPTER, type NewsAdapter } from "../adapters/types";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import {
+  annualTotals,
+  dividendCagr,
+  increaseStreak,
+} from "../sync/corporate-actions.job";
+import { mapAnnualRow, mapQuarterRow } from "../sync/financials.job";
+import {
+  PolygonService,
+  PolygonAggBar,
+} from "../vendors/polygon/polygon.service";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -43,10 +50,19 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * zero vendor calls. That is the subset optimization: 5Y ⊃ 1Y ⊃ 6M ⊃ 3M.
  */
 
-export type BarsTf = '1H' | '1D' | '1W' | '1M' | '3M' | '6M' | '1Y' | '5Y';
-type Resolution = '1min' | '5min' | '30min' | 'daily';
+export type BarsTf = "1H" | "1D" | "1W" | "1M" | "3M" | "6M" | "1Y" | "5Y";
+type Resolution = "1min" | "5min" | "30min" | "daily";
 
-export const BARS_TFS: BarsTf[] = ['1H', '1D', '1W', '1M', '3M', '6M', '1Y', '5Y'];
+export const BARS_TFS: BarsTf[] = [
+  "1H",
+  "1D",
+  "1W",
+  "1M",
+  "3M",
+  "6M",
+  "1Y",
+  "5Y",
+];
 
 interface TfSpec {
   resolution: Resolution;
@@ -58,25 +74,34 @@ interface TfSpec {
 
 /** fetchDays covers weekends/holidays so the slice always fills. */
 const TF: Record<BarsTf, TfSpec> = {
-  '1H': { resolution: '1min', fetchDays: 5, sliceBars: 60 },
-  '1D': { resolution: '5min', fetchDays: 9, sliceBars: 78 },      // 1 session ≈ 78 5-min bars
-  '1W': { resolution: '5min', fetchDays: 9, sliceBars: 390 },     // 5 sessions
-  '1M': { resolution: '30min', fetchDays: 40, sliceBars: 286 },   // 22 sessions × 13 bars
-  '3M': { resolution: 'daily', fetchDays: 95, sliceBars: 64 },
-  '6M': { resolution: 'daily', fetchDays: 190, sliceBars: 128 },
-  '1Y': { resolution: 'daily', fetchDays: 380, sliceBars: 252 },
-  '5Y': { resolution: 'daily', fetchDays: 1830, sliceBars: 1300 },
+  "1H": { resolution: "1min", fetchDays: 5, sliceBars: 60 },
+  "1D": { resolution: "5min", fetchDays: 9, sliceBars: 78 }, // 1 session ≈ 78 5-min bars
+  "1W": { resolution: "5min", fetchDays: 9, sliceBars: 390 }, // 5 sessions
+  "1M": { resolution: "30min", fetchDays: 40, sliceBars: 286 }, // 22 sessions × 13 bars
+  "3M": { resolution: "daily", fetchDays: 95, sliceBars: 64 },
+  "6M": { resolution: "daily", fetchDays: 190, sliceBars: 128 },
+  "1Y": { resolution: "daily", fetchDays: 380, sliceBars: 252 },
+  "5Y": { resolution: "daily", fetchDays: 1830, sliceBars: 1300 },
 };
 
-const RES_PARAMS: Record<Resolution, { multiplier: number; timespan: 'minute' | 'hour' | 'day' }> = {
-  '1min': { multiplier: 1, timespan: 'minute' },
-  '5min': { multiplier: 5, timespan: 'minute' },
-  '30min': { multiplier: 30, timespan: 'minute' },
-  daily: { multiplier: 1, timespan: 'day' },
+const RES_PARAMS: Record<
+  Resolution,
+  { multiplier: number; timespan: "minute" | "hour" | "day" }
+> = {
+  "1min": { multiplier: 1, timespan: "minute" },
+  "5min": { multiplier: 5, timespan: "minute" },
+  "30min": { multiplier: 30, timespan: "minute" },
+  daily: { multiplier: 1, timespan: "day" },
 };
 
 export interface StoredBar {
-  t: number; o: number; h: number; l: number; c: number; v: number; vw: number | null;
+  t: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+  vw: number | null;
 }
 
 interface BarsDoc {
@@ -85,7 +110,7 @@ interface BarsDoc {
   bars: StoredBar[];
   rangeDays: number;
   barCount: number;
-  createdAt: string;   // ISO — when this data was inserted (the cache clock)
+  createdAt: string; // ISO — when this data was inserted (the cache clock)
   updatedAt: string;
   source: string;
 }
@@ -121,19 +146,25 @@ function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-function byPublishedAtDesc(a: Record<string, unknown>, b: Record<string, unknown>): number {
-  return String(b.publishedAt as string).localeCompare(String(a.publishedAt as string));
+function byPublishedAtDesc(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+): number {
+  return String(b.publishedAt).localeCompare(String(a.publishedAt));
 }
 
 /** ET clock parts without a tz library. */
 function etParts(now = new Date()): { weekday: number; hour: number } {
-  const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York', hour12: false, weekday: 'short', hour: 'numeric',
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour12: false,
+    weekday: "short",
+    hour: "numeric",
   });
   const parts = fmt.formatToParts(now);
-  const wd = parts.find((p) => p.type === 'weekday')?.value ?? 'Mon';
-  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '12') % 24;
-  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(wd);
+  const wd = parts.find((p) => p.type === "weekday")?.value ?? "Mon";
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "12") % 24;
+  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(wd);
   return { weekday, hour };
 }
 
@@ -143,11 +174,14 @@ function inExtendedSession(): boolean {
   return weekday >= 1 && weekday <= 5 && hour >= 4 && hour < 20;
 }
 
-function isFresh(createdAtIso: string | undefined, resolution: Resolution): boolean {
+function isFresh(
+  createdAtIso: string | undefined,
+  resolution: Resolution,
+): boolean {
   if (!createdAtIso) return false;
   const age = Date.now() - Date.parse(createdAtIso);
   if (!Number.isFinite(age) || age < 0) return false;
-  if (resolution === 'daily') return age < DAILY_TTL_MS;
+  if (resolution === "daily") return age < DAILY_TTL_MS;
   // Intraday: refetch every 15 min while a session is running; once the session
   // is over, anything fetched after it ended stays fresh until the next one.
   if (inExtendedSession()) return age < INTRADAY_SESSION_TTL_MS;
@@ -160,12 +194,34 @@ export class OnDemandService implements OnModuleDestroy {
 
   /** In-memory hot cache: parsed Firestore docs, keyed {TICKER}_{res}. */
   private readonly memBars = new Map<string, BarsDoc>();
-  private readonly memCompany = new Map<string, { data: Record<string, unknown>; at: number }>();
-  private readonly memDividendHistory = new Map<string, { data: Record<string, unknown>; at: number }>();
-  private readonly memSplits = new Map<string, { data: Record<string, unknown>; at: number }>();
-  private readonly memFinancials = new Map<string, { data: Record<string, unknown>; at: number }>();
-  private readonly memNews = new Map<string, { data: Record<string, unknown>[]; at: number }>();
-  private readonly memOptions = new Map<string, { data: Record<string, unknown>; at: number }>();
+  private readonly memCompany = new Map<
+    string,
+    { data: Record<string, unknown>; at: number }
+  >();
+  private readonly memDividendHistory = new Map<
+    string,
+    { data: Record<string, unknown>; at: number }
+  >();
+  private readonly memSplits = new Map<
+    string,
+    { data: Record<string, unknown>; at: number }
+  >();
+  private readonly memFinancials = new Map<
+    string,
+    { data: Record<string, unknown>; at: number }
+  >();
+  private readonly memNews = new Map<
+    string,
+    { data: Record<string, unknown>[]; at: number }
+  >();
+  private readonly memOptions = new Map<
+    string,
+    { data: Record<string, unknown>; at: number }
+  >();
+  private readonly memLogo = new Map<
+    string,
+    { data: { data: Buffer; contentType: string } | null; at: number }
+  >();
   /** Coalescing: concurrent misses for the same key share one vendor promise. */
   private readonly inflight = new Map<string, Promise<unknown>>();
 
@@ -175,8 +231,14 @@ export class OnDemandService implements OnModuleDestroy {
   private knownUsageTickers: Set<string> | null = null;
 
   readonly stats = {
-    barsRequests: 0, barsVendorCalls: 0, barsFirestoreHits: 0, barsMemHits: 0,
-    companyRequests: 0, companyVendorCalls: 0, usageFlushes: 0, lastError: '',
+    barsRequests: 0,
+    barsVendorCalls: 0,
+    barsFirestoreHits: 0,
+    barsMemHits: 0,
+    companyRequests: 0,
+    companyVendorCalls: 0,
+    usageFlushes: 0,
+    lastError: "",
   };
 
   constructor(
@@ -200,8 +262,15 @@ export class OnDemandService implements OnModuleDestroy {
    * Bars for one ticker+timeframe, cache-aside. Returns the newest N bars for
    * the timeframe (oldest-first) plus cache metadata for the response headers.
    */
-  async getBars(ticker: string, tf: BarsTf): Promise<{
-    ticker: string; tf: BarsTf; bars: StoredBar[]; source: 'memory' | 'firestore' | 'vendor'; asOf: string;
+  async getBars(
+    ticker: string,
+    tf: BarsTf,
+  ): Promise<{
+    ticker: string;
+    tf: BarsTf;
+    bars: StoredBar[];
+    source: "memory" | "firestore" | "vendor";
+    asOf: string;
   }> {
     this.stats.barsRequests++;
     this.recordUsage(ticker);
@@ -210,38 +279,90 @@ export class OnDemandService implements OnModuleDestroy {
 
     // 1. Per-instance memory (already-parsed doc).
     const mem = this.memBars.get(key);
-    if (mem && isFresh(mem.createdAt, spec.resolution) && mem.rangeDays >= spec.fetchDays) {
+    if (
+      mem &&
+      isFresh(mem.createdAt, spec.resolution) &&
+      mem.rangeDays >= spec.fetchDays
+    ) {
       this.stats.barsMemHits++;
-      return { ticker, tf, bars: this.slice(mem, spec), source: 'memory', asOf: mem.createdAt };
+      return {
+        ticker,
+        tf,
+        bars: this.slice(mem, spec),
+        source: "memory",
+        asOf: mem.createdAt,
+      };
     }
 
     // 2. Firestore shared cache.
-    const ref = this.firebase.firestore.collection('stock_bars').doc(key);
+    const ref = this.firebase.firestore.collection("stock_bars").doc(key);
     const snap = await ref.get();
     if (snap.exists) {
       const doc = snap.data() as BarsDoc;
-      if (isFresh(doc.createdAt, spec.resolution) && (doc.rangeDays ?? 0) >= spec.fetchDays) {
+      if (
+        isFresh(doc.createdAt, spec.resolution) &&
+        (doc.rangeDays ?? 0) >= spec.fetchDays
+      ) {
         this.memBars.set(key, doc);
         this.stats.barsFirestoreHits++;
-        return { ticker, tf, bars: this.slice(doc, spec), source: 'firestore', asOf: doc.createdAt };
+        return {
+          ticker,
+          tf,
+          bars: this.slice(doc, spec),
+          source: "firestore",
+          asOf: doc.createdAt,
+        };
       }
       // Wide enough but STALE → INCREMENTAL refresh: history never changes, so
       // fetch only the days since the last stored bar and append. A 5-year doc
       // costs a ~2-day fetch per day of staleness — old data is never re-pulled.
       if ((doc.rangeDays ?? 0) >= spec.fetchDays && doc.bars.length > 0) {
-        const fresh = await this.refreshIncremental(ticker, spec.resolution, doc, ref);
-        return { ticker, tf, bars: this.slice(fresh, spec), source: 'vendor', asOf: fresh.createdAt };
+        const fresh = await this.refreshIncremental(
+          ticker,
+          spec.resolution,
+          doc,
+          ref,
+        );
+        return {
+          ticker,
+          tf,
+          bars: this.slice(fresh, spec),
+          source: "vendor",
+          asOf: fresh.createdAt,
+        };
       }
       // Too narrow — a wider window was requested than ever stored. This is the
       // one genuine full fetch (backfill), still a single vendor call.
       const widest = Math.max(spec.fetchDays, doc.rangeDays ?? 0);
-      const fresh = await this.fetchAndStore(ticker, spec.resolution, widest, ref);
-      return { ticker, tf, bars: this.slice(fresh, spec), source: 'vendor', asOf: fresh.createdAt };
+      const fresh = await this.fetchAndStore(
+        ticker,
+        spec.resolution,
+        widest,
+        ref,
+      );
+      return {
+        ticker,
+        tf,
+        bars: this.slice(fresh, spec),
+        source: "vendor",
+        asOf: fresh.createdAt,
+      };
     }
 
     // 3. Vendor (coalesced) — first-ever request for this ticker+resolution.
-    const fresh = await this.fetchAndStore(ticker, spec.resolution, spec.fetchDays, ref);
-    return { ticker, tf, bars: this.slice(fresh, spec), source: 'vendor', asOf: fresh.createdAt };
+    const fresh = await this.fetchAndStore(
+      ticker,
+      spec.resolution,
+      spec.fetchDays,
+      ref,
+    );
+    return {
+      ticker,
+      tf,
+      bars: this.slice(fresh, spec),
+      source: "vendor",
+      asOf: fresh.createdAt,
+    };
   }
 
   /**
@@ -251,7 +372,9 @@ export class OnDemandService implements OnModuleDestroy {
    * so a 5Y-widened doc stays 5Y without ever re-downloading 5 years.
    */
   private async refreshIncremental(
-    ticker: string, resolution: Resolution, doc: BarsDoc,
+    ticker: string,
+    resolution: Resolution,
+    doc: BarsDoc,
     ref: FirebaseFirestore.DocumentReference,
   ): Promise<BarsDoc> {
     const key = `${ticker}_${resolution}_incr`;
@@ -265,13 +388,26 @@ export class OnDemandService implements OnModuleDestroy {
       const to = isoDate(new Date());
       this.stats.barsVendorCalls++;
       const raw: PolygonAggBar[] = await this.polygon.getAggsRange(
-        ticker, from, to, timespan, multiplier, 50_000,
+        ticker,
+        from,
+        to,
+        timespan,
+        multiplier,
+        50_000,
       );
       const now = new Date().toISOString();
       const kept = doc.bars.filter((b) => b.t < lastT); // drop the possibly-partial tail
       const appended = raw
         .filter((b) => b.t >= lastT)
-        .map((b) => ({ t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v, vw: b.vw ?? null }));
+        .map((b) => ({
+          t: b.t,
+          o: b.o,
+          h: b.h,
+          l: b.l,
+          c: b.c,
+          v: b.v,
+          vw: b.vw ?? null,
+        }));
       const next: BarsDoc = {
         ...doc,
         bars: [...kept, ...appended],
@@ -293,7 +429,9 @@ export class OnDemandService implements OnModuleDestroy {
   }
 
   private async fetchAndStore(
-    ticker: string, resolution: Resolution, rangeDays: number,
+    ticker: string,
+    resolution: Resolution,
+    rangeDays: number,
     ref: FirebaseFirestore.DocumentReference,
   ): Promise<BarsDoc> {
     const key = `${ticker}_${resolution}_${rangeDays}`;
@@ -306,18 +444,31 @@ export class OnDemandService implements OnModuleDestroy {
       const from = new Date(to.getTime() - rangeDays * 86_400_000);
       this.stats.barsVendorCalls++;
       const raw: PolygonAggBar[] = await this.polygon.getAggsRange(
-        ticker, isoDate(from), isoDate(to), timespan, multiplier, 50_000,
+        ticker,
+        isoDate(from),
+        isoDate(to),
+        timespan,
+        multiplier,
+        50_000,
       );
       const now = new Date().toISOString();
       const doc: BarsDoc = {
         ticker,
         resolution,
-        bars: raw.map((b) => ({ t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v, vw: b.vw ?? null })),
+        bars: raw.map((b) => ({
+          t: b.t,
+          o: b.o,
+          h: b.h,
+          l: b.l,
+          c: b.c,
+          v: b.v,
+          vw: b.vw ?? null,
+        })),
         rangeDays,
         barCount: raw.length,
         createdAt: now,
         updatedAt: now,
-        source: 'polygon-ondemand',
+        source: "polygon-ondemand",
       };
       // Replace (not merge): the doc IS the series; merging would append noise.
       await ref.set(doc);
@@ -343,22 +494,29 @@ export class OnDemandService implements OnModuleDestroy {
     const mem = this.memCompany.get(ticker);
     if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
 
-    const ref = this.firebase.firestore.collection('companies').doc(ticker);
+    const ref = this.firebase.firestore.collection("companies").doc(ticker);
     const snap = await ref.get();
     if (snap.exists) {
       const data = snap.data() as Record<string, unknown>;
-      const created = typeof data.createdAt === 'string' ? Date.parse(data.createdAt) : NaN;
+      const created =
+        typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
       // 'description' in data → the doc was written by a build that includes the
       // company profile blurb; older docs lack the key, so fall through to a
       // refetch to backfill it rather than serving a description-less doc.
-      if (Number.isFinite(created) && Date.now() - created < COMPANY_TTL_MS && data.price != null && 'description' in data) {
+      if (
+        Number.isFinite(created) &&
+        Date.now() - created < COMPANY_TTL_MS &&
+        data.price != null &&
+        "description" in data
+      ) {
         this.memCompany.set(ticker, { data, at: Date.now() });
         return data;
       }
     }
 
     const key = `company_${ticker}`;
-    const existing = this.inflight.get(key) as Promise<Record<string, unknown> | null> | undefined;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown> | null> | undefined;
     if (existing) return existing;
 
     const p = (async () => {
@@ -369,26 +527,28 @@ export class OnDemandService implements OnModuleDestroy {
       } catch {
         details = null; // unknown ticker — still try the snapshot
       }
-      const quotes = await this.polygon.getUniversalSnapshot([ticker]).catch(() => []);
+      const quotes = await this.polygon
+        .getUniversalSnapshot([ticker])
+        .catch(() => []);
       const q = quotes[0] as Record<string, unknown> | undefined;
       if (!details && !q) return null;
 
       const now = new Date().toISOString();
       const doc: Record<string, unknown> = {
         ticker,
-        name: (details?.name as string) ?? ticker,
-        description: (details?.description as string) ?? null,
-        homepageUrl: (details?.homepage_url as string) ?? null,
-        sector: (details?.sic_description as string) ?? null,
-        marketCap: (details?.market_cap as number) ?? null,
-        exchange: (details?.primary_exchange as string) ?? null,
-        price: (q?.price as number) ?? null,
-        pctChange: (q?.changePercent as number) ?? null,
-        prevClose: (q?.previousClose as number) ?? null,
-        volume: (q?.volume as number) ?? null,
+        name: details?.name ?? ticker,
+        description: details?.description ?? null,
+        homepageUrl: details?.homepage_url ?? null,
+        sector: details?.sic_description ?? null,
+        marketCap: details?.market_cap ?? null,
+        exchange: details?.primary_exchange ?? null,
+        price: q?.price ?? null,
+        pctChange: q?.changePercent ?? null,
+        prevClose: q?.previousClose ?? null,
+        volume: q?.volume ?? null,
         createdAt: now,
         updatedAt: now,
-        source: 'polygon-ondemand',
+        source: "polygon-ondemand",
       };
       await ref.set(doc, { merge: true });
       this.memCompany.set(ticker, { data: doc, at: Date.now() });
@@ -405,10 +565,17 @@ export class OnDemandService implements OnModuleDestroy {
    * synced companies universe, so the peers list can show every ticker Polygon
    * returned, on demand — no per-ticker company fetch needed.
    */
-  async getQuotes(
-    tickers: string[],
-  ): Promise<Array<{ ticker: string; name: string | null; price: number | null; pctChange: number | null }>> {
-    const syms = [...new Set(tickers.map((t) => t.toUpperCase().trim()).filter(Boolean))].slice(0, 25);
+  async getQuotes(tickers: string[]): Promise<
+    Array<{
+      ticker: string;
+      name: string | null;
+      price: number | null;
+      pctChange: number | null;
+    }>
+  > {
+    const syms = [
+      ...new Set(tickers.map((t) => t.toUpperCase().trim()).filter(Boolean)),
+    ].slice(0, 25);
     if (syms.length === 0) return [];
     syms.forEach((t) => this.recordUsage(t));
     const snaps = await this.polygon.getUniversalSnapshot(syms).catch(() => []);
@@ -420,6 +587,26 @@ export class OnDemandService implements OnModuleDestroy {
     }));
   }
 
+  // ── Company logo (Polygon branding, proxied) ────────────────────────────
+
+  /**
+   * Company logo bytes from Polygon's ticker `branding`, proxied server-side so
+   * the API key never reaches the browser. In-memory cached (including "no
+   * logo" as a null result) for a day so a logo-heavy grid doesn't re-hit
+   * Polygon; the endpoint also sets a long edge/browser Cache-Control. Returns
+   * null when Polygon has no branding for the ticker (caller → letter tile).
+   */
+  async getLogo(
+    ticker: string,
+  ): Promise<{ data: Buffer; contentType: string } | null> {
+    const mem = this.memLogo.get(ticker);
+    if (mem && Date.now() - mem.at < 24 * 60 * 60_000) return mem.data;
+    this.recordUsage(ticker);
+    const img = await this.polygon.getBrandingImage(ticker).catch(() => null);
+    this.memLogo.set(ticker, { data: img, at: Date.now() });
+    return img;
+  }
+
   // ── Dividend history ────────────────────────────────────────────────────
 
   /**
@@ -428,15 +615,20 @@ export class OnDemandService implements OnModuleDestroy {
    * sweep writes, so a ticker the sweep hasn't reached yet gets its doc
    * created here on first request instead of waiting for the cron to arrive.
    */
-  async getDividendHistory(ticker: string): Promise<Record<string, unknown> | null> {
+  async getDividendHistory(
+    ticker: string,
+  ): Promise<Record<string, unknown> | null> {
     const mem = this.memDividendHistory.get(ticker);
     if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
 
-    const ref = this.firebase.firestore.collection('dividend_history').doc(ticker);
+    const ref = this.firebase.firestore
+      .collection("dividend_history")
+      .doc(ticker);
     const snap = await ref.get();
     if (snap.exists) {
       const data = snap.data() as Record<string, unknown>;
-      const created = typeof data.createdAt === 'string' ? Date.parse(data.createdAt) : NaN;
+      const created =
+        typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
       if (Number.isFinite(created) && Date.now() - created < DAILY_TTL_MS) {
         this.memDividendHistory.set(ticker, { data, at: Date.now() });
         return data;
@@ -444,19 +636,28 @@ export class OnDemandService implements OnModuleDestroy {
     }
 
     const key = `dividend_history_${ticker}`;
-    const existing = this.inflight.get(key) as Promise<Record<string, unknown> | null> | undefined;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown> | null> | undefined;
     if (existing) return existing;
 
     const p = (async () => {
-      const history = await this.polygon.getDividendHistory(ticker, DIV_HISTORY_LIMIT);
+      const history = await this.polygon.getDividendHistory(
+        ticker,
+        DIV_HISTORY_LIMIT,
+      );
       const totals = annualTotals(history);
       const cutoff = new Date();
       cutoff.setUTCFullYear(cutoff.getUTCFullYear() - 1);
       const cutoffIso = cutoff.toISOString().slice(0, 10);
-      const ttm = history.filter((d) => d.exDividendDate != null && d.exDividendDate >= cutoffIso);
+      const ttm = history.filter(
+        (d) => d.exDividendDate != null && d.exDividendDate >= cutoffIso,
+      );
       const ttmTotal = ttm.reduce((s, d) => s + (d.cashAmount ?? 0), 0);
-      const company: Record<string, unknown> | null = await this.getCompany(ticker).catch(() => null);
-      const price: number | null = (company?.price as number | undefined) ?? null;
+      const company: Record<string, unknown> | null = await this.getCompany(
+        ticker,
+      ).catch(() => null);
+      const price: number | null =
+        (company?.price as number | undefined) ?? null;
 
       const now = new Date().toISOString();
       const doc: Record<string, unknown> = {
@@ -473,13 +674,16 @@ export class OnDemandService implements OnModuleDestroy {
         annualTotals: totals.slice(0, DIV_ANNUAL_YEARS),
         ttmTotal: ttm.length > 0 ? Math.round(ttmTotal * 10000) / 10000 : null,
         ttmPayments: ttm.length,
-        yieldPct: price != null && ttm.length > 0 ? Math.round((ttmTotal / price) * 10000) / 100 : null,
+        yieldPct:
+          price != null && ttm.length > 0
+            ? Math.round((ttmTotal / price) * 10000) / 100
+            : null,
         yieldBasisPrice: price,
         cagr5yPct: dividendCagr(totals, DIV_CAGR_YEARS),
         increaseStreakYears: increaseStreak(totals),
         frequency: history[0]?.frequency ?? null,
         isPayer: history.length > 0,
-        source: 'polygon-ondemand',
+        source: "polygon-ondemand",
         createdAt: now,
         updatedAt: now,
       };
@@ -499,11 +703,12 @@ export class OnDemandService implements OnModuleDestroy {
     const mem = this.memSplits.get(ticker);
     if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
 
-    const ref = this.firebase.firestore.collection('splits').doc(ticker);
+    const ref = this.firebase.firestore.collection("splits").doc(ticker);
     const snap = await ref.get();
     if (snap.exists) {
       const data = snap.data() as Record<string, unknown>;
-      const created = typeof data.createdAt === 'string' ? Date.parse(data.createdAt) : NaN;
+      const created =
+        typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
       if (Number.isFinite(created) && Date.now() - created < DAILY_TTL_MS) {
         this.memSplits.set(ticker, { data, at: Date.now() });
         return data;
@@ -511,7 +716,8 @@ export class OnDemandService implements OnModuleDestroy {
     }
 
     const key = `splits_${ticker}`;
-    const existing = this.inflight.get(key) as Promise<Record<string, unknown> | null> | undefined;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown> | null> | undefined;
     if (existing) return existing;
 
     const p = (async () => {
@@ -521,7 +727,7 @@ export class OnDemandService implements OnModuleDestroy {
         ticker,
         splits,
         latestSplit: splits[0] ?? null,
-        source: 'polygon-ondemand',
+        source: "polygon-ondemand",
         createdAt: now,
         updatedAt: now,
       };
@@ -546,11 +752,12 @@ export class OnDemandService implements OnModuleDestroy {
     const mem = this.memFinancials.get(ticker);
     if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
 
-    const ref = this.firebase.firestore.collection('financials').doc(ticker);
+    const ref = this.firebase.firestore.collection("financials").doc(ticker);
     const snap = await ref.get();
     if (snap.exists) {
       const data = snap.data() as Record<string, unknown>;
-      const created = typeof data.createdAt === 'string' ? Date.parse(data.createdAt) : NaN;
+      const created =
+        typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
       if (Number.isFinite(created) && Date.now() - created < DAILY_TTL_MS) {
         this.memFinancials.set(ticker, { data, at: Date.now() });
         return data;
@@ -558,19 +765,26 @@ export class OnDemandService implements OnModuleDestroy {
     }
 
     const key = `financials_${ticker}`;
-    const existing = this.inflight.get(key) as Promise<Record<string, unknown> | null> | undefined;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown> | null> | undefined;
     if (existing) return existing;
 
     const p = (async () => {
       const [rows, estimates] = await Promise.all([
-        this.polygon.getFinancialStatements(ticker, 'quarterly', FIN_QUARTERS),
+        this.polygon.getFinancialStatements(ticker, "quarterly", FIN_QUARTERS),
         this.earningsEstimatesFor(ticker),
       ]);
-      const quarters = rows.map((r) => mapQuarterRow(r, this.matchEpsEstimate(estimates, r.endDate)));
+      const quarters = rows.map((r) =>
+        mapQuarterRow(r, this.matchEpsEstimate(estimates, r.endDate)),
+      );
 
       let annual: ReturnType<typeof mapAnnualRow>[] = [];
       try {
-        const yr = await this.polygon.getFinancialStatements(ticker, 'annual', FIN_ANNUAL_YEARS);
+        const yr = await this.polygon.getFinancialStatements(
+          ticker,
+          "annual",
+          FIN_ANNUAL_YEARS,
+        );
         annual = yr.map(mapAnnualRow);
       } catch {
         // Annual is a secondary tab — a failure there shouldn't block quarterly data.
@@ -578,7 +792,12 @@ export class OnDemandService implements OnModuleDestroy {
 
       const now = new Date().toISOString();
       const doc: Record<string, unknown> = {
-        ticker, quarters, annual, source: 'polygon-ondemand', createdAt: now, updatedAt: now,
+        ticker,
+        quarters,
+        annual,
+        source: "polygon-ondemand",
+        createdAt: now,
+        updatedAt: now,
       };
       await ref.set(doc);
       this.memFinancials.set(ticker, { data: doc, at: Date.now() });
@@ -590,15 +809,18 @@ export class OnDemandService implements OnModuleDestroy {
   }
 
   /** Raw {reportDate, epsEstimate} pairs for one ticker's synced earnings_events. */
-  private async earningsEstimatesFor(ticker: string): Promise<Array<{ date: string; epsEstimate: number }>> {
+  private async earningsEstimatesFor(
+    ticker: string,
+  ): Promise<Array<{ date: string; epsEstimate: number }>> {
     const snap = await this.firebase.firestore
-      .collection('earnings_events')
-      .where('ticker', '==', ticker)
+      .collection("earnings_events")
+      .where("ticker", "==", ticker)
       .get();
     const out: Array<{ date: string; epsEstimate: number }> = [];
     for (const d of snap.docs) {
       const data = d.data();
-      if (data.epsEstimate != null && data.date) out.push({ date: data.date, epsEstimate: data.epsEstimate });
+      if (data.epsEstimate != null && data.date)
+        out.push({ date: data.date, epsEstimate: data.epsEstimate });
     }
     return out;
   }
@@ -616,8 +838,11 @@ export class OnDemandService implements OnModuleDestroy {
     const target = new Date(`${endDate}T00:00:00Z`).getTime();
     let best: { v: number; gap: number } | null = null;
     for (const e of estimates) {
-      const gap = Math.abs(new Date(`${e.date}T00:00:00Z`).getTime() - target) / 86_400_000;
-      if (gap <= 90 && (!best || gap < best.gap)) best = { v: e.epsEstimate, gap };
+      const gap =
+        Math.abs(new Date(`${e.date}T00:00:00Z`).getTime() - target) /
+        86_400_000;
+      if (gap <= 90 && (!best || gap < best.gap))
+        best = { v: e.epsEstimate, gap };
     }
     return best?.v ?? null;
   }
@@ -636,10 +861,13 @@ export class OnDemandService implements OnModuleDestroy {
     const mem = this.memNews.get(ticker);
     if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
 
-    const snap = await this.firebase.firestore.collection('news').where('ticker', '==', ticker).get();
-    const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Record<string, unknown>);
+    const snap = await this.firebase.firestore
+      .collection("news")
+      .where("ticker", "==", ticker)
+      .get();
+    const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Array<Record<string, unknown>>;
     const freshestUpdate = docs.reduce((max, d) => {
-      const t = typeof d.updatedAt === 'string' ? Date.parse(d.updatedAt) : NaN;
+      const t = typeof d.updatedAt === "string" ? Date.parse(d.updatedAt) : NaN;
       return Number.isFinite(t) ? Math.max(max, t) : max;
     }, 0);
 
@@ -650,14 +878,19 @@ export class OnDemandService implements OnModuleDestroy {
     }
 
     const key = `news_${ticker}`;
-    const existing = this.inflight.get(key) as Promise<Record<string, unknown>[]> | undefined;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown>[]> | undefined;
     if (existing) return existing;
 
     const p = (async () => {
       const to = new Date();
       const from = new Date(to.getTime() - NEWS_LOOKBACK_DAYS * 86_400_000);
       const isoDate = (d: Date) => d.toISOString().slice(0, 10);
-      const result = await this.news.fetchNews(ticker, isoDate(from), isoDate(to));
+      const result = await this.news.fetchNews(
+        ticker,
+        isoDate(from),
+        isoDate(to),
+      );
       const now = new Date().toISOString();
       const articles = result.data.slice(0, NEWS_ARTICLE_CAP).map((a) => {
         const docId = `${ticker}_${a.id}`;
@@ -684,13 +917,19 @@ export class OnDemandService implements OnModuleDestroy {
       if (articles.length > 0) {
         const batch = this.firebase.firestore.batch();
         for (const a of articles) {
-          batch.set(this.firebase.firestore.collection('news').doc(a.docId), a.data, { merge: true });
+          batch.set(
+            this.firebase.firestore.collection("news").doc(a.docId),
+            a.data,
+            { merge: true },
+          );
         }
         await batch.commit();
       }
       const sorted = articles
         .map((a) => ({ id: a.docId, ...a.data }))
-        .sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)));
+        .sort((a, b) =>
+          String(b.publishedAt).localeCompare(String(a.publishedAt)),
+        );
       this.memNews.set(ticker, { data: sorted, at: Date.now() });
       return sorted;
     })().finally(() => this.inflight.delete(key));
@@ -711,15 +950,20 @@ export class OnDemandService implements OnModuleDestroy {
    * before calling this — it's a curated set, not an open one like bars/
    * company/dividends.
    */
-  async getOptionsChain(ticker: string): Promise<Record<string, unknown> | null> {
+  async getOptionsChain(
+    ticker: string,
+  ): Promise<Record<string, unknown> | null> {
     const mem = this.memOptions.get(ticker);
     if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
 
-    const ref = this.firebase.firestore.collection('options_chains').doc(ticker);
+    const ref = this.firebase.firestore
+      .collection("options_chains")
+      .doc(ticker);
     const snap = await ref.get();
     if (snap.exists) {
       const data = snap.data() as Record<string, unknown>;
-      const created = typeof data.createdAt === 'string' ? Date.parse(data.createdAt) : NaN;
+      const created =
+        typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
       if (Number.isFinite(created) && Date.now() - created < DAILY_TTL_MS) {
         this.memOptions.set(ticker, { data, at: Date.now() });
         return data;
@@ -727,7 +971,8 @@ export class OnDemandService implements OnModuleDestroy {
     }
 
     const key = `options_${ticker}`;
-    const existing = this.inflight.get(key) as Promise<Record<string, unknown> | null> | undefined;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown> | null> | undefined;
     if (existing) return existing;
 
     const p = (async () => {
@@ -736,11 +981,19 @@ export class OnDemandService implements OnModuleDestroy {
       lookback.setUTCDate(lookback.getUTCDate() - OPTIONS_AGG_LOOKBACK_DAYS);
       const from = isoDate(lookback);
 
-      const contracts = await this.polygon.getOptionContracts(ticker, today, OPTIONS_CONTRACTS_LIMIT);
+      const contracts = await this.polygon.getOptionContracts(
+        ticker,
+        today,
+        OPTIONS_CONTRACTS_LIMIT,
+      );
       const enriched: Record<string, unknown>[] = [];
       for (const c of contracts) {
         try {
-          const bar = await this.polygon.getOptionLatestBar(c.ticker, from, today);
+          const bar = await this.polygon.getOptionLatestBar(
+            c.ticker,
+            from,
+            today,
+          );
           enriched.push({
             contractTicker: c.ticker,
             contractType: c.contract_type,
@@ -756,10 +1009,15 @@ export class OnDemandService implements OnModuleDestroy {
             lastVolume: bar?.v ?? null,
             lastTradeCount: bar?.n ?? null,
             lastBarDate: bar ? isoDate(new Date(bar.t)) : null,
-            lastRangePct: bar && bar.o > 0 ? Math.round(((bar.h - bar.l) / bar.o) * 10000) / 100 : null,
+            lastRangePct:
+              bar && bar.o > 0
+                ? Math.round(((bar.h - bar.l) / bar.o) * 10000) / 100
+                : null,
           });
         } catch (err) {
-          this.logger.warn(`options on-demand: bar fetch failed for ${c.ticker}: ${(err as Error).message}`);
+          this.logger.warn(
+            `options on-demand: bar fetch failed for ${c.ticker}: ${(err as Error).message}`,
+          );
         }
         await sleep(this.polygon.requestDelayMs);
       }
@@ -768,8 +1026,8 @@ export class OnDemandService implements OnModuleDestroy {
       const doc = {
         underlyingTicker: ticker,
         contracts: enriched,
-        source: 'polygon-ondemand',
-        note: 'Strikes, expirations and per-contract OHLCV/VWAP/volume are real (delayed). Bid/ask, IV, greeks and open interest return NOT_AUTHORIZED on the current Polygon plan — they need the Options add-on.',
+        source: "polygon-ondemand",
+        note: "Strikes, expirations and per-contract OHLCV/VWAP/volume are real (delayed). Bid/ask, IV, greeks and open interest return NOT_AUTHORIZED on the current Polygon plan — they need the Options add-on.",
         createdAt: now,
         updatedAt: now,
       };
@@ -788,7 +1046,10 @@ export class OnDemandService implements OnModuleDestroy {
   recordUsage(ticker: string): void {
     this.pendingUsage.set(ticker, (this.pendingUsage.get(ticker) ?? 0) + 1);
     if (!this.usageTimer) {
-      this.usageTimer = setInterval(() => void this.flushUsage(), USAGE_FLUSH_MS);
+      this.usageTimer = setInterval(
+        () => void this.flushUsage(),
+        USAGE_FLUSH_MS,
+      );
       this.usageTimer.unref?.();
     }
   }
@@ -800,13 +1061,13 @@ export class OnDemandService implements OnModuleDestroy {
     try {
       const db = this.firebase.firestore;
       if (!this.knownUsageTickers) {
-        const ids = await db.collection('ticker_usage').select().get();
+        const ids = await db.collection("ticker_usage").select().get();
         this.knownUsageTickers = new Set(ids.docs.map((d) => d.id));
       }
       const batch = db.batch();
       const now = new Date().toISOString();
       for (const [ticker, n] of toFlush) {
-        const ref = db.collection('ticker_usage').doc(ticker);
+        const ref = db.collection("ticker_usage").doc(ticker);
         const payload: Record<string, unknown> = {
           ticker,
           count: FieldValue.increment(n),
@@ -832,8 +1093,8 @@ export class OnDemandService implements OnModuleDestroy {
   async hotTickers(limit = 100): Promise<string[]> {
     try {
       const snap = await this.firebase.firestore
-        .collection('ticker_usage')
-        .orderBy('count', 'desc')
+        .collection("ticker_usage")
+        .orderBy("count", "desc")
         .limit(limit)
         .get();
       return snap.docs.map((d) => d.id);

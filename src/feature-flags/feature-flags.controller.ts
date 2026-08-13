@@ -1,6 +1,15 @@
-import { BadRequestException, Body, Controller, Get, Header, Param, Post, UseGuards } from '@nestjs/common';
-import { FeatureFlagsService } from './feature-flags.service';
-import { FEATURE_FLAG_KEYS } from './feature-flags.registry';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Header,
+  Param,
+  Post,
+  UseGuards,
+} from "@nestjs/common";
+import { FeatureFlagsService } from "./feature-flags.service";
+import { FEATURE_FLAG_KEYS } from "./feature-flags.registry";
 
 /**
  * Feature-flag API.
@@ -15,41 +24,41 @@ import { FEATURE_FLAG_KEYS } from './feature-flags.registry';
  * Run IAM (--no-allow-unauthenticated). If ever exposed publicly, gate the
  * mutating routes behind an admin check first.
  */
-import { AdminGuard } from '../common/admin.guard';
+import { AdminGuard } from "../common/admin.guard";
 
-@Controller('feature-flags')
+@Controller("feature-flags")
 @UseGuards(AdminGuard)
 export class FeatureFlagsController {
   constructor(private readonly flags: FeatureFlagsService) {}
 
   @Get()
-  @Header('Cache-Control', 'public, max-age=5, s-maxage=15')
+  @Header("Cache-Control", "public, max-age=5, s-maxage=15")
   async all() {
     return { flags: await this.flags.getAll() };
   }
 
-  @Get('map')
-  @Header('Cache-Control', 'public, max-age=5, s-maxage=15')
+  @Get("map")
+  @Header("Cache-Control", "public, max-age=5, s-maxage=15")
   async map() {
     return await this.flags.getMap();
   }
 
-  @Post('seed')
+  @Post("seed")
   async seed() {
     return await this.flags.seed();
   }
 
-  @Post(':key')
+  @Post(":key")
   async set(
-    @Param('key') key: string,
+    @Param("key") key: string,
     @Body() body: { value?: boolean | null },
   ) {
     if (!FEATURE_FLAG_KEYS.has(key)) {
       throw new BadRequestException(`unknown flag: ${key}`);
     }
     const value = body?.value ?? null;
-    if (value !== null && typeof value !== 'boolean') {
-      throw new BadRequestException('value must be true, false, or null');
+    if (value !== null && typeof value !== "boolean") {
+      throw new BadRequestException("value must be true, false, or null");
     }
     await this.flags.setOverride(key, value);
     return { key, value, ok: true };

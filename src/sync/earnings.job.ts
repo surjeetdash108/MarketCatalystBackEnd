@@ -1,11 +1,11 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { chunkedBatchSet } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { PolygonService } from '../vendors/polygon/polygon.service';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { chunkedBatchSet } from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { PolygonService } from "../vendors/polygon/polygon.service";
+import { SyncRegistry } from "../common/sync-registry.service";
 
-const JOB_NAME = 'earnings';
+const JOB_NAME = "earnings";
 // Past-only window. Polygon is the sole source: it has no earnings-calendar or
 // estimate feed, so the calendar is built from reported SEC financials keyed on
 // `filing_date`. There is therefore no lookahead — only already-filed quarters.
@@ -34,9 +34,9 @@ export class EarningsJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['earnings_events'],
-      cronExpression: '0 6 * * *',
-      timeZone: 'America/New_York',
+      collections: ["earnings_events"],
+      cronExpression: "0 6 * * *",
+      timeZone: "America/New_York",
     });
   }
 
@@ -70,7 +70,7 @@ export class EarningsJob implements OnModuleInit {
             updatedAt: new Date().toISOString(),
           },
         }));
-      await chunkedBatchSet(this.firebase.firestore, 'earnings_events', docs);
+      await chunkedBatchSet(this.firebase.firestore, "earnings_events", docs);
 
       // Full refresh: Polygon is the sole source, so the collection must hold
       // exactly this run's reported rows. Delete any doc not in the new set —
@@ -78,8 +78,10 @@ export class EarningsJob implements OnModuleInit {
       // (they'd otherwise surface as "EPS estimate $X / actual Pending", which
       // Polygon can never produce).
       const keep = new Set(docs.map((d) => d.id));
-      const col = this.firebase.firestore.collection('earnings_events');
-      const stale = (await col.listDocuments()).filter((ref) => !keep.has(ref.id));
+      const col = this.firebase.firestore.collection("earnings_events");
+      const stale = (await col.listDocuments()).filter(
+        (ref) => !keep.has(ref.id),
+      );
       for (let i = 0; i < stale.length; i += 400) {
         const batch = this.firebase.firestore.batch();
         for (const ref of stale.slice(i, i + 400)) batch.delete(ref);

@@ -1,11 +1,11 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { SyncRegistry } from '../common/sync-registry.service';
-import { OnDemandService } from '../live/ondemand.service';
-import { tapeUniverse } from '../live/tape-universe';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { SyncRegistry } from "../common/sync-registry.service";
+import { OnDemandService } from "../live/ondemand.service";
+import { tapeUniverse } from "../live/tape-universe";
 
-const JOB_NAME = 'premarket';
+const JOB_NAME = "premarket";
 
 /**
  * THE single scheduled entry point (2026-07-24 redesign): every periodic sync
@@ -41,38 +41,38 @@ const JOB_NAME = 'premarket';
 
 /** Phase 2 — order matters only where noted. */
 const MARKET_WIDE: string[] = [
-  'market-indices',
-  'sectors',
-  'market-movers',
-  'market-breadth',
-  'fear-greed',        // reads market-breadth output
-  'macro-events',
-  'macro-regime',      // FRED-only, self-contained regime label
-  'earnings',
-  'ipos',
-  'edgar-ipo-pipeline',// SEC S-1/424B registrations; no Firestore deps
-  'news',
-  'analyst-actions',
-  'sec-form4',
-  'sec-13f',
-  'dividends',
-  'options-chains',    // its own small OPTIONS_UNIVERSE
+  "market-indices",
+  "sectors",
+  "market-movers",
+  "market-breadth",
+  "fear-greed", // reads market-breadth output
+  "macro-events",
+  "macro-regime", // FRED-only, self-contained regime label
+  "earnings",
+  "ipos",
+  "edgar-ipo-pipeline", // SEC S-1/424B registrations; no Firestore deps
+  "news",
+  "analyst-actions",
+  "sec-form4",
+  "sec-13f",
+  "dividends",
+  "options-chains", // its own small OPTIONS_UNIVERSE
 ];
 
 /** Phase 3 — over the dynamic `companies` universe. */
 const PER_TICKER: string[] = [
-  'companies',             // refresh profiles of the active set
-  'stock-history',         // ohlcv_bars substrate the compute jobs read
-  'edgar-8k',              // earnings 8-Ks; reads ohlcv_bars for reaction
-  'technical-indicators',
-  'rs-rating',
-  'tech-rating',
-  'financials',
-  'fundamentals-growth',
-  'corporate-actions',
+  "companies", // refresh profiles of the active set
+  "stock-history", // ohlcv_bars substrate the compute jobs read
+  "edgar-8k", // earnings 8-Ks; reads ohlcv_bars for reaction
+  "technical-indicators",
+  "rs-rating",
+  "tech-rating",
+  "financials",
+  "fundamentals-growth",
+  "corporate-actions",
 ];
 
-const FINAL: string[] = ['recaps'];
+const FINAL: string[] = ["recaps"];
 
 /** Warm concurrency — enough to finish a few hundred tickers premarket. */
 const WARM_CONCURRENCY = 4;
@@ -91,9 +91,14 @@ export class PremarketJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['companies', 'stock_bars', 'ticker_usage', '(orchestrates all sync jobs)'],
-      cronExpression: '0 8 * * 1-5',
-      timeZone: 'America/New_York',
+      collections: [
+        "companies",
+        "stock_bars",
+        "ticker_usage",
+        "(orchestrates all sync jobs)",
+      ],
+      cronExpression: "0 8 * * 1-5",
+      timeZone: "America/New_York",
     });
   }
 
@@ -105,21 +110,27 @@ export class PremarketJob implements OnModuleInit {
     }
     const db = this.firebase.firestore;
     try {
-      const watchlists = await db.collectionGroup('watchlists').get();
+      const watchlists = await db.collectionGroup("watchlists").get();
       for (const d of watchlists.docs) {
         const tickers = (d.data().tickers ?? []) as string[];
-        for (const t of tickers) if (typeof t === 'string' && t) hot.add(t.toUpperCase());
+        for (const t of tickers)
+          if (typeof t === "string" && t) hot.add(t.toUpperCase());
       }
     } catch (err) {
-      this.logger.warn(`watchlists collectionGroup read failed: ${(err as Error).message}`);
+      this.logger.warn(
+        `watchlists collectionGroup read failed: ${(err as Error).message}`,
+      );
     }
     try {
-      const holdings = await db.collectionGroup('holdings').get();
+      const holdings = await db.collectionGroup("holdings").get();
       for (const d of holdings.docs) hot.add(d.id.toUpperCase());
     } catch (err) {
-      this.logger.warn(`holdings collectionGroup read failed: ${(err as Error).message}`);
+      this.logger.warn(
+        `holdings collectionGroup read failed: ${(err as Error).message}`,
+      );
     }
-    for (const t of await this.ondemand.hotTickers(HOT_LIST_LIMIT)) hot.add(t.toUpperCase());
+    for (const t of await this.ondemand.hotTickers(HOT_LIST_LIMIT))
+      hot.add(t.toUpperCase());
     return [...hot].filter((t) => /^[A-Z][A-Z0-9.\-]{0,9}$/.test(t)).sort();
   }
 
@@ -131,7 +142,9 @@ export class PremarketJob implements OnModuleInit {
    * on-demand layer appends only the days since the last stored bar; it never
    * re-downloads five years every morning).
    */
-  private async warm(tickers: string[]): Promise<{ warmed: number; failed: number }> {
+  private async warm(
+    tickers: string[],
+  ): Promise<{ warmed: number; failed: number }> {
     let warmed = 0;
     let failed = 0;
     const queue = [...tickers];
@@ -152,12 +165,14 @@ export class PremarketJob implements OnModuleInit {
     return { warmed, failed };
   }
 
-  private async runPhase(names: string[]): Promise<Array<{ job: string; ok: boolean; error?: string }>> {
+  private async runPhase(
+    names: string[],
+  ): Promise<Array<{ job: string; ok: boolean; error?: string }>> {
     const results: Array<{ job: string; ok: boolean; error?: string }> = [];
     for (const name of names) {
       const runner = this.registry.get(name);
       if (!runner) {
-        results.push({ job: name, ok: false, error: 'not registered' });
+        results.push({ job: name, ok: false, error: "not registered" });
         continue;
       }
       try {
@@ -166,7 +181,9 @@ export class PremarketJob implements OnModuleInit {
       } catch (err) {
         // One failing source must not sink the whole morning refresh.
         results.push({ job: name, ok: false, error: (err as Error).message });
-        this.logger.error(`premarket: job "${name}" failed: ${(err as Error).message}`);
+        this.logger.error(
+          `premarket: job "${name}" failed: ${(err as Error).message}`,
+        );
       }
     }
     return results;
@@ -188,7 +205,12 @@ export class PremarketJob implements OnModuleInit {
       await this.meta.record(JOB_NAME, {
         ok: failed.length === 0,
         count: all.length - failed.length,
-        error: failed.length ? failed.map((f) => `${f.job}: ${f.error}`).join('; ').slice(0, 900) : undefined,
+        error: failed.length
+          ? failed
+              .map((f) => `${f.job}: ${f.error}`)
+              .join("; ")
+              .slice(0, 900)
+          : undefined,
       });
       return {
         hotTickers: hotSet.length,
@@ -199,7 +221,11 @@ export class PremarketJob implements OnModuleInit {
         tookMs: Date.now() - startedAt,
       };
     } catch (err) {
-      await this.meta.record(JOB_NAME, { ok: false, count: 0, error: (err as Error).message });
+      await this.meta.record(JOB_NAME, {
+        ok: false,
+        count: 0,
+        error: (err as Error).message,
+      });
       throw err;
     }
   }

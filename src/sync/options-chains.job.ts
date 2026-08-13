@@ -1,12 +1,12 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { setWithCreatedAt } from '../common/firestore-batch.util';
-import { OPTIONS_UNIVERSE } from '../common/options-universe';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { PolygonService } from '../vendors/polygon/polygon.service';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { setWithCreatedAt } from "../common/firestore-batch.util";
+import { OPTIONS_UNIVERSE } from "../common/options-universe";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { PolygonService } from "../vendors/polygon/polygon.service";
+import { SyncRegistry } from "../common/sync-registry.service";
 
-const JOB_NAME = 'options-chains';
+const JOB_NAME = "options-chains";
 const CONTRACTS_PER_TICKER = 20;
 const AGG_LOOKBACK_DAYS = 10;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -28,9 +28,9 @@ export class OptionsChainsJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['options_chains'],
-      cronExpression: '0 19 * * 1-5',
-      timeZone: 'America/New_York',
+      collections: ["options_chains"],
+      cronExpression: "0 19 * * 1-5",
+      timeZone: "America/New_York",
     });
   }
 
@@ -46,12 +46,20 @@ export class OptionsChainsJob implements OnModuleInit {
     let tickersWritten = 0;
     for (const ticker of OPTIONS_UNIVERSE) {
       try {
-        const contracts = await this.polygon.getOptionContracts(ticker, today, CONTRACTS_PER_TICKER);
+        const contracts = await this.polygon.getOptionContracts(
+          ticker,
+          today,
+          CONTRACTS_PER_TICKER,
+        );
         await sleep(this.polygon.requestDelayMs);
         const enriched = [];
         for (const c of contracts) {
           try {
-            const bar = await this.polygon.getOptionLatestBar(c.ticker, from, today);
+            const bar = await this.polygon.getOptionLatestBar(
+              c.ticker,
+              from,
+              today,
+            );
             // Per-contract OHLCV is authorized on this plan even though the
             // options SNAPSHOT (greeks/IV/OI/bid-ask) returns NOT_AUTHORIZED —
             // verified 2026-07-21. Only close and volume were being read, so the
@@ -80,22 +88,28 @@ export class OptionsChainsJob implements OnModuleInit {
                   : null,
             });
           } catch (err) {
-            this.logger.warn(`Failed fetching bar for ${c.ticker}: ${err.message}`);
+            this.logger.warn(
+              `Failed fetching bar for ${c.ticker}: ${err.message}`,
+            );
           }
           await sleep(this.polygon.requestDelayMs);
         }
-        await setWithCreatedAt(this.firebase.firestore, this.firebase.firestore
-          .collection('options_chains')
-          .doc(ticker), {
+        await setWithCreatedAt(
+          this.firebase.firestore,
+          this.firebase.firestore.collection("options_chains").doc(ticker),
+          {
             underlyingTicker: ticker,
             contracts: enriched,
-            source: 'polygon',
-            note: 'Strikes, expirations and per-contract OHLCV/VWAP/volume are real (delayed). Bid/ask, IV, greeks and open interest return NOT_AUTHORIZED on the current Polygon plan — they need the Options add-on.',
+            source: "polygon",
+            note: "Strikes, expirations and per-contract OHLCV/VWAP/volume are real (delayed). Bid/ask, IV, greeks and open interest return NOT_AUTHORIZED on the current Polygon plan — they need the Options add-on.",
             updatedAt: new Date().toISOString(),
-          });
+          },
+        );
         tickersWritten++;
       } catch (err) {
-        this.logger.error(`Failed syncing options for ${ticker}: ${err.message}`);
+        this.logger.error(
+          `Failed syncing options for ${ticker}: ${err.message}`,
+        );
       }
     }
     await this.meta.record(JOB_NAME, { ok: true, count: tickersWritten });

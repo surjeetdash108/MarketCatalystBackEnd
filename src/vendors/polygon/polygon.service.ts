@@ -1,12 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { fetchJson } from '../../common/http.util';
+import { Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { fetchJson } from "../../common/http.util";
 
 // Polygon rebranded to Massive (Oct 2025); api.polygon.io still resolves but is
 // being phased out in favour of api.massive.com. Kept configurable so the host
 // can be cut over via env once a key is confirmed working on the new one,
 // without a redeploy of changed code.
-const DEFAULT_BASE_URL = 'https://api.polygon.io';
+const DEFAULT_BASE_URL = "https://api.polygon.io";
 
 // Delay between pages of a paginated endpoint. 12.5s is the free Basic tier's
 // 5-calls-per-minute budget; EVERY paid tier is unlimited, so on a paid key
@@ -67,7 +67,7 @@ export interface PolygonTickerRef {
 export interface PolygonOptionContract {
   ticker: string;
   underlying_ticker: string;
-  contract_type: 'call' | 'put';
+  contract_type: "call" | "put";
   strike_price: number;
   expiration_date: string;
   exercise_style?: string;
@@ -76,7 +76,7 @@ export interface PolygonOptionContract {
 
 export interface PolygonNewsInsight {
   ticker: string;
-  sentiment: 'positive' | 'negative' | 'neutral';
+  sentiment: "positive" | "negative" | "neutral";
   sentiment_reasoning: string;
 }
 
@@ -104,23 +104,25 @@ export class PolygonService {
   private readonly pageDelayMs: number;
 
   constructor(private readonly config: ConfigService) {
-    this.apiKey = this.config.get('POLYGON_API_KEY', '');
+    this.apiKey = this.config.get("POLYGON_API_KEY", "");
     if (!this.apiKey) {
-      this.logger.warn('POLYGON_API_KEY not set — Polygon-backed jobs will fail.');
+      this.logger.warn(
+        "POLYGON_API_KEY not set — Polygon-backed jobs will fail.",
+      );
     }
 
     this.baseUrl = this.config
-      .get('POLYGON_API_BASE_URL', DEFAULT_BASE_URL)
-      .replace(/\/$/, '');
+      .get("POLYGON_API_BASE_URL", DEFAULT_BASE_URL)
+      .replace(/\/$/, "");
 
     // Parsed defensively: a typo or a negative value must fall back to the safe
     // free-tier delay rather than silently hammering the API. Blank is treated
     // as unset too — `POLYGON_PAGE_DELAY_MS=` is a natural way to leave the var
     // empty, and Number('') is 0, which would disable the throttle entirely.
     const rawDelay = String(
-      this.config.get('POLYGON_PAGE_DELAY_MS', ''),
+      this.config.get("POLYGON_PAGE_DELAY_MS", ""),
     ).trim();
-    const parsedDelay = rawDelay === '' ? NaN : Number(rawDelay);
+    const parsedDelay = rawDelay === "" ? NaN : Number(rawDelay);
     this.pageDelayMs =
       Number.isFinite(parsedDelay) && parsedDelay >= 0
         ? parsedDelay
@@ -156,7 +158,9 @@ export class PolygonService {
       if (bars.length > 0) {
         return { date, bars };
       }
-      this.logger.log(`No grouped-daily data for ${date} (holiday/weekend) — trying prior day`);
+      this.logger.log(
+        `No grouped-daily data for ${date} (holiday/weekend) — trying prior day`,
+      );
     }
     return null;
   }
@@ -165,7 +169,7 @@ export class PolygonService {
     ticker: string,
     from: string,
     to: string,
-    timespan = 'day',
+    timespan = "day",
     multiplier = 1,
     limit = 5000,
   ): Promise<PolygonAggBar[]> {
@@ -188,7 +192,7 @@ export class PolygonService {
   async getIntradayBars(
     ticker: string,
     multiplier: number,
-    timespan: 'minute' | 'hour',
+    timespan: "minute" | "hour",
     from: string,
     to: string,
   ): Promise<PolygonAggBar[]> {
@@ -278,7 +282,12 @@ export class PolygonService {
     afterDate: string,
     throughDate: string,
   ): Promise<
-    Array<{ ticker: string; executionDate: string; splitFrom: number; splitTo: number }>
+    Array<{
+      ticker: string;
+      executionDate: string;
+      splitFrom: number;
+      splitTo: number;
+    }>
   > {
     const res = await fetchJson<any>(
       `${this.baseUrl}/v3/reference/splits` +
@@ -304,7 +313,9 @@ export class PolygonService {
     exchanges: Record<string, string>;
     serverTime: string;
   }> {
-    return fetchJson(`${this.baseUrl}/v1/marketstatus/now?apiKey=${this.apiKey}`);
+    return fetchJson(
+      `${this.baseUrl}/v1/marketstatus/now?apiKey=${this.apiKey}`,
+    );
   }
 
   /** Upcoming market holidays and early closes. */
@@ -356,113 +367,6 @@ export class PolygonService {
     }));
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Additional AUTHORIZED Polygon endpoints — vendor layer kept complete so any
-  // future feature can wire them without touching this file. Not yet consumed
-  // by a controller/UI (independent data); see Doc/POLYGON-FEATURE-CROSSCHECK.
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /** CPI inflation series — GET /fed/v1/inflation. Returns raw dated rows. */
-  async getInflation(limit = 13): Promise<Array<Record<string, unknown>>> {
-    const res = await fetchJson<any>(
-      `${this.baseUrl}/fed/v1/inflation?limit=${limit}&sort=date.desc&apiKey=${this.apiKey}`,
-    );
-    return (res.results ?? []) as Array<Record<string, unknown>>;
-  }
-
-  /** Model-implied inflation expectations — GET /fed/v1/inflation-expectations. */
-  async getInflationExpectations(limit = 13): Promise<Array<Record<string, unknown>>> {
-    const res = await fetchJson<any>(
-      `${this.baseUrl}/fed/v1/inflation-expectations?limit=${limit}&sort=date.desc&apiKey=${this.apiKey}`,
-    );
-    return (res.results ?? []) as Array<Record<string, unknown>>;
-  }
-
-  /**
-   * FX previous-day aggregate — GET /v2/aggs/ticker/C:{pair}/prev.
-   * `pair` is a currency pair like "EURUSD" or "USDJPY".
-   */
-  async getFxPrevClose(pair: string): Promise<{
-    pair: string;
-    close: number | null;
-    open: number | null;
-    high: number | null;
-    low: number | null;
-    volume: number | null;
-  } | null> {
-    const res = await fetchJson<any>(
-      `${this.baseUrl}/v2/aggs/ticker/C:${pair}/prev?adjusted=true&apiKey=${this.apiKey}`,
-    );
-    const r = res.results?.[0];
-    if (!r) return null;
-    return {
-      pair,
-      close: r.c ?? null,
-      open: r.o ?? null,
-      high: r.h ?? null,
-      low: r.l ?? null,
-      volume: r.v ?? null,
-    };
-  }
-
-  /** Daily open/close/high/low for one ticker — GET /v1/open-close/{ticker}/{date}. */
-  async getDailyOpenClose(ticker: string, date: string): Promise<Record<string, unknown> | null> {
-    const res = await fetchJson<any>(
-      `${this.baseUrl}/v1/open-close/${ticker}/${date}?adjusted=true&apiKey=${this.apiKey}`,
-    );
-    return (res ?? null) as Record<string, unknown> | null;
-  }
-
-  /** Corporate/name-change events for a ticker — GET /vX/reference/tickers/{ticker}/events. */
-  async getTickerEvents(ticker: string): Promise<Array<Record<string, unknown>>> {
-    const res = await fetchJson<any>(
-      `${this.baseUrl}/vX/reference/tickers/${ticker}/events?apiKey=${this.apiKey}`,
-    );
-    return (res.results?.events ?? []) as Array<Record<string, unknown>>;
-  }
-
-  /**
-   * Vendor-computed technical indicator — GET /v1/indicators/{indicator}/{ticker}.
-   * We normally compute our own (technical-indicators.job); this is here for
-   * completeness / cross-checking. `indicator` ∈ sma | ema | rsi | macd.
-   */
-  async getIndicator(
-    indicator: 'sma' | 'ema' | 'rsi' | 'macd',
-    ticker: string,
-    params: { window?: number; timespan?: string; limit?: number } = {},
-  ): Promise<Array<Record<string, unknown>>> {
-    const { window = 14, timespan = 'day', limit = 50 } = params;
-    const win = indicator === 'macd' ? '' : `&window=${window}`;
-    const res = await fetchJson<any>(
-      `${this.baseUrl}/v1/indicators/${indicator}/${ticker}?timespan=${timespan}${win}&series_type=close&order=desc&limit=${limit}&apiKey=${this.apiKey}`,
-    );
-    return (res.results?.values ?? []) as Array<Record<string, unknown>>;
-  }
-
-  /** Reference: stock exchanges — GET /v3/reference/exchanges?asset_class=stocks. */
-  async getExchanges(): Promise<Array<Record<string, unknown>>> {
-    const res = await fetchJson<any>(
-      `${this.baseUrl}/v3/reference/exchanges?asset_class=stocks&locale=us&apiKey=${this.apiKey}`,
-    );
-    return (res.results ?? []) as Array<Record<string, unknown>>;
-  }
-
-  /** Reference: trade/quote conditions — GET /v3/reference/conditions. */
-  async getConditions(): Promise<Array<Record<string, unknown>>> {
-    const res = await fetchJson<any>(
-      `${this.baseUrl}/v3/reference/conditions?asset_class=stocks&limit=200&apiKey=${this.apiKey}`,
-    );
-    return (res.results ?? []) as Array<Record<string, unknown>>;
-  }
-
-  /** Reference: ticker types — GET /v3/reference/tickers/types. */
-  async getTickerTypes(): Promise<Array<Record<string, unknown>>> {
-    const res = await fetchJson<any>(
-      `${this.baseUrl}/v3/reference/tickers/types?asset_class=stocks&locale=us&apiKey=${this.apiKey}`,
-    );
-    return (res.results ?? []) as Array<Record<string, unknown>>;
-  }
-
   /**
    * Universal snapshot. Carries the extended-hours fields the delayed
    * per-ticker snapshot does not: `early_trading_change_percent` and
@@ -489,7 +393,7 @@ export class PolygonService {
   > {
     if (tickers.length === 0) return [];
     const res = await fetchJson<any>(
-      `${this.baseUrl}/v3/snapshot?ticker.any_of=${tickers.join(',')}` +
+      `${this.baseUrl}/v3/snapshot?ticker.any_of=${tickers.join(",")}` +
         `&limit=250&apiKey=${this.apiKey}`,
     );
     return (res.results ?? []).map((r: any) => {
@@ -520,6 +424,35 @@ export class PolygonService {
     return res.results;
   }
 
+  /**
+   * Company logo bytes from Polygon's ticker `branding` (icon preferred, then
+   * logo). The branding URLs require the API key appended, so this must run
+   * server-side — the browser never sees the key. Returns null when Polygon has
+   * no branding for the ticker (caller falls back to a letter tile).
+   */
+  async getBrandingImage(
+    ticker: string,
+  ): Promise<{ data: Buffer; contentType: string } | null> {
+    let details: any = null;
+    try {
+      details = await this.getTickerDetails(ticker);
+    } catch {
+      return null;
+    }
+    const branding = details?.branding as
+      { icon_url?: string; logo_url?: string } | undefined;
+    const base = branding?.icon_url ?? branding?.logo_url;
+    if (!base) return null;
+    const url = base.includes("?")
+      ? `${base}&apiKey=${this.apiKey}`
+      : `${base}?apiKey=${this.apiKey}`;
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const contentType = resp.headers.get("content-type") ?? "image/png";
+    const data = Buffer.from(await resp.arrayBuffer());
+    return { data, contentType };
+  }
+
   async getTtmEps(ticker: string): Promise<number | null> {
     const res = await fetchJson<any>(
       `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
@@ -527,8 +460,9 @@ export class PolygonService {
     );
     const inc = res.results?.[0]?.financials?.income_statement;
     const eps =
-      inc?.diluted_earnings_per_share?.value ?? inc?.basic_earnings_per_share?.value;
-    return typeof eps === 'number' ? eps : null;
+      inc?.diluted_earnings_per_share?.value ??
+      inc?.basic_earnings_per_share?.value;
+    return typeof eps === "number" ? eps : null;
   }
 
   /**
@@ -577,7 +511,7 @@ export class PolygonService {
         if (!ticker) continue;
         const inc = p.financials?.income_statement ?? {};
         const v = (k: string) =>
-          typeof inc[k]?.value === 'number' ? (inc[k].value as number) : null;
+          typeof inc[k]?.value === "number" ? (inc[k].value as number) : null;
         out.push({
           ticker,
           companyName: p.company_name ?? null,
@@ -586,9 +520,9 @@ export class PolygonService {
           fiscalPeriod: p.fiscal_period ?? null,
           fiscalYear: p.fiscal_year ?? null,
           epsActual:
-            v('diluted_earnings_per_share') ?? v('basic_earnings_per_share'),
-          revenueActual: v('revenues'),
-          netIncome: v('net_income_loss'),
+            v("diluted_earnings_per_share") ?? v("basic_earnings_per_share"),
+          revenueActual: v("revenues"),
+          netIncome: v("net_income_loss"),
         });
       }
       url = res.next_url ? `${res.next_url}&apiKey=${this.apiKey}` : null;
@@ -599,7 +533,7 @@ export class PolygonService {
 
   async getIncomeStatements(
     ticker: string,
-    timeframe = 'annual',
+    timeframe = "annual",
     limit = 2,
   ): Promise<
     Array<{
@@ -625,12 +559,12 @@ export class PolygonService {
         fiscalYear: p.fiscal_year ?? null,
         fiscalPeriod: p.fiscal_period ?? null,
         endDate: p.end_date ?? null,
-        revenue: v('revenues'),
-        costOfRevenue: v('cost_of_revenue'),
-        grossProfit: v('gross_profit'),
-        netIncome: v('net_income_loss'),
-        operatingIncome: v('operating_income_loss'),
-        dilutedEps: v('diluted_earnings_per_share'),
+        revenue: v("revenues"),
+        costOfRevenue: v("cost_of_revenue"),
+        grossProfit: v("gross_profit"),
+        netIncome: v("net_income_loss"),
+        operatingIncome: v("operating_income_loss"),
+        dilutedEps: v("diluted_earnings_per_share"),
       };
     });
   }
@@ -644,7 +578,7 @@ export class PolygonService {
    */
   async getFinancialStatements(
     ticker: string,
-    timeframe = 'quarterly',
+    timeframe = "quarterly",
     limit = 10,
   ): Promise<
     Array<{
@@ -668,7 +602,7 @@ export class PolygonService {
       Object.fromEntries(
         Object.entries(node ?? {}).map(([k, v]) => [
           k,
-          typeof v?.value === 'number' ? v.value : null,
+          typeof v?.value === "number" ? v.value : null,
         ]),
       );
     return (res.results ?? []).map((p: any) => ({
@@ -691,17 +625,17 @@ export class PolygonService {
     }>
   > {
     const SECTOR_ETFS = {
-      Technology: 'XLK',
-      'Financial Services': 'XLF',
-      Energy: 'XLE',
-      Healthcare: 'XLV',
-      Industrials: 'XLI',
-      'Consumer Defensive': 'XLP',
-      'Consumer Cyclical': 'XLY',
-      Utilities: 'XLU',
-      'Basic Materials': 'XLB',
-      'Real Estate': 'XLRE',
-      'Communication Services': 'XLC',
+      Technology: "XLK",
+      "Financial Services": "XLF",
+      Energy: "XLE",
+      Healthcare: "XLV",
+      Industrials: "XLI",
+      "Consumer Defensive": "XLP",
+      "Consumer Cyclical": "XLY",
+      Utilities: "XLU",
+      "Basic Materials": "XLB",
+      "Real Estate": "XLRE",
+      "Communication Services": "XLC",
     };
     const out = [];
     for (const [sector, etf] of Object.entries(SECTOR_ETFS)) {
@@ -710,7 +644,7 @@ export class PolygonService {
       out.push({
         date: new Date(q.t).toISOString().slice(0, 10),
         sector,
-        exchange: 'ETF-proxy',
+        exchange: "ETF-proxy",
         averageChange: q.dp,
       });
     }
@@ -766,14 +700,15 @@ export class PolygonService {
     }>
   > {
     const FREQ = {
-      0: 'One-Time',
-      1: 'Annual',
-      2: 'Semi-Annual',
-      4: 'Quarterly',
-      12: 'Monthly',
+      0: "One-Time",
+      1: "Annual",
+      2: "Semi-Annual",
+      4: "Quarterly",
+      12: "Monthly",
     };
     const out = [];
-    let url = `${this.baseUrl}/v3/reference/dividends?ex_dividend_date.gte=${from}` +
+    let url =
+      `${this.baseUrl}/v3/reference/dividends?ex_dividend_date.gte=${from}` +
       `&ex_dividend_date.lte=${to}&limit=1000&apiKey=${this.apiKey}`;
     while (url) {
       const res = await fetchJson<any>(url);
@@ -816,7 +751,8 @@ export class PolygonService {
     }>
   > {
     const out = [];
-    let url = `${this.baseUrl}/vX/reference/ipos?listing_date.gte=${from}` +
+    let url =
+      `${this.baseUrl}/vX/reference/ipos?listing_date.gte=${from}` +
       `&listing_date.lte=${to}&limit=1000&apiKey=${this.apiKey}`;
     while (url) {
       const res = await fetchJson<any>(url);
@@ -832,14 +768,14 @@ export class PolygonService {
               ? String(lo)
               : null;
         out.push({
-          date: r.listing_date ?? r.announced_date ?? '',
-          symbol: r.ticker ?? '',
-          name: r.issuer_name ?? '',
-          exchange: r.primary_exchange ?? '',
+          date: r.listing_date ?? r.announced_date ?? "",
+          symbol: r.ticker ?? "",
+          name: r.issuer_name ?? "",
+          exchange: r.primary_exchange ?? "",
           price,
           numberOfShares: r.max_shares_offered ?? r.shares_outstanding ?? null,
           totalSharesValue: r.total_offer_size ?? null,
-          status: r.ipo_status ?? '',
+          status: r.ipo_status ?? "",
         });
       }
       url = res.next_url ? `${res.next_url}&apiKey=${this.apiKey}` : null;
@@ -852,7 +788,10 @@ export class PolygonService {
     const all: PolygonTickerRef[] = [];
     let url = `${this.baseUrl}/v3/reference/tickers?market=stocks&active=${active}&limit=1000&apiKey=${this.apiKey}`;
     while (url) {
-      const res = await fetchJson<{ results?: PolygonTickerRef[]; next_url?: string }>(url);
+      const res = await fetchJson<{
+        results?: PolygonTickerRef[];
+        next_url?: string;
+      }>(url);
       all.push(...(res.results ?? []));
       url = res.next_url ? `${res.next_url}&apiKey=${this.apiKey}` : null;
       if (url) await sleep(this.pageDelayMs);

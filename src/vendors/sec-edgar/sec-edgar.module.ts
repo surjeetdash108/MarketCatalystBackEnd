@@ -1,5 +1,5 @@
-import { Module } from '@nestjs/common';
-import { SecEdgarService } from './sec-edgar.service';
+import { Module } from "@nestjs/common";
+import { SecEdgarService } from "./sec-edgar.service";
 
 @Module({
   providers: [SecEdgarService],

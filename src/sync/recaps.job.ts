@@ -1,8 +1,8 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { setWithCreatedAt } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { setWithCreatedAt } from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { SyncRegistry } from "../common/sync-registry.service";
 
 /**
  * End-of-Day recap → `recaps/{date}` (delivery-plan R28).
@@ -20,7 +20,7 @@ import { SyncRegistry } from '../common/sync-registry.service';
  * here — that is AI copy tracked under R36 (Anthropic). This job owns the DATA.
  */
 
-const JOB_NAME = 'recaps';
+const JOB_NAME = "recaps";
 const TOP_N = 6;
 
 function isoDate(d: Date): string {
@@ -39,9 +39,9 @@ export class RecapsJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['recaps'],
-      cronExpression: '45 18 * * 1-5',
-      timeZone: 'America/New_York',
+      collections: ["recaps"],
+      cronExpression: "45 18 * * 1-5",
+      timeZone: "America/New_York",
     });
   }
 
@@ -50,22 +50,31 @@ export class RecapsJob implements OnModuleInit {
   }
 
   private num(v: unknown): number | null {
-    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
   }
 
   async run() {
     try {
       const db = this.firebase.firestore;
       const weekAgo = isoDate(new Date(Date.now() - 7 * 86_400_000));
-      const [indicesSnap, moversSnap, sectorsSnap, breadthSnap, idxHistSnap, secHistSnap] =
-        await Promise.all([
-          db.collection('market_indices').get(),
-          db.collection('market_movers').get(),
-          db.collection('sectors').get(),
-          db.collection('market_breadth').get(),
-          db.collection('market_indices_history').where('asOfDate', '>=', weekAgo).get(),
-          db.collection('sectors_history').where('asOfDate', '>=', weekAgo).get(),
-        ]);
+      const [
+        indicesSnap,
+        moversSnap,
+        sectorsSnap,
+        breadthSnap,
+        idxHistSnap,
+        secHistSnap,
+      ] = await Promise.all([
+        db.collection("market_indices").get(),
+        db.collection("market_movers").get(),
+        db.collection("sectors").get(),
+        db.collection("market_breadth").get(),
+        db
+          .collection("market_indices_history")
+          .where("asOfDate", ">=", weekAgo)
+          .get(),
+        db.collection("sectors_history").where("asOfDate", ">=", weekAgo).get(),
+      ]);
 
       // Indices (SPX/NDX/DJI/RUT/VIX/US10Y/…) — label, value, % move.
       const indices = indicesSnap.docs.map((d) => {
@@ -96,7 +105,9 @@ export class RecapsJob implements OnModuleInit {
           };
         })
         .filter((m) => m.pctChange != null);
-      const byPct = [...movers].sort((a, b) => (b.pctChange ?? 0) - (a.pctChange ?? 0));
+      const byPct = [...movers].sort(
+        (a, b) => (b.pctChange ?? 0) - (a.pctChange ?? 0),
+      );
       const topGainers = byPct.slice(0, TOP_N);
       const topLosers = byPct.slice(-TOP_N).reverse();
 
@@ -113,7 +124,7 @@ export class RecapsJob implements OnModuleInit {
 
       // Internals → the latest breadth day.
       const breadth = breadthSnap.docs
-        .map((d) => ({ id: d.id, data: d.data() as Record<string, unknown> }))
+        .map((d) => ({ id: d.id, data: d.data() }))
         .sort((a, b) => b.id.localeCompare(a.id))[0]?.data;
       const breadthId = breadthSnap.docs
         .map((d) => d.id)
@@ -136,7 +147,10 @@ export class RecapsJob implements OnModuleInit {
       // Index weekly % = price move from the first to the last history row this
       // week (values are already scaled to the index level). Sector weekly % =
       // the daily sector %s compounded across the week (sectors carry no level).
-      const idxByLabel = new Map<string, { asOfDate: string; value: number | null }[]>();
+      const idxByLabel = new Map<
+        string,
+        { asOfDate: string; value: number | null }[]
+      >();
       for (const d of idxHistSnap.docs) {
         const x = d.data();
         const label = (x.label as string) ?? d.id;
@@ -149,10 +163,13 @@ export class RecapsJob implements OnModuleInit {
           .filter((r) => r.value != null && r.asOfDate)
           .sort((a, b) => a.asOfDate.localeCompare(b.asOfDate));
         if (sorted.length < 2) return { label, pctChange: null };
-        const first = sorted[0].value as number;
-        const last = sorted[sorted.length - 1].value as number;
+        const first = sorted[0].value;
+        const last = sorted[sorted.length - 1].value;
         const pct = first !== 0 ? ((last - first) / first) * 100 : null;
-        return { label, pctChange: pct == null ? null : Math.round(pct * 100) / 100 };
+        return {
+          label,
+          pctChange: pct == null ? null : Math.round(pct * 100) / 100,
+        };
       });
 
       const secByName = new Map<string, number[]>();
@@ -167,7 +184,8 @@ export class RecapsJob implements OnModuleInit {
       }
       const weeklySectors = [...secByName.entries()]
         .map(([sector, pcts]) => {
-          const compound = (pcts.reduce((acc, p) => acc * (1 + p / 100), 1) - 1) * 100;
+          const compound =
+            (pcts.reduce((acc, p) => acc * (1 + p / 100), 1) - 1) * 100;
           return { sector, pctChange: Math.round(compound * 100) / 100 };
         })
         .sort((a, b) => b.pctChange - a.pctChange);
@@ -178,7 +196,7 @@ export class RecapsJob implements OnModuleInit {
       };
 
       const date = breadthId ?? isoDate(new Date());
-      await setWithCreatedAt(db, db.collection('recaps').doc(date), {
+      await setWithCreatedAt(db, db.collection("recaps").doc(date), {
         date,
         indices,
         topGainers,
@@ -189,14 +207,14 @@ export class RecapsJob implements OnModuleInit {
         weekly,
         // Narrative is R36 (Anthropic) — this job intentionally leaves it null.
         narrative: null,
-        source: 'polygon-derived',
+        source: "polygon-derived",
         updatedAt: new Date().toISOString(),
       });
 
       await this.meta.record(JOB_NAME, { ok: true, count: 1 });
       this.logger.log(
         `recap ${date}: ${indices.length} indices, ${topGainers.length}/${topLosers.length} movers, ` +
-          `${sectorLeaders.length}/${sectorLaggards.length} sector lead/lag, internals ${internals ? 'yes' : 'no'}`,
+          `${sectorLeaders.length}/${sectorLaggards.length} sector lead/lag, internals ${internals ? "yes" : "no"}`,
       );
       return { date, gainers: topGainers.length, losers: topLosers.length };
     } catch (err) {

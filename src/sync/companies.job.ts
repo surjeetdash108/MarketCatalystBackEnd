@@ -1,13 +1,16 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { AllSourcesFailedError } from '../adapters/adapter-error';
-import { COMPANY_PROFILE_ADAPTER, type CompanyProfileAdapter } from '../adapters/types';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { setWithCreatedAt } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { activeUniverse } from '../common/ticker-universe';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { AllSourcesFailedError } from "../adapters/adapter-error";
+import {
+  COMPANY_PROFILE_ADAPTER,
+  type CompanyProfileAdapter,
+} from "../adapters/types";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { setWithCreatedAt } from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { activeUniverse } from "../common/ticker-universe";
+import { SyncRegistry } from "../common/sync-registry.service";
 
-const JOB_NAME = 'companies';
+const JOB_NAME = "companies";
 const BATCH_SIZE = 60;
 const DELAY_MS = 200;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -17,7 +20,8 @@ export class CompaniesJob implements OnModuleInit {
   private readonly logger = new Logger(CompaniesJob.name);
 
   constructor(
-    @Inject(COMPANY_PROFILE_ADAPTER) private readonly companyProfile: CompanyProfileAdapter,
+    @Inject(COMPANY_PROFILE_ADAPTER)
+    private readonly companyProfile: CompanyProfileAdapter,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
@@ -25,9 +29,9 @@ export class CompaniesJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['companies'],
-      cronExpression: '0 2 * * *',
-      timeZone: 'America/New_York',
+      collections: ["companies"],
+      cronExpression: "0 2 * * *",
+      timeZone: "America/New_York",
     });
   }
 
@@ -40,15 +44,18 @@ export class CompaniesJob implements OnModuleInit {
       const universe = await activeUniverse(this.firebase.firestore);
       if (universe.length === 0) {
         await this.meta.record(JOB_NAME, { ok: true, count: 0 });
-        return { count: 0, note: 'no active tickers yet' };
+        return { count: 0, note: "no active tickers yet" };
       }
       // Batch never larger than the active universe, so a small
       // universe is fully covered in one premarket run.
       const cursor = await this.meta.getCursor(JOB_NAME);
-      const batch = Array.from({ length: Math.min(BATCH_SIZE, universe.length) }, (_, i) => universe[(cursor + i) % universe.length]);
+      const batch = Array.from(
+        { length: Math.min(BATCH_SIZE, universe.length) },
+        (_, i) => universe[(cursor + i) % universe.length],
+      );
       let written = 0;
       const failed = [];
-      const col = this.firebase.firestore.collection('companies');
+      const col = this.firebase.firestore.collection("companies");
       for (const symbol of batch) {
         try {
           const result = await this.companyProfile.fetchCompany(symbol);
@@ -60,7 +67,9 @@ export class CompaniesJob implements OnModuleInit {
           }
           const { data, source, warnings } = result;
           if (warnings.length > 0) {
-            this.logger.log(`${symbol}: ${warnings.length} warning(s) from ${source} — ${warnings.map((w) => w.code).join(', ')}`);
+            this.logger.log(
+              `${symbol}: ${warnings.length} warning(s) from ${source} — ${warnings.map((w) => w.code).join(", ")}`,
+            );
           }
           await setWithCreatedAt(this.firebase.firestore, col.doc(symbol), {
             ...data,
@@ -71,7 +80,9 @@ export class CompaniesJob implements OnModuleInit {
           written++;
         } catch (err) {
           if (err instanceof AllSourcesFailedError) {
-            this.logger.error(`${symbol}: every configured source failed — ${err.attempts.map((a) => `${a.source}: ${a.error}`).join(' | ')}`);
+            this.logger.error(
+              `${symbol}: every configured source failed — ${err.attempts.map((a) => `${a.source}: ${a.error}`).join(" | ")}`,
+            );
             failed.push({ ticker: symbol, error: err.message });
           } else {
             this.logger.error(`Failed syncing ${symbol}: ${err.message}`);
@@ -80,14 +91,17 @@ export class CompaniesJob implements OnModuleInit {
         }
         await sleep(DELAY_MS);
       }
-      await this.meta.setCursor(JOB_NAME, (cursor + BATCH_SIZE) % universe.length);
+      await this.meta.setCursor(
+        JOB_NAME,
+        (cursor + BATCH_SIZE) % universe.length,
+      );
       await this.meta.record(JOB_NAME, {
         ok: true,
         count: written,
         ...(failed.length > 0
           ? {
-            error: `${failed.length}/${batch.length} tickers failed: ${failed.map((f) => f.ticker).join(', ')}`,
-          }
+              error: `${failed.length}/${batch.length} tickers failed: ${failed.map((f) => f.ticker).join(", ")}`,
+            }
           : {}),
       });
       return {

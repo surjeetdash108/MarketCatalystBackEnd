@@ -1,12 +1,15 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { QUOTE_ADAPTER, type QuoteAdapter } from '../adapters/types';
-import { SyncRegistry } from '../common/sync-registry.service';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import {
+  batchSetWithCreatedAt,
+  type PendingWrite,
+} from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { QUOTE_ADAPTER, type QuoteAdapter } from "../adapters/types";
+import { SyncRegistry } from "../common/sync-registry.service";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 
-const JOB_NAME = 'market-indices';
+const JOB_NAME = "market-indices";
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -18,64 +21,64 @@ function isoDate(d: Date): string {
 // value shows up as two tiles disagreeing about "S&P 500" on the same screen).
 const INDEX_PROXIES = [
   {
-    symbol: 'SPX',
-    label: 'S&P 500',
-    proxyTicker: 'SPY',
+    symbol: "SPX",
+    label: "S&P 500",
+    proxyTicker: "SPY",
     isProxy: true,
-    note: 'ETF proxy for the S&P 500 index',
+    note: "ETF proxy for the S&P 500 index",
     multiplier: 10,
   },
   {
-    symbol: 'NDX',
-    label: 'Nasdaq',
-    proxyTicker: 'QQQ',
+    symbol: "NDX",
+    label: "Nasdaq",
+    proxyTicker: "QQQ",
     isProxy: true,
-    note: 'ETF proxy for the Nasdaq-100 index',
+    note: "ETF proxy for the Nasdaq-100 index",
     multiplier: 36.3,
   },
   {
-    symbol: 'DJI',
-    label: 'Dow',
-    proxyTicker: 'DIA',
+    symbol: "DJI",
+    label: "Dow",
+    proxyTicker: "DIA",
     isProxy: true,
-    note: 'ETF proxy for the Dow Jones index',
+    note: "ETF proxy for the Dow Jones index",
     multiplier: 100,
   },
   {
-    symbol: 'RUT',
-    label: 'Russell 2K',
-    proxyTicker: 'IWM',
+    symbol: "RUT",
+    label: "Russell 2K",
+    proxyTicker: "IWM",
     isProxy: true,
-    note: 'ETF proxy for the Russell 2000 index',
+    note: "ETF proxy for the Russell 2000 index",
     multiplier: 10,
   },
   {
-    symbol: 'GOLD',
-    label: 'Gold',
-    proxyTicker: 'GLD',
+    symbol: "GOLD",
+    label: "Gold",
+    proxyTicker: "GLD",
     isProxy: true,
-    note: 'ETF proxy for spot gold',
+    note: "ETF proxy for spot gold",
   },
   {
-    symbol: 'WTI',
-    label: 'WTI Crude',
-    proxyTicker: 'USO',
+    symbol: "WTI",
+    label: "WTI Crude",
+    proxyTicker: "USO",
     isProxy: true,
-    note: 'ETF proxy for WTI crude oil',
+    note: "ETF proxy for WTI crude oil",
   },
   {
-    symbol: 'DXY',
-    label: 'Dollar (DXY)',
-    proxyTicker: 'UUP',
+    symbol: "DXY",
+    label: "Dollar (DXY)",
+    proxyTicker: "UUP",
     isProxy: true,
-    note: 'ETF proxy for the US Dollar Index',
+    note: "ETF proxy for the US Dollar Index",
   },
   {
-    symbol: 'VIX',
-    label: 'VIX',
-    proxyTicker: 'VIXY',
+    symbol: "VIX",
+    label: "VIX",
+    proxyTicker: "VIXY",
     isProxy: true,
-    note: 'Decaying VIX futures ETN — directional proxy only, not the spot VIX level',
+    note: "Decaying VIX futures ETN — directional proxy only, not the spot VIX level",
   },
 ];
 
@@ -93,9 +96,9 @@ export class MarketIndicesJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['market_indices', 'market_indices_history'],
-      cronExpression: '5 18 * * 1-5',
-      timeZone: 'America/New_York',
+      collections: ["market_indices", "market_indices_history"],
+      cronExpression: "5 18 * * 1-5",
+      timeZone: "America/New_York",
     });
   }
 
@@ -106,15 +109,19 @@ export class MarketIndicesJob implements OnModuleInit {
   async run() {
     try {
       const writes: PendingWrite[] = [];
-      const col = this.firebase.firestore.collection('market_indices');
-      const historyCol = this.firebase.firestore.collection('market_indices_history');
+      const col = this.firebase.firestore.collection("market_indices");
+      const historyCol = this.firebase.firestore.collection(
+        "market_indices_history",
+      );
       const today = isoDate(new Date());
       let written = 0;
       for (const idx of INDEX_PROXIES) {
         try {
           const quoteResult = await this.quotes.fetchQuote(idx.proxyTicker);
           if (!quoteResult) {
-            this.logger.warn(`No quote for ${idx.symbol} (${idx.proxyTicker}) from any source — skipping`);
+            this.logger.warn(
+              `No quote for ${idx.symbol} (${idx.proxyTicker}) from any source — skipping`,
+            );
             continue;
           }
           const quote = quoteResult.data;
@@ -150,7 +157,9 @@ export class MarketIndicesJob implements OnModuleInit {
           });
           written++;
         } catch (err) {
-          this.logger.error(`Failed fetching proxy quote for ${idx.symbol} (${idx.proxyTicker}): ${err.message}`);
+          this.logger.error(
+            `Failed fetching proxy quote for ${idx.symbol} (${idx.proxyTicker}): ${err.message}`,
+          );
         }
       }
       // US10Y is NOT an ETF proxy any more. It used to be TLT — a long-treasury
@@ -168,13 +177,14 @@ export class MarketIndicesJob implements OnModuleInit {
           const pc = prior?.yield10Year ?? null;
           // Yields are quoted in percentage POINTS, so `change` is a basis-point
           // move and `pctChange` is its relative size — not the same number.
-          const change = pc == null ? null : Math.round((value - pc) * 1000) / 1000;
+          const change =
+            pc == null ? null : Math.round((value - pc) * 1000) / 1000;
           const doc = {
-            label: '10Y Yield',
+            label: "10Y Yield",
             proxyTicker: null,
             isProxy: false,
-            note: 'US Treasury 10-year constant-maturity yield, in percent',
-            unit: 'percent',
+            note: "US Treasury 10-year constant-maturity yield, in percent",
+            unit: "percent",
             value,
             change,
             pctChange:
@@ -185,11 +195,11 @@ export class MarketIndicesJob implements OnModuleInit {
             prevClose: pc,
             asOfDate: latest.date,
             curve: latest,
-            source: 'polygon-fed',
+            source: "polygon-fed",
             updatedAt: new Date().toISOString(),
           };
           const curveWrites: PendingWrite[] = [
-            { ref: col.doc('US10Y'), data: doc },
+            { ref: col.doc("US10Y"), data: doc },
             {
               ref: historyCol.doc(`${today}_US10Y`),
               data: { ...doc, asOfDate: today },
@@ -200,7 +210,9 @@ export class MarketIndicesJob implements OnModuleInit {
           written++;
         }
       } catch (err) {
-        this.logger.error(`Failed fetching treasury yields for US10Y: ${err.message}`);
+        this.logger.error(
+          `Failed fetching treasury yields for US10Y: ${err.message}`,
+        );
       }
 
       await batchSetWithCreatedAt(this.firebase.firestore, writes);

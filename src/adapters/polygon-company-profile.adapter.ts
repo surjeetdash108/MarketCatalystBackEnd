@@ -1,12 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { sectorFromSic } from '../common/sic-sector.util';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { Injectable, Logger } from "@nestjs/common";
+import { sectorFromSic } from "../common/sic-sector.util";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 import {
   AdapterResult,
   AdapterWarning,
   CanonicalCompany,
   CompanyProfileAdapter,
-} from './types';
+} from "./types";
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -14,7 +14,7 @@ function isoDate(d: Date): string {
 
 @Injectable()
 export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
-  readonly sourceName = 'polygon';
+  readonly sourceName = "polygon";
   private readonly logger = new Logger(PolygonCompanyProfileAdapter.name);
 
   constructor(private readonly polygon: PolygonService) {}
@@ -38,7 +38,11 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       const to = new Date();
       const from = new Date(to);
       from.setUTCDate(from.getUTCDate() - 7);
-      const bars = await this.polygon.getAggsRange(ticker, isoDate(from), isoDate(to));
+      const bars = await this.polygon.getAggsRange(
+        ticker,
+        isoDate(from),
+        isoDate(to),
+      );
       if (bars.length >= 2) {
         const last = bars[bars.length - 1];
         const prev = bars[bars.length - 2];
@@ -50,24 +54,25 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       } else if (bars.length === 1) {
         price = bars[0].c;
         warnings.push({
-          code: 'SUB_REQUEST_FAILED',
-          field: 'pctChange',
+          code: "SUB_REQUEST_FAILED",
+          field: "pctChange",
           message:
-            'Only one trading day of bars returned in the lookback window — cannot compute pctChange.',
+            "Only one trading day of bars returned in the lookback window — cannot compute pctChange.",
         });
       } else {
         warnings.push({
-          code: 'SUB_REQUEST_FAILED',
-          field: 'price,pctChange',
-          message: 'No recent bars returned for this ticker in the last 7 days.',
+          code: "SUB_REQUEST_FAILED",
+          field: "price,pctChange",
+          message:
+            "No recent bars returned for this ticker in the last 7 days.",
         });
       }
     } catch (err) {
       const reason = err.message;
       this.logger.warn(`Failed fetching recent bars for ${ticker}: ${reason}`);
       warnings.push({
-        code: 'SUB_REQUEST_FAILED',
-        field: 'price,pctChange',
+        code: "SUB_REQUEST_FAILED",
+        field: "price,pctChange",
         message: `Recent-bars request failed: ${reason}`,
       });
     }
@@ -82,8 +87,8 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       const reason = err.message;
       this.logger.warn(`Failed fetching TTM EPS for ${ticker}: ${reason}`);
       warnings.push({
-        code: 'SUB_REQUEST_FAILED',
-        field: 'eps,peRatio',
+        code: "SUB_REQUEST_FAILED",
+        field: "eps,peRatio",
         message: `TTM financials request failed: ${reason}`,
       });
     }
@@ -98,8 +103,8 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       const reason = err.message;
       this.logger.warn(`Failed fetching peers for ${ticker}: ${reason}`);
       warnings.push({
-        code: 'SUB_REQUEST_FAILED',
-        field: 'peers',
+        code: "SUB_REQUEST_FAILED",
+        field: "peers",
         message: `Related-companies request failed: ${reason}`,
       });
     }
@@ -129,10 +134,12 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       }
     } catch (err) {
       const reason = err.message;
-      this.logger.warn(`Failed fetching dividend history for ${ticker}: ${reason}`);
+      this.logger.warn(
+        `Failed fetching dividend history for ${ticker}: ${reason}`,
+      );
       warnings.push({
-        code: 'SUB_REQUEST_FAILED',
-        field: 'dividendYield,dividendPerShare',
+        code: "SUB_REQUEST_FAILED",
+        field: "dividendYield,dividendPerShare",
         message: `Dividend-history request failed: ${reason}`,
       });
     }

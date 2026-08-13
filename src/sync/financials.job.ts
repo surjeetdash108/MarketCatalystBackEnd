@@ -1,10 +1,10 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { chunkedBatchSet } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { SyncRegistry } from '../common/sync-registry.service';
-import { activeUniverse } from '../common/ticker-universe';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { chunkedBatchSet } from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { SyncRegistry } from "../common/sync-registry.service";
+import { activeUniverse } from "../common/ticker-universe";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 
 /**
  * 10-quarter quarterly financials → `financials/{ticker}` (delivery-plan R29).
@@ -22,7 +22,7 @@ import { PolygonService } from '../vendors/polygon/polygon.service';
  * screen's company read.
  */
 
-const JOB_NAME = 'financials';
+const JOB_NAME = "financials";
 const BATCH_SIZE = 40;
 const QUARTERS = 10;
 const ANNUAL_YEARS = 8;
@@ -30,7 +30,9 @@ const DELAY_MS = 120;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** One row as returned by PolygonService.getFinancialStatements(). */
-export type PolygonFinancialRow = Awaited<ReturnType<PolygonService['getFinancialStatements']>>[number];
+export type PolygonFinancialRow = Awaited<
+  ReturnType<PolygonService["getFinancialStatements"]>
+>[number];
 
 /** One fiscal-year row — actuals only (Polygon annual financials). */
 export interface AnnualFinancials {
@@ -88,7 +90,10 @@ export interface QuarterFinancials {
 }
 
 /** Maps one quarterly Polygon financials row onto the doc shape `financials/{ticker}.quarters` stores. */
-export function mapQuarterRow(r: PolygonFinancialRow, epsEstimate: number | null): QuarterFinancials {
+export function mapQuarterRow(
+  r: PolygonFinancialRow,
+  epsEstimate: number | null,
+): QuarterFinancials {
   const inc = r.income;
   const bs = r.balanceSheet;
   const cf = r.cashFlow;
@@ -141,7 +146,9 @@ export function mapQuarterRow(r: PolygonFinancialRow, epsEstimate: number | null
     operatingMarginPct: pct(operatingIncome),
     netMarginPct: pct(netIncome),
     currentRatio:
-      currentAssets != null && currentLiabilities != null && currentLiabilities > 0
+      currentAssets != null &&
+      currentLiabilities != null &&
+      currentLiabilities > 0
         ? Math.round((currentAssets / currentLiabilities) * 100) / 100
         : null,
   };
@@ -174,9 +181,9 @@ export class FinancialsJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['financials'],
-      cronExpression: '45 4 * * *',
-      timeZone: 'America/New_York',
+      collections: ["financials"],
+      cronExpression: "45 4 * * *",
+      timeZone: "America/New_York",
     });
   }
 
@@ -196,8 +203,8 @@ export class FinancialsJob implements OnModuleInit {
     const snaps = await Promise.all(
       tickers.map((t) =>
         this.firebase.firestore
-          .collection('earnings_events')
-          .where('ticker', '==', t)
+          .collection("earnings_events")
+          .where("ticker", "==", t)
           .get(),
       ),
     );
@@ -225,7 +232,9 @@ export class FinancialsJob implements OnModuleInit {
     for (const [key, v] of estimates) {
       if (!key.startsWith(`${ticker}_`)) continue;
       const dateStr = key.slice(ticker.length + 1);
-      const gap = Math.abs(new Date(`${dateStr}T00:00:00Z`).getTime() - target) / 86_400_000;
+      const gap =
+        Math.abs(new Date(`${dateStr}T00:00:00Z`).getTime() - target) /
+        86_400_000;
       // Report date follows the fiscal period end by weeks; 90d is generous.
       if (gap <= 90 && (!best || gap < best.gap)) best = { v, gap };
     }
@@ -237,7 +246,7 @@ export class FinancialsJob implements OnModuleInit {
       const universe = await activeUniverse(this.firebase.firestore);
       if (universe.length === 0) {
         await this.meta.record(JOB_NAME, { ok: true, count: 0 });
-        return { count: 0, note: 'no active tickers yet' };
+        return { count: 0, note: "no active tickers yet" };
       }
       // Batch never larger than the active universe, so a small
       // universe is fully covered in one premarket run.
@@ -254,7 +263,7 @@ export class FinancialsJob implements OnModuleInit {
         try {
           const rows = await this.polygon.getFinancialStatements(
             ticker,
-            'quarterly',
+            "quarterly",
             QUARTERS,
           );
           if (rows.length === 0) {
@@ -272,17 +281,24 @@ export class FinancialsJob implements OnModuleInit {
           try {
             const yr = await this.polygon.getFinancialStatements(
               ticker,
-              'annual',
+              "annual",
               ANNUAL_YEARS,
             );
             annual = yr.map(mapAnnualRow);
           } catch (err) {
-            this.logger.warn(`annual financials failed for ${ticker}: ${err.message}`);
+            this.logger.warn(
+              `annual financials failed for ${ticker}: ${err.message}`,
+            );
           }
 
           docs.push({
             id: ticker,
-            data: { ticker, quarters, annual, updatedAt: new Date().toISOString() },
+            data: {
+              ticker,
+              quarters,
+              annual,
+              updatedAt: new Date().toISOString(),
+            },
           });
         } catch (err) {
           this.logger.error(`financials failed for ${ticker}: ${err.message}`);
@@ -291,8 +307,11 @@ export class FinancialsJob implements OnModuleInit {
         await sleep(DELAY_MS);
       }
 
-      await chunkedBatchSet(this.firebase.firestore, 'financials', docs);
-      await this.meta.setCursor(JOB_NAME, (cursor + BATCH_SIZE) % universe.length);
+      await chunkedBatchSet(this.firebase.firestore, "financials", docs);
+      await this.meta.setCursor(
+        JOB_NAME,
+        (cursor + BATCH_SIZE) % universe.length,
+      );
       await this.meta.record(JOB_NAME, { ok: true, count: docs.length });
       return { written: docs.length, failed };
     } catch (err) {

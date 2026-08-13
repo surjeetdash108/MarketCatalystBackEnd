@@ -1,7 +1,7 @@
-import { Controller, Get, Post, UseGuards } from '@nestjs/common';
-import { CurrentUser } from '../common/current-user.decorator';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { FirebaseAuthGuard } from '../common/firebase-auth.guard';
+import { Controller, Get, Post, UseGuards } from "@nestjs/common";
+import { CurrentUser } from "../common/current-user.decorator";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
 /**
  * Per-user notification bell — replaces notification-bell.tsx's direct
@@ -12,7 +12,7 @@ import { FirebaseAuthGuard } from '../common/firebase-auth.guard';
  * ever flipped to `true`. "Mark all read" (not per-item) matches the bell's
  * existing UX: opening the panel marks everything currently visible as seen.
  */
-@Controller('api')
+@Controller("api")
 @UseGuards(FirebaseAuthGuard)
 export class NotificationsController {
   constructor(private readonly firebase: FirebaseAdminService) {}
@@ -21,21 +21,22 @@ export class NotificationsController {
     return this.firebase.firestore.collection(`users/${uid}/notifications`);
   }
 
-  @Get('notifications')
+  @Get("notifications")
   async list(@CurrentUser() uid: string): Promise<Record<string, unknown>[]> {
     const snap = await this.col(uid).get();
-    const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Record<string, unknown>);
+    const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Array<Record<string, unknown>>;
     return rows.sort((a, b) =>
-      String((b.publishedAt ?? '') as string).localeCompare(String((a.publishedAt ?? '') as string)),
+      String(b.publishedAt ?? "").localeCompare(String(a.publishedAt ?? "")),
     );
   }
 
-  @Post('notifications/mark-all-read')
+  @Post("notifications/mark-all-read")
   async markAllRead(@CurrentUser() uid: string): Promise<{ ok: true }> {
-    const snap = await this.col(uid).where('read', '==', false).get();
+    const snap = await this.col(uid).where("read", "==", false).get();
     if (!snap.empty) {
       const batch = this.firebase.firestore.batch();
-      for (const d of snap.docs) batch.set(d.ref, { read: true }, { merge: true });
+      for (const d of snap.docs)
+        batch.set(d.ref, { read: true }, { merge: true });
       await batch.commit();
     }
     return { ok: true };

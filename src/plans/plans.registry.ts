@@ -50,88 +50,222 @@ export interface EntitlementDef {
  */
 export const ENTITLEMENTS: EntitlementDef[] = [
   // ── Core market data ──────────────────────────────────────────────────────
-  { key: 'marketCatalyst', label: 'Market Dashboard', group: 'Core',
-    description: 'See the main dashboard with market pulse, movers and heatmap.' },
-  { key: 'news', label: 'News & Commentary', group: 'Core',
-    description: 'Read the live news feed and commentary screen.' },
-  { key: 'scanner', label: 'Market Movers', group: 'Core',
-    description: 'See daily gainers, losers and unusual-volume lists.' },
-  { key: 'heatmap', label: 'Sector Heatmap', group: 'Core',
-    description: 'View the sector and stock heatmap with day/week performance.' },
-  { key: 'macro', label: 'Macro & Calendars', group: 'Core',
-    description: 'Access the economic calendar, VIX and dividend calendars.' },
-  { key: 'ipos', label: 'IPO Corner', group: 'Core',
-    description: 'Browse upcoming and recent IPOs with offer prices.' },
+  {
+    key: "marketCatalyst",
+    label: "Market Dashboard",
+    group: "Core",
+    description:
+      "See the main dashboard with market pulse, movers and heatmap.",
+  },
+  {
+    key: "news",
+    label: "News & Commentary",
+    group: "Core",
+    description: "Read the live news feed and commentary screen.",
+  },
+  {
+    key: "scanner",
+    label: "Market Movers",
+    group: "Core",
+    description: "See daily gainers, losers and unusual-volume lists.",
+  },
+  {
+    key: "heatmap",
+    label: "Sector Heatmap",
+    group: "Core",
+    description: "View the sector and stock heatmap with day/week performance.",
+  },
+  {
+    key: "macro",
+    label: "Macro & Calendars",
+    group: "Core",
+    description: "Access the economic calendar, VIX and dividend calendars.",
+  },
+  {
+    key: "ipos",
+    label: "IPO Corner",
+    group: "Core",
+    description: "Browse upcoming and recent IPOs with offer prices.",
+  },
 
   // ── Charting ──────────────────────────────────────────────────────────────
-  { key: 'chartsDaily', label: 'Daily Charts', group: 'Charting',
-    description: 'View 3-month, 6-month and 1-year price charts.' },
-  { key: 'chartsIntraday', label: 'Intraday Charts', group: 'Charting',
-    description: 'View 1-day, 1-week and 1-month charts built from minute bars.' },
-  { key: 'chartsHistory', label: 'Long History (5Y)', group: 'Charting',
-    description: 'View the full five-year price history on any chart.' },
-  { key: 'chartIndicators', label: 'Chart Indicators', group: 'Charting',
-    description: 'Overlay moving averages, EMAs, volume and the RSI pane.' },
-  { key: 'chartNotes', label: 'Chart Notes', group: 'Charting',
-    description: 'Save personal notes pinned to a chart.' },
+  {
+    key: "chartsDaily",
+    label: "Daily Charts",
+    group: "Charting",
+    description: "View 3-month, 6-month and 1-year price charts.",
+  },
+  {
+    key: "chartsIntraday",
+    label: "Intraday Charts",
+    group: "Charting",
+    description:
+      "View 1-day, 1-week and 1-month charts built from minute bars.",
+  },
+  {
+    key: "chartsHistory",
+    label: "Long History (5Y)",
+    group: "Charting",
+    description: "View the full five-year price history on any chart.",
+  },
+  {
+    key: "chartIndicators",
+    label: "Chart Indicators",
+    group: "Charting",
+    description: "Overlay moving averages, EMAs, volume and the RSI pane.",
+  },
+  {
+    key: "chartNotes",
+    label: "Chart Notes",
+    group: "Charting",
+    description: "Save personal notes pinned to a chart.",
+  },
 
   // ── Research depth ────────────────────────────────────────────────────────
-  { key: 'technicalRatings', label: 'Technical Ratings', group: 'Research',
-    description: 'See the technical rating gauge, RSI, MACD and moving-average table.' },
-  { key: 'fundamentalRatings', label: 'Financial Statements', group: 'Research',
-    description: 'See quarterly revenue, EPS, balance sheet and cash flow.' },
-  { key: 'dividendHistory', label: 'Dividend History', group: 'Research',
-    description: 'See full dividend history, yield, growth rate and payment dates.' },
-  { key: 'peers', label: 'Peer Comparison', group: 'Research',
-    description: 'See comparable companies and how the stock ranks against them.' },
-  { key: 'ownership', label: 'Insider & 13F', group: 'Research',
-    description: 'See insider trades and institutional fund holdings.' },
-  { key: 'earningsDetail', label: 'Earnings Detail', group: 'Research',
-    description: 'See EPS history, estimate-vs-actual and the earnings calendar.' },
+  {
+    key: "technicalRatings",
+    label: "Technical Ratings",
+    group: "Research",
+    description:
+      "See the technical rating gauge, RSI, MACD and moving-average table.",
+  },
+  {
+    key: "fundamentalRatings",
+    label: "Financial Statements",
+    group: "Research",
+    description: "See quarterly revenue, EPS, balance sheet and cash flow.",
+  },
+  {
+    key: "dividendHistory",
+    label: "Dividend History",
+    group: "Research",
+    description:
+      "See full dividend history, yield, growth rate and payment dates.",
+  },
+  {
+    key: "peers",
+    label: "Peer Comparison",
+    group: "Research",
+    description:
+      "See comparable companies and how the stock ranks against them.",
+  },
+  {
+    key: "ownership",
+    label: "Insider & 13F",
+    group: "Research",
+    description: "See insider trades and institutional fund holdings.",
+  },
+  {
+    key: "earningsDetail",
+    label: "Earnings Detail",
+    group: "Research",
+    description:
+      "See EPS history, estimate-vs-actual and the earnings calendar.",
+  },
 
   // ── Personal tools ────────────────────────────────────────────────────────
-  { key: 'watchlist', label: 'Watchlist', group: 'My Money',
-    description: 'Build and track a personal watchlist of stocks.' },
-  { key: 'portfolio', label: 'Portfolio Tracking', group: 'My Money',
-    description: 'Track holdings with live prices and profit/loss.' },
-  { key: 'screener', label: 'Stock Screener', group: 'My Money',
-    description: 'Filter the universe by growth, technical and liquidity criteria.' },
-  { key: 'themes', label: 'Sector Themes', group: 'My Money',
-    description: 'Browse curated theme baskets such as Mag7 and AI & Semis.' },
-  { key: 'alerts', label: 'Price Alerts', group: 'My Money',
-    description: 'Create alerts that fire when a price or signal condition is met.',
-    unbuilt: true },
+  {
+    key: "watchlist",
+    label: "Watchlist",
+    group: "My Money",
+    description: "Build and track a personal watchlist of stocks.",
+  },
+  {
+    key: "portfolio",
+    label: "Portfolio Tracking",
+    group: "My Money",
+    description: "Track holdings with live prices and profit/loss.",
+  },
+  {
+    key: "screener",
+    label: "Stock Screener",
+    group: "My Money",
+    description:
+      "Filter the universe by growth, technical and liquidity criteria.",
+  },
+  {
+    key: "themes",
+    label: "Sector Themes",
+    group: "My Money",
+    description: "Browse curated theme baskets such as Mag7 and AI & Semis.",
+  },
+  {
+    key: "alerts",
+    label: "Price Alerts",
+    group: "My Money",
+    description:
+      "Create alerts that fire when a price or signal condition is met.",
+    unbuilt: true,
+  },
 
   // ── Advanced / premium ────────────────────────────────────────────────────
-  { key: 'optionsChain', label: 'Options Chain', group: 'Advanced',
-    description: 'View the options chain with strikes, expirations and traded prices.' },
-  { key: 'exportData', label: 'Data Export', group: 'Advanced',
-    description: 'Download screens and recaps as PDF or CSV.', unbuilt: true },
-  { key: 'apiAccess', label: 'API Access', group: 'Advanced',
-    description: 'Call the market-data API from your own scripts with a key.',
-    unbuilt: true },
-  { key: 'aiAssistant', label: 'AI Assistant', group: 'Advanced',
-    description: 'Ask the AI copilot questions and get generated summaries.',
-    unbuilt: true },
-  { key: 'backtesting', label: 'Backtesting', group: 'Advanced',
-    description: 'Test a strategy against historical price data.', unbuilt: true },
-  { key: 'paperTrading', label: 'Paper Trading', group: 'Advanced',
-    description: 'Place simulated trades without real money.', unbuilt: true },
+  {
+    key: "optionsChain",
+    label: "Options Chain",
+    group: "Advanced",
+    description:
+      "View the options chain with strikes, expirations and traded prices.",
+  },
+  {
+    key: "exportData",
+    label: "Data Export",
+    group: "Advanced",
+    description: "Download screens and recaps as PDF or CSV.",
+    unbuilt: true,
+  },
+  {
+    key: "apiAccess",
+    label: "API Access",
+    group: "Advanced",
+    description: "Call the market-data API from your own scripts with a key.",
+    unbuilt: true,
+  },
+  {
+    key: "aiAssistant",
+    label: "AI Assistant",
+    group: "Advanced",
+    description: "Ask the AI copilot questions and get generated summaries.",
+    unbuilt: true,
+  },
+  {
+    key: "backtesting",
+    label: "Backtesting",
+    group: "Advanced",
+    description: "Test a strategy against historical price data.",
+    unbuilt: true,
+  },
+  {
+    key: "paperTrading",
+    label: "Paper Trading",
+    group: "Advanced",
+    description: "Place simulated trades without real money.",
+    unbuilt: true,
+  },
 
   // ── Staff only ────────────────────────────────────────────────────────────
-  { key: 'adminDashboard', label: 'Admin Console', group: 'Staff',
-    description: 'Open the admin console with revenue and user analytics.',
-    staffOnly: true },
-  { key: 'userManagement', label: 'User Management', group: 'Staff',
-    description: 'View and manage other users’ accounts and subscriptions.',
-    staffOnly: true },
+  {
+    key: "adminDashboard",
+    label: "Admin Console",
+    group: "Staff",
+    description: "Open the admin console with revenue and user analytics.",
+    staffOnly: true,
+  },
+  {
+    key: "userManagement",
+    label: "User Management",
+    group: "Staff",
+    description: "View and manage other users’ accounts and subscriptions.",
+    staffOnly: true,
+  },
 ];
 
-export const ENTITLEMENT_KEYS = ENTITLEMENTS.map((e) => e.key) as unknown as readonly string[];
+export const ENTITLEMENT_KEYS = ENTITLEMENTS.map(
+  (e) => e.key,
+) as unknown as readonly string[];
 
 export type EntitlementKey = string;
 
-export type BillingCycle = 'monthly' | 'yearly' | 'none';
+export type BillingCycle = "monthly" | "yearly" | "none";
 
 export interface PlanDefinition {
   id: string;
@@ -155,10 +289,7 @@ export interface PlanDefinition {
 
 /** Every entitlement set to the same value — the requirement's starting point. */
 function allEntitlements(value: boolean): Record<EntitlementKey, boolean> {
-  return Object.fromEntries(ENTITLEMENT_KEYS.map((k) => [k, value])) as Record<
-    EntitlementKey,
-    boolean
-  >;
+  return Object.fromEntries(ENTITLEMENT_KEYS.map((k) => [k, value]));
 }
 
 /**
@@ -166,9 +297,9 @@ function allEntitlements(value: boolean): Record<EntitlementKey, boolean> {
  * granting them to a paying customer would be privilege escalation rather than
  * an upsell. Access is gated on the admin account instead.
  */
-const STAFF_ONLY: EntitlementKey[] = ENTITLEMENTS.filter((e) => e.staffOnly).map(
-  (e) => e.key,
-);
+const STAFF_ONLY: EntitlementKey[] = ENTITLEMENTS.filter(
+  (e) => e.staffOnly,
+).map((e) => e.key);
 
 /**
  * The tier ladder — what each plan actually includes.
@@ -185,46 +316,48 @@ const STAFF_ONLY: EntitlementKey[] = ENTITLEMENTS.filter((e) => e.staffOnly).map
  */
 /** Free: browse the market and keep a watchlist. Daily charts only. */
 const FREE_GRANTS: EntitlementKey[] = [
-  'marketCatalyst',
-  'news',
-  'scanner',
-  'heatmap',
-  'macro',
-  'ipos',
-  'chartsDaily',
-  'watchlist',
+  "marketCatalyst",
+  "news",
+  "scanner",
+  "heatmap",
+  "macro",
+  "ipos",
+  "chartsDaily",
+  "watchlist",
 ];
 
 /** Plus: the working toolkit — real charting, research depth, personal tools. */
 const PLUS_ADDS: EntitlementKey[] = [
-  'chartsIntraday',
-  'chartsHistory',
-  'chartIndicators',
-  'chartNotes',
-  'technicalRatings',
-  'dividendHistory',
-  'peers',
-  'earningsDetail',
-  'portfolio',
-  'screener',
-  'themes',
-  'alerts',
+  "chartsIntraday",
+  "chartsHistory",
+  "chartIndicators",
+  "chartNotes",
+  "technicalRatings",
+  "dividendHistory",
+  "peers",
+  "earningsDetail",
+  "portfolio",
+  "screener",
+  "themes",
+  "alerts",
 ];
 
 /** Pro: everything customer-facing, including the not-yet-built premium tier. */
 const PRO_ADDS: EntitlementKey[] = [
-  'fundamentalRatings',
-  'ownership',
-  'optionsChain',
-  'exportData',
-  'apiAccess',
-  'aiAssistant',
-  'backtesting',
-  'paperTrading',
+  "fundamentalRatings",
+  "ownership",
+  "optionsChain",
+  "exportData",
+  "apiAccess",
+  "aiAssistant",
+  "backtesting",
+  "paperTrading",
 ];
 
 /** Builds a flag map granting exactly `granted`, with staff keys forced off. */
-function entitlementsFor(granted: EntitlementKey[]): Record<EntitlementKey, boolean> {
+function entitlementsFor(
+  granted: EntitlementKey[],
+): Record<EntitlementKey, boolean> {
   const flags = allEntitlements(false);
   for (const k of granted) flags[k] = true;
   for (const k of STAFF_ONLY) flags[k] = false;
@@ -233,40 +366,44 @@ function entitlementsFor(granted: EntitlementKey[]): Record<EntitlementKey, bool
 
 const FREE_ENTITLEMENTS = entitlementsFor(FREE_GRANTS);
 const PLUS_ENTITLEMENTS = entitlementsFor([...FREE_GRANTS, ...PLUS_ADDS]);
-const PRO_ENTITLEMENTS = entitlementsFor([...FREE_GRANTS, ...PLUS_ADDS, ...PRO_ADDS]);
+const PRO_ENTITLEMENTS = entitlementsFor([
+  ...FREE_GRANTS,
+  ...PLUS_ADDS,
+  ...PRO_ADDS,
+]);
 
 export const PLAN_DEFINITIONS: PlanDefinition[] = [
   {
-    id: 'free',
-    name: 'Free',
+    id: "free",
+    name: "Free",
     amount: 0,
-    currency: 'USD',
-    billingCycle: 'none',
-    description: 'Free Plan',
+    currency: "USD",
+    billingCycle: "none",
+    description: "Free Plan",
     featureFlags: FREE_ENTITLEMENTS,
     active: true,
     sortOrder: 0,
     stripePriceId: null,
   },
   {
-    id: 'plus',
-    name: 'Plus',
+    id: "plus",
+    name: "Plus",
     amount: 2999, // $29.99
-    currency: 'USD',
-    billingCycle: 'monthly',
-    description: 'Plus Plan',
+    currency: "USD",
+    billingCycle: "monthly",
+    description: "Plus Plan",
     featureFlags: PLUS_ENTITLEMENTS,
     active: true,
     sortOrder: 1,
     stripePriceId: null,
   },
   {
-    id: 'pro',
-    name: 'Pro',
+    id: "pro",
+    name: "Pro",
     amount: 4999, // $49.99
-    currency: 'USD',
-    billingCycle: 'monthly',
-    description: 'Professional Plan',
+    currency: "USD",
+    billingCycle: "monthly",
+    description: "Professional Plan",
     featureFlags: PRO_ENTITLEMENTS,
     active: true,
     sortOrder: 2,
@@ -275,12 +412,7 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
 ];
 
 /** The plan assigned to a user who has never paid. */
-export const DEFAULT_PLAN_ID = 'free';
+export const DEFAULT_PLAN_ID = "free";
 
 export type SubscriptionStatus =
-  | 'ACTIVE'
-  | 'EXPIRED'
-  | 'CANCELLED'
-  | 'PAST_DUE'
-  | 'TRIALING'
-  | 'NONE';
+  "ACTIVE" | "EXPIRED" | "CANCELLED" | "PAST_DUE" | "TRIALING" | "NONE";

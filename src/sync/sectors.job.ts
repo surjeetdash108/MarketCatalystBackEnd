@@ -1,17 +1,20 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { SECTORS_ADAPTER, type SectorsAdapter } from '../adapters/types';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import {
+  batchSetWithCreatedAt,
+  type PendingWrite,
+} from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { SECTORS_ADAPTER, type SectorsAdapter } from "../adapters/types";
+import { SyncRegistry } from "../common/sync-registry.service";
 
-const JOB_NAME = 'sectors';
+const JOB_NAME = "sectors";
 
 function slug(sector: string): string {
   return sector
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '');
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
 }
 
 @Injectable()
@@ -27,9 +30,9 @@ export class SectorsJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['sectors', 'sectors_history'],
-      cronExpression: '0 18 * * 1-5',
-      timeZone: 'America/New_York',
+      collections: ["sectors", "sectors_history"],
+      cronExpression: "0 18 * * 1-5",
+      timeZone: "America/New_York",
     });
   }
 
@@ -43,11 +46,13 @@ export class SectorsJob implements OnModuleInit {
       const rows = result.data;
       const source = result.source;
       if (result.warnings.length > 0) {
-        this.logger.log(`sectors: ${result.warnings.map((w) => w.code).join(', ')}`);
+        this.logger.log(
+          `sectors: ${result.warnings.map((w) => w.code).join(", ")}`,
+        );
       }
       const writes: PendingWrite[] = [];
-      const col = this.firebase.firestore.collection('sectors');
-      const historyCol = this.firebase.firestore.collection('sectors_history');
+      const col = this.firebase.firestore.collection("sectors");
+      const historyCol = this.firebase.firestore.collection("sectors_history");
       for (const row of rows) {
         const doc = {
           sector: row.sector,
@@ -61,7 +66,11 @@ export class SectorsJob implements OnModuleInit {
         writes.push({ ref: col.doc(slug(row.sector)), data: doc });
         // merge:false preserves this call site's original plain set() — history
         // rows are a full snapshot, not an accumulation of partial updates.
-        writes.push({ ref: historyCol.doc(`${row.date}_${slug(row.sector)}`), data: doc, merge: false });
+        writes.push({
+          ref: historyCol.doc(`${row.date}_${slug(row.sector)}`),
+          data: doc,
+          merge: false,
+        });
       }
       await batchSetWithCreatedAt(this.firebase.firestore, writes);
       await this.meta.record(JOB_NAME, { ok: true, count: rows.length });

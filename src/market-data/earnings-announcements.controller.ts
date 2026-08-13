@@ -1,6 +1,6 @@
-import { Controller, Get, Header } from '@nestjs/common';
-import { CachedCollectionsService } from '../live/cached-collections.service';
-import { MarketDataService } from './market-data.service';
+import { Controller, Get, Header } from "@nestjs/common";
+import { CachedCollectionsService } from "../live/cached-collections.service";
+import { MarketDataService } from "./market-data.service";
 
 /**
  * GET /market-data/earnings-announcements — SEC-EDGAR 8-K item-2.02 earnings
@@ -8,18 +8,23 @@ import { MarketDataService } from './market-data.service';
  * (`earnings_announcements`, written by the `edgar-8k` job). Backs the recap's
  * "earnings movers" and the earnings detail's Session/Reaction rows.
  */
-@Controller('market-data')
+@Controller("market-data")
 export class EarningsAnnouncementsController {
   constructor(
     private readonly marketData: MarketDataService,
     private readonly cached: CachedCollectionsService,
   ) {}
 
-  @Get('earnings-announcements')
-  @Header('Cache-Control', 'public, max-age=300, s-maxage=300, stale-while-revalidate=600')
+  @Get("earnings-announcements")
+  @Header(
+    "Cache-Control",
+    "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
+  )
   async earningsAnnouncements() {
-    await this.marketData.ensureFresh('edgar-8k');
-    const { earnings_announcements } = await this.cached.get(['earnings_announcements']);
+    await this.marketData.ensureFresh("edgar-8k");
+    const { earnings_announcements } = await this.cached.get([
+      "earnings_announcements",
+    ]);
     return earnings_announcements;
   }
 }

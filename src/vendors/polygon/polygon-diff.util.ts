@@ -1,6 +1,6 @@
-import { CanonicalMoverBase } from '../../adapters/types';
-import { candidateTradingDays } from '../../common/trading-days.util';
-import { PolygonService } from './polygon.service';
+import { CanonicalMoverBase } from "../../adapters/types";
+import { candidateTradingDays } from "../../common/trading-days.util";
+import { PolygonService } from "./polygon.service";
 
 const MIN_PRICE = 3;
 const MIN_VOLUME = 500_000;
@@ -16,7 +16,7 @@ const MIN_VOLUME = 500_000;
  */
 export const MAX_ABS_PCT_CHANGE = 100;
 
-export type QuarantineReason = 'split' | 'extreme-move';
+export type QuarantineReason = "split" | "extreme-move";
 
 export interface GroupedDailyDiff {
   date: string;
@@ -30,15 +30,19 @@ export interface GroupedDailyDiff {
 export async function diffGroupedDaily(
   polygon: PolygonService,
 ): Promise<GroupedDailyDiff> {
-  const today = await polygon.getLatestGroupedDaily(candidateTradingDays(new Date()));
+  const today = await polygon.getLatestGroupedDaily(
+    candidateTradingDays(new Date()),
+  );
   if (!today) {
     throw new Error(
-      'No grouped-daily data found in the last 7 candidate days — Polygon may be down or every candidate day was a holiday/weekend',
+      "No grouped-daily data found in the last 7 candidate days — Polygon may be down or every candidate day was a holiday/weekend",
     );
   }
   const dayBefore = new Date(`${today.date}T00:00:00Z`);
   dayBefore.setUTCDate(dayBefore.getUTCDate() - 1);
-  const prior = await polygon.getLatestGroupedDaily(candidateTradingDays(dayBefore));
+  const prior = await polygon.getLatestGroupedDaily(
+    candidateTradingDays(dayBefore),
+  );
   if (!prior) {
     throw new Error(
       `No prior trading day found before ${today.date} — cannot compute %change without a comparison day`,
@@ -77,7 +81,7 @@ export function quarantineReason(
   q: CanonicalMoverBase,
   splitTickers: Set<string>,
 ): QuarantineReason | null {
-  if (splitTickers.has(q.ticker)) return 'split';
-  if (Math.abs(q.pctChange) >= MAX_ABS_PCT_CHANGE) return 'extreme-move';
+  if (splitTickers.has(q.ticker)) return "split";
+  if (Math.abs(q.pctChange) >= MAX_ABS_PCT_CHANGE) return "extreme-move";
   return null;
 }
