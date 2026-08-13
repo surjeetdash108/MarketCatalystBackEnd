@@ -1,12 +1,12 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { createHash, randomUUID } from 'crypto';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { BadRequestException, Injectable, Logger } from "@nestjs/common";
+import { createHash, randomUUID } from "crypto";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import {
   PURGE_TARGETS,
   PURGE_TARGETS_BY_NAME,
   PurgeTarget,
   toBound,
-} from './purge.registry';
+} from "./purge.registry";
 
 /** Firestore caps a write batch at 500 operations. */
 const DELETE_BATCH_SIZE = 500;
@@ -68,7 +68,7 @@ export class PurgeService {
    * hash and is rejected.
    */
   private fingerprint(c: PurgeCriteria): string {
-    return createHash('sha256')
+    return createHash("sha256")
       .update(
         JSON.stringify({
           collections: [...c.collections].sort(),
@@ -77,7 +77,7 @@ export class PurgeService {
           resetSyncState: !!c.resetSyncState,
         }),
       )
-      .digest('hex');
+      .digest("hex");
   }
 
   private validate(c: PurgeCriteria): PurgeTarget[] {
@@ -87,7 +87,7 @@ export class PurgeService {
       );
     }
     for (const d of [c.from, c.to]) {
-      if (d != null && d !== '' && !ISO_DATE.test(d)) {
+      if (d != null && d !== "" && !ISO_DATE.test(d)) {
         throw new BadRequestException(`Date must be YYYY-MM-DD, got "${d}".`);
       }
     }
@@ -120,8 +120,8 @@ export class PurgeService {
       target.collection,
     );
     if (target.dateField) {
-      if (c.from) q = q.where(target.dateField, '>=', c.from);
-      if (c.to) q = q.where(target.dateField, '<=', toBound(target, c.to));
+      if (c.from) q = q.where(target.dateField, ">=", c.from);
+      if (c.to) q = q.where(target.dateField, "<=", toBound(target, c.to));
     }
     return q;
   }
@@ -189,24 +189,24 @@ export class PurgeService {
   private consumeToken(token: string | undefined, c: PurgeCriteria): number {
     if (!token) {
       throw new BadRequestException(
-        'Missing previewToken. Call POST /purge/preview first — execute is refused until the matching document count has been produced.',
+        "Missing previewToken. Call POST /purge/preview first — execute is refused until the matching document count has been produced.",
       );
     }
     const entry = this.tokens.get(token);
     if (!entry) {
       throw new BadRequestException(
-        'Unknown or already-used previewToken. Preview again.',
+        "Unknown or already-used previewToken. Preview again.",
       );
     }
     if (Date.now() - entry.issuedAt > TOKEN_TTL_MS) {
       this.tokens.delete(token);
       throw new BadRequestException(
-        'previewToken expired (5 min). Preview again.',
+        "previewToken expired (5 min). Preview again.",
       );
     }
     if (entry.fingerprint !== this.fingerprint(c)) {
       throw new BadRequestException(
-        'Criteria do not match the ones that were previewed. Preview the exact selection you intend to purge.',
+        "Criteria do not match the ones that were previewed. Preview the exact selection you intend to purge.",
       );
     }
     // Single-use: consumed even on a later failure, so a token can never drive
@@ -259,8 +259,8 @@ export class PurgeService {
 
     for (const job of jobs) {
       const wm = await firestore
-        .collection('sync_watermarks')
-        .where('jobName', '==', job)
+        .collection("sync_watermarks")
+        .where("jobName", "==", job)
         .get();
       for (const chunk of chunk500(wm.docs)) {
         const batch = firestore.batch();
@@ -271,7 +271,7 @@ export class PurgeService {
       // Cursor lives on the sync_meta doc. Reset the field only — deleting the
       // doc would destroy the run history and counters the monitor UI reads.
       await firestore
-        .collection('sync_meta')
+        .collection("sync_meta")
         .doc(job)
         .set({ cursor: 0 }, { merge: true });
 
@@ -284,10 +284,16 @@ export class PurgeService {
     const targets = this.validate(c);
     const previewedTotal = this.consumeToken(previewToken, c);
 
-    const scope = `${c.collections.join(', ')} [${c.from ?? 'beginning'} → ${c.to ?? 'end'}]`;
-    this.logger.warn(`PURGE starting: ${scope} (previewed ${previewedTotal} docs)`);
+    const scope = `${c.collections.join(", ")} [${c.from ?? "beginning"} → ${c.to ?? "end"}]`;
+    this.logger.warn(
+      `PURGE starting: ${scope} (previewed ${previewedTotal} docs)`,
+    );
 
-    const results: Array<{ collection: string; deleted: number; error?: string }> = [];
+    const results: Array<{
+      collection: string;
+      deleted: number;
+      error?: string;
+    }> = [];
     for (const t of targets) {
       try {
         const deleted = await this.deleteQuery(t, c);
@@ -304,7 +310,9 @@ export class PurgeService {
     if (c.resetSyncState) {
       const jobs = [...new Set(targets.flatMap((t) => t.jobs))].sort();
       syncStateCleared = await this.resetSyncState(jobs);
-      this.logger.warn(`PURGE reset sync state: ${syncStateCleared.join('; ')}`);
+      this.logger.warn(
+        `PURGE reset sync state: ${syncStateCleared.join("; ")}`,
+      );
     }
 
     const totalDeleted = results.reduce((s, r) => s + r.deleted, 0);

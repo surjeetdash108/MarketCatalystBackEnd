@@ -1,7 +1,7 @@
-import { Module } from '@nestjs/common';
-import { DiscoveryModule } from '@nestjs/core';
-import { ApiHealthController } from './api-health.controller';
-import { ApiHealthService } from './api-health.service';
+import { Module } from "@nestjs/common";
+import { DiscoveryModule } from "@nestjs/core";
+import { ApiHealthController } from "./api-health.controller";
+import { ApiHealthService } from "./api-health.service";
 
 /**
  * DiscoveryModule gives ApiHealthService the DiscoveryService + MetadataScanner

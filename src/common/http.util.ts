@@ -24,7 +24,7 @@ export function redactUrl(url: string): string {
   try {
     const u = new URL(url);
     for (const [k] of [...u.searchParams]) {
-      if (SECRET_PARAMS.test(k)) u.searchParams.set(k, 'REDACTED');
+      if (SECRET_PARAMS.test(k)) u.searchParams.set(k, "REDACTED");
     }
     return u.toString();
   } catch {
@@ -32,7 +32,7 @@ export function redactUrl(url: string): string {
     // pass a raw key through.
     return url.replace(
       /([?&](?:api_?key|token|access_token|apitoken|key)=)[^&]*/gi,
-      '$1REDACTED',
+      "$1REDACTED",
     );
   }
 }
@@ -49,9 +49,9 @@ export async function fetchJson<T = unknown>(
       continue;
     }
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
+      const body = await res.text().catch(() => "");
       throw new Error(
-        `${init.method ?? 'GET'} ${redactUrl(url)} -> ${res.status}: ${body.slice(0, 300)}`,
+        `${init.method ?? "GET"} ${redactUrl(url)} -> ${res.status}: ${body.slice(0, 300)}`,
       );
     }
     return res.json() as Promise<T>;

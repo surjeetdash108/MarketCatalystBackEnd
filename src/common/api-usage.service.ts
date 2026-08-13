@@ -1,6 +1,6 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { Interval } from '@nestjs/schedule';
-import { FirebaseAdminService } from './firebase-admin.provider';
+import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
+import { Interval } from "@nestjs/schedule";
+import { FirebaseAdminService } from "./firebase-admin.provider";
 
 /**
  * Per-user API-usage metering, read by the admin console's `apiCalls` column.
@@ -34,14 +34,17 @@ export class ApiUsageService implements OnModuleDestroy {
     const batch = new Map(this.pending);
     this.pending.clear();
 
-    const { FieldValue } = await import('firebase-admin/firestore');
+    const { FieldValue } = await import("firebase-admin/firestore");
     const now = new Date().toISOString();
     await Promise.all(
       [...batch.entries()].map(([uid, count]) =>
         this.firebase.firestore
-          .collection('api_usage')
+          .collection("api_usage")
           .doc(uid)
-          .set({ count: FieldValue.increment(count), lastCall: now }, { merge: true })
+          .set(
+            { count: FieldValue.increment(count), lastCall: now },
+            { merge: true },
+          )
           .catch((err) => {
             // Re-queue so a transient Firestore blip doesn't lose the counts.
             this.pending.set(uid, (this.pending.get(uid) ?? 0) + count);

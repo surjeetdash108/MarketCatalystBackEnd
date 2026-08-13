@@ -1,10 +1,10 @@
-import { Logger } from '@nestjs/common';
-import { PolygonService } from '../vendors/polygon/polygon.service';
-import type { AdapterResult, CanonicalIpoEvent, IposAdapter } from './types';
-import { withFallback } from './with-fallback.util';
+import { Logger } from "@nestjs/common";
+import { PolygonService } from "../vendors/polygon/polygon.service";
+import type { AdapterResult, CanonicalIpoEvent, IposAdapter } from "./types";
+import { withFallback } from "./with-fallback.util";
 
 export class PolygonIposAdapter implements IposAdapter {
-  readonly sourceName = 'polygon';
+  readonly sourceName = "polygon";
   constructor(private readonly polygon: PolygonService) {}
 
   async fetchIpos(
@@ -33,8 +33,12 @@ export class CompositeIposAdapter implements IposAdapter {
   }
 
   fetchIpos(from: string, to: string) {
-    return withFallback('IPOs', this.logger, this.primary, this.secondary, (a) =>
-      a.fetchIpos(from, to),
+    return withFallback(
+      "IPOs",
+      this.logger,
+      this.primary,
+      this.secondary,
+      (a) => a.fetchIpos(from, to),
     );
   }
 }

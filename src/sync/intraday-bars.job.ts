@@ -1,10 +1,10 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { chunkedBatchSet } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { SyncRegistry } from '../common/sync-registry.service';
-import { TICKER_UNIVERSE } from '../common/ticker-universe';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { chunkedBatchSet } from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { SyncRegistry } from "../common/sync-registry.service";
+import { TICKER_UNIVERSE } from "../common/ticker-universe";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 
 /**
  * Intraday aggregate bars → `intraday_bars/{ticker}_{key}`.
@@ -31,7 +31,7 @@ import { PolygonService } from '../vendors/polygon/polygon.service';
  * this job exists to give every chart a real historical shape, not a live tape.
  */
 
-const JOB_NAME = 'intraday-bars';
+const JOB_NAME = "intraday-bars";
 const BATCH_SIZE = 40;
 const DELAY_MS = 120;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -39,13 +39,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 interface Resolution {
   key: string;
   multiplier: number;
-  timespan: 'minute';
+  timespan: "minute";
   lookbackDays: number;
 }
 
 const RESOLUTIONS: Resolution[] = [
-  { key: '5min', multiplier: 5, timespan: 'minute', lookbackDays: 10 },
-  { key: '30min', multiplier: 30, timespan: 'minute', lookbackDays: 45 },
+  { key: "5min", multiplier: 5, timespan: "minute", lookbackDays: 10 },
+  { key: "30min", multiplier: 30, timespan: "minute", lookbackDays: 45 },
 ];
 
 function isoDate(d: Date): string {
@@ -71,9 +71,9 @@ export class IntradayBarsJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['intraday_bars'],
-      cronExpression: '25 16 * * 1-5',
-      timeZone: 'America/New_York',
+      collections: ["intraday_bars"],
+      cronExpression: "25 16 * * 1-5",
+      timeZone: "America/New_York",
     });
   }
 
@@ -128,7 +128,7 @@ export class IntradayBarsJob implements OnModuleInit {
                 barCount: bars.length,
                 firstBarAt: new Date(bars[0].t).toISOString(),
                 lastBarAt: new Date(bars[bars.length - 1].t).toISOString(),
-                source: 'polygon',
+                source: "polygon",
                 updatedAt: new Date().toISOString(),
               },
             });
@@ -143,7 +143,7 @@ export class IntradayBarsJob implements OnModuleInit {
         }
       }
 
-      await chunkedBatchSet(this.firebase.firestore, 'intraday_bars', docs);
+      await chunkedBatchSet(this.firebase.firestore, "intraday_bars", docs);
       await this.meta.setCursor(
         JOB_NAME,
         (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length,

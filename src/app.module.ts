@@ -1,20 +1,20 @@
-import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { ScheduleModule } from '@nestjs/schedule';
-import { ServeStaticModule } from '@nestjs/serve-static';
-import { join } from 'path';
-import { CommonModule } from './common/common.module';
-import { UserDataModule } from './user-data/user-data.module';
-import { HealthController } from './health/health.controller';
-import { FeatureFlagsModule } from './feature-flags/feature-flags.module';
-import { PlansModule } from './plans/plans.module';
-import { RetentionModule } from './retention/retention.module';
-import { AutoPurgeModule } from './auto-purge/auto-purge.module';
-import { LiveModule } from './live/live.module';
-import { MarketDataModule } from './market-data/market-data.module';
-import { PurgeModule } from './purge/purge.module';
-import { SyncModule } from './sync/sync.module';
-import { ApiHealthModule } from './api-health/api-health.module';
+import { Module } from "@nestjs/common";
+import { ConfigModule } from "@nestjs/config";
+import { ScheduleModule } from "@nestjs/schedule";
+import { ServeStaticModule } from "@nestjs/serve-static";
+import { join } from "path";
+import { CommonModule } from "./common/common.module";
+import { UserDataModule } from "./user-data/user-data.module";
+import { HealthController } from "./health/health.controller";
+import { FeatureFlagsModule } from "./feature-flags/feature-flags.module";
+import { PlansModule } from "./plans/plans.module";
+import { RetentionModule } from "./retention/retention.module";
+import { AutoPurgeModule } from "./auto-purge/auto-purge.module";
+import { LiveModule } from "./live/live.module";
+import { MarketDataModule } from "./market-data/market-data.module";
+import { PurgeModule } from "./purge/purge.module";
+import { SyncModule } from "./sync/sync.module";
+import { ApiHealthModule } from "./api-health/api-health.module";
 
 /**
  * TWO DEPLOYMENTS, ONE IMAGE.
@@ -37,7 +37,8 @@ import { ApiHealthModule } from './api-health/api-health.module';
  * or the autoscaler signal with instances holding long-lived SSE connections.
  * The two want opposite Cloud Run settings — see deploy/DEPLOY.md §3b.
  */
-const isLiveRole = (process.env.APP_ROLE ?? 'worker').trim().toLowerCase() === 'live';
+const isLiveRole =
+  (process.env.APP_ROLE ?? "worker").trim().toLowerCase() === "live";
 
 /** Batch surface — worker role only. */
 const workerModules = isLiveRole
@@ -54,22 +55,22 @@ const workerModules = isLiveRole
       // the root path, and every button on it would 404 there anyway.
       // `exclude` keeps the API routes from being shadowed by the static handler.
       ServeStaticModule.forRoot({
-        rootPath: join(__dirname, '..', 'public'),
+        rootPath: join(__dirname, "..", "public"),
         exclude: [
-          '/health',
-          '/sync/{*splat}',
-          '/purge/{*splat}',
-          '/live/{*splat}',
-          '/market-data/{*splat}',
-          '/feature-flags/{*splat}',
-          '/retention/{*splat}',
+          "/health",
+          "/sync/{*splat}",
+          "/purge/{*splat}",
+          "/live/{*splat}",
+          "/market-data/{*splat}",
+          "/feature-flags/{*splat}",
+          "/retention/{*splat}",
         ],
       }),
     ];
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: ".env" }),
     ScheduleModule.forRoot(),
     CommonModule,
     LiveModule,

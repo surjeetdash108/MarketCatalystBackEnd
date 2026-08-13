@@ -1,12 +1,12 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { chunkedBatchSet } from '../common/firestore-batch.util';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { diffGroupedDaily } from '../vendors/polygon/polygon-diff.util';
-import { PolygonService } from '../vendors/polygon/polygon.service';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { chunkedBatchSet } from "../common/firestore-batch.util";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { diffGroupedDaily } from "../vendors/polygon/polygon-diff.util";
+import { PolygonService } from "../vendors/polygon/polygon.service";
+import { SyncRegistry } from "../common/sync-registry.service";
 
-const JOB_NAME = 'market-quotes';
+const JOB_NAME = "market-quotes";
 
 @Injectable()
 export class MarketQuotesJob implements OnModuleInit {
@@ -21,9 +21,9 @@ export class MarketQuotesJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['tickers'],
-      cronExpression: '7 18 * * 1-5',
-      timeZone: 'America/New_York',
+      collections: ["tickers"],
+      cronExpression: "7 18 * * 1-5",
+      timeZone: "America/New_York",
     });
   }
 
@@ -42,11 +42,11 @@ export class MarketQuotesJob implements OnModuleInit {
           pctChange: q.pctChange,
           volume: q.volume,
           asOfDate: q.asOfDate,
-          quoteSource: 'polygon',
+          quoteSource: "polygon",
           quoteUpdatedAt: new Date().toISOString(),
         },
       }));
-      await chunkedBatchSet(this.firebase.firestore, 'tickers', docs);
+      await chunkedBatchSet(this.firebase.firestore, "tickers", docs);
       await this.meta.record(JOB_NAME, { ok: true, count: docs.length });
       return { count: docs.length, asOfDate: date };
     } catch (err) {

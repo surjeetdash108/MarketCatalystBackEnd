@@ -1,12 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { PlansService } from './plans.service';
+import { Injectable, Logger } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { PlansService } from "./plans.service";
 import {
   DEFAULT_PLAN_ID,
   ENTITLEMENT_KEYS,
   type EntitlementKey,
   type SubscriptionStatus,
-} from './plans.registry';
+} from "./plans.registry";
 
 /**
  * A user's effective subscription and entitlements.
@@ -52,7 +52,10 @@ export class SubscriptionsService {
   }
 
   async forUser(userId: string): Promise<EffectiveSubscription> {
-    const snap = await this.firebase.firestore.collection('users').doc(userId).get();
+    const snap = await this.firebase.firestore
+      .collection("users")
+      .doc(userId)
+      .get();
     const u = snap.data() ?? {};
     return this.resolve(userId, u);
   }
@@ -61,8 +64,12 @@ export class SubscriptionsService {
    * Pure resolution from a user document — separated from the read so the admin
    * list can resolve hundreds of users from one query instead of N reads.
    */
-  async resolve(userId: string, u: Record<string, any>): Promise<EffectiveSubscription> {
-    const storedStatus: SubscriptionStatus | null = u.subscriptionStatus ?? null;
+  async resolve(
+    userId: string,
+    u: Record<string, any>,
+  ): Promise<EffectiveSubscription> {
+    const storedStatus: SubscriptionStatus | null =
+      u.subscriptionStatus ?? null;
     const expiryDate: string | null = u.subscriptionExpiryDate ?? null;
     const daysRemaining = this.daysUntil(expiryDate);
 
@@ -71,16 +78,19 @@ export class SubscriptionsService {
     const lapsed =
       daysRemaining != null &&
       daysRemaining < 0 &&
-      (storedStatus === 'ACTIVE' || storedStatus === 'TRIALING');
+      (storedStatus === "ACTIVE" || storedStatus === "TRIALING");
 
     const effectiveStatus: SubscriptionStatus = lapsed
-      ? 'EXPIRED'
-      : (storedStatus ?? 'NONE');
+      ? "EXPIRED"
+      : (storedStatus ?? "NONE");
 
-    const entitled = effectiveStatus === 'ACTIVE' || effectiveStatus === 'TRIALING';
+    const entitled =
+      effectiveStatus === "ACTIVE" || effectiveStatus === "TRIALING";
     // Anyone without a live subscription falls back to free — never to "no
     // access", which would lock a lapsed customer out of the product entirely.
-    const planId: string = entitled ? (u.currentPlan ?? DEFAULT_PLAN_ID) : DEFAULT_PLAN_ID;
+    const planId: string = entitled
+      ? (u.currentPlan ?? DEFAULT_PLAN_ID)
+      : DEFAULT_PLAN_ID;
 
     const planEntitlements = await this.plans.entitlementsFor(planId);
     const plan = await this.plans.get(planId);
@@ -91,7 +101,7 @@ export class SubscriptionsService {
     const entitlements = Object.fromEntries(
       ENTITLEMENT_KEYS.map((k) => [
         k,
-        typeof overrides[k] === 'boolean' ? overrides[k] : planEntitlements[k],
+        typeof overrides[k] === "boolean" ? overrides[k] : planEntitlements[k],
       ]),
     ) as Record<EntitlementKey, boolean>;
 

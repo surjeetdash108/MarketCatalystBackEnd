@@ -1,5 +1,5 @@
-import { Logger } from '@nestjs/common';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { Logger } from "@nestjs/common";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 import type {
   AdapterResult,
   CanonicalBar,
@@ -8,8 +8,8 @@ import type {
   FinancialsAdapter,
   MarketBarsAdapter,
   TickerUniverseAdapter,
-} from './types';
-import { withFallback } from './with-fallback.util';
+} from "./types";
+import { withFallback } from "./with-fallback.util";
 
 /**
  * Seams for the three domains that were hardcoded to PolygonService: daily bars,
@@ -32,7 +32,7 @@ function isoDate(ms: number): string {
 // ── Daily bars ──────────────────────────────────────────────────────────────
 
 export class PolygonMarketBarsAdapter implements MarketBarsAdapter {
-  readonly sourceName = 'polygon';
+  readonly sourceName = "polygon";
   constructor(private readonly polygon: PolygonService) {}
 
   get requestDelayMs() {
@@ -92,7 +92,7 @@ export class CompositeMarketBarsAdapter implements MarketBarsAdapter {
 // ── Ticker universe ─────────────────────────────────────────────────────────
 
 export class PolygonTickerUniverseAdapter implements TickerUniverseAdapter {
-  readonly sourceName = 'polygon';
+  readonly sourceName = "polygon";
   constructor(private readonly polygon: PolygonService) {}
 
   async fetchAllTickers(
@@ -136,7 +136,7 @@ export class CompositeTickerUniverseAdapter implements TickerUniverseAdapter {
 
   fetchAllTickers(activeOnly: boolean) {
     return withFallback(
-      'ticker universe',
+      "ticker universe",
       this.logger,
       this.primary,
       this.secondary,
@@ -148,7 +148,7 @@ export class CompositeTickerUniverseAdapter implements TickerUniverseAdapter {
 // ── Financials ──────────────────────────────────────────────────────────────
 
 export class PolygonFinancialsAdapter implements FinancialsAdapter {
-  readonly sourceName = 'polygon';
+  readonly sourceName = "polygon";
   constructor(private readonly polygon: PolygonService) {}
 
   get requestDelayMs() {
@@ -165,9 +165,9 @@ export class PolygonFinancialsAdapter implements FinancialsAdapter {
       source: this.sourceName,
       warnings: [
         {
-          code: 'STALE_DATA',
+          code: "STALE_DATA",
           message:
-            'Served by /vX/reference/financials — Polygon\'s EXPERIMENTAL namespace. The replacement (/stocks/financials/v1/*) needs Advanced or the Financials add-on, so this path cannot be upgraded on Starter and may break without deprecation notice.',
+            "Served by /vX/reference/financials — Polygon's EXPERIMENTAL namespace. The replacement (/stocks/financials/v1/*) needs Advanced or the Financials add-on, so this path cannot be upgraded on Starter and may break without deprecation notice.",
         },
       ],
     };

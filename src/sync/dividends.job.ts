@@ -1,11 +1,11 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { chunkedBatchSet } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { DIVIDENDS_ADAPTER, type DividendsAdapter } from '../adapters/types';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { chunkedBatchSet } from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { DIVIDENDS_ADAPTER, type DividendsAdapter } from "../adapters/types";
+import { SyncRegistry } from "../common/sync-registry.service";
 
-const JOB_NAME = 'dividends';
+const JOB_NAME = "dividends";
 const LOOKAHEAD_DAYS = 30;
 
 function isoDate(d: Date): string {
@@ -46,9 +46,9 @@ export class DividendsJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['dividends'],
-      cronExpression: '20 6 * * *',
-      timeZone: 'America/New_York',
+      collections: ["dividends"],
+      cronExpression: "20 6 * * *",
+      timeZone: "America/New_York",
     });
   }
 
@@ -66,7 +66,9 @@ export class DividendsJob implements OnModuleInit {
       const events = result.data;
       const source = result.source;
       if (result.warnings.length > 0) {
-        this.logger.log(`dividends: ${result.warnings.map((w) => w.code).join(', ')}`);
+        this.logger.log(
+          `dividends: ${result.warnings.map((w) => w.code).join(", ")}`,
+        );
       }
       // Annualized yield per row. Polygon has no yield field (it arrives null),
       // which left the Macro screen's high-yield vs growth buckets unable to
@@ -78,16 +80,19 @@ export class DividendsJob implements OnModuleInit {
       for (let i = 0; i < symbols.length; i += 300) {
         const refs = symbols
           .slice(i, i + 300)
-          .map((s) => this.firebase.firestore.collection('companies').doc(s));
-        const docs = await this.firebase.firestore.getAll(...refs).catch(() => []);
+          .map((s) => this.firebase.firestore.collection("companies").doc(s));
+        const docs = await this.firebase.firestore
+          .getAll(...refs)
+          .catch(() => []);
         for (const d of docs) {
           const price = d.data()?.price;
-          if (typeof price === 'number' && price > 0) priceByTicker.set(d.id, price);
+          if (typeof price === "number" && price > 0)
+            priceByTicker.set(d.id, price);
         }
       }
       const PAYMENTS_PER_YEAR: Record<string, number> = {
         Annual: 1,
-        'Semi-Annual': 2,
+        "Semi-Annual": 2,
         Quarterly: 4,
         Monthly: 12,
       };
@@ -95,7 +100,9 @@ export class DividendsJob implements OnModuleInit {
         const price = priceByTicker.get(e.symbol);
         // A one-time/special dividend has no annual cadence to project, so it
         // gets no yield rather than a fabricated 4x annualization.
-        const perYear = e.frequency ? PAYMENTS_PER_YEAR[e.frequency] : undefined;
+        const perYear = e.frequency
+          ? PAYMENTS_PER_YEAR[e.frequency]
+          : undefined;
         if (!price || !perYear || !e.dividend) return null;
         return Math.round(((e.dividend * perYear) / price) * 10000) / 100;
       };
@@ -108,23 +115,27 @@ export class DividendsJob implements OnModuleInit {
       // lost. Matches the scheme already used by ohlcv_bars ({ticker}_{barDate})
       // and earnings_events ({ticker}_{date}). Events with no ex-date fall back
       // to symbol alone rather than producing an "undefined"-suffixed key.
-      await chunkedBatchSet(this.firebase.firestore, 'dividends', events.map((e) => ({
-        id: dividendDocId(e),
-        data: {
-          ticker: e.symbol,
-          exDividendDate: e.date,
-          recordDate: e.recordDate,
-          paymentDate: e.paymentDate,
-          declarationDate: e.declarationDate,
-          dividendAmount: e.dividend,
-          yieldPct: e.yield ?? annualizedYield(e),
-          yieldIsDerived: e.yield == null,
-          frequency: e.frequency,
-          source,
-          warnings: result.warnings,
-          updatedAt: new Date().toISOString(),
-        },
-      })));
+      await chunkedBatchSet(
+        this.firebase.firestore,
+        "dividends",
+        events.map((e) => ({
+          id: dividendDocId(e),
+          data: {
+            ticker: e.symbol,
+            exDividendDate: e.date,
+            recordDate: e.recordDate,
+            paymentDate: e.paymentDate,
+            declarationDate: e.declarationDate,
+            dividendAmount: e.dividend,
+            yieldPct: e.yield ?? annualizedYield(e),
+            yieldIsDerived: e.yield == null,
+            frequency: e.frequency,
+            source,
+            warnings: result.warnings,
+            updatedAt: new Date().toISOString(),
+          },
+        })),
+      );
       await this.meta.record(JOB_NAME, { ok: true, count: events.length });
       return { count: events.length };
     } catch (err) {

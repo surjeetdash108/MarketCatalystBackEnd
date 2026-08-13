@@ -1,9 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { setWithCreatedAt } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { FredService } from '../vendors/fred/fred.service';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { setWithCreatedAt } from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { FredService } from "../vendors/fred/fred.service";
+import { SyncRegistry } from "../common/sync-registry.service";
 
 /**
  * Macro regime label → `macro_regime/current`. A rules-based, graded read
@@ -13,7 +13,7 @@ import { SyncRegistry } from '../common/sync-registry.service';
  * Components are stored so the UI can show the "why", not just the label.
  */
 
-const JOB_NAME = 'macro-regime';
+const JOB_NAME = "macro-regime";
 
 interface Comp {
   value: number | null;
@@ -40,9 +40,9 @@ export class MacroRegimeJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['macro_regime'],
-      cronExpression: '0 8 * * 1-5', // runs inside premarket orchestration
-      timeZone: 'America/New_York',
+      collections: ["macro_regime"],
+      cronExpression: "0 8 * * 1-5", // runs inside premarket orchestration
+      timeZone: "America/New_York",
     });
   }
 
@@ -52,20 +52,28 @@ export class MacroRegimeJob implements OnModuleInit {
 
   async run() {
     try {
-      const [curveObs, vixObs, creditObs, sp500Obs, unrateObs] = await Promise.all([
-        this.fred.getLatestObservations('T10Y2Y', 1), // 10Y-2Y spread
-        this.fred.getLatestObservations('VIXCLS', 1), // VIX close
-        this.fred.getLatestObservations('BAMLH0A0HYM2', 1), // HY OAS
-        this.fred.getLatestObservations('SP500', 220), // for 200-DMA trend
-        this.fred.getLatestObservations('UNRATE', 4), // ~3-month trend
-      ]);
+      const [curveObs, vixObs, creditObs, sp500Obs, unrateObs] =
+        await Promise.all([
+          this.fred.getLatestObservations("T10Y2Y", 1), // 10Y-2Y spread
+          this.fred.getLatestObservations("VIXCLS", 1), // VIX close
+          this.fred.getLatestObservations("BAMLH0A0HYM2", 1), // HY OAS
+          this.fred.getLatestObservations("SP500", 220), // for 200-DMA trend
+          this.fred.getLatestObservations("UNRATE", 4), // ~3-month trend
+        ]);
 
       // 1) Yield curve: steeper = risk-on, inverted = risk-off.
       const curve = num(curveObs[0]?.value);
       const yieldCurve: Comp = {
         value: curve,
         signal: curve == null ? null : curve > 0.5 ? 1 : curve < 0 ? -1 : 0,
-        label: curve == null ? 'n/a' : curve < 0 ? 'Inverted' : curve > 0.5 ? 'Steep' : 'Flat',
+        label:
+          curve == null
+            ? "n/a"
+            : curve < 0
+              ? "Inverted"
+              : curve > 0.5
+                ? "Steep"
+                : "Flat",
       };
 
       // 2) Volatility (VIX): calm = risk-on, stressed = risk-off.
@@ -73,7 +81,14 @@ export class MacroRegimeJob implements OnModuleInit {
       const volatility: Comp = {
         value: vix,
         signal: vix == null ? null : vix < 15 ? 1 : vix > 25 ? -1 : 0,
-        label: vix == null ? 'n/a' : vix < 15 ? 'Calm' : vix > 25 ? 'Stressed' : 'Elevated',
+        label:
+          vix == null
+            ? "n/a"
+            : vix < 15
+              ? "Calm"
+              : vix > 25
+                ? "Stressed"
+                : "Elevated",
       };
 
       // 3) Credit (HY OAS): tight spreads = risk-on, wide = risk-off.
@@ -81,7 +96,14 @@ export class MacroRegimeJob implements OnModuleInit {
       const credit: Comp = {
         value: oas,
         signal: oas == null ? null : oas < 3.5 ? 1 : oas > 5 ? -1 : 0,
-        label: oas == null ? 'n/a' : oas < 3.5 ? 'Tight' : oas > 5 ? 'Wide' : 'Normal',
+        label:
+          oas == null
+            ? "n/a"
+            : oas < 3.5
+              ? "Tight"
+              : oas > 5
+                ? "Wide"
+                : "Normal",
       };
 
       // 4) Trend: S&P 500 vs its 200-day moving average.
@@ -93,12 +115,20 @@ export class MacroRegimeJob implements OnModuleInit {
         sp500Vals.length >= 200
           ? sp500Vals.slice(0, 200).reduce((a, b) => a + b, 0) / 200
           : null;
-      const trendPct = spLatest != null && ma200 ? ((spLatest - ma200) / ma200) * 100 : null;
+      const trendPct =
+        spLatest != null && ma200 ? ((spLatest - ma200) / ma200) * 100 : null;
       const trend: Comp = {
         value: trendPct == null ? null : Math.round(trendPct * 100) / 100,
-        signal: trendPct == null ? null : trendPct > 2 ? 1 : trendPct < 0 ? -1 : 0,
+        signal:
+          trendPct == null ? null : trendPct > 2 ? 1 : trendPct < 0 ? -1 : 0,
         label:
-          trendPct == null ? 'n/a' : trendPct < 0 ? 'Below 200-DMA' : trendPct > 2 ? 'Above 200-DMA' : 'Near 200-DMA',
+          trendPct == null
+            ? "n/a"
+            : trendPct < 0
+              ? "Below 200-DMA"
+              : trendPct > 2
+                ? "Above 200-DMA"
+                : "Near 200-DMA",
       };
 
       // 5) Employment: falling unemployment = risk-on, rising = risk-off.
@@ -116,14 +146,14 @@ export class MacroRegimeJob implements OnModuleInit {
                 : 0,
         label:
           unrateLatest == null
-            ? 'n/a'
+            ? "n/a"
             : unratePrior == null
-              ? 'Flat'
+              ? "Flat"
               : unrateLatest < unratePrior
-                ? 'Falling'
+                ? "Falling"
                 : unrateLatest > unratePrior
-                  ? 'Rising'
-                  : 'Flat',
+                  ? "Rising"
+                  : "Flat",
       };
 
       const components = { yieldCurve, volatility, credit, trend, employment };
@@ -132,27 +162,33 @@ export class MacroRegimeJob implements OnModuleInit {
         .filter((s): s is -1 | 0 | 1 => s != null);
       const score = signals.reduce((a, b) => a + b, 0);
       const counted = signals.length;
-      const regime = score >= 2 ? 'Risk-On' : score <= -2 ? 'Risk-Off' : 'Neutral';
+      const regime =
+        score >= 2 ? "Risk-On" : score <= -2 ? "Risk-Off" : "Neutral";
 
       const asOfDate =
-        curveObs[0]?.date ?? vixObs[0]?.date ?? sp500Obs[0]?.date ?? new Date().toISOString().slice(0, 10);
+        curveObs[0]?.date ??
+        vixObs[0]?.date ??
+        sp500Obs[0]?.date ??
+        new Date().toISOString().slice(0, 10);
 
       await setWithCreatedAt(
         this.firebase.firestore,
-        this.firebase.firestore.collection('macro_regime').doc('current'),
+        this.firebase.firestore.collection("macro_regime").doc("current"),
         {
           regime,
           score,
           maxScore: counted,
           components,
           asOfDate,
-          source: 'fred-derived',
+          source: "fred-derived",
           updatedAt: new Date().toISOString(),
         },
       );
 
       await this.meta.record(JOB_NAME, { ok: true, count: 1 });
-      this.logger.log(`macro-regime: ${regime} (score ${score}/${counted}) as of ${asOfDate}`);
+      this.logger.log(
+        `macro-regime: ${regime} (score ${score}/${counted}) as of ${asOfDate}`,
+      );
       return { regime, score, counted };
     } catch (err) {
       await this.meta.record(JOB_NAME, { ok: false, error: err.message });

@@ -1,27 +1,24 @@
-import { Module } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { PolygonModule } from '../vendors/polygon/polygon.module';
-import { PolygonService } from '../vendors/polygon/polygon.service';
-import { CompositeCompanyProfileAdapter } from './composite-company-profile.adapter';
-import { CompositeMoverEnrichmentAdapter } from './composite-mover-enrichment.adapter';
-import { CompositeMoversAdapter } from './composite-movers.adapter';
-import { CompositeNewsAdapter } from './composite-news.adapter';
-import { PolygonCompanyProfileAdapter } from './polygon-company-profile.adapter';
-import { PolygonMoverEnrichmentAdapter } from './polygon-mover-enrichment.adapter';
-import { PolygonMoversAdapter } from './polygon-movers.adapter';
-import { PolygonNewsAdapter } from './polygon-news.adapter';
+import { Module } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { PolygonModule } from "../vendors/polygon/polygon.module";
+import { PolygonService } from "../vendors/polygon/polygon.service";
+import { CompositeCompanyProfileAdapter } from "./composite-company-profile.adapter";
+import { CompositeMoverEnrichmentAdapter } from "./composite-mover-enrichment.adapter";
+import { CompositeMoversAdapter } from "./composite-movers.adapter";
+import { CompositeNewsAdapter } from "./composite-news.adapter";
+import { PolygonCompanyProfileAdapter } from "./polygon-company-profile.adapter";
+import { PolygonMoverEnrichmentAdapter } from "./polygon-mover-enrichment.adapter";
+import { PolygonMoversAdapter } from "./polygon-movers.adapter";
+import { PolygonNewsAdapter } from "./polygon-news.adapter";
 import {
   CompositeDividendsAdapter,
   PolygonDividendsAdapter,
-} from './dividends.adapters';
-import {
-  CompositeIposAdapter,
-  PolygonIposAdapter,
-} from './ipos.adapters';
+} from "./dividends.adapters";
+import { CompositeIposAdapter, PolygonIposAdapter } from "./ipos.adapters";
 import {
   CompositeSectorsAdapter,
   PolygonSectorsAdapter,
-} from './sectors.adapters';
+} from "./sectors.adapters";
 import {
   CompositeFinancialsAdapter,
   CompositeMarketBarsAdapter,
@@ -29,11 +26,8 @@ import {
   PolygonFinancialsAdapter,
   PolygonMarketBarsAdapter,
   PolygonTickerUniverseAdapter,
-} from './market-data.adapters';
-import {
-  CompositeQuoteAdapter,
-  PolygonQuoteAdapter,
-} from './quote.adapters';
+} from "./market-data.adapters";
+import { CompositeQuoteAdapter, PolygonQuoteAdapter } from "./quote.adapters";
 import {
   COMPANY_PROFILE_ADAPTER,
   DIVIDENDS_ADAPTER,
@@ -46,17 +40,17 @@ import {
   NEWS_ADAPTER,
   QUOTE_ADAPTER,
   SECTORS_ADAPTER,
-} from './types';
+} from "./types";
 
 // Every composite is Polygon-only. The list is where a second vendor becomes
 // selectable again — add its name here and one entry to the bySource map.
-const POLYGON_ONLY_SOURCES = ['polygon', 'none'];
+const POLYGON_ONLY_SOURCES = ["polygon", "none"];
 
 function parseSource(config, key, validSources, fallbackDefault) {
   const raw = config.get(key, fallbackDefault);
   if (!validSources.includes(raw)) {
     throw new Error(
-      `Unknown ${key}="${raw}" — expected one of: ${validSources.join(', ')}`,
+      `Unknown ${key}="${raw}" — expected one of: ${validSources.join(", ")}`,
     );
   }
   return raw;
@@ -84,7 +78,7 @@ function buildComposite(
     validSources,
     defaults.primary,
   );
-  if (primarySource === 'none') {
+  if (primarySource === "none") {
     throw new Error(
       `${name}_SOURCE cannot be "none" — a primary source is required`,
     );
@@ -96,7 +90,7 @@ function buildComposite(
     defaults.fallback,
   );
   const fallback =
-    fallbackSource === 'none' || fallbackSource === primarySource
+    fallbackSource === "none" || fallbackSource === primarySource
       ? null
       : bySource[fallbackSource]();
   return new Composite(bySource[primarySource](), fallback);
@@ -115,9 +109,9 @@ function buildComposite(
       useFactory: (config, polygon) =>
         buildComposite(
           config,
-          'COMPANY_PROFILE',
+          "COMPANY_PROFILE",
           POLYGON_ONLY_SOURCES,
-          { primary: 'polygon', fallback: 'none' },
+          { primary: "polygon", fallback: "none" },
           {
             polygon: () => new PolygonCompanyProfileAdapter(polygon),
             none: () => null,
@@ -131,9 +125,9 @@ function buildComposite(
       useFactory: (config, polygon) =>
         buildComposite(
           config,
-          'MOVERS',
+          "MOVERS",
           POLYGON_ONLY_SOURCES,
-          { primary: 'polygon', fallback: 'none' },
+          { primary: "polygon", fallback: "none" },
           {
             polygon: () => new PolygonMoversAdapter(polygon),
             none: () => null,
@@ -147,9 +141,9 @@ function buildComposite(
       useFactory: (config, polygon) =>
         buildComposite(
           config,
-          'MOVER_ENRICHMENT',
+          "MOVER_ENRICHMENT",
           POLYGON_ONLY_SOURCES,
-          { primary: 'polygon', fallback: 'none' },
+          { primary: "polygon", fallback: "none" },
           {
             polygon: () => new PolygonMoverEnrichmentAdapter(polygon),
             none: () => null,
@@ -169,9 +163,9 @@ function buildComposite(
       useFactory: (config, polygon) =>
         buildComposite(
           config,
-          'DIVIDENDS',
+          "DIVIDENDS",
           POLYGON_ONLY_SOURCES,
-          { primary: 'polygon', fallback: 'none' },
+          { primary: "polygon", fallback: "none" },
           {
             polygon: () => new PolygonDividendsAdapter(polygon),
             none: () => null,
@@ -185,9 +179,9 @@ function buildComposite(
       useFactory: (config, polygon) =>
         buildComposite(
           config,
-          'IPOS',
+          "IPOS",
           POLYGON_ONLY_SOURCES,
-          { primary: 'polygon', fallback: 'none' },
+          { primary: "polygon", fallback: "none" },
           {
             polygon: () => new PolygonIposAdapter(polygon),
             none: () => null,
@@ -201,9 +195,9 @@ function buildComposite(
       useFactory: (config, polygon) =>
         buildComposite(
           config,
-          'SECTORS',
+          "SECTORS",
           POLYGON_ONLY_SOURCES,
-          { primary: 'polygon', fallback: 'none' },
+          { primary: "polygon", fallback: "none" },
           {
             polygon: () => new PolygonSectorsAdapter(polygon),
             none: () => null,
@@ -217,9 +211,9 @@ function buildComposite(
       useFactory: (config, polygon) =>
         buildComposite(
           config,
-          'QUOTE',
+          "QUOTE",
           POLYGON_ONLY_SOURCES,
-          { primary: 'polygon', fallback: 'none' },
+          { primary: "polygon", fallback: "none" },
           {
             polygon: () => new PolygonQuoteAdapter(polygon),
             none: () => null,
@@ -233,9 +227,9 @@ function buildComposite(
       useFactory: (config, polygon) =>
         buildComposite(
           config,
-          'MARKET_BARS',
+          "MARKET_BARS",
           POLYGON_ONLY_SOURCES,
-          { primary: 'polygon', fallback: 'none' },
+          { primary: "polygon", fallback: "none" },
           {
             polygon: () => new PolygonMarketBarsAdapter(polygon),
             none: () => null,
@@ -249,9 +243,9 @@ function buildComposite(
       useFactory: (config, polygon) =>
         buildComposite(
           config,
-          'TICKER_UNIVERSE',
+          "TICKER_UNIVERSE",
           POLYGON_ONLY_SOURCES,
-          { primary: 'polygon', fallback: 'none' },
+          { primary: "polygon", fallback: "none" },
           {
             polygon: () => new PolygonTickerUniverseAdapter(polygon),
             none: () => null,
@@ -265,9 +259,9 @@ function buildComposite(
       useFactory: (config, polygon) =>
         buildComposite(
           config,
-          'FINANCIALS',
+          "FINANCIALS",
           POLYGON_ONLY_SOURCES,
-          { primary: 'polygon', fallback: 'none' },
+          { primary: "polygon", fallback: "none" },
           {
             polygon: () => new PolygonFinancialsAdapter(polygon),
             none: () => null,

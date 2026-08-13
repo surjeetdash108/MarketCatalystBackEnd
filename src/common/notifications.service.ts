@@ -1,6 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { FirebaseAdminService } from './firebase-admin.provider';
-import { batchSetWithCreatedAt, type PendingWrite } from './firestore-batch.util';
+import { Injectable, Logger } from "@nestjs/common";
+import { FirebaseAdminService } from "./firebase-admin.provider";
+import {
+  batchSetWithCreatedAt,
+  type PendingWrite,
+} from "./firestore-batch.util";
 
 /** Per-user cap — the bell subscribes to the whole subcollection. */
 const MAX_PER_USER = 100;
@@ -9,7 +12,7 @@ const MAX_AGE_DAYS = 30;
 export interface NotificationInput {
   /** Article id — stable, so a re-run updates in place instead of duplicating. */
   id: string;
-  type: 'news';
+  type: "news";
   header: string;
   detail: string | null;
   imageUrl: string | null;
@@ -20,7 +23,7 @@ export interface NotificationInput {
   publishedAt: string;
   /** How the news reads for the stock: +ve, -ve or neutral. Drives the bell's
    *  colour so a user sees at a glance whether their holding got good/bad news. */
-  direction: 'positive' | 'negative' | 'neutral';
+  direction: "positive" | "negative" | "neutral";
   /** Which importance rule(s) fired — keeps the heuristic auditable from data. */
   reasons: string[];
 }
@@ -53,7 +56,7 @@ export class NotificationsService {
    * enumerating every user on every news sync.
    */
   private async loadSubscribers(): Promise<Subscriber[]> {
-    const users = await this.firebase.firestore.collection('users').get();
+    const users = await this.firebase.firestore.collection("users").get();
     const out: Subscriber[] = [];
 
     for (const u of users.docs) {
@@ -120,7 +123,9 @@ export class NotificationsService {
       for (const s of matched) {
         recipients.add(s.uid);
         writes.push({
-          ref: this.firebase.firestore.doc(`users/${s.uid}/notifications/${n.id}`),
+          ref: this.firebase.firestore.doc(
+            `users/${s.uid}/notifications/${n.id}`,
+          ),
           data: {
             type: n.type,
             header: n.header,
@@ -152,17 +157,25 @@ export class NotificationsService {
 
   /** Trims each user's subcollection to MAX_PER_USER and MAX_AGE_DAYS. */
   async prune(): Promise<number> {
-    const cutoff = new Date(Date.now() - MAX_AGE_DAYS * 86400_000).toISOString();
-    const users = await this.firebase.firestore.collection('users').get();
+    const cutoff = new Date(
+      Date.now() - MAX_AGE_DAYS * 86400_000,
+    ).toISOString();
+    const users = await this.firebase.firestore.collection("users").get();
     let deleted = 0;
 
     for (const u of users.docs) {
-      const col = this.firebase.firestore.collection(`users/${u.id}/notifications`);
-      const snap = await col.orderBy('publishedAt', 'desc').get();
+      const col = this.firebase.firestore.collection(
+        `users/${u.id}/notifications`,
+      );
+      const snap = await col.orderBy("publishedAt", "desc").get();
       if (snap.empty) continue;
 
-      const stale = snap.docs.filter((d) => (d.data().publishedAt ?? '') < cutoff);
-      const fresh = snap.docs.filter((d) => (d.data().publishedAt ?? '') >= cutoff);
+      const stale = snap.docs.filter(
+        (d) => (d.data().publishedAt ?? "") < cutoff,
+      );
+      const fresh = snap.docs.filter(
+        (d) => (d.data().publishedAt ?? "") >= cutoff,
+      );
       const doomed = [...stale, ...fresh.slice(MAX_PER_USER)];
 
       for (let i = 0; i < doomed.length; i += 500) {

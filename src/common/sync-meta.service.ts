@@ -1,7 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { FirebaseAdminService } from './firebase-admin.provider';
-import { setWithCreatedAt } from './firestore-batch.util';
-import { SyncRegistry } from './sync-registry.service';
+import { Injectable, Logger } from "@nestjs/common";
+import { FirebaseAdminService } from "./firebase-admin.provider";
+import { setWithCreatedAt } from "./firestore-batch.util";
+import { SyncRegistry } from "./sync-registry.service";
 
 export interface SyncResult {
   ok: boolean;
@@ -23,11 +23,11 @@ export class SyncMetaService {
   // malformed zone falls back to UTC rather than throwing away the count.
   todayFor(timeZone: string): string {
     try {
-      return new Intl.DateTimeFormat('en-CA', {
+      return new Intl.DateTimeFormat("en-CA", {
         timeZone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
       }).format(new Date());
     } catch {
       return new Date().toISOString().slice(0, 10);
@@ -37,10 +37,10 @@ export class SyncMetaService {
   async record(jobName: string, result: SyncResult): Promise<void> {
     const jobMeta = this.registry.getMeta(jobName);
     const now = new Date().toISOString();
-    const today = this.todayFor(jobMeta?.timeZone ?? 'America/New_York');
+    const today = this.todayFor(jobMeta?.timeZone ?? "America/New_York");
     const doc = {
       lastSyncedAt: now,
-      lastStatus: result.ok ? 'ok' : 'error',
+      lastStatus: result.ok ? "ok" : "error",
       lastCount: result.count ?? null,
       ...(result.ok
         ? { lastSuccessAt: now, lastSuccessCount: result.count ?? null }
@@ -58,7 +58,7 @@ export class SyncMetaService {
     // rolls over, which FieldValue.increment alone can't express), so this runs
     // in a transaction. Jobs record at most a few times an hour, so the extra
     // read is negligible and contention is effectively zero.
-    const ref = this.firebase.firestore.collection('sync_meta').doc(jobName);
+    const ref = this.firebase.firestore.collection("sync_meta").doc(jobName);
     try {
       await this.firebase.firestore.runTransaction(async (tx) => {
         const prev = (await tx.get(ref)).data() ?? {};
@@ -94,7 +94,7 @@ export class SyncMetaService {
 
   async status(jobName: string) {
     const snap = await this.firebase.firestore
-      .collection('sync_meta')
+      .collection("sync_meta")
       .doc(jobName)
       .get();
     return snap.exists
@@ -103,13 +103,13 @@ export class SyncMetaService {
   }
 
   async statusAll(): Promise<Array<{ job: string } & Record<string, unknown>>> {
-    const snap = await this.firebase.firestore.collection('sync_meta').get();
+    const snap = await this.firebase.firestore.collection("sync_meta").get();
     return snap.docs.map((d) => ({ job: d.id, ...d.data() }));
   }
 
   async getCursor(jobName: string): Promise<number> {
     const snap = await this.firebase.firestore
-      .collection('sync_meta')
+      .collection("sync_meta")
       .doc(jobName)
       .get();
     return snap.data()?.cursor ?? 0;
@@ -120,17 +120,9 @@ export class SyncMetaService {
     // it stamps createdAt too rather than leaving a doc without one.
     await setWithCreatedAt(
       this.firebase.firestore,
-      this.firebase.firestore.collection('sync_meta').doc(jobName),
+      this.firebase.firestore.collection("sync_meta").doc(jobName),
       { cursor },
     );
-  }
-
-  async getWatermark(jobName: string, entityKey: string): Promise<string | null> {
-    const snap = await this.firebase.firestore
-      .collection('sync_watermarks')
-      .doc(`${jobName}__${entityKey}`)
-      .get();
-    return snap.data()?.lastSyncedThrough ?? null;
   }
 
   /**
@@ -146,9 +138,12 @@ export class SyncMetaService {
   async getSyncedRange(
     jobName: string,
     entityKey: string,
-  ): Promise<{ lastSyncedThrough: string | null; earliestSyncedFrom: string | null }> {
+  ): Promise<{
+    lastSyncedThrough: string | null;
+    earliestSyncedFrom: string | null;
+  }> {
     const snap = await this.firebase.firestore
-      .collection('sync_watermarks')
+      .collection("sync_watermarks")
       .doc(`${jobName}__${entityKey}`)
       .get();
     const d = snap.data();
@@ -167,7 +162,7 @@ export class SyncMetaService {
     await setWithCreatedAt(
       this.firebase.firestore,
       this.firebase.firestore
-        .collection('sync_watermarks')
+        .collection("sync_watermarks")
         .doc(`${jobName}__${entityKey}`),
       {
         jobName,
@@ -186,7 +181,7 @@ export class SyncMetaService {
     await setWithCreatedAt(
       this.firebase.firestore,
       this.firebase.firestore
-        .collection('sync_watermarks')
+        .collection("sync_watermarks")
         .doc(`${jobName}__${entityKey}`),
       {
         jobName,

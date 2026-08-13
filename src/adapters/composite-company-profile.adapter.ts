@@ -1,11 +1,15 @@
-import { Logger } from '@nestjs/common';
-import { AllSourcesFailedError, isRetryableVendorError, SourceAttempt } from './adapter-error';
+import { Logger } from "@nestjs/common";
+import {
+  AllSourcesFailedError,
+  isRetryableVendorError,
+  SourceAttempt,
+} from "./adapter-error";
 import {
   AdapterResult,
   AdapterWarning,
   CanonicalCompany,
   CompanyProfileAdapter,
-} from './types';
+} from "./types";
 
 export class CompositeCompanyProfileAdapter implements CompanyProfileAdapter {
   private readonly logger = new Logger(CompositeCompanyProfileAdapter.name);
@@ -29,7 +33,7 @@ export class CompositeCompanyProfileAdapter implements CompanyProfileAdapter {
       if (result) return result;
       attempts.push({
         source: this.primary.sourceName,
-        error: 'no data returned (ticker not found on this source)',
+        error: "no data returned (ticker not found on this source)",
         retryable: false,
       });
     } catch (err) {
@@ -41,10 +45,10 @@ export class CompositeCompanyProfileAdapter implements CompanyProfileAdapter {
         retryable,
       });
       this.logger.warn(
-        `${this.primary.sourceName} failed for ${ticker} (${retryable ? 'retryable' : 'not retryable'}): ${message}` +
+        `${this.primary.sourceName} failed for ${ticker} (${retryable ? "retryable" : "not retryable"}): ${message}` +
           (this.secondary
             ? ` — falling back to ${this.secondary.sourceName}`
-            : ' — no fallback configured'),
+            : " — no fallback configured"),
       );
     }
     if (!this.secondary) {
@@ -56,7 +60,7 @@ export class CompositeCompanyProfileAdapter implements CompanyProfileAdapter {
       if (!fallbackResult) {
         attempts.push({
           source: this.secondary.sourceName,
-          error: 'no data returned (ticker not found on this source)',
+          error: "no data returned (ticker not found on this source)",
           retryable: false,
         });
       }
@@ -72,7 +76,7 @@ export class CompositeCompanyProfileAdapter implements CompanyProfileAdapter {
       throw new AllSourcesFailedError(`company ${ticker}`, attempts);
     }
     const fallbackWarning: AdapterWarning = {
-      code: 'FALLBACK_USED',
+      code: "FALLBACK_USED",
       message: `Primary source ${this.primary.sourceName} failed (${attempts[0].error}) — served by fallback ${this.secondary.sourceName} instead.`,
     };
     return {

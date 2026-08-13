@@ -1,6 +1,6 @@
-import { BadRequestException, Controller, Query, Sse } from '@nestjs/common';
-import { Observable, map, merge, of, concat } from 'rxjs';
-import { PolygonLiveService } from './polygon-live.service';
+import { BadRequestException, Controller, Query, Sse } from "@nestjs/common";
+import { Observable, map, merge, of, concat } from "rxjs";
+import { PolygonLiveService } from "./polygon-live.service";
 
 /**
  * Server-Sent Events bridge: browser <- our origin <- Polygon delayed WS.
@@ -20,7 +20,7 @@ interface SseEvent {
 /** Symbols only — this value is interpolated into an upstream subscription. */
 const TICKER_RE = /^[A-Z.]{1,10}$/;
 
-@Controller('live')
+@Controller("live")
 export class LiveController {
   constructor(private readonly live: PolygonLiveService) {}
 
@@ -32,9 +32,9 @@ export class LiveController {
    *   event: status    on every upstream connection-state change
    *   event: tick      per aggregate window (~1/sec while the market is active)
    */
-  @Sse('stream')
-  stream(@Query('ticker') ticker?: string): Observable<SseEvent> {
-    const sym = (ticker ?? '').toUpperCase().trim();
+  @Sse("stream")
+  stream(@Query("ticker") ticker?: string): Observable<SseEvent> {
+    const sym = (ticker ?? "").toUpperCase().trim();
     if (!TICKER_RE.test(sym)) {
       throw new BadRequestException(
         'ticker must be 1-10 characters, A-Z and "." only',
@@ -54,18 +54,21 @@ export class LiveController {
     // prevClose is fetched once per stream; the promise is folded into the
     // observable so the snapshot always arrives before any tick is forwarded.
     const snapshot$ = concat(
-      of<SseEvent>({ type: 'status', data: { connected: false, message: 'starting' } }),
+      of<SseEvent>({
+        type: "status",
+        data: { connected: false, message: "starting" },
+      }),
       new Observable<SseEvent>((sub) => {
         this.live
           .previousClose(sym)
           .then((pc) => {
             sub.next({
-              type: 'snapshot',
+              type: "snapshot",
               data: {
                 ticker: sym,
                 previousClose: pc,
-                feed: 'polygon-delayed',
-                channel: 'A',
+                feed: "polygon-delayed",
+                channel: "A",
                 delayMinutes: 15,
                 note: 'Stocks Starter plan is delayed-only; real-time cluster returns "not authorized".',
               },
@@ -78,12 +81,15 @@ export class LiveController {
 
     // No filter: the service routes by ticker, so this stream only ever
     // carries this client's symbol.
-    const ticks$ = this.live
-      .ticksFor(sym)
-      .pipe(map((t) => ({ type: 'tick', data: { ...t } as Record<string, unknown> })));
+    const ticks$ = this.live.ticksFor(sym).pipe(
+      map((t) => ({
+        type: "tick",
+        data: { ...t },
+      })),
+    );
 
     const status$ = this.live.status$.pipe(
-      map((s) => ({ type: 'status', data: { ...s } })),
+      map((s) => ({ type: "status", data: { ...s } })),
     );
 
     // upstream$ never emits — it exists purely so its teardown runs when the

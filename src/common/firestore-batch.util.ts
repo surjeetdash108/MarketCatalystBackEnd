@@ -1,4 +1,4 @@
-import { Firestore } from 'firebase-admin/firestore';
+import { Firestore } from "firebase-admin/firestore";
 
 const MAX_BATCH_WRITES = 500;
 
@@ -42,11 +42,11 @@ async function existingCreatedAt(
   for (let i = 0; i < refs.length; i += MAX_READ_BATCH) {
     const chunk = refs.slice(i, i + MAX_READ_BATCH);
     const snaps = await firestore.getAll(...chunk, {
-      fieldMask: ['createdAt'],
+      fieldMask: ["createdAt"],
     });
     for (const snap of snaps) {
-      const v = snap.get('createdAt');
-      if (typeof v === 'string' && v) found.set(snap.ref.path, v);
+      const v = snap.get("createdAt");
+      if (typeof v === "string" && v) found.set(snap.ref.path, v);
     }
   }
   return found;
@@ -118,7 +118,7 @@ export async function chunkedBatchSet<T>(
     firestore,
     docs.map(({ id, data }) => ({
       ref: col.doc(id),
-      data: data as FirebaseFirestore.DocumentData,
+      data: data,
     })),
   );
 }

@@ -1,11 +1,11 @@
-import { Injectable, RequestMethod } from '@nestjs/common';
+import { Injectable, RequestMethod } from "@nestjs/common";
 import {
   GUARDS_METADATA,
   METHOD_METADATA,
   PATH_METADATA,
-} from '@nestjs/common/constants';
-import { ConfigService } from '@nestjs/config';
-import { DiscoveryService, MetadataScanner, Reflector } from '@nestjs/core';
+} from "@nestjs/common/constants";
+import { ConfigService } from "@nestjs/config";
+import { DiscoveryService, MetadataScanner, Reflector } from "@nestjs/core";
 
 export interface EndpointProbe {
   status: number;
@@ -98,25 +98,39 @@ export class ApiHealthService {
 
     for (const wrapper of this.discovery.getControllers()) {
       const instance = wrapper.instance as Record<string, unknown> | undefined;
-      const metatype = wrapper.metatype as (new (...a: unknown[]) => unknown) | undefined;
+      const metatype = wrapper.metatype as
+        (new (...a: unknown[]) => unknown) | undefined;
       if (!instance || !metatype) continue;
 
       const proto = Object.getPrototypeOf(instance) as Record<string, unknown>;
-      const ctrlPath = this.reflector.get<string>(PATH_METADATA, metatype) ?? '';
-      const classGuards = this.reflector.get<unknown[]>(GUARDS_METADATA, metatype);
+      const ctrlPath =
+        this.reflector.get<string>(PATH_METADATA, metatype) ?? "";
+      const classGuards = this.reflector.get<unknown[]>(
+        GUARDS_METADATA,
+        metatype,
+      );
 
       const names =
-        typeof this.scanner.getAllMethodNames === 'function'
+        typeof this.scanner.getAllMethodNames === "function"
           ? this.scanner.getAllMethodNames(proto)
           : Object.getOwnPropertyNames(proto);
 
       for (const name of names) {
         const handler = proto[name];
-        if (typeof handler !== 'function') continue;
-        const methodPath = this.reflector.get<string | undefined>(PATH_METADATA, handler);
-        const httpMethod = this.reflector.get<number | undefined>(METHOD_METADATA, handler);
+        if (typeof handler !== "function") continue;
+        const methodPath = this.reflector.get<string | undefined>(
+          PATH_METADATA,
+          handler,
+        );
+        const httpMethod = this.reflector.get<number | undefined>(
+          METHOD_METADATA,
+          handler,
+        );
         if (methodPath === undefined || httpMethod === undefined) continue;
-        const methodGuards = this.reflector.get<unknown[]>(GUARDS_METADATA, handler);
+        const methodGuards = this.reflector.get<unknown[]>(
+          GUARDS_METADATA,
+          handler,
+        );
 
         rows.push({
           method: RequestMethod[httpMethod] ?? String(httpMethod),
@@ -128,7 +142,8 @@ export class ApiHealthService {
     }
 
     return rows.sort(
-      (a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method),
+      (a, b) =>
+        a.path.localeCompare(b.path) || a.method.localeCompare(b.method),
     );
   }
 
@@ -140,8 +155,8 @@ export class ApiHealthService {
    */
   async vendorHealth(): Promise<VendorHealth[]> {
     const polyBase = String(
-      this.config.get('POLYGON_API_BASE_URL', 'https://api.polygon.io'),
-    ).replace(/\/$/, '');
+      this.config.get("POLYGON_API_BASE_URL", "https://api.polygon.io"),
+    ).replace(/\/$/, "");
 
     const probes: Array<{
       name: string;
@@ -149,30 +164,30 @@ export class ApiHealthService {
       make: (key: string) => { url: string; headers?: Record<string, string> };
     }> = [
       {
-        name: 'Polygon',
-        keyName: 'POLYGON_API_KEY',
+        name: "Polygon",
+        keyName: "POLYGON_API_KEY",
         make: (k) => ({ url: `${polyBase}/v1/marketstatus/now?apiKey=${k}` }),
       },
       {
-        name: 'FRED',
-        keyName: 'FRED_API_KEY',
+        name: "FRED",
+        keyName: "FRED_API_KEY",
         make: (k) => ({
           url: `https://api.stlouisfed.org/fred/series?series_id=GDP&api_key=${k}&file_type=json`,
         }),
       },
       {
-        name: 'Anthropic',
-        keyName: 'ANTHROPIC_API_KEY',
+        name: "Anthropic",
+        keyName: "ANTHROPIC_API_KEY",
         make: (k) => ({
-          url: 'https://api.anthropic.com/v1/models',
-          headers: { 'x-api-key': k, 'anthropic-version': '2023-06-01' },
+          url: "https://api.anthropic.com/v1/models",
+          headers: { "x-api-key": k, "anthropic-version": "2023-06-01" },
         }),
       },
     ];
 
     return Promise.all(
       probes.map(async (p): Promise<VendorHealth> => {
-        const key = String(this.config.get(p.keyName, '')).trim();
+        const key = String(this.config.get(p.keyName, "")).trim();
         if (!key) {
           return {
             name: p.name,
@@ -181,7 +196,7 @@ export class ApiHealthService {
             online: false,
             status: null,
             ms: null,
-            note: 'no key configured',
+            note: "no key configured",
             request: null,
             response: null,
           };
@@ -191,9 +206,9 @@ export class ApiHealthService {
         // header-auth vendors (Anthropic) keep the secret off the URL.
         const redactedUrl = req.url.replace(
           /(apikey|apiKey|api_key|token)=[^&]+/gi,
-          '$1=***',
+          "$1=***",
         );
-        const request = { method: 'GET', url: redactedUrl };
+        const request = { method: "GET", url: redactedUrl };
         const started = Date.now();
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 8000);
@@ -203,7 +218,7 @@ export class ApiHealthService {
             signal: controller.signal,
           });
           const ms = Date.now() - started;
-          const body = await res.text().catch(() => '');
+          const body = await res.text().catch(() => "");
           return {
             name: p.name,
             keyName: p.keyName,
@@ -211,7 +226,7 @@ export class ApiHealthService {
             online: res.ok,
             status: res.status,
             ms,
-            note: res.ok ? 'online' : `HTTP ${res.status}`,
+            note: res.ok ? "online" : `HTTP ${res.status}`,
             request,
             response: body.slice(0, 300),
           };
@@ -223,7 +238,10 @@ export class ApiHealthService {
             online: false,
             status: 0,
             ms: Date.now() - started,
-            note: (err as Error).name === 'AbortError' ? 'timeout' : (err as Error).message,
+            note:
+              (err as Error).name === "AbortError"
+                ? "timeout"
+                : (err as Error).message,
             request,
             response: null,
           };
@@ -235,14 +253,14 @@ export class ApiHealthService {
   }
 
   private joinPath(a: string, b: string): string {
-    const strip = (s: string) => (s || '').replace(/^\/+|\/+$/g, '');
-    const joined = [strip(a), strip(b)].filter(Boolean).join('/');
-    return '/' + joined;
+    const strip = (s: string) => (s || "").replace(/^\/+|\/+$/g, "");
+    const joined = [strip(a), strip(b)].filter(Boolean).join("/");
+    return "/" + joined;
   }
 
   async check(): Promise<ApiHealthReport> {
     const endpoints = this.listEndpoints();
-    const port = Number(this.config.get('PORT', 4400)) || 4400;
+    const port = Number(this.config.get("PORT", 4400)) || 4400;
     const base = `http://127.0.0.1:${port}`;
 
     // External vendor probes run in parallel with the internal route probing.
@@ -251,26 +269,26 @@ export class ApiHealthService {
     const rows: EndpointRow[] = await Promise.all(
       endpoints.map(async (e): Promise<EndpointRow> => {
         const probeable =
-          e.method === 'GET' &&
+          e.method === "GET" &&
           !e.guarded &&
-          !e.path.includes(':') &&
-          !e.path.includes('*');
+          !e.path.includes(":") &&
+          !e.path.includes("*");
 
         if (!probeable) {
           const reason =
-            e.method !== 'GET'
+            e.method !== "GET"
               ? `mutating (${e.method})`
               : e.guarded
-                ? 'requires auth'
-                : e.path.includes(':')
-                  ? 'needs path param'
-                  : 'wildcard route';
+                ? "requires auth"
+                : e.path.includes(":")
+                  ? "needs path param"
+                  : "wildcard route";
           return { ...e, probe: { skipped: true, reason } };
         }
 
         const started = Date.now();
         try {
-          const res = await fetch(base + e.path, { method: 'GET' });
+          const res = await fetch(base + e.path, { method: "GET" });
           const status = res.status;
           return {
             ...e,
@@ -299,15 +317,21 @@ export class ApiHealthService {
     );
 
     const byMethod: Record<string, number> = {};
-    for (const e of endpoints) byMethod[e.method] = (byMethod[e.method] ?? 0) + 1;
-    const probedRows = rows.filter((r) => !('skipped' in r.probe));
-    const okCount = probedRows.filter((r) => (r.probe as EndpointProbe).ok).length;
-    const upCount = probedRows.filter((r) => (r.probe as EndpointProbe).up).length;
+    for (const e of endpoints)
+      byMethod[e.method] = (byMethod[e.method] ?? 0) + 1;
+    const probedRows = rows.filter((r) => !("skipped" in r.probe));
+    const okCount = probedRows.filter(
+      (r) => (r.probe as EndpointProbe).ok,
+    ).length;
+    const upCount = probedRows.filter(
+      (r) => (r.probe as EndpointProbe).up,
+    ).length;
 
     const vendors = await vendorsPromise;
-    const role = String(this.config.get('APP_ROLE', 'worker')).toLowerCase();
+    const role = String(this.config.get("APP_ROLE", "worker")).toLowerCase();
     return {
-      service: role === 'live' ? 'market-catalyst-live' : 'market-catalyst-backend',
+      service:
+        role === "live" ? "market-catalyst-live" : "market-catalyst-backend",
       generatedAt: new Date().toISOString(),
       vendors,
       summary: {

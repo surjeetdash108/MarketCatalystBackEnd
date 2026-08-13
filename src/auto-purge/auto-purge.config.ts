@@ -41,15 +41,15 @@ export interface EphemeralTarget {
 
 export const EPHEMERAL_TARGETS: EphemeralTarget[] = [
   {
-    collection: 'market_movers',
-    field: 'updatedAt',
+    collection: "market_movers",
+    field: "updatedAt",
     maxAgeHours: 12,
-    note: 'Top gainers/losers change daily; tickers that fall off the list leave abandoned docs the movers job never deletes.',
+    note: "Top gainers/losers change daily; tickers that fall off the list leave abandoned docs the movers job never deletes.",
   },
   {
-    collection: 'options_chains',
-    field: 'updatedAt',
+    collection: "options_chains",
+    field: "updatedAt",
     maxAgeHours: 12,
-    note: 'Per-ticker option chains; a ticker no longer covered leaves a stale doc.',
+    note: "Per-ticker option chains; a ticker no longer covered leaves a stale doc.",
   },
 ];

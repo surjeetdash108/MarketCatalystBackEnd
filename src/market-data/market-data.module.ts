@@ -1,29 +1,23 @@
-import { Module } from '@nestjs/common';
-import { AdaptersModule } from '../adapters/adapters.module';
-import { FmpModule } from '../vendors/fmp/fmp.module';
-import { FredModule } from '../vendors/fred/fred.module';
-import { LiveModule } from '../live/live.module';
-import { PolygonModule } from '../vendors/polygon/polygon.module';
-import { SecEdgarModule } from '../vendors/sec-edgar/sec-edgar.module';
-import { AnalystActionsController } from './analyst-actions.controller';
-import { CompaniesController } from './companies.controller';
-import { DividendsController } from './dividends.controller';
-import { Edgar8kFeedService } from './edgar-8k-feed.service';
-import { EarningsController } from './earnings.controller';
-import { EarningsAnnouncementsController } from './earnings-announcements.controller';
-import { FilingsWireController } from './filings-wire.controller';
-import { IpoPipelineController } from './ipo-pipeline.controller';
-import { MacroRegimeController } from './macro-regime.controller';
-import { InsiderPositionsController } from './insider-positions.controller';
-import { InsiderTransactionsController } from './insider-transactions.controller';
-import { IposController } from './ipos.controller';
-import { MacroEventsController } from './macro-events.controller';
-import { MarketDataService } from './market-data.service';
-import { MarketMoversController } from './market-movers.controller';
-import { MarketSentimentController } from './market-sentiment.controller';
-import { NewsController } from './news.controller';
-import { RecapsController } from './recaps.controller';
-import { SectorsController } from './sectors.controller';
+import { Module } from "@nestjs/common";
+import { LiveModule } from "../live/live.module";
+import { AnalystActionsController } from "./analyst-actions.controller";
+import { CompaniesController } from "./companies.controller";
+import { DividendsController } from "./dividends.controller";
+import { EarningsController } from "./earnings.controller";
+import { EarningsAnnouncementsController } from "./earnings-announcements.controller";
+import { FilingsWireController } from "./filings-wire.controller";
+import { IpoPipelineController } from "./ipo-pipeline.controller";
+import { MacroRegimeController } from "./macro-regime.controller";
+import { InsiderPositionsController } from "./insider-positions.controller";
+import { InsiderTransactionsController } from "./insider-transactions.controller";
+import { IposController } from "./ipos.controller";
+import { MacroEventsController } from "./macro-events.controller";
+import { MarketDataService } from "./market-data.service";
+import { MarketMoversController } from "./market-movers.controller";
+import { MarketSentimentController } from "./market-sentiment.controller";
+import { NewsController } from "./news.controller";
+import { RecapsController } from "./recaps.controller";
+import { SectorsController } from "./sectors.controller";
 
 /**
  * Screen-facing read module for market-wide (non-user-owned) data — Movers,
@@ -42,7 +36,7 @@ import { SectorsController } from './sectors.controller';
  * a follow-up, not a blocker for local verification.
  */
 @Module({
-  imports: [LiveModule, AdaptersModule, FredModule, PolygonModule, SecEdgarModule, FmpModule],
+  imports: [LiveModule],
   controllers: [
     MarketMoversController,
     SectorsController,
@@ -62,6 +56,6 @@ import { SectorsController } from './sectors.controller';
     NewsController,
     RecapsController,
   ],
-  providers: [MarketDataService, Edgar8kFeedService],
+  providers: [MarketDataService],
 })
 export class MarketDataModule {}

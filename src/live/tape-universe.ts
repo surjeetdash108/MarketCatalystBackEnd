@@ -16,7 +16,7 @@
  * before the real yield was wired up.
  */
 
-export type TapeKind = 'index' | 'stock' | 'rate';
+export type TapeKind = "index" | "stock" | "rate";
 
 export interface TapeSymbol {
   /** Stable id the UI keys tiles and drawers on. */
@@ -44,86 +44,86 @@ export interface TapeSymbol {
 /** Index tiles, via ETF proxies — the current plan does not include indices. */
 export const TAPE_INDICES: TapeSymbol[] = [
   {
-    id: 'SPX',
-    kind: 'index',
-    label: 'S&P 500',
-    proxyTicker: 'SPY',
+    id: "SPX",
+    kind: "index",
+    label: "S&P 500",
+    proxyTicker: "SPY",
     isProxy: true,
-    note: 'ETF proxy for the S&P 500 index',
+    note: "ETF proxy for the S&P 500 index",
     multiplier: 10, // SPY is structured as ~1/10th of the S&P 500 by design.
   },
   {
-    id: 'NDX',
-    kind: 'index',
-    label: 'Nasdaq',
-    proxyTicker: 'QQQ',
+    id: "NDX",
+    kind: "index",
+    label: "Nasdaq",
+    proxyTicker: "QQQ",
     isProxy: true,
-    note: 'ETF proxy for the Nasdaq-100 index',
+    note: "ETF proxy for the Nasdaq-100 index",
     // QQQ launched at 1/40th of NDX (1999) but has drifted since (expense
     // ratio drag) — 36.3 is the current ratio, verified against a live NDX
     // print (25,122.18) on 2026-07-31. Re-verify periodically; this drifts.
     multiplier: 36.3,
   },
   {
-    id: 'DJI',
-    kind: 'index',
-    label: 'Dow',
-    proxyTicker: 'DIA',
+    id: "DJI",
+    kind: "index",
+    label: "Dow",
+    proxyTicker: "DIA",
     isProxy: true,
-    note: 'ETF proxy for the Dow Jones index',
+    note: "ETF proxy for the Dow Jones index",
     multiplier: 100, // DIA is structured as ~1/100th of the DJIA by design.
   },
   {
-    id: 'RUT',
-    kind: 'index',
-    label: 'Russell 2K',
-    proxyTicker: 'IWM',
+    id: "RUT",
+    kind: "index",
+    label: "Russell 2K",
+    proxyTicker: "IWM",
     isProxy: true,
-    note: 'ETF proxy for the Russell 2000 index',
+    note: "ETF proxy for the Russell 2000 index",
     multiplier: 10, // Standard IWM≈RUT/10 approximation.
   },
   {
-    id: 'VIX',
-    kind: 'index',
-    label: 'VIX',
-    proxyTicker: 'VIXY',
+    id: "VIX",
+    kind: "index",
+    label: "VIX",
+    proxyTicker: "VIXY",
     isProxy: true,
-    note: 'Decaying VIX futures ETN — directional proxy only, not the spot VIX level',
+    note: "Decaying VIX futures ETN — directional proxy only, not the spot VIX level",
   },
   {
-    id: 'WTI',
-    kind: 'index',
-    label: 'WTI Crude',
-    proxyTicker: 'USO',
+    id: "WTI",
+    kind: "index",
+    label: "WTI Crude",
+    proxyTicker: "USO",
     isProxy: true,
-    note: 'ETF proxy for WTI crude oil',
+    note: "ETF proxy for WTI crude oil",
   },
   {
-    id: 'GOLD',
-    kind: 'index',
-    label: 'Gold',
-    proxyTicker: 'GLD',
+    id: "GOLD",
+    kind: "index",
+    label: "Gold",
+    proxyTicker: "GLD",
     isProxy: true,
-    note: 'ETF proxy for spot gold',
+    note: "ETF proxy for spot gold",
   },
   {
-    id: 'DXY',
-    kind: 'index',
-    label: 'Dollar (DXY)',
-    proxyTicker: 'UUP',
+    id: "DXY",
+    kind: "index",
+    label: "Dollar (DXY)",
+    proxyTicker: "UUP",
     isProxy: true,
-    note: 'ETF proxy for the US Dollar Index',
+    note: "ETF proxy for the US Dollar Index",
   },
 ];
 
 /** The rate tile. Sourced separately — see the docblock above. */
 export const TAPE_RATE: TapeSymbol = {
-  id: 'US10Y',
-  kind: 'rate',
-  label: '10Y Yield',
+  id: "US10Y",
+  kind: "rate",
+  label: "10Y Yield",
   proxyTicker: null,
   isProxy: false,
-  note: 'US Treasury 10-year constant-maturity yield, in percent',
+  note: "US Treasury 10-year constant-maturity yield, in percent",
 };
 
 /**
@@ -132,18 +132,18 @@ export const TAPE_RATE: TapeSymbol = {
  * Override with TAPE_STOCKS so the list is tunable without a deploy.
  */
 const DEFAULT_TAPE_STOCKS = [
-  'AAPL',
-  'MSFT',
-  'NVDA',
-  'GOOGL',
-  'AMZN',
-  'META',
-  'TSLA',
-  'AVGO',
-  'JPM',
-  'V',
-  'XOM',
-  'LLY',
+  "AAPL",
+  "MSFT",
+  "NVDA",
+  "GOOGL",
+  "AMZN",
+  "META",
+  "TSLA",
+  "AVGO",
+  "JPM",
+  "V",
+  "XOM",
+  "LLY",
 ];
 
 /** Guards the single upstream request against an absurd TAPE_STOCKS value. */
@@ -151,14 +151,17 @@ const MAX_TAPE_STOCKS = 40;
 const TICKER_RE = /^[A-Z][A-Z.]{0,9}$/;
 
 export function tapeStocks(raw?: string): TapeSymbol[] {
-  const list = (raw ?? '')
-    .split(',')
+  const list = (raw ?? "")
+    .split(",")
     .map((t) => t.trim().toUpperCase())
     .filter((t) => TICKER_RE.test(t));
-  const symbols = (list.length ? list : DEFAULT_TAPE_STOCKS).slice(0, MAX_TAPE_STOCKS);
+  const symbols = (list.length ? list : DEFAULT_TAPE_STOCKS).slice(
+    0,
+    MAX_TAPE_STOCKS,
+  );
   return symbols.map((t) => ({
     id: t,
-    kind: 'stock' as const,
+    kind: "stock" as const,
     // The tape shows the symbol, not the company name — it has to fit in a
     // scrolling strip. The vendor's `name` is carried on the item for the
     // drawer that opens when the tile is clicked.
@@ -179,5 +182,7 @@ export function tapeUniverse(rawStocks?: string): TapeSymbol[] {
  * actually an equity. One request covers all of them.
  */
 export function snapshotSymbols(universe: TapeSymbol[]): string[] {
-  return universe.filter((s) => s.proxyTicker !== null).map((s) => s.proxyTicker);
+  return universe
+    .filter((s) => s.proxyTicker !== null)
+    .map((s) => s.proxyTicker);
 }

@@ -24,7 +24,7 @@ export interface RetentionRule {
   /** Field carrying the row's own date. */
   dateField: string;
   /** 'date' → 'YYYY-MM-DD'; 'datetime' → full ISO. Controls the cutoff format. */
-  dateFormat: 'date' | 'datetime';
+  dateFormat: "date" | "datetime";
   /** Delete rows whose dateField is older than this many days. */
   retentionDays: number;
   /** Why this window — keeps the choice auditable. */
@@ -33,41 +33,41 @@ export interface RetentionRule {
 
 export const RETENTION_RULES: RetentionRule[] = [
   {
-    collection: 'market_movers_history',
-    dateField: 'asOfDate',
-    dateFormat: 'date',
+    collection: "market_movers_history",
+    dateField: "asOfDate",
+    dateFormat: "date",
     retentionDays: 400,
-    note: 'Daily mover snapshots; ~13 months covers YoY comparisons.',
+    note: "Daily mover snapshots; ~13 months covers YoY comparisons.",
   },
   {
-    collection: 'market_indices_history',
-    dateField: 'asOfDate',
-    dateFormat: 'date',
+    collection: "market_indices_history",
+    dateField: "asOfDate",
+    dateFormat: "date",
     retentionDays: 400,
-    note: 'Daily index snapshots; 13 months.',
+    note: "Daily index snapshots; 13 months.",
   },
   {
-    collection: 'sectors_history',
-    dateField: 'asOfDate',
-    dateFormat: 'date',
+    collection: "sectors_history",
+    dateField: "asOfDate",
+    dateFormat: "date",
     retentionDays: 400,
-    note: 'Daily sector snapshots; 13 months.',
+    note: "Daily sector snapshots; 13 months.",
   },
   {
-    collection: 'news',
-    dateField: 'publishedAt',
-    dateFormat: 'datetime',
+    collection: "news",
+    dateField: "publishedAt",
+    dateFormat: "datetime",
     retentionDays: 120,
-    note: 'Articles age out of relevance; 4 months is generous for a news feed.',
+    note: "Articles age out of relevance; 4 months is generous for a news feed.",
   },
   {
-    collection: 'ohlcv_bars',
-    dateField: 'barDate',
-    dateFormat: 'date',
+    collection: "ohlcv_bars",
+    dateField: "barDate",
+    dateFormat: "date",
     retentionDays: 800,
     // NOTE: keep > 2 years. rs-rating and the 1Y chart read a full year of
     // bars; trimming below ~500 days would silently corrupt those.
-    note: 'Price history; >2yr so RS-rating and 1Y charts stay intact.',
+    note: "Price history; >2yr so RS-rating and 1Y charts stay intact.",
   },
 ];
 
@@ -76,5 +76,5 @@ export function cutoffFor(rule: RetentionRule, now: Date): string {
   const d = new Date(now.getTime() - rule.retentionDays * 86_400_000);
   const iso = d.toISOString();
   // 'date' fields compare as 'YYYY-MM-DD'; 'datetime' as a full ISO instant.
-  return rule.dateFormat === 'date' ? iso.slice(0, 10) : iso;
+  return rule.dateFormat === "date" ? iso.slice(0, 10) : iso;
 }

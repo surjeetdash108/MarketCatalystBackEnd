@@ -1,10 +1,10 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { chunkedBatchSet } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { TICKER_UNIVERSE } from '../common/ticker-universe';
-import { SecEdgarService } from '../vendors/sec-edgar/sec-edgar.service';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { chunkedBatchSet } from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { TICKER_UNIVERSE } from "../common/ticker-universe";
+import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
+import { SyncRegistry } from "../common/sync-registry.service";
 
 /**
  * SEC-EDGAR 8-K ingestion → two collections, from ONE per-company submissions
@@ -23,7 +23,7 @@ import { SyncRegistry } from '../common/sync-registry.service';
  * keyed idempotently (accession / ticker_date), so re-runs upsert.
  */
 
-const JOB_NAME = 'edgar-8k';
+const JOB_NAME = "edgar-8k";
 const BATCH_SIZE = 20;
 const FILINGS_PER_COMPANY = 8;
 const LOOKBACK_DAYS = 120;
@@ -42,24 +42,28 @@ function addDays(d: Date, n: number): Date {
  * wall-clock in US-Eastern; we read the HH:MM directly (avoiding TZ math):
  * before 09:30 → BMO, at/after 16:00 → AMC, otherwise intraday.
  */
-function sessionFromAcceptance(acc?: string): 'BMO' | 'AMC' | 'Intraday' | null {
+function sessionFromAcceptance(
+  acc?: string,
+): "BMO" | "AMC" | "Intraday" | null {
   if (!acc || acc.length < 16) return null;
   const hh = Number(acc.slice(11, 13));
   const mm = Number(acc.slice(14, 16));
   if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
   const mins = hh * 60 + mm;
-  if (mins < 9 * 60 + 30) return 'BMO';
-  if (mins >= 16 * 60) return 'AMC';
-  return 'Intraday';
+  if (mins < 9 * 60 + 30) return "BMO";
+  if (mins >= 16 * 60) return "AMC";
+  return "Intraday";
 }
 
-async function fetchTickerToCik(userAgent: string): Promise<Map<string, string>> {
-  const res = await fetch('https://www.sec.gov/files/company_tickers.json', {
-    headers: { 'User-Agent': userAgent },
+async function fetchTickerToCik(
+  userAgent: string,
+): Promise<Map<string, string>> {
+  const res = await fetch("https://www.sec.gov/files/company_tickers.json", {
+    headers: { "User-Agent": userAgent },
   });
-  const data = await res.json();
+  const data = (await res.json()) as Record<string, { ticker: string; cik_str: string | number }>;
   const map = new Map<string, string>();
-  for (const entry of Object.values(data) as any[]) {
+  for (const entry of Object.values(data)) {
     map.set(entry.ticker.toUpperCase(), String(entry.cik_str));
   }
   return map;
@@ -78,9 +82,9 @@ export class Edgar8KJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['filings_wire', 'earnings_announcements'],
-      cronExpression: '0 8 * * 1-5', // runs inside premarket orchestration
-      timeZone: 'America/New_York',
+      collections: ["filings_wire", "earnings_announcements"],
+      cronExpression: "0 8 * * 1-5", // runs inside premarket orchestration
+      timeZone: "America/New_York",
     });
   }
 
@@ -98,38 +102,46 @@ export class Edgar8KJob implements OnModuleInit {
   private async reactionPct(
     ticker: string,
     announceDate: string,
-    session: 'BMO' | 'AMC' | 'Intraday' | null,
+    session: "BMO" | "AMC" | "Intraday" | null,
   ): Promise<number | null> {
     try {
       const to = isoDate(addDays(new Date(announceDate), 7));
       const snap = await this.firebase.firestore
-        .collection('ohlcv_bars')
-        .where('ticker', '==', ticker)
-        .where('barDate', '<=', to)
-        .orderBy('barDate', 'desc')
+        .collection("ohlcv_bars")
+        .where("ticker", "==", ticker)
+        .where("barDate", "<=", to)
+        .orderBy("barDate", "desc")
         .limit(20)
         .get();
-      const bars = (snap.docs
-        .map((d) => d.data())
-        .filter((b) => typeof b.close === 'number') as { barDate: string; close: number }[])
-        .reverse(); // ascending
+      const bars = (
+        snap.docs
+          .map((d) => d.data())
+          .filter((b) => typeof b.close === "number") as {
+          barDate: string;
+          close: number;
+        }[]
+      ).reverse(); // ascending
       if (bars.length < 2) return null;
       let idx = bars.findIndex((b) => b.barDate >= announceDate);
       if (idx === -1) idx = bars.length - 1;
       // AMC news lands after the close → next session reacts. Otherwise the move
       // is prior-close → announcement-day close.
-      if (session === 'AMC') {
+      if (session === "AMC") {
         const base = bars[idx]?.close;
         const next = bars[idx + 1]?.close;
-        if (base != null && base > 0 && next != null) return ((next - base) / base) * 100;
+        if (base != null && base > 0 && next != null)
+          return ((next - base) / base) * 100;
         return null;
       }
       const prev = bars[idx - 1]?.close;
       const cur = bars[idx]?.close;
-      if (prev != null && prev > 0 && cur != null) return ((cur - prev) / prev) * 100;
+      if (prev != null && prev > 0 && cur != null)
+        return ((cur - prev) / prev) * 100;
       return null;
     } catch (err) {
-      this.logger.warn(`reaction calc failed for ${ticker} ${announceDate}: ${(err as Error).message}`);
+      this.logger.warn(
+        `reaction calc failed for ${ticker} ${announceDate}: ${(err as Error).message}`,
+      );
       return null;
     }
   }
@@ -141,7 +153,9 @@ export class Edgar8KJob implements OnModuleInit {
         { length: BATCH_SIZE },
         (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
       );
-      const tickerToCik = await fetchTickerToCik('Market Catalyst Backend hello@inc108.com');
+      const tickerToCik = await fetchTickerToCik(
+        "Market Catalyst Backend hello@inc108.com",
+      );
       const cutoff = isoDate(addDays(new Date(), -LOOKBACK_DAYS));
 
       const wireDocs: { id: string; data: Record<string, unknown> }[] = [];
@@ -154,17 +168,18 @@ export class Edgar8KJob implements OnModuleInit {
           continue;
         }
         try {
-          const { name, recentFilings } = await this.secEdgar.getSubmissions(cik);
+          const { name, recentFilings } =
+            await this.secEdgar.getSubmissions(cik);
           const eightKs = recentFilings
-            .filter((f) => f.form === '8-K' && f.filingDate >= cutoff)
+            .filter((f) => f.form === "8-K" && f.filingDate >= cutoff)
             .slice(0, FILINGS_PER_COMPANY);
           for (const f of eightKs) {
             const announceDate = f.reportDate || f.filingDate;
             const session = sessionFromAcceptance(f.acceptanceDateTime);
-            const items = f.items ?? '';
+            const items = f.items ?? "";
             const hasResults = /(^|[^\d])2\.02([^\d]|$)/.test(items);
-            const accNoDash = f.accessionNumber.replace(/-/g, '');
-            const url = `https://www.sec.gov/Archives/edgar/data/${cik.replace(/\D/g, '')}/${accNoDash}/${f.primaryDocument}`;
+            const accNoDash = f.accessionNumber.replace(/-/g, "");
+            const url = `https://www.sec.gov/Archives/edgar/data/${cik.replace(/\D/g, "")}/${accNoDash}/${f.primaryDocument}`;
 
             wireDocs.push({
               id: f.accessionNumber,
@@ -178,14 +193,18 @@ export class Edgar8KJob implements OnModuleInit {
                 items: items || null,
                 session,
                 isEarnings: hasResults,
-                description: f.primaryDocDescription ?? '8-K',
+                description: f.primaryDocDescription ?? "8-K",
                 url,
                 updatedAt: new Date().toISOString(),
               },
             });
 
             if (hasResults) {
-              const reactionPct = await this.reactionPct(ticker, announceDate, session);
+              const reactionPct = await this.reactionPct(
+                ticker,
+                announceDate,
+                session,
+              );
               annDocs.push({
                 id: `${ticker}_${announceDate}`,
                 data: {
@@ -193,7 +212,10 @@ export class Edgar8KJob implements OnModuleInit {
                   companyName: name ?? ticker,
                   announceDate,
                   session,
-                  reactionPct: reactionPct == null ? null : Math.round(reactionPct * 100) / 100,
+                  reactionPct:
+                    reactionPct == null
+                      ? null
+                      : Math.round(reactionPct * 100) / 100,
                   accessionNumber: f.accessionNumber,
                   url,
                   updatedAt: new Date().toISOString(),
@@ -206,9 +228,16 @@ export class Edgar8KJob implements OnModuleInit {
         }
       }
 
-      await chunkedBatchSet(this.firebase.firestore, 'filings_wire', wireDocs);
-      await chunkedBatchSet(this.firebase.firestore, 'earnings_announcements', annDocs);
-      await this.meta.setCursor(JOB_NAME, (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length);
+      await chunkedBatchSet(this.firebase.firestore, "filings_wire", wireDocs);
+      await chunkedBatchSet(
+        this.firebase.firestore,
+        "earnings_announcements",
+        annDocs,
+      );
+      await this.meta.setCursor(
+        JOB_NAME,
+        (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length,
+      );
       await this.meta.record(JOB_NAME, { ok: true, count: wireDocs.length });
       this.logger.log(
         `edgar-8k: ${wireDocs.length} filings, ${annDocs.length} earnings announcements (cursor ${cursor})`,

@@ -1,14 +1,10 @@
-import { Injectable } from '@nestjs/common';
-import { PolygonService } from '../vendors/polygon/polygon.service';
-import {
-  AdapterResult,
-  CanonicalNewsArticle,
-  NewsAdapter,
-} from './types';
+import { Injectable } from "@nestjs/common";
+import { PolygonService } from "../vendors/polygon/polygon.service";
+import { AdapterResult, CanonicalNewsArticle, NewsAdapter } from "./types";
 
 @Injectable()
 export class PolygonNewsAdapter implements NewsAdapter {
-  readonly sourceName = 'polygon';
+  readonly sourceName = "polygon";
 
   constructor(private readonly polygon: PolygonService) {}
 
@@ -25,7 +21,7 @@ export class PolygonNewsAdapter implements NewsAdapter {
         ticker,
         headline: a.title,
         summary: a.description ?? null,
-        source: a.publisher?.name ?? 'Polygon',
+        source: a.publisher?.name ?? "Polygon",
         url: a.article_url,
         category: null,
         sentiment: insight?.sentiment ?? null,

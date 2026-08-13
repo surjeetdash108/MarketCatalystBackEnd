@@ -1,10 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { XMLParser } from 'fast-xml-parser';
-import { fetchJson } from '../../common/http.util';
+import { Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { XMLParser } from "fast-xml-parser";
+import { fetchJson } from "../../common/http.util";
 
-const SUBMISSIONS_BASE = 'https://data.sec.gov/submissions';
-const ARCHIVES_BASE = 'https://www.sec.gov/Archives/edgar/data';
+const SUBMISSIONS_BASE = "https://data.sec.gov/submissions";
+const ARCHIVES_BASE = "https://www.sec.gov/Archives/edgar/data";
 const MIN_DELAY_MS = 150;
 
 const xmlParser = new XMLParser({
@@ -38,8 +38,8 @@ export class SecEdgarService {
 
   constructor(private readonly config: ConfigService) {
     this.userAgent = this.config.get(
-      'SEC_EDGAR_USER_AGENT',
-      'Market Catalyst Backend (unset-contact@example.com)',
+      "SEC_EDGAR_USER_AGENT",
+      "Market Catalyst Backend (unset-contact@example.com)",
     );
   }
 
@@ -47,24 +47,28 @@ export class SecEdgarService {
     const elapsed = Date.now() - this.lastRequestAt;
     if (elapsed < MIN_DELAY_MS) await sleep(MIN_DELAY_MS - elapsed);
     this.lastRequestAt = Date.now();
-    return fetchJson(url, { headers: { 'User-Agent': this.userAgent } });
+    return fetchJson(url, { headers: { "User-Agent": this.userAgent } });
   }
 
   private async throttledFetchText(url: string): Promise<string> {
     const elapsed = Date.now() - this.lastRequestAt;
     if (elapsed < MIN_DELAY_MS) await sleep(MIN_DELAY_MS - elapsed);
     this.lastRequestAt = Date.now();
-    const res = await fetch(url, { headers: { 'User-Agent': this.userAgent } });
+    const res = await fetch(url, { headers: { "User-Agent": this.userAgent } });
     if (!res.ok) throw new Error(`GET ${url} -> ${res.status}`);
     return res.text();
   }
 
   private pad10(cik: string): string {
-    return cik.replace(/\D/g, '').padStart(10, '0');
+    return cik.replace(/\D/g, "").padStart(10, "0");
   }
 
-  async getSubmissions(cik: string): Promise<{ name: string; recentFilings: SecFiling[] }> {
-    const data = await this.throttledFetch(`${SUBMISSIONS_BASE}/CIK${this.pad10(cik)}.json`);
+  async getSubmissions(
+    cik: string,
+  ): Promise<{ name: string; recentFilings: SecFiling[] }> {
+    const data = await this.throttledFetch(
+      `${SUBMISSIONS_BASE}/CIK${this.pad10(cik)}.json`,
+    );
     const r = data.filings.recent;
     const recentFilings = r.form.map((form: string, i: number) => ({
       form,
@@ -81,19 +85,26 @@ export class SecEdgarService {
     return { name: data.name, recentFilings };
   }
 
-  private async getFilingFileNames(cik: string, accessionNumber: string): Promise<string[]> {
-    const accNoDash = accessionNumber.replace(/-/g, '');
+  private async getFilingFileNames(
+    cik: string,
+    accessionNumber: string,
+  ): Promise<string[]> {
+    const accNoDash = accessionNumber.replace(/-/g, "");
     const idx = await this.throttledFetch(
       `${ARCHIVES_BASE}/${this.pad10(cik)}/${accNoDash}/index.json`,
     );
     return idx.directory.item.map((i: any) => i.name);
   }
 
-  async get13FInformationTable(cik: string, accessionNumber: string): Promise<unknown[]> {
-    const accNoDash = accessionNumber.replace(/-/g, '');
+  async get13FInformationTable(
+    cik: string,
+    accessionNumber: string,
+  ): Promise<unknown[]> {
+    const accNoDash = accessionNumber.replace(/-/g, "");
     const files = await this.getFilingFileNames(cik, accessionNumber);
     const infoTableFile = files.find(
-      (f) => f.endsWith('.xml') && f !== 'primary_doc.xml' && !f.includes('index'),
+      (f) =>
+        f.endsWith(".xml") && f !== "primary_doc.xml" && !f.includes("index"),
     );
     if (!infoTableFile) {
       throw new Error(
@@ -132,11 +143,15 @@ export class SecEdgarService {
         transactions: any[];
       }
   > {
-    const accNoDash = accessionNumber.replace(/-/g, '');
+    const accNoDash = accessionNumber.replace(/-/g, "");
     const files = await this.getFilingFileNames(cik, accessionNumber);
-    const form4File = files.find((f) => f.endsWith('.xml') && !f.includes('index'));
+    const form4File = files.find(
+      (f) => f.endsWith(".xml") && !f.includes("index"),
+    );
     if (!form4File) {
-      throw new Error(`No Form 4 XML found in filing ${accessionNumber} for CIK ${cik}`);
+      throw new Error(
+        `No Form 4 XML found in filing ${accessionNumber} for CIK ${cik}`,
+      );
     }
     const xml = await this.throttledFetchText(
       `${ARCHIVES_BASE}/${this.pad10(cik)}/${accNoDash}/${form4File}`,
@@ -156,7 +171,8 @@ export class SecEdgarService {
         cik: doc.reportingOwner?.reportingOwnerId?.rptOwnerCik,
         name: doc.reportingOwner?.reportingOwnerId?.rptOwnerName,
         isOfficer:
-          doc.reportingOwner?.reportingOwnerRelationship?.isOfficer === 'true' ||
+          doc.reportingOwner?.reportingOwnerRelationship?.isOfficer ===
+            "true" ||
           doc.reportingOwner?.reportingOwnerRelationship?.isOfficer === true,
         officerTitle:
           doc.reportingOwner?.reportingOwnerRelationship?.officerTitle ?? null,

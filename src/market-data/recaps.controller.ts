@@ -1,16 +1,28 @@
-import { Controller, Get, NotImplementedException } from '@nestjs/common';
+import { Controller, Get, Header } from "@nestjs/common";
+import { CachedCollectionsService } from "../live/cached-collections.service";
+import { MarketDataService } from "./market-data.service";
 
 /**
- * GET /market-data/recaps — recaps.job.ts calls no vendor at all; it
- * aggregates market_indices/market_movers/sectors/market_breadth (plus their
- * _history siblings) into a frozen per-day snapshot. There's no single live
- * source to call directly, so this returns 501 rather than re-deriving a
- * "live" recap that contradicts its own frozen-snapshot design.
+ * GET /market-data/recaps — backs the Recap screen's numeric fields
+ * (indices/gainers/losers/sector leaders-laggards/internals). `recaps.job.ts`
+ * writes `narrative: null` — the headline/story prose isn't produced by any
+ * job yet, so the screen's hardcoded headline copy stays as-is.
  */
-@Controller('market-data')
+@Controller("market-data")
 export class RecapsController {
-  @Get('recaps')
-  recaps(): never {
-    throw new NotImplementedException('not implemented');
+  constructor(
+    private readonly marketData: MarketDataService,
+    private readonly cached: CachedCollectionsService,
+  ) {}
+
+  @Get("recaps")
+  @Header(
+    "Cache-Control",
+    "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
+  )
+  async recaps() {
+    await this.marketData.ensureFresh("recaps");
+    const { recaps } = await this.cached.get(["recaps"]);
+    return recaps;
   }
 }

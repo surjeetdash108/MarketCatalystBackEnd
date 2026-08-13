@@ -1,14 +1,14 @@
-import { Logger } from '@nestjs/common';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { Logger } from "@nestjs/common";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 import type {
   AdapterResult,
   CanonicalSectorPerformance,
   SectorsAdapter,
-} from './types';
-import { withFallback } from './with-fallback.util';
+} from "./types";
+import { withFallback } from "./with-fallback.util";
 
 export class PolygonSectorsAdapter implements SectorsAdapter {
-  readonly sourceName = 'polygon';
+  readonly sourceName = "polygon";
   constructor(private readonly polygon: PolygonService) {}
 
   async fetchSectorPerformance(): Promise<
@@ -19,17 +19,17 @@ export class PolygonSectorsAdapter implements SectorsAdapter {
     // throwing is what lets the composite fall through to the next vendor.
     // This preserves the explicit empty-check the job used to do inline.
     if (data.length === 0) {
-      throw new Error('Polygon returned no sector-ETF data');
+      throw new Error("Polygon returned no sector-ETF data");
     }
     return {
       data,
       source: this.sourceName,
       warnings: [
         {
-          code: 'STALE_DATA',
-          field: 'averageChange',
+          code: "STALE_DATA",
+          field: "averageChange",
           message:
-            'Derived from 11 SPDR sector ETFs, not true cap-weighted sector aggregates — Massive has no sector endpoint on any tier.',
+            "Derived from 11 SPDR sector ETFs, not true cap-weighted sector aggregates — Massive has no sector endpoint on any tier.",
         },
       ],
     };
@@ -51,7 +51,7 @@ export class CompositeSectorsAdapter implements SectorsAdapter {
 
   fetchSectorPerformance() {
     return withFallback(
-      'sector performance',
+      "sector performance",
       this.logger,
       this.primary,
       this.secondary,
