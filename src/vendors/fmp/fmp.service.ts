@@ -312,7 +312,10 @@ export class FmpService {
       `grades?symbol=${encodeURIComponent(ticker)}&limit=${limit}`,
       { retries: 0 },
     );
-    return rows.map((r) => {
+    // FMP's `grades` endpoint IGNORES the limit param and returns the full
+    // history (1000s of rows) newest-first — slice here or a batch write blows
+    // past Firestore's 11.5MB limit.
+    return rows.slice(0, limit).map((r) => {
       const o = r as Record<string, unknown>;
       return {
         date: String(o.date ?? ""),
