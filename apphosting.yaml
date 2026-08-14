@@ -99,12 +99,11 @@ env:
     value: "fmp"
   - variable: ANALYST_SOURCE
     value: "fmp"
-  # Per-run cursor batch for the per-ticker jobs (financials / analyst-actions).
-  # 150 covers the ~385-ticker universe in ~3 runs and keeps nightly full-refresh
-  # to ~3 nights, while staying inside the 900s request timeout. 40 reverts.
+  # Per-run cursor batch for the financials job. 150 covers the ~385-ticker
+  # universe in ~3 runs and keeps nightly full-refresh to ~3 nights, while staying
+  # inside the 900s request timeout. 40 reverts. (analyst-actions is a
+  # full-universe sweep each run — no batch/cursor.)
   - variable: FINANCIALS_BATCH_SIZE
-    value: "150"
-  - variable: ANALYST_BATCH_SIZE
     value: "150"
   - variable: QUOTE_SOURCE
     value: "polygon"

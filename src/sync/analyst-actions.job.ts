@@ -8,12 +8,11 @@ import { ANALYST_RATINGS_ADAPTER } from "../adapters/types";
 import type { AnalystRatingsAdapter } from "../adapters/analyst-ratings.adapter";
 
 const JOB_NAME = "analyst-actions";
-// Per-run cursor batch — env-configurable so a backfill can cover the universe
-// in a few runs instead of 40/run. Default 40 preserves the original cadence.
-const BATCH_SIZE = Number(process.env.ANALYST_BATCH_SIZE) || 40;
-/** Small gap between per-ticker calls so a batch never bursts the vendor. */
-const DELAY_MS = 120;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// Full-universe sweep each run: analyst consensus is ONE cheap FMP call per
+// ticker (grades-consensus) and FMP handles the concurrent load, so a single run
+// covers the whole universe — no cursor, no multi-night coverage lag. A bounded
+// worker pool keeps it fast without bursting the vendor (FmpService also paces).
+const CONCURRENCY = Number(process.env.ANALYST_CONCURRENCY) || 8;
 
 @Injectable()
 export class AnalystActionsJob implements OnModuleInit {
@@ -60,55 +59,52 @@ export class AnalystActionsJob implements OnModuleInit {
         return { written: 0, note: "no active tickers yet" };
       }
 
-      // Rotate a bounded batch per premarket run (same cursor pattern as
-      // financials.job) so per-run vendor calls stay predictable; upserts by
-      // ticker, so coverage accumulates across runs.
-      const cursor = await this.meta.getCursor(JOB_NAME);
-      const batch = Array.from(
-        { length: Math.min(BATCH_SIZE, universe.length) },
-        (_, i) => universe[(cursor + i) % universe.length],
-      );
-
+      // Sweep the ENTIRE universe each run via a bounded worker pool. Consensus
+      // is upserted by ticker (merge); a ticker with no consensus this run (null,
+      // e.g. an ETF) is skipped so its prior doc is never wiped.
       const docs: { id: string; data: Record<string, unknown> }[] = [];
       let failed = 0;
-      for (const ticker of batch) {
-        try {
-          const c = await this.ratings.getConsensus(ticker);
-          if (c) {
-            docs.push({
-              id: ticker,
-              data: {
-                ticker,
-                consensus: c.consensus,
-                strongBuy: c.strongBuy,
-                buy: c.buy,
-                hold: c.hold,
-                sell: c.sell,
-                strongSell: c.strongSell,
-                source: this.ratings.sourceName,
-                updatedAt: new Date().toISOString(),
-              },
-            });
+      const queue = [...universe];
+      const worker = async () => {
+        for (;;) {
+          const ticker = queue.shift();
+          if (!ticker) return;
+          try {
+            const c = await this.ratings.getConsensus(ticker);
+            if (c) {
+              docs.push({
+                id: ticker,
+                data: {
+                  ticker,
+                  consensus: c.consensus,
+                  strongBuy: c.strongBuy,
+                  buy: c.buy,
+                  hold: c.hold,
+                  sell: c.sell,
+                  strongSell: c.strongSell,
+                  source: this.ratings.sourceName,
+                  updatedAt: new Date().toISOString(),
+                },
+              });
+            }
+          } catch (err) {
+            failed++;
+            this.logger.warn(
+              `analyst consensus failed for ${ticker}: ${err.message}`,
+            );
           }
-        } catch (err) {
-          failed++;
-          this.logger.warn(
-            `analyst consensus failed for ${ticker}: ${err.message}`,
-          );
         }
-        await sleep(DELAY_MS);
-      }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, universe.length) }, worker),
+      );
 
       if (docs.length > 0) {
         await chunkedBatchSet(this.firebase.firestore, "analyst_actions", docs);
       }
-      await this.meta.setCursor(
-        JOB_NAME,
-        (cursor + BATCH_SIZE) % universe.length,
-      );
       await this.meta.record(JOB_NAME, { ok: true, count: docs.length });
       this.logger.log(
-        `analyst-actions: wrote ${docs.length}/${batch.length} (${this.ratings.sourceName}), ${failed} failed`,
+        `analyst-actions: wrote ${docs.length}/${universe.length} (${this.ratings.sourceName}), ${failed} failed`,
       );
       return { written: docs.length, failed };
     } catch (err) {
