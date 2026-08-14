@@ -1,6 +1,6 @@
-import { Controller, Get, Header } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { MarketDataService } from './market-data.service';
+import { Controller, Get, Header } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { MarketDataService } from "./market-data.service";
 
 // A bounded, sorted view of `news` — NOT routed through CachedCollectionsService's
 // allow-list, since that does a full unfiltered collection().get() per entry;
@@ -22,7 +22,7 @@ const NEWS_STALE_MS = 15 * 60_000;
  * GET /live/news?ticker=X (src/live/ondemand.controller.ts) instead — that's a
  * cache-aside fill against the same `news` collection, scoped to one ticker.
  */
-@Controller('market-data')
+@Controller("market-data")
 export class NewsController {
   private cache: { data: Record<string, unknown>[]; at: number } | null = null;
 
@@ -31,15 +31,19 @@ export class NewsController {
     private readonly firebase: FirebaseAdminService,
   ) {}
 
-  @Get('news')
-  @Header('Cache-Control', 'public, max-age=60, s-maxage=120, stale-while-revalidate=300')
+  @Get("news")
+  @Header(
+    "Cache-Control",
+    "public, max-age=60, s-maxage=120, stale-while-revalidate=300",
+  )
   async news(): Promise<Record<string, unknown>[]> {
-    if (this.cache && Date.now() - this.cache.at < NEWS_FEED_CACHE_MS) return this.cache.data;
+    if (this.cache && Date.now() - this.cache.at < NEWS_FEED_CACHE_MS)
+      return this.cache.data;
 
-    await this.marketData.ensureFresh('news', NEWS_STALE_MS);
+    await this.marketData.ensureFresh("news", NEWS_STALE_MS);
     const snap = await this.firebase.firestore
-      .collection('news')
-      .orderBy('publishedAt', 'desc')
+      .collection("news")
+      .orderBy("publishedAt", "desc")
       .limit(NEWS_FEED_LIMIT)
       .get();
     const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));

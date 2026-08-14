@@ -1,8 +1,8 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { Subject } from 'rxjs';
-import WebSocket from 'ws';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { Subject } from "rxjs";
+import WebSocket from "ws";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 
 /**
  * One upstream Polygon WebSocket, fanned out to many browser clients.
@@ -28,7 +28,7 @@ import { PolygonService } from '../vendors/polygon/polygon.service';
  * (min-instances >= 1). It is intended for local evaluation as it stands.
  */
 
-const DELAYED_WS_URL = 'wss://delayed.polygon.io/stocks';
+const DELAYED_WS_URL = "wss://delayed.polygon.io/stocks";
 /** Upstream reconnect backoff, capped so a long outage doesn't spin hot. */
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
@@ -45,7 +45,7 @@ const STALL_TIMEOUT_MS = 45_000;
 
 /** A per-second aggregate as Polygon sends it on the `A` channel. */
 interface PolygonAggMessage {
-  ev: 'A' | 'AM';
+  ev: "A" | "AM";
   sym: string;
   /** Tick volume for this window. */
   v: number;
@@ -117,7 +117,7 @@ export class PolygonLiveService implements OnModuleDestroy {
     private readonly config: ConfigService,
     private readonly polygon: PolygonService,
   ) {
-    this.apiKey = this.config.get('POLYGON_API_KEY', '');
+    this.apiKey = this.config.get("POLYGON_API_KEY", "");
   }
 
   /** Stream for one ticker, created on first use. */
@@ -172,7 +172,9 @@ export class PolygonLiveService implements OnModuleDestroy {
       this.tickSubjects.get(sym)?.complete();
       this.tickSubjects.delete(sym);
       if (this.authed && this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ action: 'unsubscribe', params: `A.${sym}` }));
+        this.ws.send(
+          JSON.stringify({ action: "unsubscribe", params: `A.${sym}` }),
+        );
       }
     } else {
       this.refCounts.set(sym, next);
@@ -181,7 +183,7 @@ export class PolygonLiveService implements OnModuleDestroy {
 
   private sendSubscribe(sym: string) {
     if (this.authed && this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ action: 'subscribe', params: `A.${sym}` }));
+      this.ws.send(JSON.stringify({ action: "subscribe", params: `A.${sym}` }));
     }
     // If not yet authed, onAuthSuccess replays every ref-counted ticker.
   }
@@ -190,11 +192,17 @@ export class PolygonLiveService implements OnModuleDestroy {
   private ensureConnected(): boolean {
     if (this.ws || this.closing) return true;
     if (!this.apiKey) {
-      this.status$.next({ connected: false, message: 'POLYGON_API_KEY not set' });
+      this.status$.next({
+        connected: false,
+        message: "POLYGON_API_KEY not set",
+      });
       return false;
     }
     if (this.fatal) {
-      this.status$.next({ connected: false, message: `not retrying: ${this.fatal}` });
+      this.status$.next({
+        connected: false,
+        message: `not retrying: ${this.fatal}`,
+      });
       return false;
     }
 
@@ -202,17 +210,19 @@ export class PolygonLiveService implements OnModuleDestroy {
     const ws = new WebSocket(DELAYED_WS_URL);
     this.ws = ws;
 
-    ws.on('open', () => {
+    ws.on("open", () => {
       this.lastInboundAt = Date.now();
       this.startHeartbeat(ws);
-      ws.send(JSON.stringify({ action: 'auth', params: this.apiKey }));
+      ws.send(JSON.stringify({ action: "auth", params: this.apiKey }));
     });
 
     // A pong is proof the far end is still reachable even when the market is
     // quiet and no ticks are flowing.
-    ws.on('pong', () => { this.lastInboundAt = Date.now(); });
+    ws.on("pong", () => {
+      this.lastInboundAt = Date.now();
+    });
 
-    ws.on('message', (raw: WebSocket.RawData) => {
+    ws.on("message", (raw: WebSocket.RawData) => {
       this.lastInboundAt = Date.now();
       let msgs: any[];
       try {
@@ -225,21 +235,24 @@ export class PolygonLiveService implements OnModuleDestroy {
       }
     });
 
-    ws.on('error', (err) => {
+    ws.on("error", (err) => {
       this.logger.error(`upstream socket error: ${err.message}`);
       this.status$.next({ connected: false, message: err.message });
     });
 
-    ws.on('close', (code, reason) => {
+    ws.on("close", (code, reason) => {
       this.authed = false;
       this.ws = null;
       this.stopHeartbeat();
       // Close code and reason were previously discarded, which is why the
       // one-socket-per-key thrash took an experiment to diagnose instead of
       // being readable in the log.
-      const why = `code ${code}${reason?.length ? ` (${reason.toString()})` : ''}`;
+      const why = `code ${code}${reason?.length ? ` (${reason.toString()})` : ""}`;
       this.logger.log(`upstream closed: ${why}`);
-      this.status$.next({ connected: false, message: `upstream closed: ${why}` });
+      this.status$.next({
+        connected: false,
+        message: `upstream closed: ${why}`,
+      });
       if (!this.closing && !this.fatal && this.refCounts.size > 0) {
         this.scheduleReconnect();
       }
@@ -254,7 +267,9 @@ export class PolygonLiveService implements OnModuleDestroy {
       if (ws.readyState !== WebSocket.OPEN) return;
       const idle = Date.now() - this.lastInboundAt;
       if (idle > STALL_TIMEOUT_MS) {
-        this.logger.warn(`no inbound data for ${Math.round(idle / 1000)}s — terminating half-open socket`);
+        this.logger.warn(
+          `no inbound data for ${Math.round(idle / 1000)}s — terminating half-open socket`,
+        );
         // terminate(), not close(): a half-open socket will never complete the
         // closing handshake, so close() would hang. terminate() destroys it
         // immediately and fires 'close', re-entering the reconnect path.
@@ -271,31 +286,41 @@ export class PolygonLiveService implements OnModuleDestroy {
   }
 
   private handleMessage(m: any) {
-    if (m.ev === 'status') {
-      if (m.status === 'auth_success') {
+    if (m.ev === "status") {
+      if (m.status === "auth_success") {
         this.authed = true;
         this.reconnectDelay = RECONNECT_BASE_MS;
-        this.status$.next({ connected: true, message: 'authenticated (delayed feed)' });
+        this.status$.next({
+          connected: true,
+          message: "authenticated (delayed feed)",
+        });
         // Replay subscriptions — covers both first connect and reconnect.
         for (const sym of this.refCounts.keys()) {
-          this.ws?.send(JSON.stringify({ action: 'subscribe', params: `A.${sym}` }));
+          this.ws?.send(
+            JSON.stringify({ action: "subscribe", params: `A.${sym}` }),
+          );
         }
-      } else if (m.status === 'auth_failed') {
+      } else if (m.status === "auth_failed") {
         // Terminal: a rejected key is not a transient outage. Retrying would
         // spin at the 30s backoff cap indefinitely while looking like a
         // network problem. Fail loudly and stop.
-        this.fatal = m.message ?? 'auth_failed';
-        this.logger.error(`AUTH FAILED — not retrying until restart: ${this.fatal}`);
-        this.status$.next({ connected: false, message: `auth failed: ${this.fatal}` });
+        this.fatal = m.message ?? "auth_failed";
+        this.logger.error(
+          `AUTH FAILED — not retrying until restart: ${this.fatal}`,
+        );
+        this.status$.next({
+          connected: false,
+          message: `auth failed: ${this.fatal}`,
+        });
         this.ws?.close();
-      } else if (m.status === 'error') {
+      } else if (m.status === "error") {
         this.logger.error(`upstream status error: ${m.message}`);
-        this.status$.next({ connected: false, message: m.message ?? 'error' });
+        this.status$.next({ connected: false, message: m.message ?? "error" });
       }
       return;
     }
 
-    if (m.ev === 'A' || m.ev === 'AM') {
+    if (m.ev === "A" || m.ev === "AM") {
       const a = m as PolygonAggMessage;
       const subject = this.tickSubjects.get(a.sym);
       if (!subject) return; // nobody is watching this symbol

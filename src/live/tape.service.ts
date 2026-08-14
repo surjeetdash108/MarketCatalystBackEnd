@@ -1,10 +1,15 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { createHash } from 'crypto';
-import { Observable, ReplaySubject } from 'rxjs';
-import { PolygonService } from '../vendors/polygon/polygon.service';
-import { MarketStatusService } from './market-status.service';
-import { snapshotSymbols, tapeUniverse, type TapeKind, type TapeSymbol } from './tape-universe';
+import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { createHash } from "crypto";
+import { Observable, ReplaySubject } from "rxjs";
+import { PolygonService } from "../vendors/polygon/polygon.service";
+import { MarketStatusService } from "./market-status.service";
+import {
+  snapshotSymbols,
+  tapeUniverse,
+  type TapeKind,
+  type TapeSymbol,
+} from "./tape-universe";
 
 /**
  * The header ticker tape: ONE vendor request per refresh, broadcast to every
@@ -49,7 +54,8 @@ const IDLE_REFRESH_MS = 15 * 60_000;
  */
 const TREASURY_TTL_MS = 6 * 60 * 60_000;
 
-const DELAY_NOTE = 'Underlying feed is ~15 minutes delayed on the current plan.';
+const DELAY_NOTE =
+  "Underlying feed is ~15 minutes delayed on the current plan.";
 
 /**
  * `catch (err)` binds `unknown`, and a thrown non-Error (a string, a rejected
@@ -59,13 +65,13 @@ const DELAY_NOTE = 'Underlying feed is ~15 minutes delayed on the current plan.'
  */
 function errMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
-  if (typeof err === 'string') return err;
+  if (typeof err === "string") return err;
   // String() on a plain object yields the literally useless "[object Object]";
   // serialising it at least preserves whatever the thrower put in there.
   try {
-    return JSON.stringify(err) ?? 'unknown error';
+    return JSON.stringify(err) ?? "unknown error";
   } catch {
-    return 'unknown error';
+    return "unknown error";
   }
 }
 
@@ -79,7 +85,7 @@ export interface TapeItem {
   isProxy: boolean;
   note: string | null;
   /** 'percent' on the rate tile only; absent on price-quoted tiles. */
-  unit?: 'percent';
+  unit?: "percent";
   value: number | null;
   /**
    * ABSOLUTE move for the rate tile (basis points), PERCENT move for every
@@ -100,7 +106,7 @@ export interface TapeFrame {
   /** When WE fetched, ISO. Not when the data is from — see vendorDelayNote. */
   asOf: string;
   vendorDelayNote: string;
-  marketPhase: 'open' | 'pre' | 'after' | 'closed' | 'unknown';
+  marketPhase: "open" | "pre" | "after" | "closed" | "unknown";
   /** True when the most recent refresh failed and these are the last good values. */
   stale: boolean;
 }
@@ -116,7 +122,7 @@ export class TapeService implements OnModuleDestroy {
   private readonly frames = new ReplaySubject<TapeFrame>(1);
   private lastFrame: TapeFrame | null = null;
   /** Hash of the last broadcast frame — suppresses no-op pushes. */
-  private lastHash = '';
+  private lastHash = "";
 
   private clients = 0;
   private timer: NodeJS.Timeout | null = null;
@@ -136,8 +142,8 @@ export class TapeService implements OnModuleDestroy {
     suppressedFrames: 0,
     clients: 0,
     lastRefreshMs: 0,
-    lastRefreshAt: '',
-    lastError: '',
+    lastRefreshAt: "",
+    lastError: "",
   };
 
   constructor(
@@ -145,7 +151,7 @@ export class TapeService implements OnModuleDestroy {
     private readonly marketStatus: MarketStatusService,
     config: ConfigService,
   ) {
-    this.universe = tapeUniverse(config.get<string>('TAPE_STOCKS'));
+    this.universe = tapeUniverse(config.get<string>("TAPE_STOCKS"));
     this.snapshotTickers = snapshotSymbols(this.universe);
   }
 
@@ -190,14 +196,16 @@ export class TapeService implements OnModuleDestroy {
    * enough, so a burst of JSON requests cannot become a burst of vendor calls.
    */
   async currentFrame(): Promise<TapeFrame> {
-    const age = this.lastFrame ? Date.now() - Date.parse(this.lastFrame.asOf) : Infinity;
+    const age = this.lastFrame
+      ? Date.now() - Date.parse(this.lastFrame.asOf)
+      : Infinity;
     if (!this.lastFrame || age > ACTIVE_REFRESH_MS) await this.refresh();
     return (
       this.lastFrame ?? {
         items: [],
         asOf: new Date().toISOString(),
         vendorDelayNote: DELAY_NOTE,
-        marketPhase: 'unknown',
+        marketPhase: "unknown",
         stale: true,
       }
     );
@@ -236,7 +244,7 @@ export class TapeService implements OnModuleDestroy {
       // non-stale frame already captured, prices cannot move — skip the vendor
       // entirely. The timer keeps ticking (15-min cadence) only to re-check
       // the phase, so the tape resumes by itself at the next session open.
-      if (phase === 'closed' && this.lastFrame && !this.lastFrame.stale) {
+      if (phase === "closed" && this.lastFrame && !this.lastFrame.stale) {
         if (this.clients > 0) this.ensureTimer(IDLE_REFRESH_MS);
         return;
       }
@@ -244,15 +252,21 @@ export class TapeService implements OnModuleDestroy {
       // One request for every equity on the tape — indices proxies and
       // mega-caps together. `ticker.any_of` is what makes this O(1) in the
       // number of symbols instead of one call each.
-      const rows = await this.polygon.getUniversalSnapshot(this.snapshotTickers);
+      const rows = await this.polygon.getUniversalSnapshot(
+        this.snapshotTickers,
+      );
       this.stats.upstreamCalls++;
       const bySymbol = new Map(rows.map((r) => [r.ticker, r]));
 
       const rate = await this.treasuryTile();
 
       const items: TapeItem[] = this.universe.map((s) => {
-        if (s.kind === 'rate') return rate(s);
+        if (s.kind === "rate") return rate(s);
         const r = s.proxyTicker ? bySymbol.get(s.proxyTicker) : undefined;
+        // Index-level fields scale by the proxy ETF's fixed share-to-index
+        // ratio (see TapeSymbol.multiplier's docblock); % change is
+        // scale-invariant and is left as the ETF's own move.
+        const mult = s.multiplier ?? 1;
         return {
           id: s.id,
           kind: s.kind,
@@ -261,21 +275,21 @@ export class TapeService implements OnModuleDestroy {
           proxyTicker: s.proxyTicker,
           isProxy: s.isProxy,
           note: s.note,
-          value: r?.price ?? null,
+          value: r?.price != null ? r.price * mult : null,
           // Price tiles render a PERCENT move, matching what the strip has
           // always shown and what mergePulse feeds the index drawer.
           change: r?.changePercent ?? null,
           pctChange: r?.changePercent ?? null,
-          open: r?.open ?? null,
-          dayHigh: r?.high ?? null,
-          dayLow: r?.low ?? null,
-          prevClose: r?.previousClose ?? null,
+          open: r?.open != null ? r.open * mult : null,
+          dayHigh: r?.high != null ? r.high * mult : null,
+          dayLow: r?.low != null ? r.low * mult : null,
+          prevClose: r?.previousClose != null ? r.previousClose * mult : null,
         };
       });
 
       this.stats.lastRefreshMs = Date.now() - started;
       this.stats.lastRefreshAt = new Date().toISOString();
-      this.stats.lastError = '';
+      this.stats.lastError = "";
       this.publish({
         items,
         asOf: new Date().toISOString(),
@@ -288,7 +302,9 @@ export class TapeService implements OnModuleDestroy {
       // separate schedule means the interval follows the vendor's own view of
       // the session, including early closes and halts.
       if (this.clients > 0) {
-        this.ensureTimer(phase === 'closed' ? IDLE_REFRESH_MS : ACTIVE_REFRESH_MS);
+        this.ensureTimer(
+          phase === "closed" ? IDLE_REFRESH_MS : ACTIVE_REFRESH_MS,
+        );
       }
     } catch (err) {
       // Stale beats blank. The previous values are far more useful than an
@@ -313,7 +329,7 @@ export class TapeService implements OnModuleDestroy {
     // asOf changes every refresh by construction, so it is excluded from the
     // hash — otherwise nothing would ever compare equal and the check would be
     // dead code that still costs a sha1 per refresh.
-    const hash = createHash('sha1')
+    const hash = createHash("sha1")
       .update(
         JSON.stringify({
           items: frame.items,
@@ -321,7 +337,7 @@ export class TapeService implements OnModuleDestroy {
           stale: frame.stale,
         }),
       )
-      .digest('hex');
+      .digest("hex");
     this.lastFrame = frame;
     if (hash === this.lastHash) {
       this.stats.suppressedFrames++;
@@ -332,12 +348,12 @@ export class TapeService implements OnModuleDestroy {
     this.frames.next(frame);
   }
 
-  private async phase(): Promise<TapeFrame['marketPhase']> {
+  private async phase(): Promise<TapeFrame["marketPhase"]> {
     try {
       return (await this.marketStatus.get()).phase;
     } catch {
       // A market-status outage must not take the price tape down with it.
-      return 'unknown';
+      return "unknown";
     }
   }
 
@@ -374,7 +390,9 @@ export class TapeService implements OnModuleDestroy {
       const value = t?.value ?? null;
       const prev = t?.prevValue ?? null;
       const change =
-        value == null || prev == null ? null : Math.round((value - prev) * 1000) / 1000;
+        value == null || prev == null
+          ? null
+          : Math.round((value - prev) * 1000) / 1000;
       return {
         id: s.id,
         kind: s.kind,
@@ -383,7 +401,7 @@ export class TapeService implements OnModuleDestroy {
         proxyTicker: null,
         isProxy: false,
         note: s.note,
-        unit: 'percent',
+        unit: "percent",
         value,
         change,
         pctChange:
@@ -400,7 +418,10 @@ export class TapeService implements OnModuleDestroy {
 
   /** Weak ETag over a frame, for the plain-JSON endpoint. */
   etagFor(frame: TapeFrame): string {
-    const h = createHash('sha1').update(JSON.stringify(frame.items)).digest('hex').slice(0, 16);
+    const h = createHash("sha1")
+      .update(JSON.stringify(frame.items))
+      .digest("hex")
+      .slice(0, 16);
     return `W/"${h}"`;
   }
 }

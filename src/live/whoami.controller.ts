@@ -1,5 +1,5 @@
-import { Controller, Get, Header, Req } from '@nestjs/common';
-import type { Request } from 'express';
+import { Controller, Get, Header, Req } from "@nestjs/common";
+import type { Request } from "express";
 
 /**
  * GET /live/whoami  →  { ip }
@@ -12,16 +12,16 @@ import type { Request } from 'express';
  * Behind Cloud Run the real client IP is the FIRST entry of X-Forwarded-For
  * (Cloud Run appends the caller, then the LB); fall back to the socket address.
  */
-@Controller('live')
+@Controller("live")
 export class WhoamiController {
-  @Get('whoami')
-  @Header('Cache-Control', 'no-store')
+  @Get("whoami")
+  @Header("Cache-Control", "no-store")
   whoami(@Req() req: Request): { ip: string | null } {
-    const xff = req.headers['x-forwarded-for'];
+    const xff = req.headers["x-forwarded-for"];
     const fromXff = Array.isArray(xff)
       ? xff[0]
-      : (xff ?? '').split(',')[0].trim();
-    const ip = fromXff || req.ip || req.socket?.remoteAddress || '';
+      : (xff ?? "").split(",")[0].trim();
+    const ip = fromXff || req.ip || req.socket?.remoteAddress || "";
     return { ip: ip || null };
   }
 }

@@ -1,13 +1,16 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { batchSetWithCreatedAt, type PendingWrite } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { activeUniverse } from '../common/ticker-universe';
-import { MARKET_BARS_ADAPTER, type MarketBarsAdapter } from '../adapters/types';
-import { SyncRegistry } from '../common/sync-registry.service';
-import { planHistoryFloor } from '../vendors/polygon/polygon.service';
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import {
+  batchSetWithCreatedAt,
+  type PendingWrite,
+} from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { activeUniverse } from "../common/ticker-universe";
+import { MARKET_BARS_ADAPTER, type MarketBarsAdapter } from "../adapters/types";
+import { SyncRegistry } from "../common/sync-registry.service";
+import { planHistoryFloor } from "../vendors/polygon/polygon.service";
 
-const JOB_NAME = 'stock-history';
+const JOB_NAME = "stock-history";
 const BATCH_SIZE = 60;
 
 /**
@@ -47,9 +50,9 @@ export class StockHistoryJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['ohlcv_bars'],
-      cronExpression: '0 3 * * *',
-      timeZone: 'America/New_York',
+      collections: ["ohlcv_bars"],
+      cronExpression: "0 3 * * *",
+      timeZone: "America/New_York",
     });
   }
 
@@ -62,12 +65,20 @@ export class StockHistoryJob implements OnModuleInit {
       const universe = await activeUniverse(this.firebase.firestore);
       if (universe.length === 0) {
         await this.meta.record(JOB_NAME, { ok: true, count: 0 });
-        return { count: 0, note: 'no active tickers yet' };
+        return { count: 0, note: "no active tickers yet" };
       }
       // Batch never larger than the active universe, so a small
       // universe is fully covered in one premarket run.
       const cursor = await this.meta.getCursor(JOB_NAME);
-      const batch = Array.from({ length: Math.min(BATCH_SIZE, universe.length) }, (_, i) => universe[(cursor + i) % universe.length]);
+      const rotating = Array.from(
+        { length: Math.min(BATCH_SIZE, universe.length) },
+        (_, i) => universe[(cursor + i) % universe.length],
+      );
+      // Always sync SPY: it's the benchmark the technical-indicators job needs to
+      // compute beta (loadMarketCloses reads SPY from ohlcv_bars). SPY is an ETF,
+      // not in the company universe, so it would otherwise never get bars and beta
+      // would stay null for every ticker.
+      const batch = rotating.includes("SPY") ? rotating : ["SPY", ...rotating];
       const today = isoDate(new Date());
       const floor = planHistoryFloor();
       let barsWritten = 0;
@@ -127,12 +138,19 @@ export class StockHistoryJob implements OnModuleInit {
           const bars = [...byDate.values()].sort((a, b) =>
             a.date < b.date ? -1 : 1,
           );
-          if (needsDeepFill) {
+          // Only record the deep-fill as done when it actually returned bars.
+          // Marking it on an empty/failed fetch (the previous behaviour) stranded
+          // the ticker forever: it would never re-attempt the deep window and
+          // would only ever accrue the ~daily forward increment, so it never
+          // reached the ≥65 bars rs-rating needs — leaving most companies
+          // unranked. On an empty fetch we leave it un-marked so a later run
+          // retries the deep window.
+          if (needsDeepFill && bars.length > 0) {
             await this.meta.setEarliestSynced(JOB_NAME, ticker, floor);
           }
           if (bars.length > 0) {
             const writes: PendingWrite[] = [];
-            const col = this.firebase.firestore.collection('ohlcv_bars');
+            const col = this.firebase.firestore.collection("ohlcv_bars");
             let lastDate = watermark;
             for (const bar of bars) {
               const barDate = bar.date;
@@ -141,7 +159,7 @@ export class StockHistoryJob implements OnModuleInit {
                 data: {
                   ticker,
                   barDate,
-                  timespan: 'day',
+                  timespan: "day",
                   open: bar.open,
                   high: bar.high,
                   low: bar.low,
@@ -159,8 +177,7 @@ export class StockHistoryJob implements OnModuleInit {
                 // consistent rather than blending old and new adjustments.
                 merge: false,
               });
-              if (!lastDate || barDate > lastDate)
-                lastDate = barDate;
+              if (!lastDate || barDate > lastDate) lastDate = barDate;
             }
             await batchSetWithCreatedAt(this.firebase.firestore, writes);
             if (lastDate)
@@ -169,11 +186,16 @@ export class StockHistoryJob implements OnModuleInit {
             tickersUpdated++;
           }
         } catch (err) {
-          this.logger.error(`Failed syncing history for ${ticker}: ${err.message}`);
+          this.logger.error(
+            `Failed syncing history for ${ticker}: ${err.message}`,
+          );
         }
         await sleep(this.bars.requestDelayMs);
       }
-      await this.meta.setCursor(JOB_NAME, (cursor + BATCH_SIZE) % universe.length);
+      await this.meta.setCursor(
+        JOB_NAME,
+        (cursor + BATCH_SIZE) % universe.length,
+      );
       await this.meta.record(JOB_NAME, { ok: true, count: barsWritten });
       return { barsWritten, tickersUpdated };
     } catch (err) {

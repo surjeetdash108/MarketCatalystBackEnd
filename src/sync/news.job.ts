@@ -1,15 +1,22 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { AllSourcesFailedError } from '../adapters/adapter-error';
-import { NEWS_ADAPTER, type NewsAdapter } from '../adapters/types';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { batchSetWithCreatedAt, chunkedBatchSet, type PendingWrite } from '../common/firestore-batch.util';
-import { scoreImportance } from '../common/news-importance.util';
-import { NotificationsService, type NotificationInput } from '../common/notifications.service';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { TICKER_UNIVERSE } from '../common/ticker-universe';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { AllSourcesFailedError } from "../adapters/adapter-error";
+import { NEWS_ADAPTER, type NewsAdapter } from "../adapters/types";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import {
+  batchSetWithCreatedAt,
+  chunkedBatchSet,
+  type PendingWrite,
+} from "../common/firestore-batch.util";
+import { scoreImportance } from "../common/news-importance.util";
+import {
+  NotificationsService,
+  type NotificationInput,
+} from "../common/notifications.service";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { TICKER_UNIVERSE } from "../common/ticker-universe";
+import { SyncRegistry } from "../common/sync-registry.service";
 
-const JOB_NAME = 'news';
+const JOB_NAME = "news";
 const BATCH_SIZE = 80;
 const LOOKBACK_DAYS = 2;
 const DELAY_MS = 150;
@@ -33,9 +40,9 @@ export class NewsJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['news'],
-      cronExpression: '*/30 9-16 * * 1-5',
-      timeZone: 'America/New_York',
+      collections: ["news"],
+      cronExpression: "*/30 9-16 * * 1-5",
+      timeZone: "America/New_York",
     });
   }
 
@@ -75,16 +82,21 @@ export class NewsJob implements OnModuleInit {
    * cheaper than every browser pulling the whole collection.
    */
   private async writeNewsCounts(tickers: string[]): Promise<number> {
-    const col = this.firebase.firestore.collection('news');
+    const col = this.firebase.firestore.collection("news");
     const now = new Date().toISOString();
 
     const writes: PendingWrite[] = [];
     for (const ticker of tickers) {
       try {
-        const agg = await col.where('ticker', '==', ticker).count().get();
+        const agg = await col.where("ticker", "==", ticker).count().get();
         writes.push({
-          ref: this.firebase.firestore.collection('companies').doc(ticker),
-          data: { newsCount: agg.data().count, newsCountAt: now },
+          ref: this.firebase.firestore.collection("companies").doc(ticker),
+          // `ticker` included even though the doc ID already is one: this
+          // merge-write can be the FIRST write for a ticker outside the
+          // primary sync universe, and a doc missing `ticker` crashes any
+          // frontend code that assumes the field (CompanyDoc types it
+          // non-nullable) — e.g. the ticker-search dropdown, 2026-08-01.
+          data: { ticker, newsCount: agg.data().count, newsCountAt: now },
         });
       } catch (err) {
         // A transient failure must not fail the news sync itself — the articles
@@ -103,7 +115,10 @@ export class NewsJob implements OnModuleInit {
   async run() {
     try {
       const cursor = await this.meta.getCursor(JOB_NAME);
-      const batch = Array.from({ length: BATCH_SIZE }, (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length]);
+      const batch = Array.from(
+        { length: BATCH_SIZE },
+        (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
+      );
       const to = new Date();
       const from = new Date();
       from.setUTCDate(from.getUTCDate() - LOOKBACK_DAYS);
@@ -113,8 +128,12 @@ export class NewsJob implements OnModuleInit {
       const important = new Map<string, NotificationInput>();
       for (const symbol of batch) {
         try {
-          const result = await this.news.fetchNews(symbol, isoDate(from), isoDate(to));
-          if (result.warnings.some((w) => w.code === 'FALLBACK_USED')) {
+          const result = await this.news.fetchNews(
+            symbol,
+            isoDate(from),
+            isoDate(to),
+          );
+          if (result.warnings.some((w) => w.code === "FALLBACK_USED")) {
             fallbackCount++;
           }
           for (const a of result.data.slice(0, 5)) {
@@ -136,7 +155,7 @@ export class NewsJob implements OnModuleInit {
               } else {
                 important.set(a.id, {
                   id: a.id,
-                  type: 'news',
+                  type: "news",
                   header: a.headline,
                   detail: a.summary,
                   imageUrl: a.imageUrl,
@@ -144,6 +163,7 @@ export class NewsJob implements OnModuleInit {
                   source: a.source,
                   url: a.url,
                   publishedAt: a.publishedAt,
+                  direction: verdict.direction,
                   reasons: verdict.reasons,
                 });
               }
@@ -168,14 +188,18 @@ export class NewsJob implements OnModuleInit {
           }
         } catch (err) {
           if (err instanceof AllSourcesFailedError) {
-            this.logger.error(`${symbol}: every configured news source failed — ${err.attempts.map((a) => `${a.source}: ${a.error}`).join(' | ')}`);
+            this.logger.error(
+              `${symbol}: every configured news source failed — ${err.attempts.map((a) => `${a.source}: ${a.error}`).join(" | ")}`,
+            );
           } else {
-            this.logger.error(`Failed fetching news for ${symbol}: ${err.message}`);
+            this.logger.error(
+              `Failed fetching news for ${symbol}: ${err.message}`,
+            );
           }
         }
         await sleep(DELAY_MS);
       }
-      await chunkedBatchSet(this.firebase.firestore, 'news', docs);
+      await chunkedBatchSet(this.firebase.firestore, "news", docs);
       const counted = await this.writeNewsCounts(batch);
       // Only stories matching some user's watchlist/portfolio are stored; the
       // article itself already lives in `news`, so nothing is lost by skipping
@@ -184,18 +208,21 @@ export class NewsJob implements OnModuleInit {
       await this.notifications.prune();
       this.logger.log(
         `${important.size}/${docs.length} articles important; ` +
-        `${pub.written} notification(s) to ${pub.recipients} user(s); ` +
-        `${pub.skipped} matched no subscriber; ` +
-        `newsCount refreshed for ${counted} ticker(s)`,
+          `${pub.written} notification(s) to ${pub.recipients} user(s); ` +
+          `${pub.skipped} matched no subscriber; ` +
+          `newsCount refreshed for ${counted} ticker(s)`,
       );
-      await this.meta.setCursor(JOB_NAME, (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length);
+      await this.meta.setCursor(
+        JOB_NAME,
+        (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length,
+      );
       await this.meta.record(JOB_NAME, {
         ok: true,
         count: docs.length,
         ...(fallbackCount > 0
           ? {
-            error: `${fallbackCount}/${batch.length} tickers served by fallback news source`,
-          }
+              error: `${fallbackCount}/${batch.length} tickers served by fallback news source`,
+            }
           : {}),
       });
       return { count: docs.length, fallbackCount };

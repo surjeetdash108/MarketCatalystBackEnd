@@ -1,19 +1,23 @@
-import { Module } from '@nestjs/common';
-import { LiveModule } from '../live/live.module';
-import { AnalystActionsController } from './analyst-actions.controller';
-import { CompaniesController } from './companies.controller';
-import { DividendsController } from './dividends.controller';
-import { EarningsController } from './earnings.controller';
-import { InsiderPositionsController } from './insider-positions.controller';
-import { InsiderTransactionsController } from './insider-transactions.controller';
-import { IposController } from './ipos.controller';
-import { MacroEventsController } from './macro-events.controller';
-import { MarketDataService } from './market-data.service';
-import { MarketMoversController } from './market-movers.controller';
-import { MarketSentimentController } from './market-sentiment.controller';
-import { NewsController } from './news.controller';
-import { RecapsController } from './recaps.controller';
-import { SectorsController } from './sectors.controller';
+import { Module } from "@nestjs/common";
+import { LiveModule } from "../live/live.module";
+import { AnalystActionsController } from "./analyst-actions.controller";
+import { CompaniesController } from "./companies.controller";
+import { DividendsController } from "./dividends.controller";
+import { EarningsController } from "./earnings.controller";
+import { EarningsAnnouncementsController } from "./earnings-announcements.controller";
+import { FilingsWireController } from "./filings-wire.controller";
+import { IpoPipelineController } from "./ipo-pipeline.controller";
+import { MacroRegimeController } from "./macro-regime.controller";
+import { InsiderPositionsController } from "./insider-positions.controller";
+import { InsiderTransactionsController } from "./insider-transactions.controller";
+import { IposController } from "./ipos.controller";
+import { MacroEventsController } from "./macro-events.controller";
+import { MarketDataService } from "./market-data.service";
+import { MarketMoversController } from "./market-movers.controller";
+import { MarketSentimentController } from "./market-sentiment.controller";
+import { NewsController } from "./news.controller";
+import { RecapsController } from "./recaps.controller";
+import { SectorsController } from "./sectors.controller";
 
 /**
  * Screen-facing read module for market-wide (non-user-owned) data — Movers,
@@ -39,6 +43,10 @@ import { SectorsController } from './sectors.controller';
     CompaniesController,
     AnalystActionsController,
     EarningsController,
+    EarningsAnnouncementsController,
+    FilingsWireController,
+    IpoPipelineController,
+    MacroRegimeController,
     IposController,
     MacroEventsController,
     DividendsController,

@@ -90,7 +90,7 @@ low-risk: an index that matches no documents cannot be load-bearing.
 Never bake keys into the image. Create a secret per key (values from your `.env`):
 
 ```bash
-for K in POLYGON_API_KEY FMP_API_KEY FINNHUB_API_KEY FRED_API_KEY \
+for K in POLYGON_API_KEY FINNHUB_API_KEY FRED_API_KEY \
          BENZINGA_API_KEY TRADIER_ACCESS_TOKEN UNUSUAL_WHALES_API_KEY SENTRY_DSN; do
   printf "%s" "PASTE_${K}_VALUE" | gcloud secrets create "$K" --data-file=- 2>/dev/null \
     || printf "%s" "PASTE_${K}_VALUE" | gcloud secrets versions add "$K" --data-file=-
@@ -151,7 +151,7 @@ gcloud run deploy market-catalyst-backend \
   --memory=512Mi \
   --timeout=900 \
   --env-vars-file="$ENV_FILE" \
-  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FMP_API_KEY=FMP_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
+  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
 ```
 
 > ⚠ **`POLYGON_PAGE_DELAY_MS=0` is required, not optional.** It lives in
@@ -183,10 +183,19 @@ gcloud run deploy market-catalyst-live \
   --concurrency=200 \
   --memory=1Gi \
   --timeout=3600 \
-  --set-env-vars="APP_ROLE=live,NODE_ENV=production,FIREBASE_PROJECT_ID=market-catalyst-502415,POLYGON_API_BASE_URL=https://api.massive.com,CORS_ORIGINS=https://marketcatalyst.web.app" \
+  --set-env-vars="APP_ROLE=live,NODE_ENV=production,FIREBASE_PROJECT_ID=market-catalyst-502415,POLYGON_API_BASE_URL=https://api.massive.com,CORS_ORIGINS=https://marketcatalyst.web.app,POLYGON_PAGE_DELAY_MS=0,ADMIN_GUARD_TRUST_IAM=false" \
   --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest"
 ```
 
+> ⚠ **`ADMIN_GUARD_TRUST_IAM=false` is REQUIRED here — omitting it is a data
+> leak.** Admin read-models are mounted on the live role (commit b73851a), and
+> `admin.guard.ts` defaults `ADMIN_GUARD_TRUST_IAM` to `true` ("trust that Cloud
+> Run IAM already vetted the caller"). This service is `--allow-unauthenticated`
+> — there is no IAM in front — so with the default, every `/admin/*` call is
+> served to ANYONE (revenue, user counts, subscriptions). `false` forces a
+> verified Firebase admin token instead. It is NOT in the current service env by
+> default; verify with the `/admin/revenue -> 401` check below after every deploy.
+>
 > ⚠ **`--set-env-vars`, NOT `--env-vars-file`.** `deploy/env.production.yaml` is
 > the *worker's* env and carries `APP_ROLE=worker` plus
 > `ADMIN_GUARD_TRUST_IAM=true`. Pointing the public service at it would both
@@ -194,6 +203,17 @@ gcloud run deploy market-catalyst-live \
 > `--allow-unauthenticated` service — the exact combination that grants
 > anonymous `/purge`. The list above is short precisely because the live role
 > needs almost nothing.
+>
+> ⚠ **`POLYGON_PAGE_DELAY_MS=0` is required here too, not just on the worker.**
+> `TickerSearchService` (backing `GET /live/search`, the app's ticker-search box
+> everywhere it appears) calls `PolygonService.getAllTickers()` on this service
+> to lazily load the ~10k-ticker universe on first search per instance. Omitting
+> this var — as an earlier version of this command did — leaves it on the code
+> default of 12,500ms **per page**; at ~10-11 pages for the full universe that's
+> 2+ minutes of silent hang on every cold start (this service runs
+> `--min-instances=0`, so that's not rare). Confirmed and fixed in production
+> 2026-07-31: search went from >120s to ~2s once this var was added via
+> `gcloud run services update market-catalyst-live --update-env-vars=POLYGON_PAGE_DELAY_MS=0`.
 
 Three of these settings are load-bearing; the defaults silently break SSE:
 
@@ -215,7 +235,7 @@ the process and starts on the first viewer. Do not add one to
 `create-scheduler-jobs.sh`.
 
 **Frontend wiring — no per-deploy URL step.** The UI resolves its backend base
-URL at runtime (`app/iq/backend.ts`): `localhost:4100` in dev, **same-origin**
+URL at runtime (`app/iq/backend.ts`): `localhost:4400` in dev, **same-origin**
 when deployed. `firebase.json` rewrites `/api/**`, `/market-data/**` and
 `/live/**` to this `market-catalyst-live` service, so nothing hardcodes the
 Cloud Run URL. Requirements: the UI's Hosting site and this service live in the
@@ -234,7 +254,7 @@ Verify after deploying:
 ```bash
 LIVE=$(gcloud run services describe market-catalyst-live --region "$REGION" --format='value(status.url)')
 curl -s "$LIVE/live/tape" | jq '.items | length'      # -> 21
-curl -s -o /dev/null -w '%{http_code}\n' "$LIVE/admin/revenue"   # -> 404, NOT 200
+curl -s -o /dev/null -w '%{http_code}\n' "$LIVE/admin/revenue"   # -> 401 (admin IS mounted on live since b73851a, but guard-protected); NEVER 200-with-data
 curl -s "$LIVE/live/tape/stats"   # upstreamCalls must stay ~1/min as clients grows
 ```
 
@@ -311,7 +331,7 @@ UI making **zero** vendor/API calls.
 ```bash
 cp .env.example .env      # fill in real keys + keep service-account.json for local ADC
 npm install
-npm run start:dev         # http://localhost:4100  (monitor at /, ops API at /sync/*)
+npm run start:dev         # http://localhost:4400  (monitor at /, ops API at /sync/*)
 ```
 
 ## Cost / ops notes

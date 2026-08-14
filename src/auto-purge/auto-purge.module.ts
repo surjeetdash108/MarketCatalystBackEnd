@@ -1,6 +1,6 @@
-import { Module } from '@nestjs/common';
-import { CommonModule } from '../common/common.module';
-import { AutoPurgeJob } from './auto-purge.job';
+import { Module } from "@nestjs/common";
+import { CommonModule } from "../common/common.module";
+import { AutoPurgeJob } from "./auto-purge.job";
 
 /**
  * Imports CommonModule for the shared SyncRegistry singleton — that is what

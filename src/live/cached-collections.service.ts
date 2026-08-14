@@ -1,6 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { createHash } from 'crypto';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
+import { Injectable, Logger } from "@nestjs/common";
+import { createHash } from "crypto";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
 
 /**
  * Server-side cache of the SHARED, slow-changing Firestore collections that the
@@ -21,24 +21,28 @@ import { FirebaseAdminService } from '../common/firebase-admin.provider';
  */
 
 const ALLOWED = new Set<string>([
-  'companies',
-  'market_indices',
-  'market_indices_history',
-  'market_movers',
-  'market_movers_history',
-  'sectors',
-  'sectors_history',
-  'market_breadth',
-  'market_sentiment',
-  'market_sentiment_history',
-  'earnings_events',
-  'analyst_actions',
-  'ipos',
-  'macro_events',
-  'recaps',
-  'insider_transactions',
-  'dividends',
-  'fund_holdings',
+  "companies",
+  "market_indices",
+  "market_indices_history",
+  "market_movers",
+  "market_movers_history",
+  "sectors",
+  "sectors_history",
+  "market_breadth",
+  "market_sentiment",
+  "market_sentiment_history",
+  "earnings_events",
+  "analyst_actions",
+  "ipos",
+  "macro_events",
+  "recaps",
+  "insider_transactions",
+  "dividends",
+  "fund_holdings",
+  "filings_wire",
+  "earnings_announcements",
+  "ipo_pipeline",
+  "macro_regime",
 ]);
 
 const TTL_MS = 5 * 60 * 1000; // 5 minutes — these collections change daily
@@ -72,7 +76,9 @@ export class CachedCollectionsService {
         } catch (err) {
           // Serve stale on error if we have it; else an empty array (the client
           // falls back to its own direct Firestore read).
-          this.logger.warn(`cached-collections read failed for ${name}: ${(err as Error).message}`);
+          this.logger.warn(
+            `cached-collections read failed for ${name}: ${(err as Error).message}`,
+          );
           out[name] = hit?.data ?? [];
         }
       }),
@@ -81,6 +87,13 @@ export class CachedCollectionsService {
   }
 
   etagFor(obj: unknown): string {
-    return 'W/"' + createHash('sha1').update(JSON.stringify(obj)).digest('hex').slice(0, 20) + '"';
+    return (
+      'W/"' +
+      createHash("sha1")
+        .update(JSON.stringify(obj))
+        .digest("hex")
+        .slice(0, 20) +
+      '"'
+    );
   }
 }

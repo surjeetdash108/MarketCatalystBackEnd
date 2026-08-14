@@ -27,7 +27,7 @@ export interface CanonicalMoverBase {
   asOfDate: string;
 }
 
-export type CapBucket = 'Mega' | 'Large' | 'Mid' | 'Small' | 'Micro';
+export type CapBucket = "Mega" | "Large" | "Mid" | "Small" | "Micro";
 
 export interface MoverEnrichment {
   name: string | null;
@@ -43,7 +43,7 @@ export interface CanonicalNewsArticle {
   source: string;
   url: string;
   category: string | null;
-  sentiment: 'positive' | 'negative' | 'neutral' | null;
+  sentiment: "positive" | "negative" | "neutral" | null;
   sentimentReasoning: string | null;
   keywords: string[];
   publishedAt: string;
@@ -52,7 +52,7 @@ export interface CanonicalNewsArticle {
 }
 
 export interface CanonicalDividendEvent {
-  /** Vendor's stable per-event id; null when the vendor supplies none (FMP). */
+  /** Vendor's stable per-event id; null when the vendor supplies none. */
   vendorEventId?: string | null;
   /** e.g. 'CD' regular cash, 'SC' special cash. Distinguishes same-day events. */
   dividendType?: string | null;
@@ -86,7 +86,7 @@ export interface CanonicalSectorPerformance {
   averageChange: number;
 }
 
-/** Finnhub's quote shape, which Polygon's getDailyQuote already conforms to. */
+/** Canonical quote shape, which Polygon's getDailyQuote conforms to. */
 export interface CanonicalQuote {
   c: number;
   d: number;
@@ -135,7 +135,12 @@ export interface CanonicalIncomeStatement {
 }
 
 export interface AdapterWarning {
-  code: 'SUB_REQUEST_FAILED' | 'FIELD_NOT_SUPPORTED' | 'FALLBACK_USED' | 'STALE_DATA';
+  code:
+    | "SUB_REQUEST_FAILED"
+    | "FIELD_NOT_SUPPORTED"
+    | "FALLBACK_USED"
+    | "STALE_DATA"
+    | "DATA_QUARANTINED";
   message: string;
   field?: string;
 }
@@ -186,12 +191,17 @@ export interface DividendsAdapter {
 
 export interface IposAdapter {
   readonly sourceName: string;
-  fetchIpos(from: string, to: string): Promise<AdapterResult<CanonicalIpoEvent[]>>;
+  fetchIpos(
+    from: string,
+    to: string,
+  ): Promise<AdapterResult<CanonicalIpoEvent[]>>;
 }
 
 export interface SectorsAdapter {
   readonly sourceName: string;
-  fetchSectorPerformance(): Promise<AdapterResult<CanonicalSectorPerformance[]>>;
+  fetchSectorPerformance(): Promise<
+    AdapterResult<CanonicalSectorPerformance[]>
+  >;
 }
 
 export interface QuoteAdapter {
@@ -233,23 +243,29 @@ export interface FinancialsAdapter {
   ): Promise<AdapterResult<CanonicalIncomeStatement[]>>;
 }
 
-export const COMPANY_PROFILE_ADAPTER: unique symbol = Symbol('COMPANY_PROFILE_ADAPTER');
-export const MOVERS_ADAPTER: unique symbol = Symbol('MOVERS_ADAPTER');
-export const MOVER_ENRICHMENT_ADAPTER: unique symbol = Symbol('MOVER_ENRICHMENT_ADAPTER');
-export const NEWS_ADAPTER: unique symbol = Symbol('NEWS_ADAPTER');
-export const DIVIDENDS_ADAPTER: unique symbol = Symbol('DIVIDENDS_ADAPTER');
-export const IPOS_ADAPTER: unique symbol = Symbol('IPOS_ADAPTER');
-export const SECTORS_ADAPTER: unique symbol = Symbol('SECTORS_ADAPTER');
-export const QUOTE_ADAPTER: unique symbol = Symbol('QUOTE_ADAPTER');
-export const MARKET_BARS_ADAPTER: unique symbol = Symbol('MARKET_BARS_ADAPTER');
-export const TICKER_UNIVERSE_ADAPTER: unique symbol = Symbol('TICKER_UNIVERSE_ADAPTER');
-export const FINANCIALS_ADAPTER: unique symbol = Symbol('FINANCIALS_ADAPTER');
+export const COMPANY_PROFILE_ADAPTER: unique symbol = Symbol(
+  "COMPANY_PROFILE_ADAPTER",
+);
+export const MOVERS_ADAPTER: unique symbol = Symbol("MOVERS_ADAPTER");
+export const MOVER_ENRICHMENT_ADAPTER: unique symbol = Symbol(
+  "MOVER_ENRICHMENT_ADAPTER",
+);
+export const NEWS_ADAPTER: unique symbol = Symbol("NEWS_ADAPTER");
+export const DIVIDENDS_ADAPTER: unique symbol = Symbol("DIVIDENDS_ADAPTER");
+export const IPOS_ADAPTER: unique symbol = Symbol("IPOS_ADAPTER");
+export const SECTORS_ADAPTER: unique symbol = Symbol("SECTORS_ADAPTER");
+export const QUOTE_ADAPTER: unique symbol = Symbol("QUOTE_ADAPTER");
+export const MARKET_BARS_ADAPTER: unique symbol = Symbol("MARKET_BARS_ADAPTER");
+export const TICKER_UNIVERSE_ADAPTER: unique symbol = Symbol(
+  "TICKER_UNIVERSE_ADAPTER",
+);
+export const FINANCIALS_ADAPTER: unique symbol = Symbol("FINANCIALS_ADAPTER");
 
 export function capBucket(marketCap: number | null): CapBucket | null {
   if (marketCap == null) return null;
-  if (marketCap >= 200e9) return 'Mega';
-  if (marketCap >= 10e9) return 'Large';
-  if (marketCap >= 2e9) return 'Mid';
-  if (marketCap >= 300e6) return 'Small';
-  return 'Micro';
+  if (marketCap >= 200e9) return "Mega";
+  if (marketCap >= 10e9) return "Large";
+  if (marketCap >= 2e9) return "Mid";
+  if (marketCap >= 300e6) return "Small";
+  return "Micro";
 }

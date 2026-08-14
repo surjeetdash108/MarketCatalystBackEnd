@@ -1,5 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { Injectable, Logger } from "@nestjs/common";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 
 /**
  * Exchange session state from the vendor, cached.
@@ -26,7 +26,7 @@ export interface MarketStatusPayload {
   exchanges: Record<string, string>;
   serverTime: string;
   /** Normalized phase matching the UI's own vocabulary. */
-  phase: 'open' | 'pre' | 'after' | 'closed';
+  phase: "open" | "pre" | "after" | "closed";
   label: string;
   upcoming: Array<{
     date: string;
@@ -44,7 +44,10 @@ export class MarketStatusService {
   private readonly logger = new Logger(MarketStatusService.name);
 
   private status: { data: any; at: number } | null = null;
-  private holidays: { data: MarketStatusPayload['upcoming']; at: number } | null = null;
+  private holidays: {
+    data: MarketStatusPayload["upcoming"];
+    at: number;
+  } | null = null;
   /** Last good payload, served if the vendor is briefly unreachable. */
   private lastGood: MarketStatusPayload | null = null;
 
@@ -59,11 +62,11 @@ export class MarketStatusService {
     market: string;
     earlyHours: boolean;
     afterHours: boolean;
-  }): { phase: MarketStatusPayload['phase']; label: string } {
-    if (s.market === 'open') return { phase: 'open', label: 'Markets Open' };
-    if (s.earlyHours) return { phase: 'pre', label: 'Pre-Market' };
-    if (s.afterHours) return { phase: 'after', label: 'After Hours' };
-    return { phase: 'closed', label: 'Markets Closed' };
+  }): { phase: MarketStatusPayload["phase"]; label: string } {
+    if (s.market === "open") return { phase: "open", label: "Markets Open" };
+    if (s.earlyHours) return { phase: "pre", label: "Pre-Market" };
+    if (s.afterHours) return { phase: "after", label: "After Hours" };
+    return { phase: "closed", label: "Markets Closed" };
   }
 
   async get(): Promise<MarketStatusPayload> {

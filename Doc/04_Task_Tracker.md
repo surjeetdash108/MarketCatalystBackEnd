@@ -1,5 +1,77 @@
 # MarketCatalyst — Task Tracker
 
+> ## ⏱ State sync — 2026-07-27 · TWO ENVIRONMENTS (stage + prod), env-driven config
+>
+> _This block is newest and authoritative where it differs from the blocks
+> below. It introduces a second, fully-isolated environment; nothing about the
+> per-environment runtime topology (§6, the on-demand data layer, the CDN
+> rewrite) changes — that topology now simply exists twice, once per project._
+>
+> **This doc, specifically:** Add an open task — wire stage's Firebase Hosting
+> rewrites (`/api`, `/market-data`, `/live` → the stage `market-catalyst-live`
+> service) once stage billing is linked; every other tracked task is unchanged.
+>
+> **Two isolated Firebase projects = two environments.** Production stays on
+> `market-catalyst-502415`. A new **stage** project `market-catalyst-stage`
+> (project #523639228835) was created as an independent copy: its own Firestore
+> `(default)` in **nam5 / STANDARD / NATIVE** (identical region/edition to prod),
+> the **same `firestore.rules` + `firestore.indexes.json`** deployed to it, its
+> own Auth, and its own `backend-runtime@…` service account (roles
+> `datastore.user` + `secretmanager.secretAccessor`, mirroring prod — keyless,
+> the backend authenticates via ADC). Nothing is shared between the two: a
+> destructive sync, a rules change, or a test signup on stage can never touch
+> prod data or users.
+>
+> **Branch ⇄ environment.** Both repos work on the **`stage`** branch for
+> day-to-day work; `main`/`prod` map to production. `.firebaserc` carries
+> `stage`/`prod` aliases so `firebase deploy … --project stage|prod` targets the
+> right project.
+>
+> **Firebase config is env-driven now, not hardcoded.**
+> · **Backend** reads `FIREBASE_PROJECT_ID` (previously pinned to prod). Stage
+>   `.env` and `deploy/env.stage.yaml` set it to `market-catalyst-stage`;
+>   `deploy/env.production.yaml` keeps prod. Same image, same code — only the env
+>   var differs.
+> · **UI** reads `NEXT_PUBLIC_FIREBASE_*` (`app/firebase.ts`), falling back to
+>   the prod values for zero-regression. The stage build sets them via
+>   `.env.production` to the stage web-app config, so the deployed stage site
+>   authenticates against `market-catalyst-stage`.
+>
+> **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
+> static build works in every environment without a rebuild:
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
+> · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
+>   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
+>   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,
+>   CDN-cacheable). A `localhost` value of `NEXT_PUBLIC_BACKEND_URL` is ignored
+>   once the page is served from a real host, so a dev env baked into a prod
+>   build can never misroute deployed traffic. This is the **same implementation
+>   for stage and prod** — the only per-env difference is which project's
+>   `market-catalyst-live` the rewrite resolves to.
+>
+> **Per-environment Cloud Run topology is unchanged** (see §6): one image → a
+> private `worker` (`market-catalyst-backend`, all sync/admin/plans) and a public
+> `live` (`market-catalyst-live`, serving `LiveModule` + `MarketDataModule` +
+> `UserDataModule`, i.e. `/live` + `/market-data` + `/api`). Each project gets
+> its own pair.
+>
+> **Stage data = a full copy of prod.** All 35 Firestore collections (18,748
+> top-level docs + subcollections: users' portfolios/holdings, watchlists,
+> sessions; fund_holdings' filings/positions) were copied prod → stage so stage
+> mirrors production.
+>
+> **Stage status / open items (2026-07-27).**
+> · Stage **billing is not yet linked** (free/Spark). Firebase Hosting **Cloud
+>   Run rewrites and any Cloud Run deploy require billing**, so the stage
+>   `firebase.json` currently ships the **SPA catch-all only** and the stage
+>   `live`/`worker` services are **not deployed yet**. Re-add the rewrites (see
+>   prod) once billing + the stage `market-catalyst-live` service exist.
+> · The stage **static UI is live** at `https://market-catalyst-stage.web.app`.
+> · Google sign-in on stage reaches Google but needs the stage project's **OAuth
+>   consent screen published / test-users added** to complete; Email/Password
+>   works today.
+
+
 > ## ⏱ State sync — 2026-07-26 (evening) · CDN, zero-poll, spinners, DB reset EXECUTED
 >
 > _Additive to the morning 2026-07-26 on-demand block below; nothing prior is
@@ -178,7 +250,7 @@ v1.5 | June 2026
 > at `min-instances=0`, so the `@Cron` decorators never fire — **no sync job has
 > ever run automatically in production**; all data came from manual runs.
 > **(2)** The **browser cannot reach the backend** (`NEXT_PUBLIC_BACKEND_URL`
-> unset → `http://localhost:4100` baked into the production bundle, blocked as
+> unset → `http://localhost:4400` baked into the production bundle, blocked as
 > mixed content). See T-148a–d.
 
 **Status:** Not Started | In Progress | In Review | Done  
@@ -275,9 +347,10 @@ v1.5 | June 2026
 | ID | Task | Type | Est. | Pri | Assignee | Sprint | Status | Notes |
 |---|---|---|---|---|---|---|---|---|
 | T-148a | Run `create-scheduler-jobs.sh`: create Cloud Scheduler jobs for all sync jobs + create the `scheduler-invoker` service account + grant it `run.invoker` | Infra | 0.5d | P0 | Infra Eng | S-13 | Not Started | 🔴 **Nothing refreshes automatically in production.** No Cloud Scheduler jobs exist in **any** region and no `scheduler-invoker` SA exists — the script was never run. With `min-instances=0` the in-process `@Cron` decorators never fire. Every populated collection is frozen at its last **manual** run. |
-| T-148b | Firebase Hosting rewrite → Cloud Run so the browser can reach the backend; set `NEXT_PUBLIC_BACKEND_URL` and rebuild the bundle | Infra | 0.5d | P0 | Infra Eng | S-13 | Not Started | 🔴 `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4100` is baked into the production bundle and blocked as mixed content. Disables in prod: admin **Monitor** tab, extended-hours moves, market-status pill, all `/plans` + `/admin/*` endpoints, and any future Stripe checkout/webhook. **Blocked on T-148c — do not do this first.** |
+| T-148b | Firebase Hosting rewrite → Cloud Run so the browser can reach the backend; set `NEXT_PUBLIC_BACKEND_URL` and rebuild the bundle | Infra | 0.5d | P0 | Infra Eng | S-13 | Not Started | 🔴 `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4400` is baked into the production bundle and blocked as mixed content. Disables in prod: admin **Monitor** tab, extended-hours moves, market-status pill, all `/plans` + `/admin/*` endpoints, and any future Stripe checkout/webhook. **Blocked on T-148c — do not do this first.** |
 | T-148c | Set `ADMIN_GUARD_TRUST_IAM=false` **before** T-148b | Infra | 0.25d | P0 | Infra Eng | S-13 | Not Started | ⚠ **Ordering is a security requirement.** Cloud Run currently runs `--no-allow-unauthenticated`, so IAM is the guard. The moment a Hosting rewrite fronts it, `/sync/:job/run`, `/purge` and `/retention` become world-callable unless this flag is flipped first. |
-| T-148d | Rotate `POLYGON_API_KEY` (exposed in chat, never rotated) | Infra | 0.25d | P0 | Infra Eng | S-13 | Not Started | Secret Manager version 4 is enabled. `deploy/rotate-polygon-key.sh` automates everything **except** generating the replacement key at Polygon — that step is manual and must be done by the account holder. |
+| T-148d | Rotate `POLYGON_API_KEY` (exposed in chat, never rotated) | Infra | 0.25d | P0 | Infra Eng | S-13 | Not Started | Secret Manager version 4 is enabled. `deploy/rotate-polygon-key.sh` automates everything **except** generating the replacement key at Polygon — that step is manual and must be done by the account holder. ⚠ **2026-08-03 re-verify: still Not Started** — key remains un-rotated (R49). |
+| T-148e | 🆕 **Analyst Actions → Polygon (not FMP).** Per the 2026-08-02 request, migrate `analyst-actions.job.ts` off FMP `grades-consensus` onto a real per-firm feed (Polygon Benzinga-ratings add-on wired into a new `PolygonService` method, or a funded Benzinga key), and change the stored shape from a single consensus doc (`source:'fmp_consensus_interim'`) to per-firm events (firm/action/ratingOld→New/ptOld→New/date) | Backend | 3.5d | P0 | Backend | S-13 | Not Started | ⚠ **2026-08-03:** commit `afd4429` was a to-do note only (touched `src/live/*`+`src/user-data/*`); no code migration exists. `PolygonService` currently has **no** analyst method, and `BENZINGA_API_KEY` is empty. This is why the UI shows Analyst as "active from FMP". Tracks delivery row **R41** (5%). |
 
 #### Stripe
 

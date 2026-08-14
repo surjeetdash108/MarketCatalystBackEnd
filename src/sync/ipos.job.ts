@@ -1,12 +1,12 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { chunkedBatchSet } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { IPOS_ADAPTER, type IposAdapter } from '../adapters/types';
-import { SyncRegistry } from '../common/sync-registry.service';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { chunkedBatchSet } from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { IPOS_ADAPTER, type IposAdapter } from "../adapters/types";
+import { SyncRegistry } from "../common/sync-registry.service";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 
-const JOB_NAME = 'ipos';
+const JOB_NAME = "ipos";
 const LOOKBACK_DAYS = 45;
 const LOOKAHEAD_DAYS = 90;
 
@@ -17,14 +17,13 @@ function isoDate(d: Date): string {
 function slugify(name: string): string {
   return name
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '');
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
 }
 
 function parsePriceRange(price: string) {
-  if (!price)
-    return { low: null, high: null };
-  const parts = price.split('-').map((p) => Number(p.trim()));
+  if (!price) return { low: null, high: null };
+  const parts = price.split("-").map((p) => Number(p.trim()));
   if (parts.length === 2 && parts.every((n) => !Number.isNaN(n))) {
     return { low: parts[0], high: parts[1] };
   }
@@ -48,9 +47,9 @@ export class IposJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['ipos'],
-      cronExpression: '15 6 * * *',
-      timeZone: 'America/New_York',
+      collections: ["ipos"],
+      cronExpression: "15 6 * * *",
+      timeZone: "America/New_York",
     });
   }
 
@@ -68,7 +67,9 @@ export class IposJob implements OnModuleInit {
       const events = result.data;
       const source = result.source;
       if (result.warnings.length > 0) {
-        this.logger.log(`ipos: ${result.warnings.map((w) => w.code).join(', ')}`);
+        this.logger.log(
+          `ipos: ${result.warnings.map((w) => w.code).join(", ")}`,
+        );
       }
       const today = isoDate(new Date());
       // Aftermarket enrichment: for IPOs that have ALREADY listed, fetch daily
@@ -78,7 +79,8 @@ export class IposJob implements OnModuleInit {
       for (const e of events) {
         const { low, high } = parsePriceRange(e.price);
         const id = `${e.date}_${e.symbol || slugify(e.name)}`;
-        const offer = low != null && high != null ? (low + high) / 2 : (low ?? high);
+        const offer =
+          low != null && high != null ? (low + high) / 2 : (low ?? high);
 
         let currentPrice: number | null = null;
         let day1Close: number | null = null;
@@ -87,13 +89,19 @@ export class IposJob implements OnModuleInit {
         // Only for listed names with a past listing date and a real ticker.
         if (e.symbol && e.date && e.date <= today) {
           try {
-            const bars = await this.polygon.getAggsRange(e.symbol, e.date, today);
+            const bars = await this.polygon.getAggsRange(
+              e.symbol,
+              e.date,
+              today,
+            );
             if (bars.length > 0) {
               day1Close = bars[0].c ?? null;
               currentPrice = bars[bars.length - 1].c ?? null;
               if (offer && offer > 0) {
-                if (day1Close != null) day1Pop = ((day1Close - offer) / offer) * 100;
-                if (currentPrice != null) returnSinceIpo = ((currentPrice - offer) / offer) * 100;
+                if (day1Close != null)
+                  day1Pop = ((day1Close - offer) / offer) * 100;
+                if (currentPrice != null)
+                  returnSinceIpo = ((currentPrice - offer) / offer) * 100;
               }
             }
           } catch {
@@ -113,8 +121,12 @@ export class IposJob implements OnModuleInit {
             offerPrice: offer ?? null,
             currentPrice,
             day1Close,
-            day1PopPct: day1Pop == null ? null : Math.round(day1Pop * 100) / 100,
-            returnSinceIpoPct: returnSinceIpo == null ? null : Math.round(returnSinceIpo * 100) / 100,
+            day1PopPct:
+              day1Pop == null ? null : Math.round(day1Pop * 100) / 100,
+            returnSinceIpoPct:
+              returnSinceIpo == null
+                ? null
+                : Math.round(returnSinceIpo * 100) / 100,
             numberOfShares: e.numberOfShares,
             totalSharesValue: e.totalSharesValue,
             status: e.status,
@@ -124,7 +136,7 @@ export class IposJob implements OnModuleInit {
           },
         });
       }
-      await chunkedBatchSet(this.firebase.firestore, 'ipos', docs);
+      await chunkedBatchSet(this.firebase.firestore, "ipos", docs);
       await this.meta.record(JOB_NAME, { ok: true, count: docs.length });
       return { count: docs.length };
     } catch (err) {

@@ -1,29 +1,30 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { batchSetWithCreatedAt, setWithCreatedAt } from '../common/firestore-batch.util';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { candidateTradingDays } from '../common/trading-days.util';
-import { PolygonService } from '../vendors/polygon/polygon.service';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import {
+  batchSetWithCreatedAt,
+  setWithCreatedAt,
+} from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { candidateTradingDays } from "../common/trading-days.util";
+import { PolygonService } from "../vendors/polygon/polygon.service";
+import { SyncRegistry } from "../common/sync-registry.service";
 
-const JOB_NAME = 'fear-greed';
+const JOB_NAME = "fear-greed";
 const LOOKBACK_DAYS = 5;
 const clamp = (n: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n));
-const sma = (v: number[], n: number) => v.length < n ? null : v.slice(-n).reduce((a, b) => a + b, 0) / n;
-const ret = (v: number[], n: number) => v.length < n + 1 || v[v.length - 1 - n] <= 0
-  ? null
-  : (v[v.length - 1] - v[v.length - 1 - n]) / v[v.length - 1 - n];
+const sma = (v: number[], n: number) =>
+  v.length < n ? null : v.slice(-n).reduce((a, b) => a + b, 0) / n;
+const ret = (v: number[], n: number) =>
+  v.length < n + 1 || v[v.length - 1 - n] <= 0
+    ? null
+    : (v[v.length - 1] - v[v.length - 1 - n]) / v[v.length - 1 - n];
 
 function label(v: number): string {
-  if (v < 25)
-    return 'Extreme Fear';
-  if (v < 45)
-    return 'Fear';
-  if (v <= 55)
-    return 'Neutral';
-  if (v <= 75)
-    return 'Greed';
-  return 'Extreme Greed';
+  if (v < 25) return "Extreme Fear";
+  if (v < 45) return "Fear";
+  if (v <= 55) return "Neutral";
+  if (v <= 75) return "Greed";
+  return "Extreme Greed";
 }
 
 @Injectable()
@@ -39,9 +40,9 @@ export class FearGreedJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['market_sentiment', 'market_sentiment_history'],
-      cronExpression: '15 18 * * 1-5',
-      timeZone: 'America/New_York',
+      collections: ["market_sentiment", "market_sentiment_history"],
+      cronExpression: "15 18 * * 1-5",
+      timeZone: "America/New_York",
     });
   }
 
@@ -68,14 +69,18 @@ export class FearGreedJob implements OnModuleInit {
    * a historical point. Returns only the components with enough history at `i`.
    */
   private componentsAt(
-    spy: number[], tlt: number[], vixy: number[], i: number,
+    spy: number[],
+    tlt: number[],
+    vixy: number[],
+    i: number,
   ): Record<string, number> {
     const c: Record<string, number> = {};
     const spyMa = sma(spy.slice(0, i + 1), 125);
     if (spyMa) c.momentum = clamp(50 + (spy[i] / spyMa - 1) * 625);
     const spyR = ret(spy.slice(0, i + 1), 20);
     const tltR = ret(tlt.slice(0, i + 1), 20);
-    if (spyR != null && tltR != null) c.safeHaven = clamp(50 + (spyR - tltR) * 500);
+    if (spyR != null && tltR != null)
+      c.safeHaven = clamp(50 + (spyR - tltR) * 500);
     const vixMa = sma(vixy.slice(0, i + 1), 50);
     if (vixMa) c.volatility = clamp(50 - (vixy[i] / vixMa - 1) * 250);
     return c;
@@ -84,9 +89,9 @@ export class FearGreedJob implements OnModuleInit {
   async run() {
     try {
       const [spySer, tltSer, vixySer] = await Promise.all([
-        this.series('SPY'),
-        this.series('TLT'),
-        this.series('VIXY'),
+        this.series("SPY"),
+        this.series("TLT"),
+        this.series("VIXY"),
       ]);
       const spy = spySer.map((x) => x.c);
       const tlt = tltSer.map((x) => x.c);
@@ -94,34 +99,38 @@ export class FearGreedJob implements OnModuleInit {
 
       // Today's value — unchanged 4-component composite.
       const components = this.componentsAt(spy, tlt, vixy, spy.length - 1);
-      const latest = await this.polygon.getLatestGroupedDaily(candidateTradingDays(new Date(), LOOKBACK_DAYS));
+      const latest = await this.polygon.getLatestGroupedDaily(
+        candidateTradingDays(new Date(), LOOKBACK_DAYS),
+      );
       if (latest && latest.bars.length) {
         let up = 0;
         let total = 0;
         for (const b of latest.bars) {
           if (b.o > 0) {
             total++;
-            if (b.c > b.o)
-              up++;
+            if (b.c > b.o) up++;
           }
         }
-        if (total > 0)
-          components.breadth = clamp((up / total) * 100);
+        if (total > 0) components.breadth = clamp((up / total) * 100);
       }
       const vals = Object.values(components);
       if (vals.length === 0) {
-        throw new Error('No Fear & Greed components could be computed');
+        throw new Error("No Fear & Greed components could be computed");
       }
       const value = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
       await setWithCreatedAt(
         this.firebase.firestore,
-        this.firebase.firestore.collection('market_sentiment').doc('fear_greed'),
+        this.firebase.firestore
+          .collection("market_sentiment")
+          .doc("fear_greed"),
         {
           value,
           label: label(value),
-          components: Object.fromEntries(Object.entries(components).map(([k, v]) => [k, Math.round(v)])),
+          components: Object.fromEntries(
+            Object.entries(components).map(([k, v]) => [k, Math.round(v)]),
+          ),
           asOfDate: latest?.date ?? null,
-          source: 'polygon',
+          source: "polygon",
           updatedAt: new Date().toISOString(),
         },
       );
@@ -133,10 +142,13 @@ export class FearGreedJob implements OnModuleInit {
       // per-day breadth (market_breadth.breadthPct) — the same four inputs as the
       // live value — and write market_sentiment_history/{date}.
       const breadthByDate = new Map<string, number>();
-      const bsnap = await this.firebase.firestore.collection('market_breadth').get();
+      const bsnap = await this.firebase.firestore
+        .collection("market_breadth")
+        .get();
       for (const d of bsnap.docs) {
         const b = d.data();
-        if (typeof b.breadthPct === 'number') breadthByDate.set(d.id, clamp(b.breadthPct * 100));
+        if (typeof b.breadthPct === "number")
+          breadthByDate.set(d.id, clamp(b.breadthPct * 100));
       }
       const hist: { id: string; data: Record<string, unknown> }[] = [];
       // Start once the 125-day momentum window is available.
@@ -153,23 +165,34 @@ export class FearGreedJob implements OnModuleInit {
           data: {
             value: v,
             label: label(v),
-            components: Object.fromEntries(Object.entries(comp).map(([k, val]) => [k, Math.round(val)])),
+            components: Object.fromEntries(
+              Object.entries(comp).map(([k, val]) => [k, Math.round(val)]),
+            ),
             asOfDate: date,
-            source: 'polygon',
+            source: "polygon",
             updatedAt: new Date().toISOString(),
           },
         });
       }
       // Chunked batch write (Firestore caps at 500 ops/batch).
-      const col = this.firebase.firestore.collection('market_sentiment_history');
+      const col = this.firebase.firestore.collection(
+        "market_sentiment_history",
+      );
       await batchSetWithCreatedAt(
         this.firebase.firestore,
         hist.map((h) => ({ ref: col.doc(h.id), data: h.data })),
       );
 
       await this.meta.record(JOB_NAME, { ok: true, count: 1 });
-      this.logger.log(`fear-greed: value ${value}; backfilled ${hist.length} history day(s)`);
-      return { value, label: label(value), components, historyDays: hist.length };
+      this.logger.log(
+        `fear-greed: value ${value}; backfilled ${hist.length} history day(s)`,
+      );
+      return {
+        value,
+        label: label(value),
+        components,
+        historyDays: hist.length,
+      };
     } catch (err) {
       await this.meta.record(JOB_NAME, {
         ok: false,

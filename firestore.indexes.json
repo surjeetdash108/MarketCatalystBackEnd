@@ -2,7 +2,8 @@
   "indexes": [
     { "collectionGroup": "companies",      "queryScope": "COLLECTION", "fields": [{ "fieldPath": "sector", "order": "ASCENDING" }, { "fieldPath": "marketCap", "order": "DESCENDING" }] },
     { "collectionGroup": "ohlcv_bars",     "queryScope": "COLLECTION", "fields": [{ "fieldPath": "ticker", "order": "ASCENDING" }, { "fieldPath": "barDate", "order": "DESCENDING" }] },
-    { "collectionGroup": "stock_comments", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "uid", "order": "ASCENDING" }, { "fieldPath": "sym", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }] }
+    { "collectionGroup": "stock_comments", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "uid", "order": "ASCENDING" }, { "fieldPath": "sym", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }] },
+    { "collectionGroup": "feature_requests", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "uid", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }] }
   ],
   "fieldOverrides": []
 }

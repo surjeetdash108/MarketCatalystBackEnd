@@ -1,18 +1,27 @@
-# Firebase App Hosting config for the STAGE worker backend (.firebaserc default
-# project is market-catalyst-stage). This is a SEPARATE config surface from
-# gcloud run deploy — App Hosting does not read deploy/env.*.yaml, does not use
-# the root Dockerfile, and does not honor --set-secrets. Everything the app
-# needs at runtime must be declared here.
+# Firebase App Hosting config for the PROD worker backend (.firebaserc "prod"
+# and "default" both point at market-catalyst-502415). This is a SEPARATE
+# config surface from gcloud run deploy — App Hosting does not read
+# deploy/env.*.yaml, does not use the root Dockerfile, and does not honor
+# --set-secrets. Everything the app needs at runtime must be declared here.
+#
+# Stage deploys to market-catalyst-stage are on hold for now — see
+# .firebaserc's "stage" alias when that resumes.
 #
 # Secrets referenced below must already exist in Secret Manager for this
 # project and be granted to the App Hosting backend's service account:
-#   firebase apphosting:secrets:set POLYGON_API_KEY --project market-catalyst-stage
-#   firebase apphosting:secrets:grantaccess POLYGON_API_KEY --backend <BACKEND_ID> --project market-catalyst-stage
-# (repeat per secret)
+#   firebase apphosting:secrets:set POLYGON_API_KEY --project market-catalyst-502415
+#   firebase apphosting:secrets:grantaccess POLYGON_API_KEY --backend <BACKEND_ID> --project market-catalyst-502415
+# (repeat for FMP_API_KEY, FINNHUB_API_KEY, FRED_API_KEY)
 
 runConfig:
-  minInstances: 0
-  maxInstances: 3
+  # Worker must stay warm 24/7 or the in-process @Cron scheduler (SyncModule,
+  # APP_ROLE=worker) never fires — overnight jobs then only run when a request
+  # happens to trigger ensureFresh. This is the low-traffic worker backend (the
+  # public read API is the separate `live` service), so 1 warm instance means
+  # the daily crons fire exactly once. maxInstances:1 also prevents a second
+  # instance from double-firing cursor jobs (edgar-8k / sec-form4).
+  minInstances: 1
+  maxInstances: 1
   concurrency: 80
   cpuMiB: 1000
   memoryMiB: 512
@@ -30,9 +39,9 @@ env:
     value: "worker"
 
   # Selects the Firestore project this backend reads/writes. Must match the UI's
-  # NEXT_PUBLIC_FIREBASE_PROJECT_ID for this environment.
+  # NEXT_PUBLIC_FIREBASE_PROJECT_ID for prod.
   - variable: FIREBASE_PROJECT_ID
-    value: "market-catalyst-stage"
+    value: "market-catalyst-502415"
 
   # ─── Polygon / Massive ────────────────────────────────────────────────────────
   - variable: POLYGON_API_BASE_URL
@@ -45,7 +54,7 @@ env:
   # ─── Vendor routing (src/adapters/adapters.module.ts) ────────────────────────
   # Every domain is single-sourced on Polygon/Massive; FALLBACK "none" keeps the
   # other adapters registered so a vendor can be switched later without a code
-  # change. Mirrors deploy/env.stage.yaml.
+  # change. Mirrors deploy/env.production.yaml.
   - variable: COMPANY_PROFILE_SOURCE
     value: "polygon"
   - variable: COMPANY_PROFILE_FALLBACK_SOURCE
@@ -94,7 +103,7 @@ env:
   # ─── SEC EDGAR ───────────────────────────────────────────────────────────────
   # SEC requires a descriptive User-Agent with a real contact address.
   - variable: SEC_EDGAR_USER_AGENT
-    value: "Market Catalyst Backend (stage) hello@inc108.com"
+    value: "Market Catalyst Backend hello@inc108.com"
 
   # ─── Data lifecycle jobs ─────────────────────────────────────────────────────
   - variable: RETENTION_DRY_RUN
@@ -107,7 +116,7 @@ env:
   - variable: ADMIN_EMAIL
     value: "admin@marketcatalyst.ai"
 
-  # CRITICAL: this OVERRIDES deploy/env.stage.yaml, which sets "true".
+  # CRITICAL: this OVERRIDES deploy/env.production.yaml, which sets "true".
   #
   # "true" means "trust that Cloud Run IAM already vetted the caller" — correct
   # ONLY for the private (--no-allow-unauthenticated) gcloud worker. Firebase App
@@ -121,10 +130,10 @@ env:
 
   # ─── Secrets (Google Secret Manager) ─────────────────────────────────────────
   # These are the four the worker uses (per deploy/DEPLOY.md --set-secrets). Each
-  # MUST already exist in Secret Manager for THIS project and be granted to the
-  # backend, or the rollout fails. Create + grant every one before deploying:
-  #   firebase apphosting:secrets:set POLYGON_API_KEY  --project market-catalyst-stage
-  #   firebase apphosting:secrets:grantaccess POLYGON_API_KEY --backend <BACKEND_ID> --project market-catalyst-stage
+  # MUST already exist in Secret Manager for market-catalyst-502415 and be
+  # granted to the backend, or the rollout fails. Create + grant every one first:
+  #   firebase apphosting:secrets:set POLYGON_API_KEY  --project market-catalyst-502415
+  #   firebase apphosting:secrets:grantaccess POLYGON_API_KEY --backend <BACKEND_ID> --project market-catalyst-502415
   # (repeat for FMP_API_KEY, FINNHUB_API_KEY, FRED_API_KEY)
   - variable: POLYGON_API_KEY
     secret: POLYGON_API_KEY
@@ -134,4 +143,14 @@ env:
     secret: FINNHUB_API_KEY
   - variable: FRED_API_KEY
     secret: FRED_API_KEY
-  
+
+  # Optional vendors (code warns and no-ops if unset — see the vendor services'
+  # onModuleInit). Uncomment once the secret exists for this project.
+  # - variable: BENZINGA_API_KEY
+  #   secret: BENZINGA_API_KEY
+  # - variable: TRADIER_ACCESS_TOKEN
+  #   secret: TRADIER_ACCESS_TOKEN
+  # - variable: UNUSUAL_WHALES_API_KEY
+  #   secret: UNUSUAL_WHALES_API_KEY
+  # - variable: SENTRY_DSN
+  #   secret: SENTRY_DSN

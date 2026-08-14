@@ -1,6 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Injectable, Logger } from "@nestjs/common";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { SyncRegistry } from "../common/sync-registry.service";
 
 // No cron pre-populates these collections (decision #3a in the UI→backend
 // migration plan) — this is what makes "first request pays vendor latency,
@@ -34,10 +34,17 @@ export class MarketDataService {
    * has (possibly empty), same resilience contract as
    * CachedCollectionsService.get().
    */
-  async ensureFresh(jobName: string, staleMs: number = STALE_MS): Promise<void> {
+  async ensureFresh(
+    jobName: string,
+    staleMs: number = STALE_MS,
+  ): Promise<void> {
     const status: Record<string, unknown> = await this.meta.status(jobName);
-    const lastSuccessAt = (status.lastSuccessAt ?? status.lastSyncedAt ?? null) as string | null;
-    const age = lastSuccessAt ? Date.now() - Date.parse(lastSuccessAt) : Infinity;
+    const lastSuccessAt = (status.lastSuccessAt ??
+      status.lastSyncedAt ??
+      null) as string | null;
+    const age = lastSuccessAt
+      ? Date.now() - Date.parse(lastSuccessAt)
+      : Infinity;
     if (Number.isFinite(age) && age < staleMs) return;
 
     if (!this.inflight.has(jobName)) {
@@ -48,7 +55,9 @@ export class MarketDataService {
       }
       const run = runner()
         .catch((err) => {
-          this.logger.warn(`on-demand run of "${jobName}" failed: ${(err as Error).message}`);
+          this.logger.warn(
+            `on-demand run of "${jobName}" failed: ${(err as Error).message}`,
+          );
         })
         .finally(() => this.inflight.delete(jobName));
       this.inflight.set(jobName, run);

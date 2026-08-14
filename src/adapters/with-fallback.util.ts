@@ -1,10 +1,10 @@
-import { Logger } from '@nestjs/common';
+import { Logger } from "@nestjs/common";
 import {
   AllSourcesFailedError,
   isRetryableVendorError,
   SourceAttempt,
-} from './adapter-error';
-import { AdapterResult, AdapterWarning } from './types';
+} from "./adapter-error";
+import { AdapterResult, AdapterWarning } from "./types";
 
 interface NamedSource {
   readonly sourceName: string;
@@ -35,10 +35,10 @@ export async function withFallback<A extends NamedSource, T>(
     const retryable = isRetryableVendorError(err);
     attempts.push({ source: primary.sourceName, error: message, retryable });
     logger.warn(
-      `${primary.sourceName} ${entity} fetch failed (${retryable ? 'retryable' : 'not retryable'}): ${message}` +
+      `${primary.sourceName} ${entity} fetch failed (${retryable ? "retryable" : "not retryable"}): ${message}` +
         (secondary
           ? ` — falling back to ${secondary.sourceName}`
-          : ' — no fallback configured'),
+          : " — no fallback configured"),
     );
   }
 
@@ -49,7 +49,7 @@ export async function withFallback<A extends NamedSource, T>(
   try {
     const result = await call(secondary);
     const fallbackWarning: AdapterWarning = {
-      code: 'FALLBACK_USED',
+      code: "FALLBACK_USED",
       message: `Primary source ${primary.sourceName} failed (${attempts[0].error}) — served by fallback ${secondary.sourceName} instead.`,
     };
     return { ...result, warnings: [fallbackWarning, ...result.warnings] };

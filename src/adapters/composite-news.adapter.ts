@@ -1,11 +1,15 @@
-import { Logger } from '@nestjs/common';
-import { AllSourcesFailedError, isRetryableVendorError, SourceAttempt } from './adapter-error';
+import { Logger } from "@nestjs/common";
+import {
+  AllSourcesFailedError,
+  isRetryableVendorError,
+  SourceAttempt,
+} from "./adapter-error";
 import {
   AdapterResult,
   AdapterWarning,
   CanonicalNewsArticle,
   NewsAdapter,
-} from './types';
+} from "./types";
 
 export class CompositeNewsAdapter implements NewsAdapter {
   private readonly logger = new Logger(CompositeNewsAdapter.name);
@@ -37,10 +41,10 @@ export class CompositeNewsAdapter implements NewsAdapter {
         retryable,
       });
       this.logger.warn(
-        `${this.primary.sourceName} news fetch failed for ${ticker} (${retryable ? 'retryable' : 'not retryable'}): ${message}` +
+        `${this.primary.sourceName} news fetch failed for ${ticker} (${retryable ? "retryable" : "not retryable"}): ${message}` +
           (this.secondary
             ? ` — falling back to ${this.secondary.sourceName}`
-            : ' — no fallback configured'),
+            : " — no fallback configured"),
       );
     }
     if (!this.secondary) {
@@ -49,7 +53,7 @@ export class CompositeNewsAdapter implements NewsAdapter {
     try {
       const fallbackResult = await this.secondary.fetchNews(ticker, from, to);
       const fallbackWarning: AdapterWarning = {
-        code: 'FALLBACK_USED',
+        code: "FALLBACK_USED",
         message: `Primary news source ${this.primary.sourceName} failed (${attempts[0].error}) — served by fallback ${this.secondary.sourceName} instead.`,
       };
       return {

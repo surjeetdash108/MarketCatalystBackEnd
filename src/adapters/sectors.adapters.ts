@@ -1,18 +1,14 @@
-import { Logger } from '@nestjs/common';
-import { candidateTradingDays } from '../common/trading-days.util';
-import { FmpService } from '../vendors/fmp/fmp.service';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { Logger } from "@nestjs/common";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 import type {
   AdapterResult,
   CanonicalSectorPerformance,
   SectorsAdapter,
-} from './types';
-import { withFallback } from './with-fallback.util';
-
-const MAX_LOOKBACK_DAYS = 5;
+} from "./types";
+import { withFallback } from "./with-fallback.util";
 
 export class PolygonSectorsAdapter implements SectorsAdapter {
-  readonly sourceName = 'polygon';
+  readonly sourceName = "polygon";
   constructor(private readonly polygon: PolygonService) {}
 
   async fetchSectorPerformance(): Promise<
@@ -23,45 +19,20 @@ export class PolygonSectorsAdapter implements SectorsAdapter {
     // throwing is what lets the composite fall through to the next vendor.
     // This preserves the explicit empty-check the job used to do inline.
     if (data.length === 0) {
-      throw new Error('Polygon returned no sector-ETF data');
+      throw new Error("Polygon returned no sector-ETF data");
     }
     return {
       data,
       source: this.sourceName,
       warnings: [
         {
-          code: 'STALE_DATA',
-          field: 'averageChange',
+          code: "STALE_DATA",
+          field: "averageChange",
           message:
-            'Derived from 11 SPDR sector ETFs, not true cap-weighted sector aggregates — Massive has no sector endpoint on any tier.',
+            "Derived from 11 SPDR sector ETFs, not true cap-weighted sector aggregates — Massive has no sector endpoint on any tier.",
         },
       ],
     };
-  }
-}
-
-export class FmpSectorsAdapter implements SectorsAdapter {
-  private readonly logger = new Logger(FmpSectorsAdapter.name);
-  readonly sourceName = 'fmp';
-  constructor(private readonly fmp: FmpService) {}
-
-  async fetchSectorPerformance(): Promise<
-    AdapterResult<CanonicalSectorPerformance[]>
-  > {
-    // FMP's snapshot is date-keyed and returns nothing on holidays, so walk
-    // backwards through candidate trading days until one has data.
-    for (const date of candidateTradingDays(new Date(), MAX_LOOKBACK_DAYS)) {
-      const data = await this.fmp.getSectorPerformanceSnapshot(date);
-      if (data.length > 0) {
-        return { data, source: this.sourceName, warnings: [] };
-      }
-      this.logger.log(
-        `No sector performance data for ${date} — trying prior day`,
-      );
-    }
-    throw new Error(
-      `FMP returned no sector performance in the last ${MAX_LOOKBACK_DAYS} trading days`,
-    );
   }
 }
 
@@ -80,7 +51,7 @@ export class CompositeSectorsAdapter implements SectorsAdapter {
 
   fetchSectorPerformance() {
     return withFallback(
-      'sector performance',
+      "sector performance",
       this.logger,
       this.primary,
       this.secondary,

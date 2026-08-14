@@ -47,10 +47,10 @@ by the frontend directly, never through this service.
 cp .env.example .env      # fill in real vendor API keys
 # keep a Firebase service-account.json at the repo root for local Firestore access
 npm install
-npm run start:dev         # http://localhost:4100
+npm run start:dev         # http://localhost:4400
 ```
 
-- **Ops monitor UI:** http://localhost:4100/ (job status dashboard, served by NestJS)
+- **Ops monitor UI:** http://localhost:4400/ (job status dashboard, served by NestJS)
 - **Health:** `GET /health`
 - **Ops API:** `GET /sync/jobs`, `GET /sync/status`, `POST /sync/:job/run`, `POST /sync/run-all`
 

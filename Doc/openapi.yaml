@@ -69,7 +69,7 @@ servers:
     description: >-
       Proposed REST gateway (NOT deployed). Would front the same Firestore
       collections listed here for non-web consumers (mobile, third parties).
-  - url: http://localhost:4100
+  - url: http://localhost:4400
     description: >-
       NestJS backend today — only the Ops endpoints below are actually
       exposed here. All other paths are Firestore reads from the client SDK,

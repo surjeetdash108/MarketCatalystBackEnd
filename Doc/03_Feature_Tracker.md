@@ -1,5 +1,77 @@
 # MarketCatalyst — Feature Tracker
 
+> ## ⏱ State sync — 2026-07-27 · TWO ENVIRONMENTS (stage + prod), env-driven config
+>
+> _This block is newest and authoritative where it differs from the blocks
+> below. It introduces a second, fully-isolated environment; nothing about the
+> per-environment runtime topology (§6, the on-demand data layer, the CDN
+> rewrite) changes — that topology now simply exists twice, once per project._
+>
+> **This doc, specifically:** Feature status is environment-agnostic — stage
+> runs the identical codebase, so every feature's status here applies to prod
+> today and to stage once its backend is deployed.
+>
+> **Two isolated Firebase projects = two environments.** Production stays on
+> `market-catalyst-502415`. A new **stage** project `market-catalyst-stage`
+> (project #523639228835) was created as an independent copy: its own Firestore
+> `(default)` in **nam5 / STANDARD / NATIVE** (identical region/edition to prod),
+> the **same `firestore.rules` + `firestore.indexes.json`** deployed to it, its
+> own Auth, and its own `backend-runtime@…` service account (roles
+> `datastore.user` + `secretmanager.secretAccessor`, mirroring prod — keyless,
+> the backend authenticates via ADC). Nothing is shared between the two: a
+> destructive sync, a rules change, or a test signup on stage can never touch
+> prod data or users.
+>
+> **Branch ⇄ environment.** Both repos work on the **`stage`** branch for
+> day-to-day work; `main`/`prod` map to production. `.firebaserc` carries
+> `stage`/`prod` aliases so `firebase deploy … --project stage|prod` targets the
+> right project.
+>
+> **Firebase config is env-driven now, not hardcoded.**
+> · **Backend** reads `FIREBASE_PROJECT_ID` (previously pinned to prod). Stage
+>   `.env` and `deploy/env.stage.yaml` set it to `market-catalyst-stage`;
+>   `deploy/env.production.yaml` keeps prod. Same image, same code — only the env
+>   var differs.
+> · **UI** reads `NEXT_PUBLIC_FIREBASE_*` (`app/firebase.ts`), falling back to
+>   the prod values for zero-regression. The stage build sets them via
+>   `.env.production` to the stage web-app config, so the deployed stage site
+>   authenticates against `market-catalyst-stage`.
+>
+> **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
+> static build works in every environment without a rebuild:
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
+> · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
+>   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
+>   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,
+>   CDN-cacheable). A `localhost` value of `NEXT_PUBLIC_BACKEND_URL` is ignored
+>   once the page is served from a real host, so a dev env baked into a prod
+>   build can never misroute deployed traffic. This is the **same implementation
+>   for stage and prod** — the only per-env difference is which project's
+>   `market-catalyst-live` the rewrite resolves to.
+>
+> **Per-environment Cloud Run topology is unchanged** (see §6): one image → a
+> private `worker` (`market-catalyst-backend`, all sync/admin/plans) and a public
+> `live` (`market-catalyst-live`, serving `LiveModule` + `MarketDataModule` +
+> `UserDataModule`, i.e. `/live` + `/market-data` + `/api`). Each project gets
+> its own pair.
+>
+> **Stage data = a full copy of prod.** All 35 Firestore collections (18,748
+> top-level docs + subcollections: users' portfolios/holdings, watchlists,
+> sessions; fund_holdings' filings/positions) were copied prod → stage so stage
+> mirrors production.
+>
+> **Stage status / open items (2026-07-27).**
+> · Stage **billing is not yet linked** (free/Spark). Firebase Hosting **Cloud
+>   Run rewrites and any Cloud Run deploy require billing**, so the stage
+>   `firebase.json` currently ships the **SPA catch-all only** and the stage
+>   `live`/`worker` services are **not deployed yet**. Re-add the rewrites (see
+>   prod) once billing + the stage `market-catalyst-live` service exist.
+> · The stage **static UI is live** at `https://market-catalyst-stage.web.app`.
+> · Google sign-in on stage reaches Google but needs the stage project's **OAuth
+>   consent screen published / test-users added** to complete; Email/Password
+>   works today.
+
+
 > ## ⏱ State sync — 2026-07-26 (evening) · CDN, zero-poll, spinners, DB reset EXECUTED
 >
 > _Additive to the morning 2026-07-26 on-demand block below; nothing prior is
@@ -172,7 +244,7 @@ v1.4 | July 2026
 > **Deployment reality — read before trusting any "Complete" below:** backend is
 > Cloud Run revision `market-catalyst-backend-00031-wvc` with
 > `--no-allow-unauthenticated`, and `NEXT_PUBLIC_BACKEND_URL` is unset, so the
-> production bundle points at `http://localhost:4100` and **the browser cannot
+> production bundle points at `http://localhost:4400` and **the browser cannot
 > reach the backend at all**. Anything requiring a backend call is
 > BUILT-BUT-NOT-DEPLOYED, not live. Separately, **no Cloud Scheduler jobs exist
 > in any region** — with `min-instances=0` the in-process `@Cron` decorators
@@ -279,7 +351,7 @@ v1.4 | July 2026
 | ID | Feature | Phase | Tier | Status | % | Owner | Notes |
 |---|---|---|---|---|---|---|---|
 | F-17 | Stock Detail Page | MVP | Free+ | **In Progress** | 85% | Full Stack | UI complete: sym selector bar (fbar), sd-head (logo/name/price/actions), sd-grid (chart col + ratings col). CandleChart SVG + RsiPane. Key stats grid. AI Technical Analysis. Financials bar chart. TrGauge (5-segment Technical Rating) + indicator table, Peers minirows, Industry Group rank, Earnings history, Insider/Institutional section. **Real data as of 2026-07-22 (LIVE, Firestore-read — no backend call needed):** 52-week high/low + `pctFromHigh52`/`pctFromLow52` (`has52w` guard, falls back to ±2% band when absent); SMA and EMA ladders at 10/20/30/50/100/200 (`smaLadder`/`emaLadder`); VWAP (key-levels row shows Above/Below VWAP from the real value); real peers from Polygon `/v1/related-companies` (`liveCompany.peers`, sector-filter fallback for untracked tickers); dividend history card + drawer from `dividend_history/{ticker}` via `useDividendHistory` (annual totals, TTM, derived yield, 5-yr CAGR, payout, ex-div countdown, explicit "Dividend suspended" state for lapsed payers); balance sheet + cash flow in the financials drawer (`fin.hasBalanceSheet`) from `financials.job.ts`, which previously fetched and discarded them; split-adjusted disclosure note backed by `splits/{ticker}`; **RSI pane is now real** — `RsiPane` receives `company.rsi14Series` (90-point rolling RSI-14) instead of a seeded walk. Files: `app/iq/screens/stock.tsx`, `app/iq/hooks/useCompany.ts`, `useDividendHistory.ts`, `useSplits.ts`, `useFinancials.ts`. Remaining: interactive zoom, options/block-trades sections, AI narrative (F-31, still NOT BUILT — all "AI Technical Analysis" copy on this screen is fabricated static text). |
-| F-65 | Extended-Hours / Market-Status Strip | MVP | Free+ | **In Progress** | 60% | Full Stack | Snapshot cache upgraded v2 → **v3 universal snapshot**, adding `earlyTradingChangePct`, `lateTradingChangePct`, `regularTradingChangePct`, `marketStatus`. New `src/live/market-status.service.ts` + `GET /live/market-status`. Frontend `useExtendedHours` hook consumes it. **BUILT — NOT REACHABLE IN PROD:** both the extended-hours moves and the vendor market-status pill go through the backend HTTP API, which the browser cannot reach (see header note). Works locally against `localhost:4100`. |
+| F-65 | Extended-Hours / Market-Status Strip | MVP | Free+ | **In Progress** | 60% | Full Stack | Snapshot cache upgraded v2 → **v3 universal snapshot**, adding `earlyTradingChangePct`, `lateTradingChangePct`, `regularTradingChangePct`, `marketStatus`. New `src/live/market-status.service.ts` + `GET /live/market-status`. Frontend `useExtendedHours` hook consumes it. **BUILT — NOT REACHABLE IN PROD:** both the extended-hours moves and the vendor market-status pill go through the backend HTTP API, which the browser cannot reach (see header note). Works locally against `localhost:4400`. |
 | F-50 | Stock Chart Right-Click Notes (Firebase) | MVP | Pro+ | **Complete** | 100% | Full Stack | Right-click context menu on chart div. Opens centered modal with textarea. Saves to Firestore `stock_comments` collection: `{uid, sym, name, comment, createdAt: Timestamp}`. Notes card below chart shows history with datetime + ✕ delete per note. `loadNotes()` / `saveNote()` / `deleteNote()` async helpers using `collection, addDoc, getDocs, query, where, orderBy, Timestamp, deleteDoc, doc`. `useCallback` + `useEffect` refreshes notes on symbol change. File: `screens/stock.tsx`. |
 | F-18 | Peer View | MVP | Pro+ | **Not Started** | 0% | Full Stack | 5–10 closest peers by sector/industry group/business model. Table: ticker, 1D/1W/1M perf, market cap, next earnings date, analyst rating consensus, valuation snapshot. |
 | F-19 | Group View (MarketSurge-style) | MVP | Pro+ | **Not Started** | 0% | Full Stack | Industry group rank vs all groups, trend, strongest/weakest names in group, group-level news + analyst activity. |
@@ -419,7 +491,7 @@ v1.4 | July 2026
 | F-72 | Admin — Per-Plan Feature Editor | MVP | Staff | **Complete** | 100% | Full Stack | Inside the Subscriptions view. Renders all **30 entitlement keys** from the `CATALOG` for each plan with an on/off toggle and an "N of 30 enabled" count. Toggles write optimistically to `plans/{id}.featureFlags` and **revert on failure**. The 2 **staff-only** keys (`adminDashboard`, `userManagement`) render with a `staff only` badge and are **locked — not togglable** on any plan. Firestore rule enforces the same boundary server-side: an admin may update **`featureFlags` + `updatedAt` only**; `amount`, `currency` and `cycle` are server-only (a client that could rewrite `amount` could set a plan to $0), and plan create/delete is denied outright. |
 | F-73 | Admin — Revenue | MVP | Staff | **In Progress** | 50% | Full Stack | `data-view="revenue"`. Backed by `GET /admin/revenue`. The view and aggregation are built and correct, but every figure resolves to **0 / empty**: `payments`, `subscriptions` and `revenue_summary` are all empty collections, and the MRR history chart is suppressed rather than faked. **Becomes meaningful only once F-25 (Stripe) lands.** |
 | F-74 | Admin — Usage & API (feature adoption) | MVP | Staff | **In Progress** | 55% | Full Stack | `data-view="usage"`. Two halves with **different** statuses. **Feature adoption — LIVE:** reads the `feature_adoption` collection (~12 rows seeded) written by F-75. **API usage — NOT BUILT:** `api_usage` is specified, has Firestore rules, and has a collection, but **no middleware records API calls anywhere in the backend**, so every API KPI on this view reads 0. Do not read those tiles as "no traffic"; read them as "not instrumented". |
-| F-75 | Admin — Monitor (backend ops UI) | MVP | Staff | **In Progress** | 70% | Full Stack | `data-view="monitor"`. New nav item that embeds the existing backend ops dashboard (per-job Firestore collection / cron schedule / next-run tracking, manual "run all jobs" trigger). Loaded **lazily on first visit** to the tab (`renderMonitor()`), so the console does not pay for it on every load. **BUILT — NOT REACHABLE IN PROD:** the ops UI is served by the backend, which the browser cannot reach (`NEXT_PUBLIC_BACKEND_URL` unset → `http://localhost:4100` baked into the production bundle → blocked as mixed content). Works locally. This is the single largest visible casualty of that gap. |
+| F-75 | Admin — Monitor (backend ops UI) | MVP | Staff | **In Progress** | 70% | Full Stack | `data-view="monitor"`. New nav item that embeds the existing backend ops dashboard (per-job Firestore collection / cron schedule / next-run tracking, manual "run all jobs" trigger). Loaded **lazily on first visit** to the tab (`renderMonitor()`), so the console does not pay for it on every load. **BUILT — NOT REACHABLE IN PROD:** the ops UI is served by the backend, which the browser cannot reach (`NEXT_PUBLIC_BACKEND_URL` unset → `http://localhost:4400` baked into the production bundle → blocked as mixed content). Works locally. This is the single largest visible casualty of that gap. |
 
 ### Cross-Cutting Capabilities
 
@@ -443,10 +515,11 @@ for a working feature.
 | Alerts engine | **NOT BUILT** | `alerts` is a Plus entitlement and F-16 lists 12 alert types, but there is no rules engine, no evaluation job, and no delivery path (in-app, email, SMS or push). The per-stock alert toggle in F-51 is UI state only. |
 | Stripe / payments | **NOT BUILT** | No Stripe code in either repo. `payments` and `subscriptions` empty. Blocked additionally on the browser→backend gap. See F-25. |
 | `api_usage` | **SPECIFIED, NOT IMPLEMENTED** | Collection + rules exist; no middleware records anything. Admin "Usage & API" KPIs read 0. See F-74. |
+| Vendor keys (runtime) | **EMPTY IN `.env`** | 🆕 2026-08-03 audit: only `POLYGON_API_KEY` is set; `FMP`, `FINNHUB`, `FRED`, `BENZINGA`, `TRADIER_ACCESS_TOKEN`, `UNUSUAL_WHALES` and `ANTHROPIC` keys are present-but-empty. Any feature sourced from those vendors — analyst consensus (F-12), earnings depth, options quotes/flow, and **every AI surface** — returns nothing at runtime until the key is funded. May be a local-only `.env`; **verify against prod Secret Manager**. Tracked as O6 in `DELIVERY-PLAN-STATUS.md`. |
 | Per-user engagement counts | **NO SOURCE** | watchlists / holdings / apiCalls / alerts columns in Admin → Users render 0; no backing collection. See F-70. |
 | Options greeks / IV / OI / bid-ask | **VENDOR-BLOCKED** | Hard 403 `NOT_AUTHORIZED` on the Polygon options snapshot endpoint. Values shown are seeded pseudo-random. Also unavailable on this plan: index values (I:SPX, I:VIX), trades/quotes/last-trade, Benzinga endpoints, `/v1/summaries`; 404 on short-interest and futures. Measured plan limits: **exactly 900 s (15 min) delay**, **exactly 5-year rolling history**. |
 | Automated data refresh | **NOT DEPLOYED** | No Cloud Scheduler jobs in any region and no `scheduler-invoker` service account — `create-scheduler-jobs.sh` was never run. With `min-instances=0` the in-process `@Cron` decorators never fire. **No sync job has ever run automatically in production.** |
-| Backend reachable from browser | **NOT DEPLOYED** | `NEXT_PUBLIC_BACKEND_URL` unset → `http://localhost:4100` in the production bundle, blocked as mixed content. Disables Monitor (F-75), extended-hours moves and the vendor market-status pill (F-65), and any future Stripe checkout/webhook. Fix = Firebase Hosting rewrite → Cloud Run, which **requires** `ADMIN_GUARD_TRUST_IAM=false` first, or `/sync/:job/run`, `/purge` and `/retention` become world-callable. |
+| Backend reachable from browser | **NOT DEPLOYED** | `NEXT_PUBLIC_BACKEND_URL` unset → `http://localhost:4400` in the production bundle, blocked as mixed content. Disables Monitor (F-75), extended-hours moves and the vendor market-status pill (F-65), and any future Stripe checkout/webhook. Fix = Firebase Hosting rewrite → Cloud Run, which **requires** `ADMIN_GUARD_TRUST_IAM=false` first, or `/sync/:job/run`, `/purge` and `/retention` become world-callable. |
 | `POLYGON_API_KEY` | **UN-ROTATED** | Key was exposed in chat and has not been rotated. Secret Manager version 4 is enabled. `deploy/rotate-polygon-key.sh` automates everything except generating the replacement key. |
 
 ---

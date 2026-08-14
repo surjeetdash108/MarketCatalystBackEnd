@@ -1,15 +1,15 @@
-import { Injectable } from '@nestjs/common';
-import { PolygonService } from '../vendors/polygon/polygon.service';
+import { Injectable } from "@nestjs/common";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 import {
   AdapterResult,
   capBucket,
   MoverEnrichment,
   MoverEnrichmentAdapter,
-} from './types';
+} from "./types";
 
 @Injectable()
 export class PolygonMoverEnrichmentAdapter implements MoverEnrichmentAdapter {
-  readonly sourceName = 'polygon';
+  readonly sourceName = "polygon";
 
   constructor(private readonly polygon: PolygonService) {}
 
@@ -28,10 +28,10 @@ export class PolygonMoverEnrichmentAdapter implements MoverEnrichmentAdapter {
       source: this.sourceName,
       warnings: [
         {
-          code: 'FIELD_NOT_SUPPORTED',
-          field: 'sector',
+          code: "FIELD_NOT_SUPPORTED",
+          field: "sector",
           message:
-            "Polygon reports a free-text SIC description, not FMP's sector taxonomy — treat as approximate.",
+            "Polygon reports a free-text SIC description, not a normalized sector taxonomy — treat as approximate.",
         },
       ],
     };

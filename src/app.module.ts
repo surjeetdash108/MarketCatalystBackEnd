@@ -1,20 +1,21 @@
-import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { ScheduleModule } from '@nestjs/schedule';
-import { ServeStaticModule } from '@nestjs/serve-static';
-import { join } from 'path';
-import { CommonModule } from './common/common.module';
-import { UserDataModule } from './user-data/user-data.module';
-import { HealthController } from './health/health.controller';
-import { FeatureFlagsModule } from './feature-flags/feature-flags.module';
-import { PlansModule } from './plans/plans.module';
-import { RetentionModule } from './retention/retention.module';
-import { AutoPurgeModule } from './auto-purge/auto-purge.module';
-import { LiveModule } from './live/live.module';
-import { MarketDataModule } from './market-data/market-data.module';
-import { PurgeModule } from './purge/purge.module';
-import { SyncModule } from './sync/sync.module';
-import { Wave3Module } from './vendors/wave3.module';
+import { Module } from "@nestjs/common";
+import { ConfigModule } from "@nestjs/config";
+import { ScheduleModule } from "@nestjs/schedule";
+import { ServeStaticModule } from "@nestjs/serve-static";
+import { join } from "path";
+import { CommonModule } from "./common/common.module";
+import { UserDataModule } from "./user-data/user-data.module";
+import { HealthController } from "./health/health.controller";
+import { FeatureFlagsModule } from "./feature-flags/feature-flags.module";
+import { PlansModule } from "./plans/plans.module";
+import { RetentionModule } from "./retention/retention.module";
+import { AutoPurgeModule } from "./auto-purge/auto-purge.module";
+import { LiveModule } from "./live/live.module";
+import { MarketDataModule } from "./market-data/market-data.module";
+import { PurgeModule } from "./purge/purge.module";
+import { SyncModule } from "./sync/sync.module";
+import { ApiHealthModule } from "./api-health/api-health.module";
+import { BlogsModule } from "./blogs/blogs.module";
 
 /**
  * TWO DEPLOYMENTS, ONE IMAGE.
@@ -37,46 +38,59 @@ import { Wave3Module } from './vendors/wave3.module';
  * or the autoscaler signal with instances holding long-lived SSE connections.
  * The two want opposite Cloud Run settings — see deploy/DEPLOY.md §3b.
  */
-const isLiveRole = (process.env.APP_ROLE ?? 'worker').trim().toLowerCase() === 'live';
+const isLiveRole =
+  (process.env.APP_ROLE ?? "worker").trim().toLowerCase() === "live";
 
-/** Batch and admin surface — worker role only. */
+/** Batch surface — worker role only. */
 const workerModules = isLiveRole
   ? []
   : [
       SyncModule,
       PurgeModule,
       FeatureFlagsModule,
-      PlansModule,
       RetentionModule,
       AutoPurgeModule,
-      Wave3Module,
       // The ops monitor (public/index.html) drives the admin endpoints above, so
       // it belongs on the private service with them. Serving it from the public
       // live service would publish the internal ops surface to anyone who loads
       // the root path, and every button on it would 404 there anyway.
       // `exclude` keeps the API routes from being shadowed by the static handler.
       ServeStaticModule.forRoot({
-        rootPath: join(__dirname, '..', 'public'),
+        rootPath: join(__dirname, "..", "public"),
         exclude: [
-          '/health',
-          '/sync/{*splat}',
-          '/purge/{*splat}',
-          '/live/{*splat}',
-          '/market-data/{*splat}',
-          '/feature-flags/{*splat}',
-          '/retention/{*splat}',
+          "/health",
+          "/sync/{*splat}",
+          "/purge/{*splat}",
+          "/live/{*splat}",
+          "/market-data/{*splat}",
+          "/feature-flags/{*splat}",
+          "/retention/{*splat}",
         ],
       }),
     ];
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: ".env" }),
     ScheduleModule.forRoot(),
     CommonModule,
     LiveModule,
     MarketDataModule,
     UserDataModule,
+    // Mounted in BOTH roles: the public `live` service must serve the admin
+    // console's backend (/admin/* read-models, /plans, PATCH /admin/plans/:id).
+    // Safe to expose publicly ONLY because the live service runs
+    // ADMIN_GUARD_TRUST_IAM=false, so every /admin/* and /feature-flags/* call
+    // requires a verified Firebase admin token — a header-less request is
+    // refused there, not trusted. (PlansModule brings FeatureFlagsModule.)
+    PlansModule,
+    // GET /admin/api-health (AdminGuard): route inventory + self-probe for the
+    // console's Monitor tab. Both roles so the live service serves it too.
+    ApiHealthModule,
+    // /admin/blogs CRUD (AdminGuard): reads/writes the SAME public `blogs`
+    // collection the website renders (marketcatalyst.ai/posts). Both roles so
+    // the console — served by the live service — can drive it.
+    BlogsModule,
     ...workerModules,
   ],
   controllers: [HealthController],

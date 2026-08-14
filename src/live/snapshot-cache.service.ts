@@ -1,7 +1,7 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { createHash } from 'crypto';
-import { ConfigService } from '@nestjs/config';
-import { fetchJson } from '../common/http.util';
+import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
+import { createHash } from "crypto";
+import { ConfigService } from "@nestjs/config";
+import { fetchJson } from "../common/http.util";
 
 /**
  * O(1)-upstream price cache: one vendor call per refresh interval, regardless
@@ -34,12 +34,15 @@ const MAX_TRACKED = 200;
 /** True during US extended trading (04:00–20:00 ET weekdays) — the only window
  *  in which a delayed-quote refresh can return something new. */
 function inExtendedSession(now = new Date()): boolean {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York', hour12: false, weekday: 'short', hour: 'numeric',
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour12: false,
+    weekday: "short",
+    hour: "numeric",
   }).formatToParts(now);
-  const wd = parts.find((p) => p.type === 'weekday')?.value ?? 'Mon';
-  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '12') % 24;
-  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(wd);
+  const wd = parts.find((p) => p.type === "weekday")?.value ?? "Mon";
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "12") % 24;
+  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(wd);
   return weekday >= 1 && weekday <= 5 && hour >= 4 && hour < 20;
 }
 
@@ -91,16 +94,22 @@ export class SnapshotCacheService implements OnModuleDestroy {
   private refreshing = false;
 
   /** Observability: proves upstream load is decoupled from user count. */
-  readonly stats = { upstreamCalls: 0, servedRequests: 0, lastRefreshMs: 0, lastError: '' };
+  readonly stats = {
+    upstreamCalls: 0,
+    servedRequests: 0,
+    lastRefreshMs: 0,
+    lastError: "",
+  };
 
   constructor(private readonly config: ConfigService) {
-    this.apiKey = this.config.get('POLYGON_API_KEY', '');
+    this.apiKey = this.config.get("POLYGON_API_KEY", "");
     this.baseUrl = this.config
-      .get('POLYGON_API_BASE_URL', 'https://api.polygon.io')
-      .replace(/\/$/, '');
-    const raw = String(this.config.get('SNAPSHOT_REFRESH_MS', '')).trim();
-    const parsed = raw === '' ? NaN : Number(raw);
-    this.refreshMs = Number.isFinite(parsed) && parsed > 0 ? parsed : REFRESH_MS_DEFAULT;
+      .get("POLYGON_API_BASE_URL", "https://api.polygon.io")
+      .replace(/\/$/, "");
+    const raw = String(this.config.get("SNAPSHOT_REFRESH_MS", "")).trim();
+    const parsed = raw === "" ? NaN : Number(raw);
+    this.refreshMs =
+      Number.isFinite(parsed) && parsed > 0 ? parsed : REFRESH_MS_DEFAULT;
   }
 
   onModuleDestroy() {
@@ -112,7 +121,9 @@ export class SnapshotCacheService implements OnModuleDestroy {
    * a request must not be able to trigger an upstream call, or 10k concurrent
    * cold requests would produce 10k upstream calls (a cache stampede).
    */
-  async get(tickers: string[]): Promise<{ quotes: SnapshotQuote[]; ageMs: number }> {
+  async get(
+    tickers: string[],
+  ): Promise<{ quotes: SnapshotQuote[]; ageMs: number }> {
     const now = Date.now();
     this.stats.servedRequests++;
 
@@ -140,15 +151,20 @@ export class SnapshotCacheService implements OnModuleDestroy {
     const settled = Date.now();
     const oldest = tickers
       .map((t) => this.cache.get(t)?.fetchedAt)
-      .filter((v): v is number => typeof v === 'number');
-    const ageMs = oldest.length ? Math.max(0, settled - Math.min(...oldest)) : 0;
+      .filter((v): v is number => typeof v === "number");
+    const ageMs = oldest.length
+      ? Math.max(0, settled - Math.min(...oldest))
+      : 0;
 
     return { quotes, ageMs };
   }
 
   /** Weak ETag over the payload, so unchanged intervals return 304. */
   etagFor(quotes: SnapshotQuote[]): string {
-    const h = createHash('sha1').update(JSON.stringify(quotes)).digest('hex').slice(0, 16);
+    const h = createHash("sha1")
+      .update(JSON.stringify(quotes))
+      .digest("hex")
+      .slice(0, 16);
     return `W/"${h}"`;
   }
 
@@ -163,7 +179,7 @@ export class SnapshotCacheService implements OnModuleDestroy {
         }
       }
       if (this.demand.size === 0) {
-        clearInterval(this.timer!);
+        clearInterval(this.timer);
         this.timer = null;
         return;
       }
@@ -194,7 +210,7 @@ export class SnapshotCacheService implements OnModuleDestroy {
     this.refreshing = true;
     const started = Date.now();
     try {
-      const list = tickers.join(',');
+      const list = tickers.join(",");
       // v3 universal snapshot rather than the v2 per-ticker one. Same plan, same
       // delay, same single call for N tickers — but it also carries the
       // early/late trading session breakdown and the last minute bar, so the
@@ -210,7 +226,7 @@ export class SnapshotCacheService implements OnModuleDestroy {
         this.cache.set(t.ticker, { quote: this.map(t), fetchedAt: now });
       }
       this.stats.lastRefreshMs = Date.now() - started;
-      this.stats.lastError = '';
+      this.stats.lastError = "";
     } catch (err) {
       // Keep serving stale data rather than blanking the UI — the previous
       // value is far more useful than nothing on a delayed feed.
@@ -226,8 +242,9 @@ export class SnapshotCacheService implements OnModuleDestroy {
     const min = t.last_minute ?? {};
     // `last_updated` is NANOSECONDS since epoch on this endpoint; dividing by
     // 1e6 yields ms. Treating it as ms would place it ~56,000 years ahead.
-    const toMs = (v: unknown) => (typeof v === 'number' ? Math.round(v / 1e6) : null);
-    const num = (v: unknown) => (typeof v === 'number' ? v : null);
+    const toMs = (v: unknown) =>
+      typeof v === "number" ? Math.round(v / 1e6) : null;
+    const num = (v: unknown) => (typeof v === "number" ? v : null);
     // `session.price` is the vendor's own resolved last price; fall back to the
     // last minute bar and then the previous close for a pre-open request.
     const price = num(s.price) ?? num(min.close) ?? num(s.previous_close);

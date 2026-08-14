@@ -1,7 +1,7 @@
-import { Controller, Get, Header, Req, Res, Sse } from '@nestjs/common';
-import type { Request, Response } from 'express';
-import { Observable, interval, map, merge } from 'rxjs';
-import { TapeService, type TapeFrame } from './tape.service';
+import { Controller, Get, Header, Req, Res, Sse } from "@nestjs/common";
+import type { Request, Response } from "express";
+import { Observable, interval, map, merge } from "rxjs";
+import { TapeService, type TapeFrame } from "./tape.service";
 
 /**
  * Header ticker tape, streamed from our origin.
@@ -34,7 +34,7 @@ interface SseEvent {
  */
 const HEARTBEAT_MS = 20_000;
 
-@Controller('live')
+@Controller("live")
 export class TapeController {
   constructor(private readonly tape: TapeService) {}
 
@@ -47,7 +47,7 @@ export class TapeController {
    *   event: heartbeat  every 20s, so a silent market is distinguishable from
    *                     a dead connection
    */
-  @Sse('tape/stream')
+  @Sse("tape/stream")
   stream(): Observable<SseEvent> {
     // Ref counting is tied to the CLIENT's subscription, not to this handler
     // running: the teardown below is what fires when the browser disconnects
@@ -61,14 +61,14 @@ export class TapeController {
 
     const frames$ = this.tape.frames$.pipe(
       map((f) => ({
-        type: 'tape',
+        type: "tape",
         data: f as unknown as Record<string, unknown>,
       })),
     );
 
     const heartbeat$ = interval(HEARTBEAT_MS).pipe(
       map(() => ({
-        type: 'heartbeat',
+        type: "heartbeat",
         data: {
           at: new Date().toISOString(),
           stale: this.tape.lastKnownFrame?.stale ?? true,
@@ -88,17 +88,20 @@ export class TapeController {
    * upstream call — TapeService.currentFrame() refuses to refetch inside a
    * refresh window.
    */
-  @Get('tape')
-  @Header('Cache-Control', 'public, max-age=30, s-maxage=60, stale-while-revalidate=120')
+  @Get("tape")
+  @Header(
+    "Cache-Control",
+    "public, max-age=30, s-maxage=60, stale-while-revalidate=120",
+  )
   async current(@Req() req: Request, @Res() res: Response) {
     const frame: TapeFrame = await this.tape.currentFrame();
     const etag = this.tape.etagFor(frame);
 
-    if (req.headers['if-none-match'] === etag) {
-      res.status(304).setHeader('ETag', etag).end();
+    if (req.headers["if-none-match"] === etag) {
+      res.status(304).setHeader("ETag", etag).end();
       return;
     }
-    res.setHeader('ETag', etag);
+    res.setHeader("ETag", etag);
     res.json(frame);
   }
 
@@ -109,11 +112,11 @@ export class TapeController {
    * each other, the broadcast has broken and every viewer is costing a vendor
    * request.
    */
-  @Get('tape/stats')
+  @Get("tape/stats")
   stats() {
     return {
       ...this.tape.stats,
-      note: 'upstreamCalls should stay flat (~1/min) no matter how large clients gets.',
+      note: "upstreamCalls should stay flat (~1/min) no matter how large clients gets.",
     };
   }
 }
