@@ -267,6 +267,19 @@ export class FinancialsJob implements OnModuleInit {
       );
       const estimates = await this.estimatesFor(batch);
 
+      // Existing docs for this batch — used to PRESERVE FMP-derived fields when a
+      // fetch comes back empty (FMP can silently return empty under load). Without
+      // this, a throttled run would overwrite good annualEstimates/epsEstimate with
+      // nulls and coverage would oscillate instead of converging.
+      const prevSnap = await this.firebase.firestore.getAll(
+        ...batch.map((t) =>
+          this.firebase.firestore.collection("financials").doc(t),
+        ),
+      );
+      const prevById = new Map(
+        prevSnap.filter((s) => s.exists).map((s) => [s.id, s.data() ?? {}]),
+      );
+
       const docs: { id: string; data: Record<string, unknown> }[] = [];
       let failed = 0;
       for (const ticker of batch) {
@@ -280,17 +293,27 @@ export class FinancialsJob implements OnModuleInit {
             failed++;
             continue;
           }
+          const prev = prevById.get(ticker) as
+            | { quarters?: QuarterFinancials[]; annualEstimates?: unknown[] }
+            | undefined;
           // Full EPS-estimate history from the optional adapter (FMP) fills
           // %surp for EVERY quarter; the earnings_events match is the fallback
-          // (only ~180 days) when the adapter is off or has no coverage.
+          // (only ~180 days) when the adapter is off or has no coverage. A prior
+          // stored estimate is the last resort so a transient empty FMP response
+          // never wipes an already-known %surp.
           const fmpQ = this.estimates
             ? await this.estimates.getQuarterlyEstimates(ticker)
             : null;
+          const prevEpsByEnd = new Map(
+            (prev?.quarters ?? []).map((q) => [q.endDate, q.epsEstimate]),
+          );
           const quarters: QuarterFinancials[] = rows.map((r) =>
             mapQuarterRow(
               r,
               fmpQ?.epsEstimateFor(r.endDate) ??
-                this.matchEstimate(estimates, ticker, r.endDate),
+                this.matchEstimate(estimates, ticker, r.endDate) ??
+                prevEpsByEnd.get(r.endDate) ??
+                null,
             ),
           );
           // ── Annual (fiscal-year) history — actuals only, Polygon ──────────
@@ -312,10 +335,19 @@ export class FinancialsJob implements OnModuleInit {
           }
 
           // Forward annual estimates (the `*YYYY` rows) — only when the optional
-          // estimates adapter is configured; empty array otherwise.
-          const annualEstimates = this.estimates
+          // estimates adapter is configured; empty array otherwise. If FMP
+          // returns nothing this run (transient empty), keep the previously
+          // stored estimates rather than wiping them to [].
+          let annualEstimates: unknown[] = this.estimates
             ? await this.estimates.getForwardAnnual(ticker).catch(() => [])
             : [];
+          if (
+            annualEstimates.length === 0 &&
+            Array.isArray(prev?.annualEstimates) &&
+            prev.annualEstimates.length > 0
+          ) {
+            annualEstimates = prev.annualEstimates;
+          }
           docs.push({
             id: ticker,
             data: {

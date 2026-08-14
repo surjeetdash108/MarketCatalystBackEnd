@@ -186,8 +186,12 @@ export class FmpService {
     ticker: string,
   ): Promise<FmpAnalystEstimateRow[]> {
     if (!this.apiKey) return [];
+    // limit=40: enough annual rows that the forward years (current FY onward)
+    // are always in the response regardless of FMP's sort order. limit=8 could
+    // return only old years for companies with long estimate histories, which
+    // the `>= thisYear` filter in the adapter then drops to empty.
     const rows = await this.get(
-      `analyst-estimates?symbol=${encodeURIComponent(ticker)}&period=annual&limit=8`,
+      `analyst-estimates?symbol=${encodeURIComponent(ticker)}&period=annual&limit=40`,
     );
     return rows.map((r) => {
       const o = r as Record<string, unknown>;
