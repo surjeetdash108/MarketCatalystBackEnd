@@ -8,10 +8,15 @@ import { EARNINGS_ESTIMATES_ADAPTER } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 
 const JOB_NAME = "earnings";
-// Past-only window. Polygon is the sole source: it has no earnings-calendar or
-// estimate feed, so the calendar is built from reported SEC financials keyed on
-// `filing_date`. There is therefore no lookahead — only already-filed quarters.
+// Reported quarters come from Polygon SEC financials keyed on `filing_date`
+// (past-only — Polygon has no calendar/estimate feed). When an estimates adapter
+// (FMP) is configured it ALSO adds a forward window of upcoming reports, filling
+// the calendar gap Polygon structurally cannot: those rows carry consensus
+// estimates and `epsActual: null` until the company files.
 const LOOKBACK_DAYS = 180;
+// How far ahead to pull the FMP upcoming-earnings calendar. Only used when the
+// estimates adapter is present; 0 upcoming rows written otherwise.
+const LOOKAHEAD_DAYS = 45;
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -88,13 +93,51 @@ export class EarningsJob implements OnModuleInit {
             },
           };
         });
+      // Forward calendar (FMP): upcoming reports carry estimates but no actual
+      // yet — written as `epsActual: null` rows so the hub shows today's and
+      // coming reporters. Reported rows always win on id collision. Skipped
+      // entirely when no estimates adapter is configured (Polygon-only build).
+      let forwardCount = 0;
+      if (this.estimates) {
+        const fwdTo = isoDate(addDays(new Date(), LOOKAHEAD_DAYS));
+        const upcoming = await this.estimates.getUpcoming(to, fwdTo);
+        const reportedIds = new Set(docs.map((d) => d.id));
+        const nameByTicker = await this.loadCompanyNames();
+        for (const u of upcoming) {
+          // FMP's calendar is WORLDWIDE (Shenzhen/HK/EU tickers etc.). This app
+          // tracks only the US Polygon universe, so restrict upcoming rows to
+          // tickers we actually cover — which also guarantees a display name.
+          const name = nameByTicker.get(u.ticker);
+          if (!name) continue;
+          const id = `${u.ticker}_${u.date}`;
+          if (reportedIds.has(id)) continue; // a reported quarter already covers it
+          docs.push({
+            id,
+            data: {
+              ticker: u.ticker,
+              companyName: name,
+              date: u.date,
+              periodEnd: null,
+              fiscalPeriod: null,
+              fiscalYear: null,
+              session: null,
+              epsEstimate: u.epsEstimate,
+              epsActual: null,
+              revenueEstimate: u.revenueEstimate,
+              revenueActual: null,
+              updatedAt: new Date().toISOString(),
+            },
+          });
+          forwardCount++;
+        }
+      }
+
       await chunkedBatchSet(this.firebase.firestore, "earnings_events", docs);
 
-      // Full refresh: Polygon is the sole source, so the collection must hold
-      // exactly this run's reported rows. Delete any doc not in the new set —
-      // notably legacy calendar docs that carried epsEstimate but no actual
-      // (they'd otherwise surface as "EPS estimate $X / actual Pending", which
-      // Polygon can never produce).
+      // Full refresh: the collection must hold exactly this run's rows (reported
+      // quarters + FMP upcoming). Delete any doc not in the new set — including
+      // forward rows whose date passed without a filing (they roll out of the
+      // upcoming window and are replaced by the reported quarter, or dropped).
       const keep = new Set(docs.map((d) => d.id));
       const col = this.firebase.firestore.collection("earnings_events");
       const stale = (await col.listDocuments()).filter(
@@ -108,12 +151,17 @@ export class EarningsJob implements OnModuleInit {
 
       await this.meta.record(JOB_NAME, { ok: true, count: docs.length });
       const estNote = this.estimates
-        ? `, ${estimateMatches} with ${this.estimates.sourceName} estimates`
+        ? `, ${estimateMatches} with ${this.estimates.sourceName} estimates, ${forwardCount} upcoming`
         : "";
       this.logger.log(
-        `earnings: wrote ${docs.length} reported quarters (${from}..${to})${estNote}, removed ${stale.length} stale`,
+        `earnings: wrote ${docs.length} rows (${from}..${to})${estNote}, removed ${stale.length} stale`,
       );
-      return { count: docs.length, removed: stale.length, estimateMatches };
+      return {
+        count: docs.length,
+        removed: stale.length,
+        estimateMatches,
+        forwardCount,
+      };
     } catch (err) {
       await this.meta.record(JOB_NAME, {
         ok: false,
@@ -121,5 +169,20 @@ export class EarningsJob implements OnModuleInit {
       });
       throw err;
     }
+  }
+
+  /** ticker → display name from the `companies` collection (doc id is ticker),
+   * so FMP upcoming rows (symbol-only) show a company name in the hub. */
+  private async loadCompanyNames(): Promise<Map<string, string>> {
+    const snap = await this.firebase.firestore
+      .collection("companies")
+      .select("name")
+      .get();
+    const map = new Map<string, string>();
+    snap.forEach((d) => {
+      const n = d.get("name");
+      if (typeof n === "string" && n) map.set(d.id.toUpperCase(), n);
+    });
+    return map;
   }
 }

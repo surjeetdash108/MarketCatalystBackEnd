@@ -19,6 +19,16 @@ export interface EarningsEstimatesLookup {
   estimateFor(ticker: string, date: string | null): EarningsEstimate | null;
 }
 
+/** An upcoming (not-yet-reported) earnings date + its consensus estimates. */
+export interface UpcomingEarnings {
+  ticker: string;
+  /** Expected report date (YYYY-MM-DD). */
+  date: string;
+  epsEstimate: number | null;
+  /** Raw dollars. */
+  revenueEstimate: number | null;
+}
+
 /** One forward fiscal year of consensus (the `*2026–28` rows). */
 export interface ForwardAnnualEstimate {
   fiscalYear: string;
@@ -36,6 +46,9 @@ export interface EarningsEstimatesAdapter {
   readonly sourceName: string;
   /** One-shot load of every company's estimates across [from, to] (YYYY-MM-DD). */
   loadWindow(from: string, to: string): Promise<EarningsEstimatesLookup>;
+  /** Upcoming reports (with estimates, no actual yet) across [from, to] — the
+   * forward calendar Polygon cannot produce. Fills the hub's "today"/coming rows. */
+  getUpcoming(from: string, to: string): Promise<UpcomingEarnings[]>;
   /** Forward annual estimates (current fiscal year onward) for one ticker. */
   getForwardAnnual(ticker: string): Promise<ForwardAnnualEstimate[]>;
   /** Full quarterly EPS-estimate history for one ticker (drives %surp). */
@@ -112,6 +125,24 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
         return best?.est ?? null;
       },
     };
+  }
+
+  async getUpcoming(from: string, to: string): Promise<UpcomingEarnings[]> {
+    const rows = await this.fmp.getEarningsCalendar(from, to).catch((err) => {
+      this.logger.warn(
+        `FMP upcoming calendar failed (${from}..${to}): ${err.message}`,
+      );
+      return [];
+    });
+    return rows
+      .filter((r) => r.symbol && r.date)
+      .filter((r) => r.epsEstimated != null || r.revenueEstimated != null)
+      .map((r) => ({
+        ticker: r.symbol.toUpperCase(),
+        date: r.date,
+        epsEstimate: r.epsEstimated ?? null,
+        revenueEstimate: r.revenueEstimated ?? null,
+      }));
   }
 
   async getForwardAnnual(ticker: string): Promise<ForwardAnnualEstimate[]> {
