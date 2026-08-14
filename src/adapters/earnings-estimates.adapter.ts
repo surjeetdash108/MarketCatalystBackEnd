@@ -71,6 +71,34 @@ function daysBetween(a: string, b: string): number {
   return Math.abs((Date.parse(a) - Date.parse(b)) / 86_400_000);
 }
 
+/** Keep each earnings-calendar slice well under FMP's ~4000-row request cap. */
+const CALENDAR_CHUNK_DAYS = 45;
+
+/** Split [from,to] (inclusive, YYYY-MM-DD) into <=`days`-long [start,end] slices. */
+function chunkWindow(
+  from: string,
+  to: string,
+  days: number,
+): Array<[string, string]> {
+  const DAY = 86_400_000;
+  const start0 = Date.parse(from);
+  const end = Date.parse(to);
+  if (!Number.isFinite(start0) || !Number.isFinite(end) || start0 > end) {
+    return from && to ? [[from, to]] : [];
+  }
+  const out: Array<[string, string]> = [];
+  let start = start0;
+  while (start <= end) {
+    const sliceEnd = Math.min(start + (days - 1) * DAY, end);
+    out.push([
+      new Date(start).toISOString().slice(0, 10),
+      new Date(sliceEnd).toISOString().slice(0, 10),
+    ]);
+    start = sliceEnd + DAY;
+  }
+  return out;
+}
+
 /**
  * FMP-backed estimates via the bulk /earning_calendar endpoint (one request for
  * the whole window). Estimates are keyed by ticker; `estimateFor` returns the
@@ -128,21 +156,35 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
   }
 
   async getUpcoming(from: string, to: string): Promise<UpcomingEarnings[]> {
-    const rows = await this.fmp.getEarningsCalendar(from, to).catch((err) => {
-      this.logger.warn(
-        `FMP upcoming calendar failed (${from}..${to}): ${err.message}`,
-      );
-      return [];
-    });
-    return rows
-      .filter((r) => r.symbol && r.date)
-      .filter((r) => r.epsEstimated != null || r.revenueEstimated != null)
-      .map((r) => ({
-        ticker: r.symbol.toUpperCase(),
-        date: r.date,
-        epsEstimate: r.epsEstimated ?? null,
-        revenueEstimate: r.revenueEstimated ?? null,
-      }));
+    // FMP's earnings-calendar caps a SINGLE request at ~4000 rows and silently
+    // drops the overflow (keeping the far end of the window), so a multi-month
+    // span must be pulled in <=CHUNK_DAYS slices and merged, or the near-term
+    // dates vanish. Dedup by symbol+date across the slice boundaries.
+    const seen = new Set<string>();
+    const out: UpcomingEarnings[] = [];
+    for (const [f, t] of chunkWindow(from, to, CALENDAR_CHUNK_DAYS)) {
+      const rows = await this.fmp.getEarningsCalendar(f, t).catch((err) => {
+        this.logger.warn(
+          `FMP upcoming calendar failed (${f}..${t}): ${err.message}`,
+        );
+        return [];
+      });
+      for (const r of rows) {
+        if (!r.symbol || !r.date) continue;
+        if (r.epsEstimated == null && r.revenueEstimated == null) continue;
+        const ticker = r.symbol.toUpperCase();
+        const key = `${ticker}_${r.date}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          ticker,
+          date: r.date,
+          epsEstimate: r.epsEstimated ?? null,
+          revenueEstimate: r.revenueEstimated ?? null,
+        });
+      }
+    }
+    return out;
   }
 
   async getForwardAnnual(ticker: string): Promise<ForwardAnnualEstimate[]> {
