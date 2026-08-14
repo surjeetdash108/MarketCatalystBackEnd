@@ -2,6 +2,10 @@ import { Module } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PolygonModule } from "../vendors/polygon/polygon.module";
 import { PolygonService } from "../vendors/polygon/polygon.service";
+import { FmpModule } from "../vendors/fmp/fmp.module";
+import { FmpService } from "../vendors/fmp/fmp.service";
+import { FmpEarningsEstimatesAdapter } from "./earnings-estimates.adapter";
+import { FmpAnalystRatingsAdapter } from "./analyst-ratings.adapter";
 import { CompositeCompanyProfileAdapter } from "./composite-company-profile.adapter";
 import { CompositeMoverEnrichmentAdapter } from "./composite-mover-enrichment.adapter";
 import { CompositeMoversAdapter } from "./composite-movers.adapter";
@@ -18,6 +22,7 @@ import { CompositeIposAdapter, PolygonIposAdapter } from "./ipos.adapters";
 import {
   CompositeSectorsAdapter,
   PolygonSectorsAdapter,
+  FmpSectorsAdapter,
 } from "./sectors.adapters";
 import {
   CompositeFinancialsAdapter,
@@ -40,11 +45,15 @@ import {
   NEWS_ADAPTER,
   QUOTE_ADAPTER,
   SECTORS_ADAPTER,
+  EARNINGS_ESTIMATES_ADAPTER,
+  ANALYST_RATINGS_ADAPTER,
 } from "./types";
 
 // Every composite is Polygon-only. The list is where a second vendor becomes
 // selectable again — add its name here and one entry to the bySource map.
 const POLYGON_ONLY_SOURCES = ["polygon", "none"];
+/** Domains where FMP is a selectable primary/fallback (has an adapter here). */
+const POLYGON_OR_FMP_SOURCES = ["polygon", "fmp", "none"];
 
 function parseSource(config, key, validSources, fallbackDefault) {
   const raw = config.get(key, fallbackDefault);
@@ -97,7 +106,7 @@ function buildComposite(
 }
 
 @Module({
-  imports: [PolygonModule],
+  imports: [PolygonModule, FmpModule],
   providers: [
     PolygonCompanyProfileAdapter,
     PolygonMoversAdapter,
@@ -191,15 +200,18 @@ function buildComposite(
     },
     {
       provide: SECTORS_ADAPTER,
-      inject: [ConfigService, PolygonService],
-      useFactory: (config, polygon) =>
+      inject: [ConfigService, PolygonService, FmpService],
+      useFactory: (config, polygon, fmp: FmpService) =>
         buildComposite(
           config,
           "SECTORS",
-          POLYGON_ONLY_SOURCES,
+          // FMP is selectable here (real aggregates) — SECTORS_SOURCE=fmp or
+          // SECTORS_FALLBACK_SOURCE=fmp. Defaults stay polygon/none.
+          POLYGON_OR_FMP_SOURCES,
           { primary: "polygon", fallback: "none" },
           {
             polygon: () => new PolygonSectorsAdapter(polygon),
+            fmp: () => new FmpSectorsAdapter(fmp),
             none: () => null,
           },
           CompositeSectorsAdapter,
@@ -269,6 +281,36 @@ function buildComposite(
           CompositeFinancialsAdapter,
         ),
     },
+    {
+      // Opt-in estimates seam. Defaults to "none" → null, so the earnings job is
+      // untouched until EARNINGS_ESTIMATES_SOURCE=fmp (and FMP_API_KEY) are set.
+      provide: EARNINGS_ESTIMATES_ADAPTER,
+      inject: [ConfigService, FmpService],
+      useFactory: (config: ConfigService, fmp: FmpService) => {
+        const source = parseSource(
+          config,
+          "EARNINGS_ESTIMATES_SOURCE",
+          ["fmp", "none"],
+          "none",
+        );
+        return source === "fmp" ? new FmpEarningsEstimatesAdapter(fmp) : null;
+      },
+    },
+    {
+      // Opt-in analyst-ratings seam. Defaults to "none" → null, so the
+      // analyst-actions job stays a no-op until ANALYST_SOURCE=fmp.
+      provide: ANALYST_RATINGS_ADAPTER,
+      inject: [ConfigService, FmpService],
+      useFactory: (config: ConfigService, fmp: FmpService) => {
+        const source = parseSource(
+          config,
+          "ANALYST_SOURCE",
+          ["fmp", "none"],
+          "none",
+        );
+        return source === "fmp" ? new FmpAnalystRatingsAdapter(fmp) : null;
+      },
+    },
   ],
   exports: [
     COMPANY_PROFILE_ADAPTER,
@@ -282,6 +324,8 @@ function buildComposite(
     MARKET_BARS_ADAPTER,
     TICKER_UNIVERSE_ADAPTER,
     FINANCIALS_ADAPTER,
+    EARNINGS_ESTIMATES_ADAPTER,
+    ANALYST_RATINGS_ADAPTER,
   ],
 })
 export class AdaptersModule {}

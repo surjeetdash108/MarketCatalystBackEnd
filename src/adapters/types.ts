@@ -260,6 +260,14 @@ export const TICKER_UNIVERSE_ADAPTER: unique symbol = Symbol(
   "TICKER_UNIVERSE_ADAPTER",
 );
 export const FINANCIALS_ADAPTER: unique symbol = Symbol("FINANCIALS_ADAPTER");
+/** Optional (FMP) earnings-estimates seam; null when EARNINGS_ESTIMATES_SOURCE=none. */
+export const EARNINGS_ESTIMATES_ADAPTER: unique symbol = Symbol(
+  "EARNINGS_ESTIMATES_ADAPTER",
+);
+/** Optional (FMP) analyst-ratings seam; null when ANALYST_SOURCE=none. */
+export const ANALYST_RATINGS_ADAPTER: unique symbol = Symbol(
+  "ANALYST_RATINGS_ADAPTER",
+);
 
 export function capBucket(marketCap: number | null): CapBucket | null {
   if (marketCap == null) return null;

@@ -1,9 +1,11 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { chunkedBatchSet } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { SyncRegistry } from "../common/sync-registry.service";
+import { EARNINGS_ESTIMATES_ADAPTER } from "../adapters/types";
+import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 
 const JOB_NAME = "earnings";
 // Past-only window. Polygon is the sole source: it has no earnings-calendar or
@@ -30,6 +32,10 @@ export class EarningsJob implements OnModuleInit {
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
+    // Optional supplementary estimates (FMP). null when EARNINGS_ESTIMATES_SOURCE
+    // = "none" (default) — the job then behaves exactly as a Polygon-only build.
+    @Inject(EARNINGS_ESTIMATES_ADAPTER)
+    private readonly estimates: EarningsEstimatesAdapter | null,
   ) {}
 
   onModuleInit() {
@@ -49,27 +55,39 @@ export class EarningsJob implements OnModuleInit {
       const to = isoDate(new Date());
       const from = isoDate(addDays(new Date(), -LOOKBACK_DAYS));
       const rows = await this.polygon.getFinancialsByFilingDate(from, to);
+      // Optional analyst-estimate overlay (FMP). One bulk load for the window;
+      // null/no-match leaves the actuals-only behaviour untouched.
+      const est = this.estimates
+        ? await this.estimates.loadWindow(from, to)
+        : null;
+      let estimateMatches = 0;
       const docs = rows
         .filter((r) => r.filingDate)
-        .map((r) => ({
-          id: `${r.ticker}_${r.filingDate}`,
-          data: {
-            ticker: r.ticker,
-            companyName: r.companyName,
-            // Reporting date = SEC filing date (Polygon has no announcement feed).
-            date: r.filingDate,
-            periodEnd: r.periodEnd,
-            fiscalPeriod: r.fiscalPeriod,
-            fiscalYear: r.fiscalYear,
-            // No session / estimate feed from Polygon — actuals only.
-            session: null,
-            epsEstimate: null,
-            epsActual: r.epsActual,
-            revenueEstimate: null,
-            revenueActual: r.revenueActual,
-            updatedAt: new Date().toISOString(),
-          },
-        }));
+        .map((r) => {
+          const e = est?.estimateFor(r.ticker, r.filingDate) ?? null;
+          if (e && (e.epsEstimate != null || e.revenueEstimate != null))
+            estimateMatches++;
+          return {
+            id: `${r.ticker}_${r.filingDate}`,
+            data: {
+              ticker: r.ticker,
+              companyName: r.companyName,
+              // Reporting date = SEC filing date (Polygon has no announcement feed).
+              date: r.filingDate,
+              periodEnd: r.periodEnd,
+              fiscalPeriod: r.fiscalPeriod,
+              fiscalYear: r.fiscalYear,
+              // Session stays null (no feed); estimates come from the optional
+              // adapter when configured, else null (Polygon has none).
+              session: null,
+              epsEstimate: e?.epsEstimate ?? null,
+              epsActual: r.epsActual,
+              revenueEstimate: e?.revenueEstimate ?? null,
+              revenueActual: r.revenueActual,
+              updatedAt: new Date().toISOString(),
+            },
+          };
+        });
       await chunkedBatchSet(this.firebase.firestore, "earnings_events", docs);
 
       // Full refresh: Polygon is the sole source, so the collection must hold
@@ -89,10 +107,13 @@ export class EarningsJob implements OnModuleInit {
       }
 
       await this.meta.record(JOB_NAME, { ok: true, count: docs.length });
+      const estNote = this.estimates
+        ? `, ${estimateMatches} with ${this.estimates.sourceName} estimates`
+        : "";
       this.logger.log(
-        `earnings: wrote ${docs.length} reported quarters (${from}..${to}), removed ${stale.length} stale`,
+        `earnings: wrote ${docs.length} reported quarters (${from}..${to})${estNote}, removed ${stale.length} stale`,
       );
-      return { count: docs.length, removed: stale.length };
+      return { count: docs.length, removed: stale.length, estimateMatches };
     } catch (err) {
       await this.meta.record(JOB_NAME, {
         ok: false,

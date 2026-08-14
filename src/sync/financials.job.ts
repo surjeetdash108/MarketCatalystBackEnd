@@ -1,10 +1,12 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { chunkedBatchSet } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { activeUniverse } from "../common/ticker-universe";
 import { PolygonService } from "../vendors/polygon/polygon.service";
+import { EARNINGS_ESTIMATES_ADAPTER } from "../adapters/types";
+import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 
 /**
  * 10-quarter quarterly financials → `financials/{ticker}` (delivery-plan R29).
@@ -177,6 +179,10 @@ export class FinancialsJob implements OnModuleInit {
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
+    // Optional forward-estimate source (FMP). null when EARNINGS_ESTIMATES_SOURCE
+    // = "none" (default) — the doc then carries no `annualEstimates` field.
+    @Inject(EARNINGS_ESTIMATES_ADAPTER)
+    private readonly estimates: EarningsEstimatesAdapter | null,
   ) {}
 
   onModuleInit() {
@@ -270,8 +276,18 @@ export class FinancialsJob implements OnModuleInit {
             failed++;
             continue;
           }
+          // Full EPS-estimate history from the optional adapter (FMP) fills
+          // %surp for EVERY quarter; the earnings_events match is the fallback
+          // (only ~180 days) when the adapter is off or has no coverage.
+          const fmpQ = this.estimates
+            ? await this.estimates.getQuarterlyEstimates(ticker)
+            : null;
           const quarters: QuarterFinancials[] = rows.map((r) =>
-            mapQuarterRow(r, this.matchEstimate(estimates, ticker, r.endDate)),
+            mapQuarterRow(
+              r,
+              fmpQ?.epsEstimateFor(r.endDate) ??
+                this.matchEstimate(estimates, ticker, r.endDate),
+            ),
           );
           // ── Annual (fiscal-year) history — actuals only, Polygon ──────────
           // Same endpoint, timeframe=annual. Drives the Yearly tab's EPS +
@@ -291,12 +307,18 @@ export class FinancialsJob implements OnModuleInit {
             );
           }
 
+          // Forward annual estimates (the `*YYYY` rows) — only when the optional
+          // estimates adapter is configured; empty array otherwise.
+          const annualEstimates = this.estimates
+            ? await this.estimates.getForwardAnnual(ticker).catch(() => [])
+            : [];
           docs.push({
             id: ticker,
             data: {
               ticker,
               quarters,
               annual,
+              annualEstimates,
               updatedAt: new Date().toISOString(),
             },
           });

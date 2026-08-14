@@ -81,8 +81,18 @@ env:
     value: "none"
   - variable: SECTORS_SOURCE
     value: "polygon"
+  # FMP only as a fallback here: its GICS sector labels differ from the ETF-proxy
+  # labels the UI matches on (in-sector rank), so it must NOT be primary until
+  # that mapping is verified. See Doc/FMP-INTEGRATION.md (Tier 2A caveat).
   - variable: SECTORS_FALLBACK_SOURCE
-    value: "none"
+    value: "fmp"
+
+  # ── FMP-backed gap-fillers (supplementary vendor; Doc/FMP-INTEGRATION.md) ──
+  # These fill features Polygon has no feed for, so FMP is the primary source.
+  - variable: EARNINGS_ESTIMATES_SOURCE
+    value: "fmp"
+  - variable: ANALYST_SOURCE
+    value: "fmp"
   - variable: QUOTE_SOURCE
     value: "polygon"
   - variable: QUOTE_FALLBACK_SOURCE
