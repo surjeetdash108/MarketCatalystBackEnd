@@ -770,12 +770,31 @@ export class OnDemandService implements OnModuleDestroy {
     if (existing) return existing;
 
     const p = (async () => {
+      // The bulk sync job (financials.job.ts) is the ONLY writer that fetches the
+      // FMP forward `annualEstimates` and full-history quarterly epsEstimate. This
+      // on-demand refresh overwrites the whole doc, so it must carry those forward
+      // or every ticker view would wipe them (Polygon has no forward estimates).
+      const prev = snap.exists
+        ? (snap.data() as {
+            annualEstimates?: unknown[];
+            quarters?: Array<{ endDate?: string; epsEstimate?: number | null }>;
+          })
+        : undefined;
+      const prevEpsByEnd = new Map(
+        (prev?.quarters ?? []).map((q) => [q.endDate, q.epsEstimate]),
+      );
+
       const [rows, estimates] = await Promise.all([
         this.polygon.getFinancialStatements(ticker, "quarterly", FIN_QUARTERS),
         this.earningsEstimatesFor(ticker),
       ]);
       const quarters = rows.map((r) =>
-        mapQuarterRow(r, this.matchEpsEstimate(estimates, r.endDate)),
+        mapQuarterRow(
+          r,
+          this.matchEpsEstimate(estimates, r.endDate) ??
+            prevEpsByEnd.get(r.endDate) ??
+            null,
+        ),
       );
 
       let annual: ReturnType<typeof mapAnnualRow>[] = [];
@@ -795,6 +814,10 @@ export class OnDemandService implements OnModuleDestroy {
         ticker,
         quarters,
         annual,
+        // Preserve the sync job's FMP forward estimates through an on-demand refresh.
+        annualEstimates: Array.isArray(prev?.annualEstimates)
+          ? prev.annualEstimates
+          : [],
         source: "polygon-ondemand",
         createdAt: now,
         updatedAt: now,
