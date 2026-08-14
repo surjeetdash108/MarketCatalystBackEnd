@@ -70,12 +70,21 @@ export class FmpService {
   private readonly logger = new Logger(FmpService.name);
   private readonly apiKey: string;
   private readonly baseUrl: string;
+  // Request pacing. A large per-ticker batch (financials over ~150 names = ~300
+  // calls) bursts FMP hard enough that it silently returns empty 200s for a
+  // rotating subset — no 429, no error, just missing data that never converges
+  // across re-runs. A minimum gap between requests spreads the burst so every
+  // call gets a real response. `nextSlot` reserves evenly-spaced send times even
+  // when callers fire concurrently.
+  private readonly minIntervalMs: number;
+  private nextSlot = 0;
 
   constructor(private readonly config: ConfigService) {
     this.apiKey = this.config.get("FMP_API_KEY", "");
     this.baseUrl = this.config
       .get("FMP_API_BASE_URL", DEFAULT_BASE_URL)
       .replace(/\/$/, "");
+    this.minIntervalMs = Number(this.config.get("FMP_MIN_INTERVAL_MS", "50"));
     if (!this.apiKey) {
       this.logger.warn(
         "FMP_API_KEY not set — FMP-backed features stay disabled (Polygon-only). Set the key and the relevant *_SOURCE=fmp to enable.",
@@ -88,7 +97,19 @@ export class FmpService {
     return !!this.apiKey;
   }
 
+  /** Reserve the next evenly-spaced send slot, then wait until it arrives. Safe
+   * under concurrency: each caller claims a distinct slot `minIntervalMs` apart. */
+  private async pace(): Promise<void> {
+    if (this.minIntervalMs <= 0) return;
+    const now = Date.now();
+    const slot = Math.max(now, this.nextSlot);
+    this.nextSlot = slot + this.minIntervalMs;
+    const wait = slot - now;
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  }
+
   private async get(path: string, opts?: FetchJsonOptions): Promise<unknown[]> {
+    await this.pace();
     const sep = path.includes("?") ? "&" : "?";
     const res = await fetchJson<unknown>(
       `${this.baseUrl}/${path}${sep}apikey=${this.apiKey}`,
