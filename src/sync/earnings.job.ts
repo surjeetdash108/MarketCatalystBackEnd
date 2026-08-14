@@ -14,9 +14,6 @@ const JOB_NAME = "earnings";
 // the calendar gap Polygon structurally cannot: those rows carry consensus
 // estimates and `epsActual: null` until the company files.
 const LOOKBACK_DAYS = 180;
-// How far ahead to pull the FMP upcoming-earnings calendar. Only used when the
-// estimates adapter is present; 0 upcoming rows written otherwise.
-const LOOKAHEAD_DAYS = 45;
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -26,6 +23,19 @@ function addDays(d: Date, n: number): Date {
   const out = new Date(d);
   out.setUTCDate(out.getUTCDate() + n);
   return out;
+}
+
+/**
+ * Last calendar day of the NEXT quarter after `d`. The FMP upcoming-earnings
+ * window runs today → here, so the hub covers every remaining reporter in the
+ * current quarter plus the whole next quarter (a natural earnings-season span)
+ * rather than an arbitrary fixed day count.
+ */
+function endOfNextQuarter(d: Date): Date {
+  const nextQ = Math.floor(d.getUTCMonth() / 3) + 1; // 1..4 (0-indexed quarter + 1)
+  const year = d.getUTCFullYear() + Math.floor(nextQ / 4);
+  const endMonth = (nextQ % 4) * 3 + 2; // last month of that quarter (0-indexed)
+  return new Date(Date.UTC(year, endMonth + 1, 0)); // day 0 of next month = last day
 }
 
 @Injectable()
@@ -99,7 +109,7 @@ export class EarningsJob implements OnModuleInit {
       // entirely when no estimates adapter is configured (Polygon-only build).
       let forwardCount = 0;
       if (this.estimates) {
-        const fwdTo = isoDate(addDays(new Date(), LOOKAHEAD_DAYS));
+        const fwdTo = isoDate(endOfNextQuarter(new Date()));
         const upcoming = await this.estimates.getUpcoming(to, fwdTo);
         const reportedIds = new Set(docs.map((d) => d.id));
         const nameByTicker = await this.loadCompanyNames();
