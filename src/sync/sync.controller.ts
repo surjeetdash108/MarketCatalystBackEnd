@@ -7,9 +7,12 @@ import {
   NotFoundException,
   Param,
   Post,
+  Res,
   UseGuards,
 } from "@nestjs/common";
+import * as Sentry from "@sentry/node";
 import { CronJob } from "cron";
+import type { Response } from "express";
 import { AllSourcesFailedError } from "../adapters/adapter-error";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
@@ -48,6 +51,17 @@ import { AdminGuard } from "../common/admin.guard";
 @Controller("sync")
 export class SyncController {
   private readonly logger = new Logger(SyncController.name);
+
+  /**
+   * Jobs whose full run exceeds Cloud Run's request timeout (900s) and so must
+   * not be awaited inside the HTTP request. `premarket` is the multi-phase
+   * orchestration (market-wide -> per-ticker warm -> recaps); awaiting it inline
+   * 504's at 15 min and never reaches the FINAL (recaps) phase. For these we
+   * return 202 immediately and let the job finish on the instance — which only
+   * works because the worker runs with CPU-always-allocated and min-instances=1,
+   * so the event loop keeps getting CPU after the response is sent.
+   */
+  private static readonly DETACHED_JOBS = new Set(["premarket"]);
 
   constructor(
     private readonly registry: SyncRegistry,
@@ -132,13 +146,46 @@ export class SyncController {
 
   @UseGuards(AdminGuard)
   @Post(":job/run")
-  async run(@Param("job") job: string) {
+  async run(
+    @Param("job") job: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const runner = this.registry.get(job);
     if (!runner) {
       throw new NotFoundException(
         `Unknown job "${job}". Available: ${this.registry.names().join(", ")}`,
       );
     }
+
+    // Long orchestrations run detached: return 202 now, keep running on the
+    // instance. See DETACHED_JOBS. Awaiting them inline is killed at Cloud Run's
+    // 900s request timeout before the FINAL phase completes.
+    if (SyncController.DETACHED_JOBS.has(job)) {
+      const state = this.registry.list().find((j) => j.name === job);
+      if (state?.isRunning) {
+        res.status(HttpStatus.ACCEPTED);
+        return {
+          job,
+          status: "already-running",
+          runningSince: state.runningSince,
+        };
+      }
+      // Fire-and-forget: the caller (Cloud Scheduler) gets a fast 202 and the
+      // orchestration continues in the background. Errors are logged + reported
+      // to Sentry, never surfaced to the caller (there is no one waiting).
+      void runner().then(
+        () => this.logger.log(`detached job "${job}" completed`),
+        (err: unknown) => {
+          Sentry.captureException(err);
+          this.logger.error(
+            `detached job "${job}" failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
+          );
+        },
+      );
+      res.status(HttpStatus.ACCEPTED);
+      return { job, status: "started", detached: true };
+    }
+
     try {
       return await runner();
     } catch (err) {

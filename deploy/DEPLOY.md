@@ -246,8 +246,37 @@ a local UI at a remote backend.
 
 ```bash
 gcloud run services describe market-catalyst-live --region "$REGION" --format='value(status.url)'
-# informational only — the UI reaches this via the same-origin Hosting rewrite
+# informational for REST (reached via the same-origin Hosting rewrite) — but see
+# the SSE note below: this URL IS baked into the UI for live streaming.
 ```
+
+**Live streaming (SSE) — one per-deploy URL step.** REST goes same-origin so
+Hosting can CDN-cache it, but Hosting's CDN **buffers a long-lived streaming
+response**, so an EventSource opened at the same-origin `/live/**` rewrite never
+receives a frame. That is why the tape and the stock live-price/chart hooks
+(`useTapeStream`, `useLiveTick`) each carry a REST poll fallback — without the
+step below, production runs on that poll (tape 20s, price 30s), not true push.
+
+To get true SSE push in production, point the browser's EventSource straight at
+this Cloud Run service, bypassing Hosting. The UI reads
+`NEXT_PUBLIC_LIVE_STREAM_ORIGIN` (baked at build time — the UI is a static
+`output: "export"`, so it must be a `NEXT_PUBLIC_*` var) and uses it only for the
+SSE endpoints (`app/iq/backend.ts` → `streamUrl()`); REST stays same-origin.
+
+```bash
+# Build the UI with the live service URL as the SSE origin, then deploy Hosting:
+export NEXT_PUBLIC_LIVE_STREAM_ORIGIN=$(gcloud run services describe market-catalyst-live \
+  --region "$REGION" --format='value(status.url)')
+( cd ../../MarketCatalystUI && npm run build && firebase deploy --only hosting )
+```
+
+This works cross-origin because the `live` service's CORS allowlist already
+includes the Hosting origin (`CORS_ORIGINS=https://marketcatalyst.web.app`,
+`credentials:false` in `main.ts`) and both SSE streams are public, so
+EventSource's inability to send an `Authorization` header is a non-issue. If you
+serve the UI from a different Hosting domain, add it to `CORS_ORIGINS` on this
+service too, or the browser will block the stream. Leaving
+`NEXT_PUBLIC_LIVE_STREAM_ORIGIN` unset is safe — the UI falls back to the poll.
 
 Verify after deploying:
 
