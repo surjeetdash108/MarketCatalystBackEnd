@@ -27,8 +27,14 @@ runConfig:
   memoryMiB: 512
 
 env:
+  # RUNTIME-only: if NODE_ENV=production leaks into the BUILD, `npm ci` prunes
+  # devDependencies and `nest build` fails with "nest: not found" (@nestjs/cli is
+  # a devDependency). Scoping to runtime lets the build install devDeps as it
+  # does locally, while the running service still gets NODE_ENV=production.
   - variable: NODE_ENV
     value: "production"
+    availability:
+      - RUNTIME
 
   # ─── Service role (src/app.module.ts) ────────────────────────────────────────
   # This backend is the WORKER: runs the @Cron/Scheduler-triggered sync jobs and
