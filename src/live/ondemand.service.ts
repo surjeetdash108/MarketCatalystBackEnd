@@ -1,6 +1,11 @@
 import { Inject, Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { FieldValue } from "firebase-admin/firestore";
-import { NEWS_ADAPTER, type NewsAdapter } from "../adapters/types";
+import {
+  NEWS_ADAPTER,
+  type NewsAdapter,
+  EARNINGS_ESTIMATES_ADAPTER,
+} from "../adapters/types";
+import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import {
   annualTotals,
@@ -245,6 +250,10 @@ export class OnDemandService implements OnModuleDestroy {
     private readonly firebase: FirebaseAdminService,
     private readonly polygon: PolygonService,
     @Inject(NEWS_ADAPTER) private readonly news: NewsAdapter,
+    // Optional FMP estimates (same adapter the sync job uses). null when
+    // EARNINGS_ESTIMATES_SOURCE=none — on-demand then behaves Polygon-only.
+    @Inject(EARNINGS_ESTIMATES_ADAPTER)
+    private readonly estimatesAdapter: EarningsEstimatesAdapter | null,
   ) {}
 
   onModuleDestroy() {
@@ -784,14 +793,30 @@ export class OnDemandService implements OnModuleDestroy {
         (prev?.quarters ?? []).map((q) => [q.endDate, q.epsEstimate]),
       );
 
-      const [rows, estimates] = await Promise.all([
+      // FMP estimates fetched HERE (not only in the sync job) so any ticker a
+      // user opens gets forward `annualEstimates` + full-history quarterly
+      // epsEstimate immediately — coverage no longer depends on the sync cursor
+      // having already reached this ticker. earnings_events + the prior doc are
+      // fallbacks so a transient FMP miss never downgrades what we already had.
+      const [rows, estimates, fmpAnnual, fmpQ] = await Promise.all([
         this.polygon.getFinancialStatements(ticker, "quarterly", FIN_QUARTERS),
         this.earningsEstimatesFor(ticker),
+        this.estimatesAdapter
+          ? this.estimatesAdapter
+              .getForwardAnnual(ticker)
+              .catch(() => [] as unknown[])
+          : Promise.resolve([] as unknown[]),
+        this.estimatesAdapter
+          ? this.estimatesAdapter
+              .getQuarterlyEstimates(ticker)
+              .catch(() => null)
+          : Promise.resolve(null),
       ]);
       const quarters = rows.map((r) =>
         mapQuarterRow(
           r,
-          this.matchEpsEstimate(estimates, r.endDate) ??
+          fmpQ?.epsEstimateFor(r.endDate) ??
+            this.matchEpsEstimate(estimates, r.endDate) ??
             prevEpsByEnd.get(r.endDate) ??
             null,
         ),
@@ -814,10 +839,14 @@ export class OnDemandService implements OnModuleDestroy {
         ticker,
         quarters,
         annual,
-        // Preserve the sync job's FMP forward estimates through an on-demand refresh.
-        annualEstimates: Array.isArray(prev?.annualEstimates)
-          ? prev.annualEstimates
-          : [],
+        // Freshly-fetched FMP forward estimates; fall back to the prior doc's
+        // when FMP returns nothing this refresh so a transient miss never wipes.
+        annualEstimates:
+          fmpAnnual.length > 0
+            ? fmpAnnual
+            : Array.isArray(prev?.annualEstimates)
+              ? prev.annualEstimates
+              : [],
         source: "polygon-ondemand",
         createdAt: now,
         updatedAt: now,
