@@ -82,6 +82,16 @@ export class AnalystActionsJob implements OnModuleInit {
                   hold: c.hold,
                   sell: c.sell,
                   strongSell: c.strongSell,
+                  // Price target (12-mo) + rolling-average trend + recent
+                  // per-firm rating changes (all FMP; see the adapter).
+                  priceTargetConsensus: c.priceTargetConsensus,
+                  priceTargetHigh: c.priceTargetHigh,
+                  priceTargetLow: c.priceTargetLow,
+                  priceTargetMedian: c.priceTargetMedian,
+                  ptAvgLastMonth: c.ptAvgLastMonth,
+                  ptAvgLastQuarter: c.ptAvgLastQuarter,
+                  ptAvgLastYear: c.ptAvgLastYear,
+                  recentGrades: c.recentGrades,
                   source: this.ratings.sourceName,
                   updatedAt: new Date().toISOString(),
                 },

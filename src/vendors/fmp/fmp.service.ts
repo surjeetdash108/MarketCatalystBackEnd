@@ -65,6 +65,33 @@ export interface FmpEarningsSurpriseRow {
   estimatedEarning: number | null;
 }
 
+/** Analyst price-target consensus (high/low/avg/median across firms). */
+export interface FmpPriceTargetConsensusRow {
+  targetHigh: number | null;
+  targetLow: number | null;
+  targetConsensus: number | null;
+  targetMedian: number | null;
+}
+
+/** Rolling average price target over recent windows (trend). */
+export interface FmpPriceTargetSummaryRow {
+  lastMonthCount: number | null;
+  lastMonthAvg: number | null;
+  lastQuarterCount: number | null;
+  lastQuarterAvg: number | null;
+  lastYearCount: number | null;
+  lastYearAvg: number | null;
+}
+
+/** A single per-firm rating change (upgrade/downgrade/initiate/maintain). */
+export interface FmpGradeRow {
+  date: string;
+  gradingCompany: string | null;
+  previousGrade: string | null;
+  newGrade: string | null;
+  action: string | null;
+}
+
 @Injectable()
 export class FmpService {
   private readonly logger = new Logger(FmpService.name);
@@ -222,6 +249,77 @@ export class FmpService {
         symbol: String(o.symbol ?? ticker),
         actualEarningResult: num(o.epsActual ?? o.actualEarningResult),
         estimatedEarning: num(o.epsEstimated ?? o.estimatedEarning),
+      };
+    });
+  }
+
+  /**
+   * Analyst price-target consensus (`/stable/price-target-consensus`) — the
+   * high/low/average/median 12-month target across covering firms. `retries:0`
+   * so a momentary miss drops the ticker fast instead of stalling the sweep.
+   */
+  async getPriceTargetConsensus(
+    ticker: string,
+  ): Promise<FmpPriceTargetConsensusRow | null> {
+    if (!this.apiKey) return null;
+    const rows = await this.get(
+      `price-target-consensus?symbol=${encodeURIComponent(ticker)}`,
+      { retries: 0 },
+    );
+    if (rows.length === 0) return null;
+    const o = rows[0] as Record<string, unknown>;
+    return {
+      targetHigh: num(o.targetHigh),
+      targetLow: num(o.targetLow),
+      targetConsensus: num(o.targetConsensus),
+      targetMedian: num(o.targetMedian),
+    };
+  }
+
+  /**
+   * Rolling average price target (`/stable/price-target-summary`) — mean target
+   * over the last month/quarter/year, so the UI can show whether targets trend
+   * up or down.
+   */
+  async getPriceTargetSummary(
+    ticker: string,
+  ): Promise<FmpPriceTargetSummaryRow | null> {
+    if (!this.apiKey) return null;
+    const rows = await this.get(
+      `price-target-summary?symbol=${encodeURIComponent(ticker)}`,
+      { retries: 0 },
+    );
+    if (rows.length === 0) return null;
+    const o = rows[0] as Record<string, unknown>;
+    return {
+      lastMonthCount: num(o.lastMonthCount),
+      lastMonthAvg: num(o.lastMonthAvgPriceTarget),
+      lastQuarterCount: num(o.lastQuarterCount),
+      lastQuarterAvg: num(o.lastQuarterAvgPriceTarget),
+      lastYearCount: num(o.lastYearCount),
+      lastYearAvg: num(o.lastYearAvgPriceTarget),
+    };
+  }
+
+  /**
+   * Per-firm rating changes (`/stable/grades`) — the analyst-action event feed
+   * Polygon has no equivalent for: which firm, from→to grade, and the action
+   * (upgrade/downgrade/initiate/maintain). Newest first; `limit` bounds the pull.
+   */
+  async getGrades(ticker: string, limit = 10): Promise<FmpGradeRow[]> {
+    if (!this.apiKey) return [];
+    const rows = await this.get(
+      `grades?symbol=${encodeURIComponent(ticker)}&limit=${limit}`,
+      { retries: 0 },
+    );
+    return rows.map((r) => {
+      const o = r as Record<string, unknown>;
+      return {
+        date: String(o.date ?? ""),
+        gradingCompany: o.gradingCompany != null ? String(o.gradingCompany) : null,
+        previousGrade: o.previousGrade != null ? String(o.previousGrade) : null,
+        newGrade: o.newGrade != null ? String(o.newGrade) : null,
+        action: o.action != null ? String(o.action) : null,
       };
     });
   }
