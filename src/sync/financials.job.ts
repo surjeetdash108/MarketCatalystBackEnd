@@ -25,7 +25,11 @@ import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.ad
  */
 
 const JOB_NAME = "financials";
-const BATCH_SIZE = 40;
+// Per-run cursor batch. Configurable so a backfill (or a larger universe) can be
+// covered in fewer runs without waiting days for the 40/run cursor to rotate.
+// Keep it small enough that one run finishes inside the Cloud Run request timeout
+// (900s): ~2.5s/ticker, so 150 ≈ 6min. Default 40 preserves the original cadence.
+const BATCH_SIZE = Number(process.env.FINANCIALS_BATCH_SIZE) || 40;
 const QUARTERS = 10;
 const ANNUAL_YEARS = 8;
 const DELAY_MS = 120;

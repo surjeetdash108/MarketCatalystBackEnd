@@ -8,7 +8,9 @@ import { ANALYST_RATINGS_ADAPTER } from "../adapters/types";
 import type { AnalystRatingsAdapter } from "../adapters/analyst-ratings.adapter";
 
 const JOB_NAME = "analyst-actions";
-const BATCH_SIZE = 40;
+// Per-run cursor batch — env-configurable so a backfill can cover the universe
+// in a few runs instead of 40/run. Default 40 preserves the original cadence.
+const BATCH_SIZE = Number(process.env.ANALYST_BATCH_SIZE) || 40;
 /** Small gap between per-ticker calls so a batch never bursts the vendor. */
 const DELAY_MS = 120;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
