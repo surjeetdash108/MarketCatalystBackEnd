@@ -30,6 +30,10 @@ export interface FmpEarningRow {
   symbol: string;
   epsEstimated: number | null;
   revenueEstimated: number | null;
+  // Reported actuals (present once a company has announced) — the announcement
+  // date fills the ~2-week gap Polygon's 10-Q filing-date feed leaves.
+  epsActual: number | null;
+  revenueActual: number | null;
 }
 
 /** Normalised analyst grades consensus (rating tallies + label). */
@@ -90,6 +94,19 @@ export interface FmpGradeRow {
   previousGrade: string | null;
   newGrade: string | null;
   action: string | null;
+}
+
+/** A macro/economic-calendar release (past or scheduled). */
+export interface FmpEconEventRow {
+  date: string;
+  country: string | null;
+  event: string | null;
+  currency: string | null;
+  previous: number | null;
+  estimate: number | null;
+  actual: number | null;
+  impact: string | null;
+  unit: string | null;
 }
 
 @Injectable()
@@ -163,6 +180,8 @@ export class FmpService {
         symbol: String(o.symbol ?? ""),
         epsEstimated: num(o.epsEstimated),
         revenueEstimated: num(o.revenueEstimated),
+        epsActual: num(o.epsActual),
+        revenueActual: num(o.revenueActual),
       };
     });
   }
@@ -323,6 +342,34 @@ export class FmpService {
         previousGrade: o.previousGrade != null ? String(o.previousGrade) : null,
         newGrade: o.newGrade != null ? String(o.newGrade) : null,
         action: o.action != null ? String(o.action) : null,
+      };
+    });
+  }
+
+  /**
+   * Economic calendar (`/stable/economic-calendar`) — scheduled + released macro
+   * events (CPI, PPI, jobs, FOMC…) with date, estimate, previous and actual. This
+   * is the forward release schedule FRED cannot provide (FRED has only past
+   * observations). `date` carries a time; callers take the date part.
+   */
+  async getEconomicCalendar(
+    from: string,
+    to: string,
+  ): Promise<FmpEconEventRow[]> {
+    if (!this.apiKey) return [];
+    const rows = await this.get(`economic-calendar?from=${from}&to=${to}`);
+    return rows.map((r) => {
+      const o = r as Record<string, unknown>;
+      return {
+        date: String(o.date ?? ""),
+        country: o.country != null ? String(o.country) : null,
+        event: o.event != null ? String(o.event) : null,
+        currency: o.currency != null ? String(o.currency) : null,
+        previous: num(o.previous),
+        estimate: num(o.estimate),
+        actual: num(o.actual),
+        impact: o.impact != null ? String(o.impact) : null,
+        unit: o.unit != null ? String(o.unit) : null,
       };
     });
   }

@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AdaptersModule } from "../adapters/adapters.module";
 import { FredModule } from "../vendors/fred/fred.module";
+import { FmpModule } from "../vendors/fmp/fmp.module";
 import { PolygonModule } from "../vendors/polygon/polygon.module";
 import { SecEdgarModule } from "../vendors/sec-edgar/sec-edgar.module";
 import { AnalystActionsJob } from "./analyst-actions.job";
@@ -40,6 +41,7 @@ import { LiveModule } from "../live/live.module";
   imports: [
     PolygonModule,
     FredModule,
+    FmpModule,
     SecEdgarModule,
     AdaptersModule,
     // For OnDemandService — the premarket warm fills the same cache the
