@@ -36,6 +36,19 @@ export interface FmpEarningRow {
   revenueActual: number | null;
 }
 
+/** Normalised stock-news row (`/stable/news/stock`). `site` is the outlet. */
+export interface FmpNewsRow {
+  symbol: string | null;
+  publishedDate: string;
+  title: string;
+  text: string | null;
+  site: string | null;
+  url: string;
+  image: string | null;
+  /** Sentiment label when the response carries one, else null. */
+  sentiment: string | null;
+}
+
 /** Normalised analyst grades consensus (rating tallies + label). */
 export interface FmpConsensusRow {
   symbol: string;
@@ -184,6 +197,31 @@ export class FmpService {
         revenueActual: num(o.revenueActual),
       };
     });
+  }
+
+  /**
+   * Per-ticker stock news (`/stable/news/stock`). `site` is the publishing
+   * outlet; some responses also carry a `sentiment` label which we pass through.
+   */
+  async getStockNews(
+    symbol: string,
+    from: string,
+    to: string,
+  ): Promise<FmpNewsRow[]> {
+    if (!this.apiKey) return [];
+    const rows = await this.get(
+      `news/stock?symbols=${encodeURIComponent(symbol)}&from=${from}&to=${to}&limit=20`,
+    );
+    return (rows as Record<string, unknown>[]).map((r) => ({
+      symbol: (r.symbol as string) ?? symbol,
+      publishedDate: String(r.publishedDate ?? r.date ?? ""),
+      title: String(r.title ?? ""),
+      text: (r.text as string) ?? null,
+      site: (r.site as string) ?? (r.publisher as string) ?? null,
+      url: String(r.url ?? ""),
+      image: (r.image as string) ?? null,
+      sentiment: (r.sentiment as string) ?? null,
+    }));
   }
 
   /**

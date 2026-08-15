@@ -22,6 +22,7 @@ export class PolygonNewsAdapter implements NewsAdapter {
         headline: a.title,
         summary: a.description ?? null,
         source: a.publisher?.name ?? "Polygon",
+        vendor: "polygon",
         url: a.article_url,
         category: null,
         sentiment: insight?.sentiment ?? null,

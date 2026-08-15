@@ -19,14 +19,19 @@ export interface EarningsEstimatesLookup {
   estimateFor(ticker: string, date: string | null): EarningsEstimate | null;
 }
 
-/** An upcoming (not-yet-reported) earnings date + its consensus estimates. */
+/** An earnings date + its consensus estimates. When the date is in the recent
+ *  past, `epsActual`/`revenueActual` carry the reported numbers (FMP announces
+ *  before the SEC 10-Q Polygon keys on files). */
 export interface UpcomingEarnings {
   ticker: string;
-  /** Expected report date (YYYY-MM-DD). */
+  /** Report date (YYYY-MM-DD). */
   date: string;
   epsEstimate: number | null;
   /** Raw dollars. */
   revenueEstimate: number | null;
+  /** Reported actuals when already announced, else null (future date). */
+  epsActual: number | null;
+  revenueActual: number | null;
 }
 
 /** One forward fiscal year of consensus (the `*2026–28` rows). */
@@ -171,7 +176,15 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
       });
       for (const r of rows) {
         if (!r.symbol || !r.date) continue;
-        if (r.epsEstimated == null && r.revenueEstimated == null) continue;
+        // Keep a row if it carries ANY of estimate/actual (a just-announced row
+        // may have only actuals).
+        if (
+          r.epsEstimated == null &&
+          r.revenueEstimated == null &&
+          r.epsActual == null &&
+          r.revenueActual == null
+        )
+          continue;
         const ticker = r.symbol.toUpperCase();
         const key = `${ticker}_${r.date}`;
         if (seen.has(key)) continue;
@@ -181,6 +194,8 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
           date: r.date,
           epsEstimate: r.epsEstimated ?? null,
           revenueEstimate: r.revenueEstimated ?? null,
+          epsActual: r.epsActual ?? null,
+          revenueActual: r.revenueActual ?? null,
         });
       }
     }

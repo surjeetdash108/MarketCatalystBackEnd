@@ -40,7 +40,10 @@ export interface CanonicalNewsArticle {
   ticker: string;
   headline: string;
   summary: string | null;
+  /** Publisher / outlet name (e.g. "Reuters", "Benzinga"). */
   source: string;
+  /** Which data vendor delivered this article — "polygon" | "fmp". */
+  vendor: string;
   url: string;
   category: string | null;
   sentiment: "positive" | "negative" | "neutral" | null;
@@ -251,6 +254,8 @@ export const MOVER_ENRICHMENT_ADAPTER: unique symbol = Symbol(
   "MOVER_ENRICHMENT_ADAPTER",
 );
 export const NEWS_ADAPTER: unique symbol = Symbol("NEWS_ADAPTER");
+/** Optional FMP news source, merged alongside NEWS_ADAPTER (Polygon). */
+export const NEWS_FMP_ADAPTER: unique symbol = Symbol("NEWS_FMP_ADAPTER");
 export const DIVIDENDS_ADAPTER: unique symbol = Symbol("DIVIDENDS_ADAPTER");
 export const IPOS_ADAPTER: unique symbol = Symbol("IPOS_ADAPTER");
 export const SECTORS_ADAPTER: unique symbol = Symbol("SECTORS_ADAPTER");

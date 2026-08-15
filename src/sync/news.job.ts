@@ -1,6 +1,6 @@
-import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { Inject, Injectable, Logger, Optional, OnModuleInit } from "@nestjs/common";
 import { AllSourcesFailedError } from "../adapters/adapter-error";
-import { NEWS_ADAPTER, type NewsAdapter } from "../adapters/types";
+import { NEWS_ADAPTER, NEWS_FMP_ADAPTER, type NewsAdapter } from "../adapters/types";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import {
   batchSetWithCreatedAt,
@@ -32,6 +32,7 @@ export class NewsJob implements OnModuleInit {
 
   constructor(
     @Inject(NEWS_ADAPTER) private readonly news: NewsAdapter,
+    @Optional() @Inject(NEWS_FMP_ADAPTER) private readonly newsFmp: NewsAdapter | null,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly notifications: NotificationsService,
@@ -136,7 +137,34 @@ export class NewsJob implements OnModuleInit {
           if (result.warnings.some((w) => w.code === "FALLBACK_USED")) {
             fallbackCount++;
           }
-          for (const a of result.data.slice(0, 5)) {
+          // Merge FMP news (when NEWS_FMP_SOURCE=fmp) alongside Polygon's,
+          // deduped by URL — Polygon wins a collision. Each article keeps its own
+          // `vendor` so the UI can badge Polygon vs FMP.
+          const articles = [...result.data];
+          if (this.newsFmp) {
+            try {
+              const fmpRes = await this.newsFmp.fetchNews(
+                symbol,
+                isoDate(from),
+                isoDate(to),
+              );
+              const seenUrls = new Set(articles.map((a) => a.url));
+              for (const a of fmpRes.data) {
+                if (a.url && !seenUrls.has(a.url)) {
+                  seenUrls.add(a.url);
+                  articles.push(a);
+                }
+              }
+            } catch (e) {
+              this.logger.warn(
+                `FMP news failed for ${symbol}: ${(e as Error).message}`,
+              );
+            }
+          }
+          articles.sort((a, b) =>
+            (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""),
+          );
+          for (const a of articles.slice(0, 8)) {
             // Importance is derived, not vendor-supplied — see
             // news-importance.util.ts for why and how. Notifications reuse the
             // news doc id so a re-run updates in place instead of duplicating.
@@ -175,6 +203,7 @@ export class NewsJob implements OnModuleInit {
                 headline: a.headline,
                 summary: a.summary,
                 source: a.source,
+                vendor: a.vendor,
                 url: a.url,
                 category: a.category,
                 sentiment: a.sentiment,

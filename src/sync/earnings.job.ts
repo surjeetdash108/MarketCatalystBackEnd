@@ -14,6 +14,14 @@ const JOB_NAME = "earnings";
 // the calendar gap Polygon structurally cannot: those rows carry consensus
 // estimates and `epsActual: null` until the company files.
 const LOOKBACK_DAYS = 180;
+// How far back to pull FMP's announcement-based calendar (which carries actuals)
+// to cover the window where a company has reported but its SEC 10-Q — the only
+// thing Polygon's filing-date feed sees — hasn't posted yet (~2 weeks).
+const RECENT_REPORTED_DAYS = 30;
+// A Polygon 10-Q filing date and FMP's announcement date for the same quarter
+// sit days-to-weeks apart; treat an FMP row within this many days of a Polygon
+// reported row for the same ticker as the same quarter (avoids a duplicate).
+const DUP_TOLERANCE_DAYS = 21;
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -23,6 +31,10 @@ function addDays(d: Date, n: number): Date {
   const out = new Date(d);
   out.setUTCDate(out.getUTCDate() + n);
   return out;
+}
+
+function daysBetween(a: string, b: string): number {
+  return Math.abs((Date.parse(a) - Date.parse(b)) / 86_400_000);
 }
 
 /**
@@ -109,18 +121,35 @@ export class EarningsJob implements OnModuleInit {
       // entirely when no estimates adapter is configured (Polygon-only build).
       let forwardCount = 0;
       if (this.estimates) {
+        // Pull FMP's calendar from RECENT_REPORTED_DAYS back (just-announced
+        // reports carry actuals — filling the gap before their 10-Q files)
+        // through the next quarter (upcoming reports carry estimates only).
+        const calFrom = isoDate(addDays(new Date(), -RECENT_REPORTED_DAYS));
         const fwdTo = isoDate(endOfNextQuarter(new Date()));
-        const upcoming = await this.estimates.getUpcoming(to, fwdTo);
+        const upcoming = await this.estimates.getUpcoming(calFrom, fwdTo);
         const reportedIds = new Set(docs.map((d) => d.id));
+        // Reported dates per ticker, to skip an FMP row whose quarter is already
+        // covered by a nearby Polygon 10-Q (same quarter, different date basis).
+        const reportedDates = new Map<string, string[]>();
+        for (const d of docs) {
+          const t = d.data.ticker as string;
+          const list = reportedDates.get(t);
+          if (list) list.push(d.data.date as string);
+          else reportedDates.set(t, [d.data.date as string]);
+        }
         const nameByTicker = await this.loadCompanyNames();
         for (const u of upcoming) {
           // FMP's calendar is WORLDWIDE (Shenzhen/HK/EU tickers etc.). This app
-          // tracks only the US Polygon universe, so restrict upcoming rows to
-          // tickers we actually cover — which also guarantees a display name.
+          // tracks only the US Polygon universe, so restrict rows to tickers we
+          // actually cover — which also guarantees a display name.
           const name = nameByTicker.get(u.ticker);
           if (!name) continue;
           const id = `${u.ticker}_${u.date}`;
-          if (reportedIds.has(id)) continue; // a reported quarter already covers it
+          if (reportedIds.has(id)) continue; // exact reported row already covers it
+          const near = (reportedDates.get(u.ticker) ?? []).some(
+            (d) => daysBetween(d, u.date) <= DUP_TOLERANCE_DAYS,
+          );
+          if (near) continue; // same quarter already present via Polygon 10-Q
           docs.push({
             id,
             data: {
@@ -132,9 +161,9 @@ export class EarningsJob implements OnModuleInit {
               fiscalYear: null,
               session: null,
               epsEstimate: u.epsEstimate,
-              epsActual: null,
+              epsActual: u.epsActual,
               revenueEstimate: u.revenueEstimate,
-              revenueActual: null,
+              revenueActual: u.revenueActual,
               updatedAt: new Date().toISOString(),
             },
           });

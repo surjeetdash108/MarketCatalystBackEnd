@@ -14,6 +14,7 @@ import { PolygonCompanyProfileAdapter } from "./polygon-company-profile.adapter"
 import { PolygonMoverEnrichmentAdapter } from "./polygon-mover-enrichment.adapter";
 import { PolygonMoversAdapter } from "./polygon-movers.adapter";
 import { PolygonNewsAdapter } from "./polygon-news.adapter";
+import { FmpNewsAdapter } from "./fmp-news.adapter";
 import {
   CompositeDividendsAdapter,
   PolygonDividendsAdapter,
@@ -43,6 +44,7 @@ import {
   MOVERS_ADAPTER,
   MOVER_ENRICHMENT_ADAPTER,
   NEWS_ADAPTER,
+  NEWS_FMP_ADAPTER,
   QUOTE_ADAPTER,
   SECTORS_ADAPTER,
   EARNINGS_ESTIMATES_ADAPTER,
@@ -165,6 +167,16 @@ function buildComposite(
       inject: [PolygonService],
       useFactory: (polygon) =>
         new CompositeNewsAdapter(new PolygonNewsAdapter(polygon), null),
+    },
+    {
+      // Optional FMP news, merged with Polygon by news.job. Defaults to "none";
+      // set NEWS_FMP_SOURCE=fmp (and FMP_API_KEY) to enable the second feed.
+      provide: NEWS_FMP_ADAPTER,
+      inject: [ConfigService, FmpService],
+      useFactory: (config: ConfigService, fmp: FmpService) => {
+        const source = parseSource(config, "NEWS_FMP_SOURCE", ["fmp", "none"], "none");
+        return source === "fmp" ? new FmpNewsAdapter(fmp) : null;
+      },
     },
     {
       provide: DIVIDENDS_ADAPTER,
@@ -317,6 +329,7 @@ function buildComposite(
     MOVERS_ADAPTER,
     MOVER_ENRICHMENT_ADAPTER,
     NEWS_ADAPTER,
+    NEWS_FMP_ADAPTER,
     DIVIDENDS_ADAPTER,
     IPOS_ADAPTER,
     SECTORS_ADAPTER,

@@ -7,6 +7,7 @@ import {
 } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { sectorFromSic } from "../common/sic-sector.util";
 import {
   annualTotals,
   dividendCagr,
@@ -495,6 +496,13 @@ export class OnDemandService implements OnModuleDestroy {
    * Company profile + latest price, cache-aside on `companies/{ticker}`.
    * Written with merge:true so the richer fields the premarket technicals job
    * adds for hot tickers are never clobbered by an on-demand refresh.
+   *
+   * Populates the SAME fundamental fields the daily `companies` sync job's
+   * profile adapter writes — peRatio, eps, dividendYield, dividendPerShare,
+   * peers, industry, and the SIC-derived sector — so a ticker first seen here
+   * (the stock screen reads P/E, yield, peers etc. off this doc) shows them
+   * immediately instead of a NotAvailable gap until the sync cursor arrives.
+   * peRatio/yield are computed against the FRESH snapshot price, not stale bars.
    */
   async getCompany(ticker: string): Promise<Record<string, unknown> | null> {
     this.stats.companyRequests++;
@@ -542,19 +550,75 @@ export class OnDemandService implements OnModuleDestroy {
       const q = quotes[0] as Record<string, unknown> | undefined;
       if (!details && !q) return null;
 
+      const price = (q?.price as number | undefined) ?? null;
+
+      // Fundamentals the daily sync job's profile adapter also computes, fetched
+      // here so this doc is not missing peRatio/eps/yield/peers until the cron
+      // cursor reaches the ticker. Each is independent and best-effort: a failed
+      // or empty one degrades to null (same as the adapter's per-field try/catch)
+      // rather than dropping the whole company doc. Parallel to keep latency low.
+      const [epsRes, peersRes, divRes] = await Promise.allSettled([
+        this.polygon.getTtmEps(ticker),
+        this.polygon.getRelatedCompanies(ticker),
+        this.polygon.getDividendHistory(ticker, 40),
+      ]);
+
+      const eps = epsRes.status === "fulfilled" ? epsRes.value : null;
+      const peRatio =
+        eps != null && eps > 0 && price != null
+          ? Math.round((price / eps) * 100) / 100
+          : null;
+
+      const peers =
+        peersRes.status === "fulfilled"
+          ? peersRes.value.filter((p) => p !== ticker)
+          : [];
+
+      // Trailing-twelve-month dividends by ex-date → per-share total and yield,
+      // the same derivation the profile adapter uses (Polygon sells no yield
+      // product). Specials are included: TTM yield is what was actually paid.
+      let dividendPerShare: number | null = null;
+      let dividendYield: number | null = null;
+      if (divRes.status === "fulfilled") {
+        const cutoff = new Date();
+        cutoff.setUTCFullYear(cutoff.getUTCFullYear() - 1);
+        const cutoffIso = cutoff.toISOString().slice(0, 10);
+        const ttm = divRes.value.filter(
+          (d) => d.exDividendDate != null && d.exDividendDate >= cutoffIso,
+        );
+        if (ttm.length > 0) {
+          const total = ttm.reduce((s, d) => s + (d.cashAmount ?? 0), 0);
+          dividendPerShare = Math.round(total * 10000) / 10000;
+          if (price != null && price > 0) {
+            dividendYield = Math.round((total / price) * 10000) / 100;
+          }
+        }
+      }
+
       const now = new Date().toISOString();
       const doc: Record<string, unknown> = {
         ticker,
         name: details?.name ?? ticker,
         description: details?.description ?? null,
         homepageUrl: details?.homepage_url ?? null,
-        sector: details?.sic_description ?? null,
+        // sic_description is an INDUSTRY ("ELECTRONIC COMPUTERS"), not a sector —
+        // deriving the sector from sic_code (null when unmappable) matches the
+        // sync job so sectorRank grouping and the `sectors` join stay correct.
+        sector: sectorFromSic(
+          details?.sic_code as string | number | null | undefined,
+        ),
+        industry: details?.sic_description ?? null,
         marketCap: details?.market_cap ?? null,
         exchange: details?.primary_exchange ?? null,
-        price: q?.price ?? null,
+        price,
         pctChange: q?.changePercent ?? null,
         prevClose: q?.previousClose ?? null,
         volume: q?.volume ?? null,
+        peRatio,
+        eps,
+        dividendYield,
+        dividendPerShare,
+        peers,
         createdAt: now,
         updatedAt: now,
         source: "polygon-ondemand",
