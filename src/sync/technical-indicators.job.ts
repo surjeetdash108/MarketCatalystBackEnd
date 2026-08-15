@@ -236,6 +236,78 @@ function changeOverSessions(closes: number[], sessions: number): number | null {
   return past > 0 ? ((latest - past) / past) * 100 : null;
 }
 
+/**
+ * Classic (floor-trader) pivot points from a prior period's H/L/C — the support
+ * & resistance levels the "Key levels" widget/drawer render. Derived from the
+ * Polygon bars we already store (no vendor has a native S/R feed).
+ */
+interface PivotLevels {
+  pivot: number | null;
+  r1: number | null;
+  r2: number | null;
+  r3: number | null;
+  s1: number | null;
+  s2: number | null;
+  s3: number | null;
+}
+
+function pivotLevels(high: number, low: number, close: number): PivotLevels {
+  const p = (high + low + close) / 3;
+  const range = high - low;
+  return {
+    pivot: round2(p),
+    r1: round2(2 * p - low),
+    s1: round2(2 * p - high),
+    r2: round2(p + range),
+    s2: round2(p - range),
+    r3: round2(high + 2 * (p - low)),
+    s3: round2(low - 2 * (high - p)),
+  };
+}
+
+/** Monday (UTC) of the week containing `dateStr` (YYYY-MM-DD) — a week key. */
+function weekKey(dateStr: string): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  const back = (d.getUTCDay() + 6) % 7; // days since Monday
+  d.setUTCDate(d.getUTCDate() - back);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Aggregate H/L/C of the last COMPLETE week (excludes the current partial week). */
+function priorWeekHLC(
+  bars: Array<{ barDate?: string; high?: number; low?: number; close?: number }>,
+): { high: number; low: number; close: number } | null {
+  const weeks = new Map<
+    string,
+    { high: number; low: number; close: number; last: string }
+  >();
+  for (const b of bars) {
+    if (
+      !b.barDate ||
+      typeof b.high !== "number" ||
+      typeof b.low !== "number" ||
+      typeof b.close !== "number"
+    )
+      continue;
+    const wk = weekKey(b.barDate);
+    const cur = weeks.get(wk);
+    if (!cur) {
+      weeks.set(wk, { high: b.high, low: b.low, close: b.close, last: b.barDate });
+    } else {
+      cur.high = Math.max(cur.high, b.high);
+      cur.low = Math.min(cur.low, b.low);
+      if (b.barDate >= cur.last) {
+        cur.close = b.close;
+        cur.last = b.barDate;
+      }
+    }
+  }
+  const keys = [...weeks.keys()].sort();
+  if (keys.length < 2) return null;
+  const prior = weeks.get(keys[keys.length - 2]);
+  return prior ? { high: prior.high, low: prior.low, close: prior.close } : null;
+}
+
 @Injectable()
 export class TechnicalIndicatorsJob implements OnModuleInit {
   private readonly logger = new Logger(TechnicalIndicatorsJob.name);
@@ -374,6 +446,32 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
       avgVolume50: round2(trailingAvg(volumes, 50)),
       /** Bars actually used, so the UI can tell "no data" from "thin history". */
       barsAnalyzed: closes.length,
+
+      /**
+       * Support & resistance — classic pivot points computed from the prior
+       * daily and prior-complete-weekly bar (Polygon has no S/R feed). The Key
+       * levels widget/drawer render these alongside the 52-week high/low above.
+       */
+      keyLevels: {
+        daily:
+          latestBar &&
+          typeof latestBar.high === "number" &&
+          typeof latestBar.low === "number" &&
+          typeof latestBar.close === "number"
+            ? pivotLevels(latestBar.high, latestBar.low, latestBar.close)
+            : null,
+        weekly: (() => {
+          const w = priorWeekHLC(
+            bars as Array<{
+              barDate?: string;
+              high?: number;
+              low?: number;
+              close?: number;
+            }>,
+          );
+          return w ? pivotLevels(w.high, w.low, w.close) : null;
+        })(),
+      },
     };
   }
 
