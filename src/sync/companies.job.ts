@@ -71,8 +71,23 @@ export class CompaniesJob implements OnModuleInit {
               `${symbol}: ${warnings.length} warning(s) from ${source} — ${warnings.map((w) => w.code).join(", ")}`,
             );
           }
+          // The profile adapter carries these as placeholder nulls, but they are
+          // OWNED by other jobs: `beta` by technical-indicators, `volume` by
+          // market-quotes. Merge-writing them here would clobber the real values
+          // those jobs computed back to null between runs. `averageVolume` and
+          // `week52Range` are dead placeholders (nothing reads them; the UI uses
+          // avgVolume20/50 and computes the 52-week range client-side). Strip all
+          // four so this job writes only the fields it actually owns — no
+          // cross-job clobbering, no duplicate ownership.
+          const {
+            beta: _beta,
+            volume: _volume,
+            averageVolume: _averageVolume,
+            week52Range: _week52Range,
+            ...profile
+          } = data;
           await setWithCreatedAt(this.firebase.firestore, col.doc(symbol), {
-            ...data,
+            ...profile,
             source,
             warnings,
             updatedAt: new Date().toISOString(),

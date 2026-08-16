@@ -138,12 +138,21 @@ export class EarningsJob implements OnModuleInit {
           else reportedDates.set(t, [d.data.date as string]);
         }
         const nameByTicker = await this.loadCompanyNames();
+        // FMP's calendar is WORLDWIDE (Shenzhen/HK/EU tickers etc.). Resolve
+        // names for symbols outside our curated `companies` from the full Polygon
+        // US reference — this widens the forward calendar to the whole US market
+        // (earningshub parity) while still dropping non-US rows (absent from the
+        // reference). Only the symbols missing a curated name are looked up.
+        const upcomingSyms = [
+          ...new Set(upcoming.map((u) => u.ticker.toUpperCase())),
+        ];
+        const refNames = await this.loadRefNames(
+          upcomingSyms.filter((s) => !nameByTicker.has(s)),
+        );
         for (const u of upcoming) {
-          // FMP's calendar is WORLDWIDE (Shenzhen/HK/EU tickers etc.). This app
-          // tracks only the US Polygon universe, so restrict rows to tickers we
-          // actually cover — which also guarantees a display name.
-          const name = nameByTicker.get(u.ticker);
-          if (!name) continue;
+          const sym = u.ticker.toUpperCase();
+          const name = nameByTicker.get(sym) ?? refNames.get(sym);
+          if (!name) continue; // non-US / not an equity in the US reference
           const id = `${u.ticker}_${u.date}`;
           if (reportedIds.has(id)) continue; // exact reported row already covers it
           const near = (reportedDates.get(u.ticker) ?? []).some(
@@ -222,6 +231,38 @@ export class EarningsJob implements OnModuleInit {
       const n = d.get("name");
       if (typeof n === "string" && n) map.set(d.id.toUpperCase(), n);
     });
+    return map;
+  }
+
+  /**
+   * Resolve display names for FMP calendar symbols that are NOT in our curated
+   * `companies`, from the full Polygon US ticker reference (`tickers`, ~13k US
+   * listings written weekly by ticker-universe.job). This is what widens the
+   * forward calendar from the ~385 tracked names to the whole US market: a
+   * symbol absent from this reference is a non-US FMP row (Shenzhen/HK/EU) and is
+   * dropped; a present one is labelled with its Polygon name. Only common-stock /
+   * ADR types are kept so ETFs, warrants and units don't clutter the calendar.
+   *
+   * Reads only the specific symbols in the calendar window (batched getAll), not
+   * the whole 13k reference.
+   */
+  private async loadRefNames(symbols: string[]): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    if (symbols.length === 0) return map;
+    const col = this.firebase.firestore.collection("tickers");
+    const EQUITY_TYPES = new Set(["CS", "ADRC"]);
+    for (let i = 0; i < symbols.length; i += 300) {
+      const refs = symbols.slice(i, i + 300).map((s) => col.doc(s));
+      const snaps = await this.firebase.firestore.getAll(...refs);
+      for (const snap of snaps) {
+        if (!snap.exists) continue;
+        const d = snap.data() as Record<string, unknown>;
+        const type = d.type as string | undefined;
+        if (type && !EQUITY_TYPES.has(type)) continue;
+        const name = d.name as string | undefined;
+        if (name) map.set(snap.id.toUpperCase(), name);
+      }
+    }
     return map;
   }
 }

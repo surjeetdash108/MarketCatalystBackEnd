@@ -26,6 +26,7 @@ import { OPTIONS_UNIVERSE } from "../common/options-universe";
  *   GET /live/splits?ticker=AAPL                → cache-aside via splits
  *   GET /live/financials?ticker=AAPL            → cache-aside via financials
  *   GET /live/news?ticker=AAPL                  → per-ticker cache-aside via news
+ *   GET /live/earnings-transcript?ticker=AAPL   → latest FMP call transcript, cache-aside via earnings_transcripts
  *   GET /live/options-chain?ticker=AAPL         → cache-aside via options_chains (curated 8-ticker universe)
  *   GET /live/search?q=apple                    → in-memory universe search (no Firestore)
  *   POST /live/searched-ticker {ticker}          → record a resolved ticker search/selection
@@ -216,6 +217,24 @@ export class OnDemandController {
       throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
     const articles = await this.ondemand.getNews(sym);
     sendWithEtag(req, res, articles);
+  }
+
+  @Get("earnings-transcript")
+  @Header(
+    "Cache-Control",
+    "public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400",
+  )
+  async earningsTranscript(
+    @Query("ticker") ticker: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? "").toUpperCase().trim();
+    if (!TICKER_RE.test(sym))
+      throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+    const doc = await this.ondemand.getTranscript(sym);
+    if (!doc) throw new NotFoundException(`No data for ${sym}`);
+    sendWithEtag(req, res, doc);
   }
 
   @Get("options-chain")

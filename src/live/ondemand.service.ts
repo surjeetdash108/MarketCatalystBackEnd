@@ -15,9 +15,20 @@ import {
 } from "../sync/corporate-actions.job";
 import { mapAnnualRow, mapQuarterRow } from "../sync/financials.job";
 import {
+  computeIndicators,
+  type IndicatorBar,
+} from "../sync/technical-indicators.job";
+import { computeRsScore, rsPercentile } from "../sync/rs-rating.job";
+import {
+  computeTechComponents,
+  techRatingFromComponents,
+  type TechComponents,
+} from "../sync/tech-rating.job";
+import {
   PolygonService,
   PolygonAggBar,
 } from "../vendors/polygon/polygon.service";
+import { FmpService } from "../vendors/fmp/fmp.service";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -123,6 +134,8 @@ interface BarsDoc {
 
 /** Company profile TTL — matches the vendor's own 15-minute delay. */
 const COMPANY_TTL_MS = 15 * 60_000;
+/** Earnings transcripts change once a quarter — re-check at most daily. */
+const TRANSCRIPT_TTL_MS = 24 * 3600_000;
 /** Daily bars: at most one vendor refresh per ticker per day. */
 const DAILY_TTL_MS = 20 * 3600_000;
 /** Intraday bars during the extended session (04:00–20:00 ET weekdays). */
@@ -228,6 +241,10 @@ export class OnDemandService implements OnModuleDestroy {
     string,
     { data: { data: Buffer; contentType: string } | null; at: number }
   >();
+  private readonly memTranscript = new Map<
+    string,
+    { data: Record<string, unknown> | null; at: number }
+  >();
   /** Coalescing: concurrent misses for the same key share one vendor promise. */
   private readonly inflight = new Map<string, Promise<unknown>>();
 
@@ -255,6 +272,9 @@ export class OnDemandService implements OnModuleDestroy {
     // EARNINGS_ESTIMATES_SOURCE=none — on-demand then behaves Polygon-only.
     @Inject(EARNINGS_ESTIMATES_ADAPTER)
     private readonly estimatesAdapter: EarningsEstimatesAdapter | null,
+    // FMP is the only vendor providing earnings-call transcripts; behaves as a
+    // no-op (returns null) when FMP_API_KEY is unset, same as the other FMP paths.
+    private readonly fmp: FmpService,
   ) {}
 
   onModuleDestroy() {
@@ -504,6 +524,163 @@ export class OnDemandService implements OnModuleDestroy {
    * immediately instead of a NotAvailable gap until the sync cursor arrives.
    * peRatio/yield are computed against the FRESH snapshot price, not stale bars.
    */
+  /**
+   * Compute the technical field set the stock detail page reads (RSI/MACD/
+   * Stoch/ADX, beta, MA ladder, rolling 52-week range, pivot key levels) for a
+   * ticker being synced for the FIRST time, using the SAME computeIndicators()
+   * the nightly technical-indicators cron uses — so the field set is identical
+   * on both paths.
+   *
+   * It also persists the fetched daily bars into ohlcv_bars, which is the
+   * substrate the rs-rating and tech-rating crons read. Writing it here means
+   * the ticker earns its (universe-relative) RS / tech-rating percentile on the
+   * very next cron run. Those two ratings are the one thing this path cannot
+   * fill inline: a percentile is defined against the whole universe, not one
+   * ticker.
+   *
+   * Best-effort: any failure returns {} so the caller's company doc still saves
+   * with its profile + price rather than being lost to a bar hiccup.
+   */
+  private async computeFirstSyncTechnicals(
+    ticker: string,
+    rank: boolean,
+  ): Promise<Record<string, unknown>> {
+    // Below this many stored raw scores the universe distribution is too thin to
+    // rank against (the brief window right after deploy, before any sweep has
+    // stored raw scores). Fall back to leaving RS/tech null for the cron then.
+    const MIN_RANK_DISTRIBUTION = 20;
+    try {
+      // ~2 trading years so sma200 and the rolling 52-week window are well
+      // covered (the cron analyses the most-recent 300 bars; match that depth).
+      const to = new Date();
+      const from = new Date();
+      from.setUTCFullYear(from.getUTCFullYear() - 2);
+      const iso = (d: Date) => d.toISOString().slice(0, 10);
+      const raw = await this.polygon.getAggsRange(ticker, iso(from), iso(to));
+      if (raw.length === 0) return {};
+
+      const bars: IndicatorBar[] = raw.map((b) => ({
+        barDate: new Date(b.t).toISOString().slice(0, 10),
+        open: b.o,
+        high: b.h,
+        low: b.l,
+        close: b.c,
+        volume: b.v,
+        vwap: b.vw ?? null,
+      }));
+
+      // Persist to ohlcv_bars (same doc shape stock-history.job writes) so the
+      // RS / tech-rating crons can rank this ticker next run. Chunked to stay
+      // under Firestore's 500-write batch ceiling.
+      const col = this.firebase.firestore.collection("ohlcv_bars");
+      for (let i = 0; i < bars.length; i += 450) {
+        const batch = this.firebase.firestore.batch();
+        for (const b of bars.slice(i, i + 450)) {
+          batch.set(
+            col.doc(`${ticker}_${b.barDate}`),
+            {
+              ticker,
+              barDate: b.barDate,
+              timespan: "day",
+              open: b.open,
+              high: b.high,
+              low: b.low,
+              close: b.close,
+              volume: b.volume,
+              vwap: b.vwap,
+              source: "polygon-ondemand",
+            },
+            { merge: false },
+          );
+        }
+        await batch.commit();
+      }
+
+      // SPY closes for beta — the benchmark the cron uses, always synced.
+      const spySnap = await col
+        .where("ticker", "==", "SPY")
+        .orderBy("barDate", "desc")
+        .limit(300)
+        .get();
+      const spyMap = new Map<string, number>();
+      for (const d of spySnap.docs) {
+        const x = d.data();
+        if (typeof x.close === "number")
+          spyMap.set(x.barDate as string, x.close);
+      }
+
+      const ind = computeIndicators(bars.slice(-300), spyMap);
+      if (!ind) return {};
+
+      const closes = bars.map((b) => b.close);
+      const result: Record<string, unknown> = {
+        ...ind,
+        technicalsUpdatedAt: new Date().toISOString(),
+      };
+
+      // Raw RS score + tech components (same windows the sweeps read), stored on
+      // the doc so future rankings can place other tickers against this one too.
+      const rsScore = computeRsScore(closes.slice(-260));
+      const techComp = computeTechComponents(closes.slice(-130));
+      if (rsScore != null) result.rsScore = rsScore;
+      if (techComp) {
+        result.techMomentum = techComp.momentum;
+        result.techTrend = techComp.trend;
+        result.techRsi = techComp.rsi;
+      }
+
+      // For a brand-new ticker (no cron rating yet) rank it against the stored
+      // universe distribution so RS / tech rating show on the FIRST view. Skipped
+      // for tickers that already carry a cron rating — the sweep's universe-wide
+      // rank is authoritative — and while the distribution is too thin to trust.
+      if (rank && (rsScore != null || techComp)) {
+        try {
+          const dist = await this.firebase.firestore
+            .collection("companies")
+            .select("rsScore", "techMomentum", "techTrend", "techRsi")
+            .get();
+          const rsScores: number[] = [];
+          const techComps: TechComponents[] = [];
+          for (const d of dist.docs) {
+            if (d.id === ticker) continue;
+            const x = d.data();
+            if (typeof x.rsScore === "number") rsScores.push(x.rsScore);
+            if (
+              typeof x.techMomentum === "number" &&
+              typeof x.techTrend === "number" &&
+              typeof x.techRsi === "number"
+            ) {
+              techComps.push({
+                momentum: x.techMomentum,
+                trend: x.techTrend,
+                rsi: x.techRsi,
+              });
+            }
+          }
+          if (rsScore != null && rsScores.length >= MIN_RANK_DISTRIBUTION) {
+            result.rsRating = rsPercentile(rsScore, rsScores);
+            result.rsRatingUpdatedAt = new Date().toISOString();
+          }
+          if (techComp && techComps.length >= MIN_RANK_DISTRIBUTION) {
+            result.techRating = techRatingFromComponents(techComp, techComps);
+            result.techRatingUpdatedAt = new Date().toISOString();
+          }
+        } catch (e) {
+          this.logger.warn(
+            `on-demand rank failed for ${ticker}: ${(e as Error).message}`,
+          );
+        }
+      }
+
+      return result;
+    } catch (e) {
+      this.logger.warn(
+        `first-sync technicals failed for ${ticker}: ${(e as Error).message}`,
+      );
+      return {};
+    }
+  }
+
   async getCompany(ticker: string): Promise<Record<string, unknown> | null> {
     this.stats.companyRequests++;
     this.recordUsage(ticker);
@@ -536,6 +713,13 @@ export class OnDemandService implements OnModuleDestroy {
       Promise<Record<string, unknown> | null> | undefined;
     if (existing) return existing;
 
+    // Rank RS / tech on-demand only for a ticker that has no cron rating yet.
+    // For one the sweep already ranked, its universe-wide percentile is
+    // authoritative — merge:true preserves it rather than overwriting with an
+    // on-demand approximation.
+    const hadRating =
+      snap.exists && (snap.data() as Record<string, unknown>).rsRating != null;
+
     const p = (async () => {
       this.stats.companyVendorCalls++;
       let details: Record<string, unknown> | null = null;
@@ -557,10 +741,16 @@ export class OnDemandService implements OnModuleDestroy {
       // cursor reaches the ticker. Each is independent and best-effort: a failed
       // or empty one degrades to null (same as the adapter's per-field try/catch)
       // rather than dropping the whole company doc. Parallel to keep latency low.
-      const [epsRes, peersRes, divRes] = await Promise.allSettled([
+      const [epsRes, peersRes, divRes, techRes] = await Promise.allSettled([
         this.polygon.getTtmEps(ticker),
         this.polygon.getRelatedCompanies(ticker),
         this.polygon.getDividendHistory(ticker, 40),
+        // First-time technicals (RSI/MACD/Stoch/ADX, beta, MA ladder, 52-week
+        // range, key levels) so the detail page isn't a wall of N/A until the
+        // nightly cron reaches this ticker. Runs alongside the other fetches so
+        // it adds max(), not sum(), to latency. Best-effort — returns {} on any
+        // failure so the company doc still saves with profile + price.
+        this.computeFirstSyncTechnicals(ticker, !hadRating),
       ]);
 
       const eps = epsRes.status === "fulfilled" ? epsRes.value : null;
@@ -573,6 +763,9 @@ export class OnDemandService implements OnModuleDestroy {
         peersRes.status === "fulfilled"
           ? peersRes.value.filter((p) => p !== ticker)
           : [];
+
+      const technicals =
+        techRes.status === "fulfilled" ? techRes.value : {};
 
       // Trailing-twelve-month dividends by ex-date → per-share total and yield,
       // the same derivation the profile adapter uses (Polygon sells no yield
@@ -619,6 +812,10 @@ export class OnDemandService implements OnModuleDestroy {
         dividendYield,
         dividendPerShare,
         peers,
+        // Technical field set computed above (empty object when history is thin
+        // or the fetch failed). Spread last so a real technicals result fills
+        // rsi14/macd/beta/high52/keyLevels/... the same way the cron would.
+        ...technicals,
         createdAt: now,
         updatedAt: now,
         source: "polygon-ondemand",
@@ -1019,6 +1216,10 @@ export class OnDemandService implements OnModuleDestroy {
             headline: a.headline,
             summary: a.summary,
             source: a.source,
+            // Vendor badge parity with news.job.ts's bulk sweep — the stock
+            // screen renders a Polygon/FMP pill off this field, so the
+            // on-demand cache-fill must carry it too or the pill never shows.
+            vendor: a.vendor,
             url: a.url,
             category: a.category,
             sentiment: a.sentiment,
@@ -1149,6 +1350,74 @@ export class OnDemandService implements OnModuleDestroy {
       };
       await ref.set(doc);
       this.memOptions.set(ticker, { data: doc, at: Date.now() });
+      return doc;
+    })().finally(() => this.inflight.delete(key));
+
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  // ── Earnings-call transcript (FMP) ──────────────────────────────────────
+
+  /**
+   * Latest earnings-call transcript for one ticker, cache-aside on
+   * `earnings_transcripts/{ticker}`. FMP is the only vendor that carries
+   * transcripts (Polygon has none), so this degrades to null when FMP is off.
+   * The `null` result is cached too, so a ticker with no transcript doesn't
+   * re-hit FMP on every drawer open until the TTL lapses.
+   */
+  async getTranscript(ticker: string): Promise<Record<string, unknown> | null> {
+    this.recordUsage(ticker);
+
+    const mem = this.memTranscript.get(ticker);
+    if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
+
+    const ref = this.firebase.firestore
+      .collection("earnings_transcripts")
+      .doc(ticker);
+    const snap = await ref.get();
+    if (snap.exists) {
+      const data = snap.data() as Record<string, unknown>;
+      const created =
+        typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
+      if (Number.isFinite(created) && Date.now() - created < TRANSCRIPT_TTL_MS) {
+        this.memTranscript.set(ticker, { data, at: Date.now() });
+        return data;
+      }
+    }
+
+    const key = `transcript_${ticker}`;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown> | null> | undefined;
+    if (existing) return existing;
+
+    const p = (async () => {
+      const tx = await this.fmp.getLatestEarningsTranscript(ticker).catch(() => null);
+      const now = new Date().toISOString();
+      // Cache the "no transcript" answer as a lightweight doc so repeat opens
+      // don't re-run the FMP probe until the TTL lapses.
+      const doc: Record<string, unknown> = tx
+        ? {
+            ticker,
+            quarter: tx.quarter,
+            year: tx.year,
+            date: tx.date,
+            content: tx.content,
+            hasTranscript: true,
+            source: "fmp-ondemand",
+            createdAt: now,
+            updatedAt: now,
+          }
+        : {
+            ticker,
+            hasTranscript: false,
+            content: null,
+            source: "fmp-ondemand",
+            createdAt: now,
+            updatedAt: now,
+          };
+      await ref.set(doc);
+      this.memTranscript.set(ticker, { data: doc, at: Date.now() });
       return doc;
     })().finally(() => this.inflight.delete(key));
 

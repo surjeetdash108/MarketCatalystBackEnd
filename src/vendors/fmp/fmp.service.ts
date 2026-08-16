@@ -122,6 +122,25 @@ export interface FmpEconEventRow {
   unit: string | null;
 }
 
+/** One earnings-call transcript (`/stable/earning-call-transcript`). */
+export interface FmpTranscriptRow {
+  symbol: string;
+  /** Fiscal quarter number, 1-4 (FMP's `period`/`quarter` field). */
+  quarter: number | null;
+  year: number | null;
+  /** Call date (YYYY-MM-DD, sometimes with a time component). */
+  date: string | null;
+  /** Full transcript text — operator intro, prepared remarks and Q&A. */
+  content: string;
+}
+
+/** Available (year, quarter) a transcript exists for (`/stable/earning-call-transcript-dates`). */
+export interface FmpTranscriptDate {
+  quarter: number | null;
+  year: number | null;
+  date: string | null;
+}
+
 @Injectable()
 export class FmpService {
   private readonly logger = new Logger(FmpService.name);
@@ -411,4 +430,113 @@ export class FmpService {
       };
     });
   }
+
+  /**
+   * One earnings-call transcript for an explicit fiscal (year, quarter)
+   * (`/stable/earning-call-transcript?symbol=&year=&quarter=`). Returns null
+   * when FMP has no transcript for that exact period. `period` on the response
+   * is the quarter (e.g. "Q2" or 2) — parsed to a number defensively.
+   */
+  async getEarningsTranscript(
+    ticker: string,
+    year: number,
+    quarter: number,
+  ): Promise<FmpTranscriptRow | null> {
+    if (!this.apiKey) return null;
+    const rows = await this.get(
+      `earning-call-transcript?symbol=${encodeURIComponent(ticker)}&year=${year}&quarter=${quarter}`,
+    );
+    const o = rows[0] as Record<string, unknown> | undefined;
+    const content = o?.content != null ? String(o.content) : "";
+    if (!o || !content.trim()) return null;
+    return {
+      symbol: String(o.symbol ?? ticker),
+      quarter: quarterNum(o.period ?? o.quarter) ?? quarter,
+      year: num(o.year) ?? year,
+      date: o.date != null ? String(o.date) : null,
+      content,
+    };
+  }
+
+  /**
+   * The (year, quarter) periods FMP has a transcript for, newest first
+   * (`/stable/earning-call-transcript-dates?symbol=`). Used to resolve the
+   * latest call without guessing the calendar quarter. Parsed defensively:
+   * FMP has returned both objects ({quarter,year,date}) and tuple arrays
+   * ([quarter,year,date]) across versions.
+   */
+  async getTranscriptDates(ticker: string): Promise<FmpTranscriptDate[]> {
+    if (!this.apiKey) return [];
+    const rows = await this.get(
+      `earning-call-transcript-dates?symbol=${encodeURIComponent(ticker)}`,
+    );
+    const parsed = rows.map((r): FmpTranscriptDate => {
+      if (Array.isArray(r)) {
+        return { quarter: quarterNum(r[0]), year: num(r[1]), date: r[2] != null ? String(r[2]) : null };
+      }
+      const o = r as Record<string, unknown>;
+      return {
+        quarter: quarterNum(o.quarter ?? o.period),
+        year: num(o.year ?? o.fiscalYear),
+        date: o.date != null ? String(o.date) : null,
+      };
+    });
+    return parsed
+      .filter((d) => d.year != null && d.quarter != null)
+      .sort((a, b) => (b.year! - a.year!) || (b.quarter! - a.quarter!));
+  }
+
+  /**
+   * The most recent earnings-call transcript for a ticker. Resolves the latest
+   * (year, quarter) from `getTranscriptDates` when available; if that endpoint
+   * yields nothing, falls back to probing the last few calendar quarters so a
+   * transcript is still found. Returns null when none exists / FMP is off.
+   */
+  async getLatestEarningsTranscript(
+    ticker: string,
+  ): Promise<FmpTranscriptRow | null> {
+    if (!this.apiKey) return null;
+
+    const tryFetch = (year: number, quarter: number) =>
+      this.getEarningsTranscript(ticker, year, quarter).catch(() => null);
+
+    const dates = await this.getTranscriptDates(ticker).catch(() => []);
+    for (const d of dates.slice(0, 4)) {
+      const tx = await tryFetch(d.year!, d.quarter!);
+      if (tx) return tx;
+    }
+
+    // Fallback: dates endpoint gave nothing — probe recent calendar quarters
+    // (most recent first). Earnings for a quarter are reported the following
+    // one, so the current calendar quarter is usually not yet available.
+    for (const { year, quarter } of recentQuarters(6)) {
+      const tx = await tryFetch(year, quarter);
+      if (tx) return tx;
+    }
+    return null;
+  }
+}
+
+/** Parses FMP's quarter field ("Q2", "2", 2) into a 1-4 number, else null. */
+function quarterNum(v: unknown): number | null {
+  if (typeof v === "number") return v >= 1 && v <= 4 ? v : null;
+  if (typeof v === "string") {
+    const m = v.match(/[1-4]/);
+    return m ? Number(m[0]) : null;
+  }
+  return null;
+}
+
+/** The last `count` calendar quarters, most recent first, from a fixed clock. */
+function recentQuarters(count: number): Array<{ year: number; quarter: number }> {
+  const now = new Date();
+  let year = now.getUTCFullYear();
+  let quarter = Math.floor(now.getUTCMonth() / 3) + 1; // 1-4
+  const out: Array<{ year: number; quarter: number }> = [];
+  for (let i = 0; i < count; i++) {
+    out.push({ year, quarter });
+    quarter -= 1;
+    if (quarter < 1) { quarter = 4; year -= 1; }
+  }
+  return out;
 }

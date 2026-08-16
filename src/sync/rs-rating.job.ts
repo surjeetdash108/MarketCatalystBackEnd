@@ -14,6 +14,46 @@ const QUARTER_DAYS = 63;
 const MIN_BARS_REQUIRED = 65;
 const QUARTER_WEIGHTS = [0.4, 0.2, 0.2, 0.2];
 
+/**
+ * Raw relative-strength score = weighted trailing quarterly returns. Pure so the
+ * on-demand first-time company sync can score a brand-new ticker from the same
+ * bars, then rank it against the stored universe scores with rsPercentile below
+ * — the two together let a ticker earn an RS rating on first view instead of
+ * waiting for the nightly sweep. Returns null when history is too short (matches
+ * the sweep's skip). `closes` ascending by date.
+ */
+export function computeRsScore(closes: number[]): number | null {
+  if (closes.length < MIN_BARS_REQUIRED) return null;
+  const quarterlyReturns: number[] = [];
+  for (let q = 0; q < 4; q++) {
+    const endIdx = closes.length - 1 - q * QUARTER_DAYS;
+    const startIdx = endIdx - QUARTER_DAYS;
+    if (startIdx < 0) break;
+    const startPrice = closes[startIdx];
+    const endPrice = closes[endIdx];
+    if (startPrice <= 0) break;
+    quarterlyReturns.push((endPrice - startPrice) / startPrice);
+  }
+  if (quarterlyReturns.length === 0) return null;
+  const weights = QUARTER_WEIGHTS.slice(0, quarterlyReturns.length);
+  const weightSum = weights.reduce((a, b) => a + b, 0);
+  return (
+    quarterlyReturns.reduce((sum, r, i) => sum + r * weights[i], 0) / weightSum
+  );
+}
+
+/**
+ * Percentile (1–99) of one `score` within the universe's stored raw scores,
+ * matching run()'s ranking formula (rank i of n, mapped 1..99). The score is
+ * treated as inserted into the distribution, so it needs no prior membership.
+ */
+export function rsPercentile(score: number, universeScores: number[]): number {
+  const n = universeScores.length + 1;
+  if (n === 1) return 99;
+  const i = universeScores.filter((s) => s < score).length;
+  return Math.round(1 + (i / (n - 1)) * 98);
+}
+
 @Injectable()
 export class RsRatingJob implements OnModuleInit {
   private readonly logger = new Logger(RsRatingJob.name);
@@ -43,25 +83,8 @@ export class RsRatingJob implements OnModuleInit {
       .orderBy("barDate", "desc")
       .limit(BARS_PER_TICKER)
       .get();
-    if (snap.size < MIN_BARS_REQUIRED) return null;
     const closes = snap.docs.map((d) => d.data().close).reverse();
-    const quarterlyReturns = [];
-    for (let q = 0; q < 4; q++) {
-      const endIdx = closes.length - 1 - q * QUARTER_DAYS;
-      const startIdx = endIdx - QUARTER_DAYS;
-      if (startIdx < 0) break;
-      const startPrice = closes[startIdx];
-      const endPrice = closes[endIdx];
-      if (startPrice <= 0) break;
-      quarterlyReturns.push((endPrice - startPrice) / startPrice);
-    }
-    if (quarterlyReturns.length === 0) return null;
-    const weights = QUARTER_WEIGHTS.slice(0, quarterlyReturns.length);
-    const weightSum = weights.reduce((a, b) => a + b, 0);
-    const score =
-      quarterlyReturns.reduce((sum, r, i) => sum + r * weights[i], 0) /
-      weightSum;
-    return score;
+    return computeRsScore(closes);
   }
 
   async run() {
@@ -105,6 +128,10 @@ export class RsRatingJob implements OnModuleInit {
           ref: col.doc(r.ticker),
           data: {
             rsRating: percentile,
+            // Raw score stored so the on-demand first-time company sync can rank
+            // a brand-new ticker against this distribution (see rsPercentile /
+            // ondemand.service) instead of waiting for this nightly sweep.
+            rsScore: r.score,
             rsRatingUpdatedAt: new Date().toISOString(),
           },
         });

@@ -25,6 +25,13 @@ const BATCH_SIZE = 60;
  * planHistoryFloor() below instead of being allowed to run off the end.
  */
 const BACKFILL_DAYS = 365 * 5;
+
+/**
+ * Below this many stored bars a ticker cannot be scored by rs-rating (which
+ * needs ≥65) or the technical-indicators job. Used to detect tickers stranded
+ * by the old deep-fill bug — see the self-heal guard in run().
+ */
+const MIN_HEALTHY_BARS = 65;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function isoDate(d: Date): string {
@@ -108,13 +115,33 @@ export class StockHistoryJob implements OnModuleInit {
           const clampedForward = forwardFrom < floor ? floor : forwardFrom;
           if (clampedForward <= today) windows.push([clampedForward, today]);
 
+          // Self-heal tickers stranded by the old deep-fill bug. A ticker whose
+          // deep window once failed was wrongly marked done (earliestSyncedFrom
+          // set), so it never re-attempts the deep window and only ever accrues
+          // the daily forward increment — never reaching the ≥65 bars rs-rating
+          // and technical-indicators need. If it claims to be backfilled but is
+          // still short, force the deep window to run again. A genuinely
+          // short-history name (recent IPO) simply re-fetches its few bars each
+          // run; a stranded name fills to full history once and then stops
+          // qualifying (its count jumps well above the threshold).
+          let stranded = false;
+          if (earliestSyncedFrom != null && earliestSyncedFrom <= floor) {
+            const cnt = await this.firebase.firestore
+              .collection("ohlcv_bars")
+              .where("ticker", "==", ticker)
+              .count()
+              .get();
+            if (cnt.data().count < MIN_HEALTHY_BARS) stranded = true;
+          }
+
           const needsDeepFill =
-            earliestSyncedFrom == null || earliestSyncedFrom > floor;
+            earliestSyncedFrom == null || earliestSyncedFrom > floor || stranded;
           if (needsDeepFill) {
             // Stop the day before the known edge so the two windows don't
-            // overlap; with no known edge, take the whole plan window at once.
+            // overlap; with no known edge — or a stranded ticker being refilled
+            // from scratch — take the whole plan window at once.
             const backTo =
-              earliestSyncedFrom == null
+              earliestSyncedFrom == null || stranded
                 ? today
                 : isoDate(addDays(new Date(earliestSyncedFrom), -1));
             if (floor <= backTo) windows.push([floor, backTo]);

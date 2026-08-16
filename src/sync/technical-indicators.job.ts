@@ -308,6 +308,139 @@ function priorWeekHLC(
   return prior ? { high: prior.high, low: prior.low, close: prior.close } : null;
 }
 
+/** Bar shape the indicator math consumes — ascending by date. */
+export interface IndicatorBar {
+  barDate?: string;
+  open?: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  vwap?: number | null;
+}
+
+/**
+ * Pure technical-indicator computation, shared by the nightly sweep
+ * (computeFor below) and the on-demand first-time company sync
+ * (ondemand.service.getCompany) so a ticker seen for the very first time carries
+ * the SAME technical field set the cron writes — RSI/MACD/Stoch/ADX, beta, the
+ * MA ladder, the rolling 52-week range and pivot key levels. `bars` must be
+ * ascending by date and already limited to the window to analyse; `mktByDate` is
+ * SPY closes keyed by barDate (the beta benchmark). Returns null when history is
+ * too thin, matching the cron's skip so a sparse ticker degrades identically on
+ * both paths.
+ */
+export function computeIndicators(
+  bars: IndicatorBar[],
+  mktByDate: Map<string, number>,
+) {
+  if (bars.length < MIN_BARS) return null;
+  const closes = bars.map((b) => b.close);
+  const volumes = bars.map((b) => b.volume);
+  const highs = bars.map((b) => b.high);
+  const lows = bars.map((b) => b.low);
+  const rsiVal = rsi(closes);
+  const macdVal = macd(closes);
+  if (rsiVal == null || macdVal == null) return null;
+  const sma50 = sma(closes, 50);
+  const sma200 = sma(closes, 200);
+  const week5ChangePct = changeOverSessions(closes, 5);
+  const latestClose = closes[closes.length - 1];
+
+  // 52-week range from the real rolling year of highs/lows.
+  const yearHighs = highs.slice(-TRADING_DAYS_YEAR);
+  const yearLows = lows.slice(-TRADING_DAYS_YEAR);
+  const high52 = yearHighs.length > 0 ? Math.max(...yearHighs) : null;
+  const low52 = yearLows.length > 0 ? Math.min(...yearLows) : null;
+
+  // Full MA ladder for the drawer; sma50/sma200 stay as their own fields too.
+  const smaLadder: Record<string, number | null> = {};
+  const emaLadder: Record<string, number | null> = {};
+  for (const p of MA_PERIODS) {
+    smaLadder[String(p)] = round2(sma(closes, p));
+    const e = closes.length >= p ? ema(closes, p)[closes.length - 1] : null;
+    emaLadder[String(p)] = round2(e);
+  }
+
+  const latestBar = bars[bars.length - 1];
+  const rsiHistory = rsiSeries(closes).slice(-RSI_SERIES_LEN);
+  const stochKVal = stochK(highs, lows, closes);
+  const adxVal = adx(highs, lows, closes);
+  const betaVal = betaVs(
+    bars as { barDate: string; close: number }[],
+    mktByDate,
+  );
+
+  return {
+    rsi14: Math.round(rsiVal * 100) / 100,
+    stochK: stochKVal == null ? null : Math.round(stochKVal * 100) / 100,
+    adx14: adxVal == null ? null : Math.round(adxVal * 100) / 100,
+    beta: betaVal == null ? null : Math.round(betaVal * 1000) / 1000,
+    macd: Math.round(macdVal.macd * 10000) / 10000,
+    macdSignal: Math.round(macdVal.signal * 10000) / 10000,
+    macdHistogram: Math.round(macdVal.histogram * 10000) / 10000,
+    rvol: (() => {
+      const v = rvol(volumes);
+      return v == null ? null : Math.round(v * 100) / 100;
+    })(),
+    sma50: sma50 == null ? null : Math.round(sma50 * 100) / 100,
+    sma200: sma200 == null ? null : Math.round(sma200 * 100) / 100,
+    aboveSma50: sma50 == null ? null : latestClose >= sma50,
+    aboveSma200: sma200 == null ? null : latestClose >= sma200,
+    week5ChangePct:
+      week5ChangePct == null ? null : Math.round(week5ChangePct * 100) / 100,
+
+    /** Rolling RSI(14) line for the RSI pane. */
+    rsi14Series: rsiHistory.map((v) => Math.round(v * 10) / 10),
+    /** SMA/EMA at every period the MA drawer lists, keyed by period. */
+    smaLadder,
+    emaLadder,
+    /** Session VWAP straight from the vendor bar. */
+    vwap: round2(latestBar?.vwap),
+    /** Real rolling-52-week range and where price sits inside it. */
+    high52,
+    low52,
+    pctFromHigh52:
+      high52 && high52 > 0
+        ? round2(((latestClose - high52) / high52) * 100)
+        : null,
+    pctFromLow52:
+      low52 && low52 > 0
+        ? round2(((latestClose - low52) / low52) * 100)
+        : null,
+    /** Average daily volume. */
+    avgVolume20: round2(trailingAvg(volumes, 20)),
+    avgVolume50: round2(trailingAvg(volumes, 50)),
+    /** Bars actually used, so the UI can tell "no data" from "thin history". */
+    barsAnalyzed: closes.length,
+
+    /**
+     * Support & resistance — classic pivot points from the prior daily and
+     * prior-complete-weekly bar (Polygon has no S/R feed).
+     */
+    keyLevels: {
+      daily:
+        latestBar &&
+        typeof latestBar.high === "number" &&
+        typeof latestBar.low === "number" &&
+        typeof latestBar.close === "number"
+          ? pivotLevels(latestBar.high, latestBar.low, latestBar.close)
+          : null,
+      weekly: (() => {
+        const w = priorWeekHLC(
+          bars as Array<{
+            barDate?: string;
+            high?: number;
+            low?: number;
+            close?: number;
+          }>,
+        );
+        return w ? pivotLevels(w.high, w.low, w.close) : null;
+      })(),
+    },
+  };
+}
+
 @Injectable()
 export class TechnicalIndicatorsJob implements OnModuleInit {
   private readonly logger = new Logger(TechnicalIndicatorsJob.name);
@@ -353,126 +486,8 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
       .orderBy("barDate", "desc")
       .limit(BARS_TO_READ)
       .get();
-    if (snap.size < MIN_BARS) return null;
-    const bars = snap.docs.map((d) => d.data()).reverse();
-    const closes = bars.map((b) => b.close);
-    const volumes = bars.map((b) => b.volume);
-    const highs = bars.map((b) => b.high);
-    const lows = bars.map((b) => b.low);
-    const rsiVal = rsi(closes);
-    const macdVal = macd(closes);
-    if (rsiVal == null || macdVal == null) return null;
-    const sma50 = sma(closes, 50);
-    const sma200 = sma(closes, 200);
-    const week5ChangePct = changeOverSessions(closes, 5);
-    const latestClose = closes[closes.length - 1];
-
-    // 52-week range from the real rolling year of highs/lows. The keystats tile
-    // and the key-levels drawer previously derived these as fixed multiples of
-    // the current price (px * 1.28 / px * 0.72), which is not a 52-week range at
-    // all — it is the current price wearing one.
-    const yearHighs = highs.slice(-TRADING_DAYS_YEAR);
-    const yearLows = lows.slice(-TRADING_DAYS_YEAR);
-    const high52 = yearHighs.length > 0 ? Math.max(...yearHighs) : null;
-    const low52 = yearLows.length > 0 ? Math.min(...yearLows) : null;
-
-    // Full MA ladder for the drawer. sma50/sma200 below are kept as their own
-    // fields because existing screens (Movers, Heatmap, Tech Rating) read them
-    // by name; the ladder is additive rather than a replacement.
-    const smaLadder: Record<string, number | null> = {};
-    const emaLadder: Record<string, number | null> = {};
-    for (const p of MA_PERIODS) {
-      smaLadder[String(p)] = round2(sma(closes, p));
-      const e = closes.length >= p ? ema(closes, p)[closes.length - 1] : null;
-      emaLadder[String(p)] = round2(e);
-    }
-
-    const latestBar = bars[bars.length - 1];
-    const rsiHistory = rsiSeries(closes).slice(-RSI_SERIES_LEN);
-    const stochKVal = stochK(highs, lows, closes);
-    const adxVal = adx(highs, lows, closes);
-    const betaVal = betaVs(
-      bars as { barDate: string; close: number }[],
-      mktByDate,
-    );
-
-    return {
-      rsi14: Math.round(rsiVal * 100) / 100,
-      // Stochastic %K, Wilder ADX(14) and beta vs SPY — computed from the same
-      // bars as RSI/MACD (previously rendered N/A for lack of a "technicals vendor").
-      stochK: stochKVal == null ? null : Math.round(stochKVal * 100) / 100,
-      adx14: adxVal == null ? null : Math.round(adxVal * 100) / 100,
-      beta: betaVal == null ? null : Math.round(betaVal * 1000) / 1000,
-      macd: Math.round(macdVal.macd * 10000) / 10000,
-      macdSignal: Math.round(macdVal.signal * 10000) / 10000,
-      macdHistogram: Math.round(macdVal.histogram * 10000) / 10000,
-      rvol: (() => {
-        const v = rvol(volumes);
-        return v == null ? null : Math.round(v * 100) / 100;
-      })(),
-      // Real MA context for the Movers table (was fabricated from the sign of
-      // the day's move). Rounded to 2dp; null when history is too short.
-      sma50: sma50 == null ? null : Math.round(sma50 * 100) / 100,
-      sma200: sma200 == null ? null : Math.round(sma200 * 100) / 100,
-      // Where price sits vs each MA, precomputed so the client needn't refetch bars.
-      aboveSma50: sma50 == null ? null : latestClose >= sma50,
-      aboveSma200: sma200 == null ? null : latestClose >= sma200,
-      // True 5-session change — replaces the movers "week %" that reused the day move.
-      week5ChangePct:
-        week5ChangePct == null ? null : Math.round(week5ChangePct * 100) / 100,
-
-      // ── Fields below replace values the UI was fabricating ──
-
-      /** Rolling RSI(14) line for the RSI pane (was a seeded sine walk). */
-      rsi14Series: rsiHistory.map((v) => Math.round(v * 10) / 10),
-      /** SMA/EMA at every period the MA drawer lists, keyed by period. */
-      smaLadder,
-      emaLadder,
-      /** Session VWAP straight from the vendor bar (was a price multiple). */
-      vwap: round2(latestBar?.vwap),
-      /** Real rolling-52-week range and where price sits inside it. */
-      high52,
-      low52,
-      pctFromHigh52:
-        high52 && high52 > 0
-          ? round2(((latestClose - high52) / high52) * 100)
-          : null,
-      pctFromLow52:
-        low52 && low52 > 0
-          ? round2(((latestClose - low52) / low52) * 100)
-          : null,
-      /** Average daily volume — the keystats tile derived this from a formula. */
-      avgVolume20: round2(trailingAvg(volumes, 20)),
-      avgVolume50: round2(trailingAvg(volumes, 50)),
-      /** Bars actually used, so the UI can tell "no data" from "thin history". */
-      barsAnalyzed: closes.length,
-
-      /**
-       * Support & resistance — classic pivot points computed from the prior
-       * daily and prior-complete-weekly bar (Polygon has no S/R feed). The Key
-       * levels widget/drawer render these alongside the 52-week high/low above.
-       */
-      keyLevels: {
-        daily:
-          latestBar &&
-          typeof latestBar.high === "number" &&
-          typeof latestBar.low === "number" &&
-          typeof latestBar.close === "number"
-            ? pivotLevels(latestBar.high, latestBar.low, latestBar.close)
-            : null,
-        weekly: (() => {
-          const w = priorWeekHLC(
-            bars as Array<{
-              barDate?: string;
-              high?: number;
-              low?: number;
-              close?: number;
-            }>,
-          );
-          return w ? pivotLevels(w.high, w.low, w.close) : null;
-        })(),
-      },
-    };
+    const bars = snap.docs.map((d) => d.data()).reverse() as IndicatorBar[];
+    return computeIndicators(bars, mktByDate);
   }
 
   async run() {

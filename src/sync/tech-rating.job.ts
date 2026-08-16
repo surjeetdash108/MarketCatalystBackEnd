@@ -50,6 +50,56 @@ function percentiles(rows, pick) {
   return out;
 }
 
+/** The three raw components of the tech rating for one ticker. */
+export interface TechComponents {
+  momentum: number;
+  trend: number;
+  rsi: number;
+}
+
+/**
+ * Raw tech-rating components (63-day momentum, price-vs-SMA50 trend, RSI14) from
+ * a close series. Pure so the on-demand first-time company sync can derive them
+ * from the same bars, store them on the doc, and rank a new ticker against the
+ * universe with techRatingFromComponents below — giving a tech rating on first
+ * view instead of waiting for the nightly sweep. `closes` ascending by date;
+ * null when history is too short (matches the sweep's skip).
+ */
+export function computeTechComponents(closes: number[]): TechComponents | null {
+  if (closes.length < MIN_BARS) return null;
+  const price = closes[closes.length - 1];
+  const past = closes[closes.length - 1 - MOMENTUM_DAYS];
+  const ma50 = sma(closes, SMA_PERIOD);
+  const rsiVal = rsi14(closes);
+  if (past == null || past <= 0 || ma50 == null || ma50 <= 0 || rsiVal == null) {
+    return null;
+  }
+  return { momentum: (price - past) / past, trend: price / ma50 - 1, rsi: rsiVal };
+}
+
+/**
+ * Composite tech rating (1–99) for one ticker's components, ranked against the
+ * universe's stored components. Mirrors run()'s weighting (0.5 momentum, 0.3
+ * trend, 0.2 RSI) — each component is percentiled against the distribution
+ * (the value treated as inserted, so it needs no prior membership).
+ */
+export function techRatingFromComponents(
+  c: TechComponents,
+  universe: TechComponents[],
+): number {
+  const pct = (val: number, arr: number[]) => {
+    const n = arr.length + 1;
+    if (n === 1) return 100;
+    const i = arr.filter((x) => x < val).length;
+    return (i / (n - 1)) * 100;
+  };
+  const composite =
+    0.5 * pct(c.momentum, universe.map((u) => u.momentum)) +
+    0.3 * pct(c.trend, universe.map((u) => u.trend)) +
+    0.2 * pct(c.rsi, universe.map((u) => u.rsi));
+  return Math.min(99, Math.max(1, Math.round(composite)));
+}
+
 @Injectable()
 export class TechRatingJob implements OnModuleInit {
   private readonly logger = new Logger(TechRatingJob.name);
@@ -79,27 +129,9 @@ export class TechRatingJob implements OnModuleInit {
       .orderBy("barDate", "desc")
       .limit(BARS_TO_READ)
       .get();
-    if (snap.size < MIN_BARS) return null;
     const closes = snap.docs.map((d) => d.data().close).reverse();
-    const price = closes[closes.length - 1];
-    const past = closes[closes.length - 1 - MOMENTUM_DAYS];
-    const ma50 = sma(closes, SMA_PERIOD);
-    const rsiVal = rsi14(closes);
-    if (
-      past == null ||
-      past <= 0 ||
-      ma50 == null ||
-      ma50 <= 0 ||
-      rsiVal == null
-    ) {
-      return null;
-    }
-    return {
-      ticker,
-      momentum: (price - past) / past,
-      trend: price / ma50 - 1,
-      rsi: rsiVal,
-    };
+    const c = computeTechComponents(closes);
+    return c ? { ticker, ...c } : null;
   }
 
   async run() {
@@ -177,6 +209,12 @@ export class TechRatingJob implements OnModuleInit {
             techRating: rating.get(r.ticker),
             sectorRank: sr?.rank ?? null,
             sectorRankTotal: sr?.total ?? null,
+            // Raw components stored so the on-demand first-time company sync can
+            // rank a brand-new ticker against this distribution (see
+            // techRatingFromComponents / ondemand.service).
+            techMomentum: r.momentum,
+            techTrend: r.trend,
+            techRsi: r.rsi,
             techRatingUpdatedAt: new Date().toISOString(),
           },
         });
