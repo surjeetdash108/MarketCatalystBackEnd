@@ -76,7 +76,7 @@ export const TAPE_INDICES: TapeSymbol[] = [
   {
     id: "RUT",
     kind: "index",
-    label: "Russell 2K",
+    label: "Russell 2000",
     proxyTicker: "IWM",
     isProxy: true,
     note: "ETF proxy for the Russell 2000 index",
@@ -113,6 +113,17 @@ export const TAPE_INDICES: TapeSymbol[] = [
     proxyTicker: "UUP",
     isProxy: true,
     note: "ETF proxy for the US Dollar Index",
+  },
+  {
+    id: "BTC",
+    kind: "index",
+    label: "Bitcoin",
+    // Polygon/Massive carries no direct BTC/USD pair on this plan, so use the
+    // largest spot-bitcoin ETF (iShares IBIT) — its % move tracks spot BTC. Like
+    // GOLD/WTI above, the tile shows the ETF's own price, not the ~$100k spot.
+    proxyTicker: "IBIT",
+    isProxy: true,
+    note: "ETF proxy for spot Bitcoin (iShares Bitcoin Trust)",
   },
 ];
 

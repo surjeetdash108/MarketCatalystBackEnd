@@ -46,7 +46,7 @@ const INDEX_PROXIES = [
   },
   {
     symbol: "RUT",
-    label: "Russell 2K",
+    label: "Russell 2000",
     proxyTicker: "IWM",
     isProxy: true,
     note: "ETF proxy for the Russell 2000 index",
@@ -79,6 +79,15 @@ const INDEX_PROXIES = [
     proxyTicker: "VIXY",
     isProxy: true,
     note: "Decaying VIX futures ETN — directional proxy only, not the spot VIX level",
+  },
+  {
+    symbol: "BTC",
+    label: "Bitcoin",
+    // No direct BTC/USD on Polygon/Massive here — proxy via the iShares spot-
+    // bitcoin ETF (IBIT). % move tracks spot BTC; tile shows the ETF price.
+    proxyTicker: "IBIT",
+    isProxy: true,
+    note: "ETF proxy for spot Bitcoin (iShares Bitcoin Trust)",
   },
 ];
 
