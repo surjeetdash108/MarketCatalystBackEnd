@@ -5,6 +5,7 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { IPOS_ADAPTER, type IposAdapter } from "../adapters/types";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
+import { sectorFromSic } from "../common/sic-sector.util";
 
 const JOB_NAME = "ipos";
 const LOOKBACK_DAYS = 45;
@@ -109,12 +110,26 @@ export class IposJob implements OnModuleInit {
           }
         }
 
+        // Sector from Polygon's ticker reference (SIC → sector). New IPO tickers
+        // aren't in the `companies` universe yet, so the UI had no sector to show;
+        // fetch it here per listed name (best-effort).
+        let sector: string | null = null;
+        if (e.symbol) {
+          try {
+            const details = await this.polygon.getTickerDetails(e.symbol);
+            sector = sectorFromSic(details?.sic_code as string | number | undefined);
+          } catch {
+            // Best-effort; leave null if the reference lookup fails.
+          }
+        }
+
         docs.push({
           id,
           data: {
             date: e.date,
             symbol: e.symbol,
             name: e.name,
+            sector,
             exchange: e.exchange,
             priceLow: low,
             priceHigh: high,

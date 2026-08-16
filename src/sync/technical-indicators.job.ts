@@ -308,6 +308,26 @@ function priorWeekHLC(
   return prior ? { high: prior.high, low: prior.low, close: prior.close } : null;
 }
 
+/**
+ * Annualized N-day realized (historical) volatility, as a percent. Sample
+ * standard deviation of daily log returns over the window, scaled by √252.
+ * This is what the "30d Vol" column shows — a real volatility measure computed
+ * from the bars, since no implied-volatility (options) feed is on the plan.
+ */
+function realizedVol(closes: number[], window = 30): number | null {
+  if (closes.length < window + 1) return null;
+  const slice = closes.slice(-(window + 1));
+  const rets: number[] = [];
+  for (let i = 1; i < slice.length; i++) {
+    if (slice[i - 1] > 0 && slice[i] > 0) rets.push(Math.log(slice[i] / slice[i - 1]));
+  }
+  if (rets.length < 2) return null;
+  const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+  const variance =
+    rets.reduce((a, r) => a + (r - mean) ** 2, 0) / (rets.length - 1);
+  return Math.sqrt(variance) * Math.sqrt(252) * 100;
+}
+
 /** Bar shape the indicator math consumes — ascending by date. */
 export interface IndicatorBar {
   barDate?: string;
@@ -413,6 +433,13 @@ export function computeIndicators(
     avgVolume50: round2(trailingAvg(volumes, 50)),
     /** Bars actually used, so the UI can tell "no data" from "thin history". */
     barsAnalyzed: closes.length,
+
+    /** Annualized 30-day realized volatility (%) — the "30d Vol" column (there
+     *  is no implied-vol/options feed on the plan). */
+    realizedVol30: (() => {
+      const v = realizedVol(closes, 30);
+      return v == null ? null : Math.round(v * 100) / 100;
+    })(),
 
     /**
      * Support & resistance — classic pivot points from the prior daily and
