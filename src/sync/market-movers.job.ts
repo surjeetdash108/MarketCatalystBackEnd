@@ -15,7 +15,7 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 
 const JOB_NAME = "market-movers";
-const TOP_N = 50;
+const TOP_N = 100;
 const DELAY_MS = 150;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

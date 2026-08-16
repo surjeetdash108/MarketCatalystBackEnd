@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AdaptersModule } from "../adapters/adapters.module";
 import { PolygonModule } from "../vendors/polygon/polygon.module";
 import { FmpModule } from "../vendors/fmp/fmp.module";
+import { FredModule } from "../vendors/fred/fred.module";
 import { LiveController } from "./live.controller";
 import { PolygonLiveService } from "./polygon-live.service";
 import { SnapshotCacheService } from "./snapshot-cache.service";
@@ -28,7 +29,7 @@ import { SearchedTickersService } from "./searched-tickers.service";
  * module the public `APP_ROLE=live` service mounts. See src/app.module.ts.
  */
 @Module({
-  imports: [PolygonModule, AdaptersModule, FmpModule],
+  imports: [PolygonModule, AdaptersModule, FmpModule, FredModule],
   controllers: [
     LiveController,
     SnapshotController,

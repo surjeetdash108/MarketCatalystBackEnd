@@ -4,6 +4,7 @@ import { createHash } from "crypto";
 import { Observable, ReplaySubject } from "rxjs";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { MarketStatusService } from "./market-status.service";
+import { FredService } from "../vendors/fred/fred.service";
 import {
   snapshotSymbols,
   tapeUniverse,
@@ -53,6 +54,11 @@ const IDLE_REFRESH_MS = 15 * 60_000;
  * pointless requests a day for a number that changes once.
  */
 const TREASURY_TTL_MS = 6 * 60 * 60_000;
+// WTI crude from FRED (DCOILWTICO) — the REAL spot price. The old USO ETF proxy
+// drifts far from crude (years of futures roll decay) so it read ~$127 vs ~$82.
+// FRED is a daily series, so a 6h TTL is plenty.
+const WTI_SERIES = "DCOILWTICO";
+const WTI_TTL_MS = 6 * 60 * 60_000;
 
 const DELAY_NOTE =
   "Underlying feed is ~15 minutes delayed on the current plan.";
@@ -136,6 +142,12 @@ export class TapeService implements OnModuleDestroy {
     at: number;
   } | null = null;
 
+  private wti: {
+    value: number;
+    prevValue: number | null;
+    at: number;
+  } | null = null;
+
   readonly stats = {
     upstreamCalls: 0,
     framesBroadcast: 0,
@@ -149,6 +161,7 @@ export class TapeService implements OnModuleDestroy {
   constructor(
     private readonly polygon: PolygonService,
     private readonly marketStatus: MarketStatusService,
+    private readonly fred: FredService,
     config: ConfigService,
   ) {
     this.universe = tapeUniverse(config.get<string>("TAPE_STOCKS"));
@@ -259,9 +272,11 @@ export class TapeService implements OnModuleDestroy {
       const bySymbol = new Map(rows.map((r) => [r.ticker, r]));
 
       const rate = await this.treasuryTile();
+      const wti = await this.wtiTile();
 
       const items: TapeItem[] = this.universe.map((s) => {
         if (s.kind === "rate") return rate(s);
+        if (s.id === "WTI") return wti(s); // real crude from FRED, not the USO ETF proxy
         const r = s.proxyTicker ? bySymbol.get(s.proxyTicker) : undefined;
         // Index-level fields scale by the proxy ETF's fixed share-to-index
         // ratio (see TapeSymbol.multiplier's docblock); % change is
@@ -408,6 +423,62 @@ export class TapeService implements OnModuleDestroy {
           prev && prev !== 0 && change != null
             ? Math.round(((value - prev) / prev) * 10000) / 100
             : null,
+        open: null,
+        dayHigh: null,
+        dayLow: null,
+        prevClose: prev,
+      };
+    };
+  }
+
+  /**
+   * WTI crude tile from FRED (DCOILWTICO) — the true spot price. Mirrors
+   * `treasuryTile()`: a TTL cache over a daily FRED series, so at most one FRED
+   * call every 6h regardless of frame rate. FRED sometimes reports "." for a
+   * missing day, so we pull a small window and keep the two most recent numeric
+   * observations for the value + day-over-day change.
+   */
+  private async wtiTile(): Promise<(s: TapeSymbol) => TapeItem> {
+    const now = Date.now();
+    if (!this.wti || now - this.wti.at > WTI_TTL_MS) {
+      try {
+        const obs = await this.fred.getLatestObservations(WTI_SERIES, 6);
+        this.stats.upstreamCalls++;
+        const vals = obs
+          .map((o) => Number(o.value))
+          .filter((n) => Number.isFinite(n));
+        if (vals.length > 0) {
+          this.wti = {
+            value: vals[0],
+            prevValue: vals.length > 1 ? vals[1] : null,
+            at: now,
+          };
+        }
+      } catch (err) {
+        // Keep whatever we had; a stale crude print beats dropping the tile.
+        this.logger.warn(`WTI (FRED) refresh failed: ${errMessage(err)}`);
+      }
+    }
+
+    const w = this.wti;
+    return (s) => {
+      const value = w?.value ?? null;
+      const prev = w?.prevValue ?? null;
+      const pct =
+        value != null && prev != null && prev !== 0
+          ? Math.round(((value - prev) / prev) * 10000) / 100
+          : null;
+      return {
+        id: s.id,
+        kind: s.kind,
+        label: s.label,
+        name: null,
+        proxyTicker: null,
+        isProxy: false,
+        note: s.note,
+        value,
+        change: pct,
+        pctChange: pct,
         open: null,
         dayHigh: null,
         dayLow: null,
