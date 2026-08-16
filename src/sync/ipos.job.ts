@@ -8,7 +8,10 @@ import { PolygonService } from "../vendors/polygon/polygon.service";
 import { sectorFromSic } from "../common/sic-sector.util";
 
 const JOB_NAME = "ipos";
-const LOOKBACK_DAYS = 45;
+// Cover the full "Recent IPO performance" range so every displayed name is
+// reprocessed (aftermarket returns + sector). Was 45, which left IPOs older
+// than ~6 weeks in the list without a refreshed doc/sector.
+const LOOKBACK_DAYS = 120;
 const LOOKAHEAD_DAYS = 90;
 
 function isoDate(d: Date): string {
