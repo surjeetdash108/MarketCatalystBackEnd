@@ -55,6 +55,7 @@ const MARKET_WIDE: string[] = [
   "analyst-actions",
   "sec-form4",
   "sec-13f",
+  "institutional-ownership", // FMP ticker-indexed 13F ownership rollup
   "dividends",
   "options-chains", // its own small OPTIONS_UNIVERSE
 ];
@@ -62,6 +63,7 @@ const MARKET_WIDE: string[] = [
 /** Phase 3 — over the dynamic `companies` universe. */
 const PER_TICKER: string[] = [
   "companies", // refresh profiles of the active set
+  "companies-financials-backfill", // fill eps/peRatio on docs the profile sweep hasn't reached
   "stock-history", // ohlcv_bars substrate the compute jobs read
   "edgar-8k", // earnings 8-Ks; reads ohlcv_bars for reaction
   "technical-indicators",

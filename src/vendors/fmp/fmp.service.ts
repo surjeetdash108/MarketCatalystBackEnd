@@ -141,6 +141,34 @@ export interface FmpTranscriptDate {
   date: string | null;
 }
 
+/**
+ * Per-ticker institutional (13F) ownership summary for one fiscal quarter
+ * (`/stable/institutional-ownership/symbol-positions-summary`). This is the
+ * ticker-indexed rollup SEC 13F (CUSIP-keyed) cannot give directly.
+ */
+export interface FmpInstitutionalOwnershipRow {
+  symbol: string;
+  year: number | null;
+  quarter: number | null;
+  /** Number of institutions holding the stock this quarter. */
+  investorsHolding: number | null;
+  /** Prior-quarter holder count. */
+  lastInvestorsHolding: number | null;
+  /** Net change in holder count QoQ (holders added − removed). */
+  investorsHoldingChange: number | null;
+  /** Total 13F shares held. */
+  numberOf13Fshares: number | null;
+  lastNumberOf13Fshares: number | null;
+  /** Net change in shares held QoQ. */
+  numberOf13FsharesChange: number | null;
+  /** Total dollars invested across all 13F holders. */
+  totalInvested: number | null;
+  /** Percent of shares outstanding held by institutions (0-100). */
+  ownershipPercent: number | null;
+  /** Aggregate put/call ratio across holders (sentiment tilt). */
+  putCallRatio: number | null;
+}
+
 @Injectable()
 export class FmpService {
   private readonly logger = new Logger(FmpService.name);
@@ -512,6 +540,60 @@ export class FmpService {
     for (const { year, quarter } of recentQuarters(6)) {
       const tx = await tryFetch(year, quarter);
       if (tx) return tx;
+    }
+    return null;
+  }
+
+  /**
+   * Per-ticker institutional-ownership summary for an explicit (year, quarter)
+   * (`/stable/institutional-ownership/symbol-positions-summary`). Returns null
+   * when FMP has no 13F rollup for that ticker/period.
+   */
+  async getInstitutionalOwnership(
+    ticker: string,
+    year: number,
+    quarter: number,
+  ): Promise<FmpInstitutionalOwnershipRow | null> {
+    if (!this.apiKey) return null;
+    const rows = await this.get(
+      `institutional-ownership/symbol-positions-summary?symbol=${encodeURIComponent(ticker)}&year=${year}&quarter=${quarter}`,
+    );
+    const o = rows[0] as Record<string, unknown> | undefined;
+    if (!o) return null;
+    const investorsHolding = num(o.investorsHolding);
+    if (investorsHolding == null) return null; // no real rollup for this period
+    return {
+      symbol: String(o.symbol ?? ticker),
+      year: num(o.year) ?? year,
+      quarter: quarterNum(o.quarter ?? o.period) ?? quarter,
+      investorsHolding,
+      lastInvestorsHolding: num(o.lastInvestorsHolding),
+      investorsHoldingChange: num(o.investorsHoldingChange),
+      numberOf13Fshares: num(o.numberOf13Fshares),
+      lastNumberOf13Fshares: num(o.lastNumberOf13Fshares),
+      numberOf13FsharesChange: num(o.numberOf13FsharesChange),
+      totalInvested: num(o.totalInvested),
+      ownershipPercent: num(o.ownershipPercent),
+      putCallRatio: num(o.putCallRatio),
+    };
+  }
+
+  /**
+   * The most-recent institutional-ownership summary for a ticker. 13F rollups
+   * lag the quarter end by ~45 days, so the current calendar quarter is usually
+   * not yet published — probe the last few quarters, newest first. Returns null
+   * (and the resolved period on success) so a caller can reuse the period for a
+   * batch of tickers instead of re-probing each one.
+   */
+  async getLatestInstitutionalOwnership(
+    ticker: string,
+  ): Promise<FmpInstitutionalOwnershipRow | null> {
+    if (!this.apiKey) return null;
+    for (const { year, quarter } of recentQuarters(5)) {
+      const row = await this.getInstitutionalOwnership(ticker, year, quarter).catch(
+        () => null,
+      );
+      if (row) return row;
     }
     return null;
   }

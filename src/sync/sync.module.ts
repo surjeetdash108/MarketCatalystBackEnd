@@ -27,6 +27,8 @@ import { TechRatingJob } from "./tech-rating.job";
 import { TechnicalIndicatorsJob } from "./technical-indicators.job";
 import { Sec13FJob } from "./sec-13f.job";
 import { SecForm4Job } from "./sec-form4.job";
+import { InstitutionalOwnershipJob } from "./institutional-ownership.job";
+import { CompaniesFinancialsBackfillJob } from "./companies-financials-backfill.job";
 import { Edgar8KJob } from "./edgar-8k.job";
 import { EdgarIpoPipelineJob } from "./edgar-ipo-pipeline.job";
 import { MacroRegimeJob } from "./macro-regime.job";
@@ -52,6 +54,7 @@ import { LiveModule } from "../live/live.module";
   providers: [
     MarketMoversJob,
     CompaniesJob,
+    CompaniesFinancialsBackfillJob,
     EarningsJob,
     SectorsJob,
     AnalystActionsJob,
@@ -59,6 +62,7 @@ import { LiveModule } from "../live/live.module";
     NewsJob,
     Sec13FJob,
     SecForm4Job,
+    InstitutionalOwnershipJob,
     Edgar8KJob,
     EdgarIpoPipelineJob,
     MacroRegimeJob,

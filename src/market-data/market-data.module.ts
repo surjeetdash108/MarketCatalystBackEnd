@@ -10,6 +10,7 @@ import { IpoPipelineController } from "./ipo-pipeline.controller";
 import { MacroRegimeController } from "./macro-regime.controller";
 import { InsiderPositionsController } from "./insider-positions.controller";
 import { InsiderTransactionsController } from "./insider-transactions.controller";
+import { InstitutionalOwnershipController } from "./institutional-ownership.controller";
 import { IposController } from "./ipos.controller";
 import { MacroEventsController } from "./macro-events.controller";
 import { MarketDataService } from "./market-data.service";
@@ -52,6 +53,7 @@ import { SectorsController } from "./sectors.controller";
     DividendsController,
     InsiderTransactionsController,
     InsiderPositionsController,
+    InstitutionalOwnershipController,
     MarketSentimentController,
     NewsController,
     RecapsController,

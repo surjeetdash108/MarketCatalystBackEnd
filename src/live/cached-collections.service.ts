@@ -37,6 +37,7 @@ const ALLOWED = new Set<string>([
   "macro_events",
   "recaps",
   "insider_transactions",
+  "institutional_ownership",
   "dividends",
   "fund_holdings",
   "filings_wire",

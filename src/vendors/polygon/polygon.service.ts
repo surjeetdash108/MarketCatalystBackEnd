@@ -462,7 +462,32 @@ export class PolygonService {
     const eps =
       inc?.diluted_earnings_per_share?.value ??
       inc?.basic_earnings_per_share?.value;
-    return typeof eps === "number" ? eps : null;
+    if (typeof eps === "number") return eps;
+    // Fallback: Polygon carries no TTM row for many mid/small caps — approximate
+    // trailing-twelve-month EPS by summing the 4 most recent quarterly diluted
+    // EPS. Only when all 4 quarters carry a value, so a short history (recent
+    // IPO) never understates TTM with a partial sum.
+    return this.getTtmEpsFromQuarters(ticker);
+  }
+
+  /** TTM EPS approximated as the sum of the last 4 quarterly EPS, else null. */
+  private async getTtmEpsFromQuarters(ticker: string): Promise<number | null> {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
+        `&timeframe=quarterly&limit=4&apiKey=${this.apiKey}`,
+    );
+    const rows = res.results ?? [];
+    if (rows.length < 4) return null;
+    let sum = 0;
+    for (const r of rows.slice(0, 4)) {
+      const inc = r?.financials?.income_statement;
+      const q =
+        inc?.diluted_earnings_per_share?.value ??
+        inc?.basic_earnings_per_share?.value;
+      if (typeof q !== "number") return null;
+      sum += q;
+    }
+    return Math.round(sum * 100) / 100;
   }
 
   /**
