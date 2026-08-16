@@ -1,5 +1,58 @@
 # MarketCatalyst — Feature & Data Source Map
 
+> ## ⏱ State sync — 2026-08-16 · FMP NEWS MERGE · STOCK-DETAIL WIRING · ON-DEMAND COMPLETENESS · FULL-US EARNINGS (deployed to prod)
+>
+> _Newest and authoritative where it differs from the blocks and per-feature
+> rows below. Scoped to per-feature data sourcing; runtime topology, on-demand
+> layer and cost architecture are unchanged and not restated here._
+>
+> **News (A.1.7 / A.6 `NEWS_ADAPTER` / B.1 #12 / B.15 #3) — now a Polygon + FMP
+> merge.** The news feed merges Polygon and FMP articles, deduped by URL (Polygon
+> wins a collision). Every article carries a `vendor` field (`"polygon"` |
+> `"fmp"`), badged in the UI, alongside the publisher `source`, a `sentiment` pill
+> and a thumbnail image. Backend: env `NEWS_FMP_SOURCE=fmp`, new
+> `src/adapters/fmp-news.adapter.ts` + `NEWS_FMP_ADAPTER` token (types.ts), a
+> `news.job.ts` merge loop, and the `/live/news` on-demand path
+> (`ondemand.service.ts`) also writes `vendor`; FMP client `getStockNews()` in
+> `vendors/fmp/fmp.service.ts` (`/stable/news/stock`). FMP article `sentiment` is
+> frequently null. This deliberately reverses the earlier "FMP supplies NEVER …
+> news" scope note (redistribution licensing flagged and accepted).
+>
+> **Stock Detail (B.2) — the full detail-page set now lands on the FIRST
+> on-demand fetch.** `/live/company` (`ondemand.getCompany`) previously returned a
+> slim profile-only doc, so several B.2 rows were blank until the nightly crons
+> caught up. It now returns the FULL set on first fetch: `peRatio`, `eps`,
+> `dividendYield`, `dividendPerShare`, `peers`, the technicals (`rsi14`, `macd`,
+> `stochK`, `adx14`, `beta`, the SMA ladder, `high52`/`low52` from real bars,
+> `keyLevels`) AND the RS + tech rating. A brand-new ticker is ranked on-demand
+> against the cached universe's stored score distribution — the crons now persist
+> RAW scores (`rs-rating` → `rsScore`; `tech-rating` → `techMomentum`/`techTrend`/
+> `techRsi`) precisely so a single ticker can be ranked against them. Existing
+> cron ranks stay authoritative; ~2yr of bars are persisted to `ohlcv_bars` so the
+> nightly crons rank the ticker too. Shared PURE compute functions back both cron
+> and on-demand (`computeIndicators`, `computeRsScore`+`rsPercentile`,
+> `computeTechComponents`+`techRatingFromComponents`).
+>
+> **Dashboard popups (B.1 #7 / #16).** The analyst popup now renders price-target
+> median/low-high + recent grades (was a stale "not built yet" note). The mover
+> popup null-guards RVOL / RS — a ticker without them no longer renders a
+> fabricated "0×" / "0/99".
+>
+> **IPOs (B.17 / A.1.6) — Shares + Deal size columns are now shown**
+> (`numberOfShares` / `totalSharesValue`) — the fields were already synced, just
+> not surfaced.
+>
+> **Earnings (B.3 / B.4 / A.2.1) — the forward calendar now covers the full US
+> market.** The forward (FMP) earnings calendar no longer filters to the ~385
+> tracked `companies`; `earnings.job.ts`'s `loadRefNames` resolves every FMP
+> calendar symbol against the ~13,106-row Polygon US ticker reference (`tickers`,
+> written by `ticker-universe.job`), keeping CS/ADRC US listings with Polygon
+> names and dropping FMP's worldwide rows. Reported/historical rows were already
+> full-US (Polygon `getFinancialsByFilingDate`). Aug 26 2026 went 4 → 38
+> reporters; `earnings_events` ~7.3k → ~8.8k. NOTE: `/market-data/earnings` still
+> returns the whole collection to the client — add date-windowed loading if it
+> grows large.
+
 > ## ⏱ State sync — 2026-07-27 · TWO ENVIRONMENTS (stage + prod), env-driven config
 >
 > _This block is newest and authoritative where it differs from the blocks
@@ -625,6 +678,8 @@ GET https://api.massive.com/v2/reference/news
 
 ⚠️ **Known defect:** the job stamps `ticker` with the **queried** symbol rather than reading `tickers[]` from the article — so a story mentioning several companies is attributed only to the one being polled. This now also decides notification recipients.
 
+🆕 **2026-08-16 — Polygon news is now merged with FMP.** `news.job.ts` merges FMP articles (`getStockNews()`, `/stable/news/stock`, via `fmp-news.adapter.ts` / `NEWS_FMP_ADAPTER`, `NEWS_FMP_SOURCE=fmp`) into this feed, deduped by URL (a Polygon collision wins). Every stored article now carries `vendor` (`"polygon"` | `"fmp"`), and the `/live/news` on-demand path writes it too. Polygon articles keep their `sentiment`/`sentimentReasoning`/`keywords`; FMP articles carry a publisher `source` and (frequently null) `sentiment`.
+
 **Free alternative:** Marketaux · GDELT (no key) · publisher RSS. ⚠️ NewsAPI's free tier is **non-commercial only**.
 
 ---
@@ -858,6 +913,8 @@ GET https://financialmodelingprep.com/stable/earnings-calendar
 🔴 **Two hard limitations, both measured live on 2026-07-20:**
 1. **Coverage: 10 rows for Jul 20–24.** `limit=1000` changes nothing; a single day returned 2 rows. Finnhub returns **488** for the same window.
 2. **No session field.** The seven fields above are the entire response — Before Open / After Close cannot be sourced here at all.
+
+🆕 **2026-08-16 — full-US coverage.** The forward calendar no longer filters to the ~385 tracked `companies`. `earnings.job.ts`'s `loadRefNames` resolves every FMP calendar symbol against the ~13,106-row Polygon US ticker reference (`tickers`, written by `ticker-universe.job`), keeping US CS/ADRC listings (with Polygon names) and dropping FMP's worldwide rows. Reported/historical rows were already full-US via Polygon `getFinancialsByFilingDate`. Aug 26 2026 went 4 → 38 reporters; `earnings_events` ~7.3k → ~8.8k. NOTE: `/market-data/earnings` still returns the whole collection to the client — date-window it if it grows large.
 
 **Free alternative:** **Finnhub `/calendar/earnings` ✅ — 488 rows + `hour` (bmo/amc) + `quarter`/`year`, on the key you already hold.** See §C.3.
 
@@ -1199,6 +1256,7 @@ Configured per domain via `<NAME>_SOURCE` / `<NAME>_FALLBACK_SOURCE`.
 | `MOVERS_ADAPTER` | fmp → polygon |
 | `MOVER_ENRICHMENT_ADAPTER` | polygon → fmp |
 | `NEWS_ADAPTER` | **aggregate** — polygon + finnhub called **concurrently**, merged, deduped by URL/headline |
+| `NEWS_FMP_ADAPTER` 🆕 | **aggregate (2026-08-16)** — FMP articles (`NEWS_FMP_SOURCE=fmp`, `/stable/news/stock`) merged into the feed, deduped by URL (Polygon wins); every article carries a `vendor` field (`polygon`\|`fmp`) |
 | `DIVIDENDS_ADAPTER` | polygon → fmp |
 | `IPOS_ADAPTER` | polygon → finnhub |
 | `SECTORS_ADAPTER` | polygon → fmp |
@@ -1222,16 +1280,16 @@ Configured per domain via `<NAME>_SOURCE` / `<NAME>_FALLBACK_SOURCE`.
 | `companies` | `0 2 * * *` | `companies` | Polygon → FMP 🆕 now incl. `peers`, `dividendYield`, `dividendPerShare` |
 | `stock-history` | `0 3 * * *` | `ohlcv_bars` | Polygon 🆕 **5-year** backfill (was 300 days) + `vwap` per bar |
 | 🆕 `intraday-bars` | `25 16 * * 1-5` | `intraday_bars` | Polygon (5-min + 30-min aggs) |
-| `rs-rating` | `0 4 * * *` | `companies` (merge) | **none — computed from `ohlcv_bars`** |
+| `rs-rating` | `0 4 * * *` | `companies` (merge) | **none — computed from `ohlcv_bars`** 🆕 now also persists raw `rsScore` (2026-08-16) so a single on-demand ticker can be ranked against the stored distribution |
 | `technical-indicators` | `10 4 * * *` | `companies` (merge) | **none — computed** 🆕 +`rsi14Series`, `smaLadder`, `emaLadder`, `vwap`, `high52`/`low52`, `avgVolume20/50` |
-| `tech-rating` | `15 4 * * *` | `companies` (merge) | **none — computed** |
+| `tech-rating` | `15 4 * * *` | `companies` (merge) | **none — computed** 🆕 now also persists raw `techMomentum`/`techTrend`/`techRsi` (2026-08-16) for on-demand ranking |
 | `fundamentals-growth` | `30 4 * * *` | `companies` (merge) | Polygon (experimental `/vX/`) |
 | 🆕 `financials` | `45 4 * * *` | `financials` | Polygon (experimental `/vX/`) — balance sheet, cash flow, margins |
 | `market-indices` | `5 18 * * 1-5` | `market_indices`, `market_indices_history` | Polygon → Finnhub 🆕 US10Y from `/fed/v1/treasury-yields`, no longer the TLT proxy |
 | `market-movers` | `0 18 * * 1-5` | `market_movers`, `market_movers_history` | FMP → Polygon |
 | `sectors` | `0 18 * * 1-5` | `sectors`, `sectors_history` | Polygon (ETF proxy) → FMP |
-| `news` | `*/30 9-16 * * 1-5` | `news` (+ per-user notifications) | Polygon + Finnhub |
-| `earnings` | `0 6 * * *` | `earnings_events` | FMP |
+| `news` | `*/30 9-16 * * 1-5` | `news` (+ per-user notifications) | Polygon 🆕 **+ FMP** (2026-08-16; `NEWS_SOURCE=polygon`, `NEWS_FMP_SOURCE=fmp`; every article carries `vendor`. Finnhub is NOT in the feed — unlicensed for redistribution) |
+| `earnings` | `0 6 * * *` | `earnings_events` | FMP 🆕 **full-US** — forward symbols resolved against Polygon `tickers` ref (not just the ~385 tracked `companies`) |
 | `analyst-actions` | `0 6 * * *` | `analyst_actions` | FMP |
 | `dividends` | `20 6 * * *` | `dividends` (forward calendar) | Polygon → FMP |
 | 🆕 `corporate-actions` | `40 6 * * *` | `dividend_history`, `splits` | Polygon (full payment history + splits) |
@@ -1271,16 +1329,16 @@ Mission-control landing screen: summary cards, hover popovers, slide-in drawers.
 | 4 | Earnings Today | HYBRID | `earnings_events` (EPS only) | FMP | `/stable/earnings-calendar` | **Finnhub `/calendar/earnings` ✅ 488 vs 10 rows** |
 | 5 | Movers card (3 tabs) | HYBRID | `market_movers` | FMP → Polygon | `/stable/biggest-gainers`, `/losers` | Polygon grouped-daily ✅ (already the fallback) |
 | 6 | Heatmap mini-grid | HYBRID | `companies` + `sectors` | Polygon | `/v3/reference/tickers/{ticker}` | FMP `/sector-performance-snapshot` ✅ |
-| 7 | Analyst Actions | HYBRID | static `analyst` + live consensus pill | FMP | `/stable/grades-consensus` | **Finnhub `/stock/recommendation` ✅ (adds history)** |
+| 7 | Analyst Actions 🆕 | HYBRID | static `analyst` + live consensus pill; **popup now shows price-target median/low-high + recent grades** (2026-08-16, was a stale "not built yet" note) | FMP | `/stable/grades-consensus` | **Finnhub `/stock/recommendation` ✅ (adds history)** |
 | 8 | Screener leaders/laggards | STATIC | `screenerStocks` | — | — | Derive from `companies` (already synced) |
 | 9 | Portfolio Pulse | HYBRID/USER | `users/{uid}/portfolios/default/holdings` | — | — | — (user data; prices from `companies`) |
 | 10 | Watchlist card | HYBRID/USER | `users/{uid}/watchlists/default` | — | — | — |
 | 11 | Insider & Institutional | HYBRID | `insider_transactions` + `INSIDER_MINI_MOCK` | SEC EDGAR | `/submissions/CIK{10-digit-CIK}.json` | — already optimal (free, authoritative) |
-| 12 | Live Market Feed | HYBRID | `news`, falls back `MOCK_LIVE_FEED` | Polygon + Finnhub | `/v2/reference/news`, `/company-news` | Marketaux · GDELT · publisher RSS |
+| 12 | Live Market Feed 🆕 | HYBRID | `news`, falls back `MOCK_LIVE_FEED`; **each doc carries `vendor` (`polygon`\|`fmp`), publisher `source`, `sentiment`, thumbnail** (2026-08-16) | Polygon + FMP | `/v2/reference/news`, `/stable/news/stock` | Marketaux · GDELT · publisher RSS |
 | 13 | Recaps card | GENERATED | one-line `.txt` blob labeled "PDF" | — | — | Anthropic API + a real PDF lib |
 | 14 | VIX card | HYBRID | `market_indices` VIX; falls back `14.18` | Polygon | `/v2/aggs/ticker/VIXY/…` | CBOE delayed · Finnhub `/quote` |
 | 15 | Fear & Greed gauge 🆕 | **LIVE**→fallback | `market_sentiment/fear_greed`; falls back `62` | Polygon (computed) | grouped-daily | CNN unofficial endpoint (keep in-house) |
-| 16 | Hover popups | — | derived from rows above | — | — | — |
+| 16 | Hover popups 🆕 | — | derived from rows above; **mover popup null-guards RVOL/RS** (2026-08-16 — renders `NotAvailable` instead of a fabricated "0×"/"0/99") | — | — | — |
 | 17 | Market Internals + F&G History drawers | STATIC | `MARKET_INTERNALS`, `FG_HISTORY` | — | — | 🆕 `market_breadth` now synced (18:30 ET) — wire it |
 
 🆕 **#15 — the gauge was silently showing a hardcoded number, and the cause was a Firestore rule, not the frontend.** `market_sentiment` had **no rule at all** in the deployed ruleset, so default-deny blocked every read; the component's `?? 62` fallback then rendered a permanent **62 / "Greed"** with no error surfaced to the user. The `fear-greed` job had been writing real values the whole time. A rule for `market_sentiment` was added (the same fix also restored `stock_comments`, which powers chart notes — B.2 #7). The `?? 62` fallback is still in the code, so this is **LIVE→fallback**, not unconditionally LIVE: if the job has not run, the gauge silently reverts to 62 exactly as before.
@@ -1341,6 +1399,8 @@ The Stock screen carried the highest concentration of fabrication in the app. Fo
 
 🔴 **Not fixed on this screen:** #5 EPS surprise pane (`EarnPane` still calls `earnHistory()` directly — note it now sits on the same screen as #11/#16, which do read real EPS), #6 pattern callout, #9 AI technical analysis, #14 industry rank, #18 key levels, and the Short Interest keystat + institutional ownership % in #8/#17. Short interest returns **404** on this plan (A.1.0) — it needs FINRA's files, not a Polygon upgrade.
 
+🆕 **2026-08-16 — the LIVE→fallback rows above no longer fall back for a first-time ticker.** `/live/company` (`ondemand.getCompany`) used to return a slim profile-only doc, so `peRatio`, `eps`, `dividendYield`, `dividendPerShare`, `peers`, the indicator keystats (`rsi14`/`macd`/`stochK`/`adx14`/`beta`, SMA ladder, `high52`/`low52`, `keyLevels`) and the Technical/RS Rating (#12) rendered the fabricated fallback until the nightly crons covered the ticker. The first on-demand fetch now computes the technicals inline and ranks the RS + tech rating on-demand against the cached universe's stored raw-score distribution (`rsScore`/`techMomentum`/`techTrend`/`techRsi`, now persisted by the crons), so real values render immediately for a brand-new ticker. Existing cron ranks stay authoritative; ~2yr of bars are persisted to `ohlcv_bars` so the crons rank the ticker on their next pass. The fabricated fallbacks remain in the code only as a last resort.
+
 ---
 
 ## B.3 Earnings Hub — `app/iq/screens/earnings.tsx` · **9 features**
@@ -1368,7 +1428,7 @@ The Stock screen carried the highest concentration of fabrication in the app. Fo
 | 1 | Date navigator + Day/Week toggle | NONE | client state | — | — | — |
 | 2 | Filter bar (Cap/Sort/View/Has news/Today) | NONE | client-side over fetched rows | — | — | — |
 | 3 | Upcoming IPOs block | API | `ipos` | Polygon → Finnhub | `/vX/reference/ipos` | Finnhub `/calendar/ipo` ✅ (already fallback) |
-| 4 | Day table | API | `earnings_events` ⋈ `companies` ⋈ `news` | FMP | `/stable/earnings-calendar` | **Finnhub ✅ — would restore session column** |
+| 4 | Day table 🆕 | API | `earnings_events` ⋈ `companies` ⋈ `news`; **full-US as of 2026-08-16** — forward symbols resolved against the Polygon `tickers` ref, not filtered to the ~385 tracked `companies` (Aug 26 2026: 4 → 38 reporters) | FMP + Polygon ref | `/stable/earnings-calendar`, `/v3/reference/tickers` | **Finnhub ✅ — would restore session column** |
 | 5 | Week grid | API | same, reshaped | FMP | same | Finnhub ✅ |
 | 6 | News count badge | API | `news` | Polygon + Finnhub | `/v2/reference/news` | Marketaux · GDELT |
 
@@ -1526,7 +1586,7 @@ The Stock screen carried the highest concentration of fabrication in the app. Fo
 |---|---|---|---|---|---|---|
 | 1 | Tabs | NONE | — | — | — | — |
 | 2 | Ticker search + suggestions | STATIC | `stockInfo`/`screenerStocks`/`movers` | — | — | `tickers` ✅ |
-| 3 | Main feed | HYBRID | `news` + hardcoded `PREMARKET`/`AFTERHOURS`; live pilled | Polygon + Finnhub | `/v2/reference/news`, `/company-news` | Marketaux · GDELT · RSS |
+| 3 | Main feed 🆕 | HYBRID | `news` + hardcoded `PREMARKET`/`AFTERHOURS`; live pilled. **2026-08-16: Polygon + FMP merge**, each article badged by `vendor` (`polygon`\|`fmp`) with publisher `source`, `sentiment` pill and thumbnail (FMP `sentiment` often null) | Polygon + FMP | `/v2/reference/news`, `/stable/news/stock` | Marketaux · GDELT · RSS |
 | 4 | Quick lookup / tracked chips | STATIC | fixed list or `watch`/`folio` | — | — | — |
 | 5 | Before the Bell | STATIC + 🆕 live moves | hardcoded copy; **`useExtendedHours` supplies real pre-market % — localhost only** | Polygon | `/v3/snapshot` → backend `/live/*` | Anthropic API over `news` for the narrative |
 | 6 | After the Close | STATIC + 🆕 live moves | same, `lateTradingChangePct` | Polygon | `/v3/snapshot` | Anthropic API |
@@ -1566,7 +1626,7 @@ The Stock screen carried the highest concentration of fabrication in the app. Fo
 | 2 | Sector filter ✅labeled | NONE | count line appends "· sample data" — **best-practice example** | — | — | — |
 | 3 | Recent IPO performance table | HYBRID | live offer price; current/day1/return `—` | Polygon → Finnhub | `/vX/reference/ipos` | Join `ohlcv_bars` ✅ |
 | 4 | Upcoming pipeline | STATIC | `PIPELINE` | — | — | SEC S-1/424B filings (free) |
-| 5 | Live IPO Calendar ✅labeled | API | `ipos` | Finnhub | `/calendar/ipo` | Polygon `/vX/reference/ipos` ✅ (already primary) |
+| 5 | Live IPO Calendar ✅labeled 🆕 | API | `ipos`; **Shares + Deal size columns now shown** (`numberOfShares`/`totalSharesValue`, 2026-08-16 — were synced but unshown) | Finnhub | `/calendar/ipo` | Polygon `/vX/reference/ipos` ✅ (already primary) |
 | 6 | Footnote | — | claims "SEC EDGAR + Polygon.io" — aspirational | — | — | — |
 
 ---

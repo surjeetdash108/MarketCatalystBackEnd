@@ -1,5 +1,52 @@
 # MarketCatalyst Screen Data Sources
 
+> ## ⏱ State sync — 2026-08-16 · FMP NEWS MERGE · STOCK-DETAIL WIRING · ON-DEMAND COMPLETENESS · FULL-US EARNINGS (deployed to prod)
+>
+> _Newest and authoritative where it differs from the blocks and per-screen
+> tables below. Scoped to per-screen / per-field data sourcing; nothing about the
+> runtime topology, on-demand layer or cost architecture is restated here._
+>
+> **News / Commentary — now a Polygon + FMP merge.** The news feed merges
+> Polygon and FMP articles, deduped by URL (Polygon wins a collision). Every
+> article now carries a `vendor` field (`"polygon"` | `"fmp"`), badged in the UI,
+> alongside the publisher `source`, a `sentiment` pill and an article-thumbnail
+> image. Backend: env `NEWS_FMP_SOURCE=fmp`, new `src/adapters/fmp-news.adapter.ts`
+> + `NEWS_FMP_ADAPTER` token, a `news.job.ts` merge loop, and the `/live/news`
+> on-demand path (`ondemand.service.ts`) also writes `vendor`; the FMP client is
+> `getStockNews()` (`/stable/news/stock`). FMP article `sentiment` is frequently
+> null. This deliberately reverses the earlier "FMP supplies NEVER … news" scope
+> note (redistribution licensing flagged and accepted). `commentary.tsx` and
+> `stock.tsx` render the vendor + sentiment pills and the thumbnails.
+>
+> **Stock Detail — the full detail-page set now lands on the FIRST on-demand
+> fetch.** `/live/company` (`ondemand.getCompany`) previously returned a slim
+> profile-only doc, so technicals and ratings were blank until the nightly crons
+> caught up. It now returns the FULL set on first fetch: `peRatio`, `eps`,
+> `dividendYield`, `dividendPerShare`, `peers`, the technicals (`rsi14`, `macd`,
+> `stochK`, `adx14`, `beta`, the SMA ladder, `high52`/`low52` from real bars,
+> `keyLevels`) AND the RS + tech rating — a brand-new ticker is ranked on-demand
+> against the cached universe's stored score distribution (existing cron ranks
+> stay authoritative). It also persists ~2yr of bars to `ohlcv_bars` so the
+> nightly RS/tech-rating crons rank the ticker too. The "blank until a cron runs"
+> caveat on the Stock Detail rows below no longer applies to a first-time fetch.
+>
+> **Dashboard popups.** The analyst popup now renders price-target
+> median/low-high + recent grades (was a stale "not built yet" note). The mover
+> popup null-guards RVOL / RS, so a ticker without those values no longer renders
+> a fabricated "0×" / "0/99".
+>
+> **IPOs — Shares + Deal size columns are now shown** (`numberOfShares` /
+> `totalSharesValue`) — the fields were already synced, just not surfaced.
+>
+> **Earnings Hub — the forward calendar now covers the full US market.** The
+> forward (FMP) earnings calendar no longer filters to the ~385 tracked
+> `companies`; it resolves every FMP calendar symbol against the ~13,106-row
+> Polygon US ticker reference (`tickers`, written by `ticker-universe.job`),
+> keeping CS/ADRC US listings with Polygon names and dropping FMP's worldwide
+> rows. Reported/historical rows were already full-US (Polygon
+> `getFinancialsByFilingDate`). One representative day (Aug 26 2026) went 4 → 38
+> reporters; `earnings_events` ~7.3k → ~8.8k.
+
 > ## ⏱ State sync — 2026-07-30 · ALL SCREENS REWIRED OFF `app/iq/data.ts` MOCKS; UI SCAFFOLD PRESERVED
 >
 > _This block is newest and authoritative where it differs from the per-screen
@@ -411,14 +458,14 @@ All 14 original widgets are intact; live data is merged in via `useCollection()`
 |---|---|---|
 | Market Pulse strip (6 of 9 indices shown) | `market_indices` merged onto `data.pulse` by label→symbol map (SPX/NDX/DJI/RUT/VIX/US10Y/WTI/GOLD/DXY — see `x-primary-source` on `/market-indices` in the OpenAPI spec). **US10Y is no longer a proxy**: it is the real Treasury yield from `/fed/v1/treasury-yields` (`isProxy:false`); the other eight stay ETF-proxied because index spot (`I:SPX`, `I:VIX`) is 403 and futures 404 on this plan | 🟡 Hybrid |
 | VIX card | Same `market_indices` merge (VIX proxy = VIXY) | 🟡 Hybrid |
-| Market Movers widget (Gainers/Losers/Most Active tabs) | `market_movers` merged onto `data.movers` (price/%/name/sector/cap real; RVOL/catalyst/weekly-% still mock) | 🟡 Hybrid |
+| Market Movers widget (Gainers/Losers/Most Active tabs) | `market_movers` merged onto `data.movers` (price/%/name/sector/cap real; RVOL/catalyst/weekly-% still mock). **As of 2026-08-16 the mover popup null-guards RVOL/RS** — a ticker without those values renders `NotAvailable` instead of a fabricated "0×"/"0/99" | 🟡 Hybrid |
 | Market Heatmap mini | `sectors` + `companies` merged onto `data.sectorList` (sector %, per-stock market cap/%change real) | 🟡 Hybrid |
 | Earnings Today widget | `earnings_events` merged onto `data.earnings` by ticker (EPS estimate/actual real; session/guidance/reaction still mock) | 🟡 Hybrid |
 | Insider & Institutional mini | `insider_transactions` (latest 5 real Form 4 filings) prepended to the mock insider mini-list | 🟡 Hybrid |
-| Live Market Feed | Real `news` docs shown when any exist for the tracked universe; falls back to the original mock feed items when none have synced yet. Polygon-primary as of 2026-07-08 — docs now carry `sentiment`/`sentimentReasoning`/`keywords` when served from Polygon (null/empty on Finnhub fallback) | 🟡 Hybrid |
+| Live Market Feed | Real `news` docs shown when any exist for the tracked universe; falls back to the original mock feed items when none have synced yet. Polygon-primary as of 2026-07-08 — docs now carry `sentiment`/`sentimentReasoning`/`keywords` when served from Polygon. **As of 2026-08-16 news is a Polygon + FMP merge** (deduped by URL, Polygon wins): every doc carries a `vendor` field (`polygon`\|`fmp`), publisher `source`, `sentiment` and a thumbnail image (FMP `sentiment` often null) | 🟡 Hybrid |
 | What Matters Now (AI card) | `data.wmn` — hardcoded (needs Claude; see Recaps note below) | 🔴 Static |
 | Fear & Greed gauge | `market_sentiment/fear_greed`, computed in-house from Polygon `/v2/aggs/grouped/…`. The job had been writing this all along — the collection had **no Firestore rule at all**, so default-deny silently blocked every client read and the gauge fell back to its hardcoded `62`/"Greed" with no visible error. Rule added 2026-07-22 | ✅ Live |
-| Analyst Actions mini-list | `analyst_actions` consensus pill shown next to matching tickers; per-firm action rows stay `data.analyst` (no live per-firm event feed exists) | 🟡 Hybrid |
+| Analyst Actions mini-list | `analyst_actions` consensus pill shown next to matching tickers; per-firm action rows stay `data.analyst` (no live per-firm event feed exists). **As of 2026-08-16 the analyst popup renders price-target median/low-high + recent grades** (was a stale "not built yet" note) | 🟡 Hybrid |
 | Screener Leaders & Laggards mini | `data.screenerStocks` — hardcoded | 🔴 Static |
 | Portfolio Pulse mini | Signed-in user's real `users/{uid}/portfolios/default/holdings` merged with `companies` for live price/%; falls back to `data.folio` if the user has no saved holdings | 🟡 Hybrid |
 | Watchlist mini | Signed-in user's real `users/{uid}/watchlists/default` merged with `companies` for live price/%; falls back to `data.watch` if the user has no saved watchlist | 🟡 Hybrid |
@@ -430,7 +477,7 @@ All 14 original widgets are intact; live data is merged in via `useCollection()`
 
 | Element | Data | Status |
 |---|---|---|
-| Calendar (Day/Week toggle, date navigator + mini-calendar, Before Open/After Close/Both, live rows) | `earnings_events` only — a row exists iff a real doc matches the date; no mock rows blended in | ✅ Live |
+| Calendar (Day/Week toggle, date navigator + mini-calendar, Before Open/After Close/Both, live rows) | `earnings_events` only — a row exists iff a real doc matches the date; no mock rows blended in. **As of 2026-08-16 the forward calendar covers the full US market**: every FMP calendar symbol is resolved against the ~13,106-row Polygon `tickers` reference (keeping US CS/ADRC listings with Polygon names, dropping FMP's worldwide rows) rather than filtering to the ~385 tracked `companies`; reported rows were already full-US via Polygon `getFinancialsByFilingDate` | ✅ Live |
 | Toolbar: Sort (Symbol/Surprise), View (EPS/Sales) | Real, functional. Cap filter, Min-move filter, Has-news toggle are visible but disabled — no live source for market cap-per-row, implied move, or news-correlation yet | 🟡 Hybrid |
 | Selected-company detail card: EPS estimate/actual | `earnings_events` for the selected ticker | ✅ Live |
 | Selected-company detail card: name/sector, Guidance, Reaction, session (BMO/AMC) | Name/sector from `/live/company`; Guidance/Reaction/session render `NotAvailable` — no vendor evaluated has these fields | 🟡 Hybrid |
@@ -489,7 +536,7 @@ All 14 original widgets are intact; live data is merged in via `useCollection()`
 
 | Element | Data | Status |
 |---|---|---|
-| "Live IPO Calendar" card (new) | New, additive `ipos` (Finnhub) card — real recent/upcoming IPOs (date, name, symbol, exchange, price, status), shown once the collection has synced data | 🟡 Hybrid |
+| "Live IPO Calendar" card (new) | New, additive `ipos` (Finnhub) card — real recent/upcoming IPOs (date, name, symbol, exchange, price, status), shown once the collection has synced data. **As of 2026-08-16 the Shares and Deal size columns are shown** (`numberOfShares`/`totalSharesValue`) — the fields were already synced, just not surfaced | 🟡 Hybrid |
 | Stats strip, Recent IPO Performance table, Upcoming Pipeline table | Hardcoded (`RECENT_IPOS`, `PIPELINE`) — untouched. Finnhub's calendar has no current trading price or day-1 return, so it can't be merged into these return-calculation rows; a brand-new IPO ticker also generally isn't in `companies` yet either | 🔴 Static |
 
 FMP's `ipos-calendar` is still confirmed restricted on the current plan, but Finnhub's IPO calendar turned out to be a genuinely separate endpoint from its blocked economic calendar (verified 2026-07-07 with a real call) — so this screen is no longer vendor-blocked at all.
@@ -551,6 +598,8 @@ FMP's `ipos-calendar` is still confirmed restricted on the current plan, but Fin
 
 One trap worth recording: **raising the backfill depth constant did nothing on its own.** `sync_watermarks.lastSyncedThrough` only ever advances forward, so an already-synced ticker asks for `watermark + 1 day` and never reaches newly-available *older* history — the 5Y chart would have stayed synthetic while the build, the types and the tests all passed. `stock-history.job.ts` now also tracks `earliestSyncedFrom` and fills backwards to the plan's rolling 5-year edge. Any future depth increase must do the same.
 
+**2026-08-16 — the rows above no longer wait on a cron for a first-time ticker.** `/live/company` (`ondemand.getCompany`) used to return a slim profile-only doc, so the P/E, dividend yield, `peers`, the indicator rows (`rsi14`/`macd`/`stochK`/`adx14`/`beta`, the SMA ladder, `high52`/`low52`, `keyLevels`) and the Technical/RS Rating were all blank until the nightly crons caught up. The first on-demand fetch now returns the FULL detail-page set — the technicals computed inline and the RS + tech rating ranked on-demand against the cached universe's stored score distribution (`rsScore`/`techMomentum`/`techTrend`/`techRsi`, which the crons now persist as raw scores). Existing cron ranks stay authoritative; the on-demand rank is used only for a brand-new ticker that no cron has scored yet. It also persists ~2yr of bars to `ohlcv_bars` so the nightly RS/tech-rating crons rank the ticker on their next pass.
+
 ---
 
 ## Options Chain (`/menu/options`) — `screens/options.tsx` — **updated 2026-07-30**
@@ -580,7 +629,7 @@ Two further vendor paths are still scaffolded but inert if real bid/ask/greeks a
 
 | Element | Data | Status |
 |---|---|---|
-| Live tab | Real `news` docs merged in ahead of the original mock `commentary` items. Polygon-primary as of 2026-07-08 — carries per-ticker `sentiment`/`sentimentReasoning`/`keywords` (null/empty on Finnhub fallback) | 🟡 Hybrid |
+| Live tab | Real `news` docs merged in ahead of the original mock `commentary` items. Polygon-primary as of 2026-07-08 — carries per-ticker `sentiment`/`sentimentReasoning`/`keywords`. **As of 2026-08-16 a Polygon + FMP merge** (deduped by URL, Polygon wins): each article carries a `vendor` badge (`polygon`\|`fmp`), the publisher `source`, a `sentiment` pill and a thumbnail image (FMP `sentiment` often null) — rendered by `commentary.tsx` | 🟡 Hybrid |
 | Premarket / After Hours / My names / Macro tabs | Real `news` filtered by ET hour or ticker, appended to the corresponding original mock arrays (`PREMARKET`, `AFTERHOURS`, etc.) | 🟡 Hybrid |
 | Premarket / after-hours **price moves** (previously hardcoded lines) | `app/iq/hooks/useExtendedHours.ts` → `GET /live/snapshot`, backed by Polygon **`/v3/snapshot`** (the cache moved v2 → v3), which carries `early_trading_change_percent` / `late_trading_change_percent` / `regular_trading_change_percent` / `market_status` | ⚠️ Live locally, **renders nothing in production** — this is one of the two HTTP-served surfaces the browser can't reach (see the note at the top); it fails silently by design |
 | NewsDrawer (per-ticker history) | Live `news` section shown above the original mock `buildNewsHistory()` narrative section — both present | 🟡 Hybrid |

@@ -13,12 +13,25 @@ Firebase Hosting rewrites to the public `market-catalyst-live` Cloud Run service
 > setting `PROJECT_ID` in §0 (and use the matching `deploy/env.<env>.yaml`).
 > `.firebaserc` provides `stage`/`prod` aliases for `--project`.
 
-**Runtime model:** the app is a long-running NestJS server. On Cloud Run we deploy
-it **scale-to-zero** and let **Cloud Scheduler** trigger each sync job over HTTP
-(`POST /sync/<job>/run`) on its schedule. The in-process `@nestjs/schedule` cron
-is therefore **not** the driver in production (a scaled-to-zero instance has no
-warm process to fire it) — Cloud Scheduler is. Both use the same schedules, so
-behavior is identical; Scheduler just survives scale-to-zero.
+**Runtime model:** the app is a NestJS server. On Cloud Run the worker service
+(`market-catalyst-backend`) runs **scale-to-zero** (`--min-instances=0`, CPU
+throttled — the Cloud Run default, do **not** pass `--no-cpu-throttling`) and
+**Cloud Scheduler** triggers the short intraday sync jobs over HTTP
+(`POST /sync/<job>/run`) on their schedule; the instance cold-starts per trigger
+and bills per request. The in-process `@nestjs/schedule` cron is **not** the
+driver in production (a scaled-to-zero instance has no warm process to fire it)
+— Cloud Scheduler is.
+
+> **2026-08-16 — scale-to-zero cost cut (bill ~$75–90/mo → <$15/mo).** The worker
+> was previously always-on (`--min-instances=1` + `--no-cpu-throttling`, ≈$65/mo)
+> *only* to host the detached premarket bundle, which returns `202` and keeps
+> running past Cloud Run's 900s request limit. That bundle now runs as a separate
+> **Cloud Run Job** `premarket-job` (§3c), so the worker can scale to zero.
+> Scale-to-zero is safe because the worker's remaining `@Cron` handlers
+> (auto-purge/retention) are gated off (`ENABLE_SCHEDULED_JOBS` unset → no-ops)
+> and the `@Interval` metering flush (`api-usage.service`) flushes on
+> `onModuleDestroy`/SIGTERM — the same pattern already proven on the
+> scale-to-zero live service.
 
 Prerequisites: a **Blaze** (pay-as-you-go) Firebase project — Cloud Run, Cloud
 Scheduler, and the backfill write-bursts all require it. `gcloud` + `firebase` CLIs
@@ -126,7 +139,8 @@ done
 | Reachable by | Cloud Scheduler / `gcloud proxy` only | **the public internet** |
 | Mounts | everything: sync, purge, retention, flags, plans, ops UI at `/` | `LiveModule` + `/health` **only** |
 | `--timeout` | `900` (batch jobs) | `3600` (long-lived SSE) |
-| Workload | 25 cron jobs, one 35-min run | ticker-tape SSE fan-out |
+| Scaling | `--min-instances=0`, CPU throttled (scale-to-zero) | `--min-instances=0` |
+| Workload | short intraday sync jobs (§5) + admin/ops — the long premarket bundle is now the separate `premarket-job` Cloud Run Job (§3c) | ticker-tape SSE fan-out |
 
 **Why two and not one.** The browser has to hold an open connection to
 `/live/tape/stream`, so that service must be `--allow-unauthenticated`. On the
@@ -153,6 +167,12 @@ gcloud run deploy market-catalyst-backend \
   --env-vars-file="$ENV_FILE" \
   --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
 ```
+
+> **`--min-instances=0` + default CPU throttling is intentional (2026-08-16).**
+> The worker only handles short scheduled jobs + admin now, so it scales to zero
+> and bills per request. Do **not** re-add `--min-instances=1` or
+> `--no-cpu-throttling` — those were only needed for the old detached premarket
+> run, which is now the `premarket-job` Cloud Run Job (§3c).
 
 > ⚠ **`POLYGON_PAGE_DELAY_MS=0` is required, not optional.** It lives in
 > `deploy/env.production.yaml`. The code default is `12500` (the FREE tier's
@@ -308,35 +328,112 @@ Grab the URL:
 export SERVICE_URL=$(gcloud run services describe market-catalyst-backend --region "$REGION" --format='value(status.url)')
 ```
 
+### 3c. Deploy the premarket Cloud Run **Job** (2026-08-16)
+
+The premarket bundle runs ~18 min/weekday — past Cloud Run's 900s request limit —
+so it is **not** a request on the worker service anymore. It runs as a **Cloud Run
+Job** `premarket-job` built from the *same image*, overriding the entrypoint to
+`node dist/job-entry.js` (`src/job-entry.ts` boots a Nest application context via
+`src/app-job.module.ts` — the worker's modules **minus** `ServeStaticModule`,
+which crashes a no-HTTP context — then runs `SyncRegistry.get(SYNC_JOB ?? "premarket")()`
+and exits). This is what lets the worker service scale to zero.
+
+```bash
+# Reuse the image the worker deploy built, so the job runs identical code.
+IMAGE=$(gcloud run services describe market-catalyst-backend --region "$REGION" \
+          --format='value(spec.template.spec.containers[0].image)')
+
+gcloud run jobs create premarket-job \
+  --image "$IMAGE" \
+  --region "$REGION" \
+  --command="node" --args="dist/job-entry.js" \
+  --task-timeout=3600 \
+  --max-retries=1 \
+  --memory=2Gi --cpu=1 \
+  --service-account="backend-runtime@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --env-vars-file="$ENV_FILE" \
+  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
+# Redeploy after a code change: same command with `jobs update` instead of `jobs create`
+# (or `gcloud run jobs deploy premarket-job --source . --command=node --args=dist/job-entry.js …`).
+```
+
+Run it manually (this replaces the retired `POST /sync/premarket/run` — that
+detached path would be killed on the now scale-to-zero worker):
+
+```bash
+gcloud run jobs execute premarket-job --region "$REGION"          # fire-and-forget
+gcloud run jobs execute premarket-job --region "$REGION" --wait   # block until it exits
+```
+
+`SYNC_JOB` defaults to `premarket`; set it to any registered sync name to reuse
+the same image+entrypoint for a single job (`--update-env-vars=SYNC_JOB=<name>`).
+Its Cloud Scheduler trigger `run-premarket-job` is created in §5.
+
 ## 4. Create the Scheduler invoker service account
 
 ```bash
 gcloud iam service-accounts create scheduler-invoker --display-name="Cloud Scheduler → Cloud Run invoker"
 export INVOKER_SA="scheduler-invoker@${PROJECT_ID}.iam.gserviceaccount.com"
+# HTTP invoke on the worker service (intraday sync schedulers):
 gcloud run services add-iam-policy-binding market-catalyst-backend \
+  --region "$REGION" --member="serviceAccount:${INVOKER_SA}" --role="roles/run.invoker"
+# Run Admin API invoke on the JOB (the run-premarket-job scheduler, §5):
+gcloud run jobs add-iam-policy-binding premarket-job \
   --region "$REGION" --member="serviceAccount:${INVOKER_SA}" --role="roles/run.invoker"
 ```
 
-## 5. Create THE scheduler job (singular — 2026-07-26 on-demand redesign)
+## 5. Create the scheduler jobs (2026-08-16 — Job trigger + 5-min intraday)
 
-One Cloud Scheduler entry (`sync-premarket`, 08:00 ET weekdays →
-`/sync/premarket/run`) replaces the previous 22. The script below creates it
-AND deletes the retired per-job schedules:
+Two kinds of Cloud Scheduler entry now, both as `scheduler-invoker@`:
+
+**(a) `run-premarket-job` — triggers the Cloud Run Job (§3c).** 08:00 ET
+weekdays. It does **not** POST to the worker; it calls the Run Admin API to
+execute the job, authenticated with an OAuth token (needs `roles/run.invoker`
+on the job, granted in §4). The old `sync-premarket` HTTP scheduler is DELETED.
 
 ```bash
-PROJECT_ID="$PROJECT_ID" REGION="$REGION" SERVICE_URL="$SERVICE_URL" INVOKER_SA="$INVOKER_SA" \
-  ./deploy/create-scheduler-jobs.sh
+gcloud scheduler jobs create http run-premarket-job \
+  --project="$PROJECT_ID" --location="$REGION" \
+  --schedule="0 8 * * 1-5" --time-zone="America/New_York" \
+  --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/premarket-job:run" \
+  --http-method=POST \
+  --oauth-service-account-email="$INVOKER_SA" \
+  --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
+
+# Retire the old HTTP premarket scheduler if it still exists:
+gcloud scheduler jobs delete sync-premarket --project="$PROJECT_ID" --location="$REGION" --quiet 2>/dev/null || true
 ```
+
+**(b) Intraday HTTP sync schedulers — every 5 min during the session.** OIDC
+POST to `/sync/<job>/run` on the worker (the same pattern as before, relaxed
+from every 2 min to every 5 min — `*/5 9-16 * * 1-5` ET) for
+`market-quotes`, `movers`, `breadth`, `indices`, `fear-greed`:
+
+```bash
+for JOB in market-quotes movers breadth indices fear-greed; do
+  gcloud scheduler jobs create http "sync-${JOB}" \
+    --project="$PROJECT_ID" --location="$REGION" \
+    --schedule="*/5 9-16 * * 1-5" --time-zone="America/New_York" \
+    --uri="${SERVICE_URL}/sync/${JOB}/run" --http-method=POST \
+    --oidc-service-account-email="$INVOKER_SA" --oidc-token-audience="$SERVICE_URL" \
+    --attempt-deadline="900s"
+done
+```
+
+> ⚠ `deploy/create-scheduler-jobs.sh` is **stale** — it still creates the retired
+> single `sync-premarket` HTTP job and points at `/sync/premarket/run`. Use the
+> commands above instead until that script is updated.
 
 ## 6. First fill (one-time, optional)
 
 There is no universe backfill anymore — the DB starts empty and grows with
 usage (on-demand `/live/bars` + `/live/company`) plus the premarket warm. To
-prime the cache immediately instead of waiting for tomorrow's premarket run:
+prime the cache immediately instead of waiting for tomorrow's premarket run,
+execute the Cloud Run Job (2026-08-16 — replaces the retired detached
+`POST /sync/premarket/run`, which would be killed on the scale-to-zero worker):
 
 ```bash
-TOKEN=$(gcloud auth print-identity-token --audiences="$SERVICE_URL")
-curl -s -X POST -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/sync/premarket/run" | head -c 400
+gcloud run jobs execute premarket-job --region "$REGION" --wait
 ```
 
 To reset the market-data collections to the on-demand shape (keeps users,
@@ -368,6 +465,9 @@ npm run start:dev         # http://localhost:4400  (monitor at /, ops API at /sy
   barDate+~400d, `news` = publishedAt+~90d) — see the root README migration notes.
 - Cloud Run scale-to-zero means the first Scheduler hit each run does a cold start
   (~a few seconds incl. Firestore's first gRPC channel) — fine for cron cadence.
+- **2026-08-16 cost architecture.** Moving the premarket bundle to `premarket-job`
+  (~18 min/weekday ≈ $0.50/mo) let the worker service drop `--min-instances=1` +
+  `--no-cpu-throttling` for scale-to-zero — total infra bill ~$75–90/mo → <$15/mo.
 
 ## 7. Free CDN via Firebase Hosting (2026-07-26)
 

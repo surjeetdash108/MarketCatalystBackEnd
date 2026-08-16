@@ -5,10 +5,20 @@ Polygon structurally cannot. It is wired behind opt-in adapter seams that defaul
 to **off**, so the app runs identically to a Polygon-only build until each
 domain is explicitly enabled.
 
-> **Ownership rule (enforce in review):** FMP supplies **only** earnings
-> estimates, analyst ratings, sector performance, and profile ratios. It NEVER
-> supplies price, OHLCV bars, snapshots, news, or corporate actions — those stay
-> Polygon-owned so there is a single source of truth for price.
+> **⏱ Update 2026-08-16 (deployed to prod):** FMP **news** is now IN SCOPE (was
+> explicitly excluded below). The news feed merges Polygon + FMP articles
+> (`/stable/news/stock` via `getStockNews()`, `fmp-news.adapter.ts` +
+> `NEWS_FMP_ADAPTER`, `NEWS_FMP_SOURCE=fmp`), deduped by URL (Polygon wins) and
+> badged per `vendor`. Redistribution licensing was flagged and **accepted** by
+> the user. See §3 Tier 1C. Also: the FMP forward **earnings calendar** now
+> covers the **full US market** (resolved against the Polygon `tickers`
+> reference), not just the ~385 tracked `companies`.
+>
+> **Ownership rule (enforce in review):** FMP supplies earnings estimates,
+> analyst ratings, sector performance, profile ratios, **and news** (merged
+> under Polygon). It NEVER supplies price, OHLCV bars, snapshots, or corporate
+> actions — those stay Polygon-owned so there is a single source of truth for
+> price.
 
 ---
 
@@ -29,9 +39,11 @@ domain is explicitly enabled.
 | **Profile ratios: beta / 52-wk / avg-vol / P·E** | computed from bars; some fields null in the profile adapter | `/api/v3/quote/{sym}`, `/api/v3/profile/{sym}`, `/api/v3/ratios-ttm/{sym}` |
 
 ### Not handled by FMP (kept on Polygon/SEC/FRED)
-Price · OHLCV bars · snapshots · news · dividends/splits · IPOs · macro (FRED) ·
+Price · OHLCV bars · snapshots · dividends/splits · IPOs · macro (FRED) ·
 filings/Form 4/13F/8-K (SEC-EDGAR). Technical indicators (RSI/MACD/SMA/EMA/
 stochastic/RVOL) stay locally computed — two vendors would just drift.
+(**News** was here until 2026-08-16; it is now a merged Polygon+FMP feed — see
+Tier 1C below.)
 
 ---
 
@@ -78,6 +90,14 @@ actual-vs-estimate history) and prefers it, with the earnings_events match as
 fallback — so **every displayed quarter** gets an EPS %surp. (Sales %surp stays
 "—": the surprises endpoint is EPS-only.)
 
+**Full-US forward calendar (2026-08-16):** the FMP forward earnings calendar no
+longer filters to the ~385 tracked `companies`. `earnings.job.ts` (`loadRefNames`)
+resolves every FMP calendar symbol against the ~13,106-row Polygon US ticker
+reference (`tickers` collection, written by `ticker-universe.job`), keeping
+CS/ADRC US listings (with Polygon names) and dropping FMP's worldwide rows.
+Reported/historical rows were already full-US (Polygon `getFinancialsByFilingDate`).
+`earnings_events` total went ~7.3k → ~8.8k.
+
 ### ✅ Tier 1B — Analyst ratings (done, OFF by default)
 - `src/adapters/analyst-ratings.adapter.ts` — `AnalystRatingsAdapter` interface +
   `FmpAnalystRatingsAdapter` (`/api/v4/upgrades-downgrades-consensus`).
@@ -87,6 +107,23 @@ fallback — so **every displayed quarter** gets an EPS %surp. (Sales %surp stay
   spacing) and upserts `analyst_actions/{ticker}` = `{ ticker, consensus,
   strongBuy, buy, hold, sell, strongSell, source, updatedAt }` — the exact shape
   `analyst.tsx` / `stock.tsx` read. When null it stays the historical no-op.
+
+### ✅ Tier 1C — News (done + LIVE in prod, 2026-08-16)
+- `FmpService.getStockNews()` — `/stable/news/stock` (FMP news, worldwide feed).
+- `src/adapters/fmp-news.adapter.ts` — `FmpNewsAdapter`; `NEWS_FMP_ADAPTER` token
+  (`src/adapters/types.ts`); provider reads `NEWS_FMP_SOURCE` (default `none` →
+  `null`). Set **`NEWS_FMP_SOURCE=fmp`** in prod.
+- **Merge, not replace:** `news.job.ts` runs a merge loop — Polygon + FMP
+  articles are **deduped by URL, Polygon wins** a collision. Every article
+  carries `vendor` (`"polygon"` | `"fmp"`) alongside publisher `source` and
+  `sentiment`. `/live/news` on-demand path (`ondemand.service.ts`) also writes
+  `vendor`.
+- UI: `commentary.tsx` + `stock.tsx` render a vendor badge + sentiment pills +
+  article thumbnails.
+- ⚠ **Redistribution licensing** for serving FMP news to users was flagged and
+  **accepted by the user** — this is the deliberate exception to the
+  Polygon-only-to-users rule.
+- ⚠ FMP article `sentiment` is **frequently null**.
 
 ### ✅ Tier 2A — Sector performance (done, OFF by default)
 - `FmpSectorsAdapter` in `src/adapters/sectors.adapters.ts`; wired into the
@@ -165,9 +202,12 @@ the appropriate phase array.
 | 0 Foundation | ✅ done | — | required |
 | 1A Estimates | ✅ done (off) | `EARNINGS_ESTIMATES_SOURCE=fmp` | ★★★ |
 | 1B Analyst | ✅ done (off) | `ANALYST_SOURCE=fmp` | ★★★ |
+| 1C News | ✅ done + **LIVE prod** | `NEWS_FMP_SOURCE=fmp` | ★★★ |
 | 2A Sector | ✅ done (off) | `SECTORS_SOURCE=fmp` (or `_FALLBACK_`) | ★ |
 | 2B Profile ratios | ⬜ not recommended (redundant + needs merge) | — | ★ |
 | Forward-rows (`*YYYY`) | ✅ done (off) | `EARNINGS_ESTIMATES_SOURCE=fmp` (same as 1A) | ★★ |
 
-**All three shipped seams are OFF by default** (`*_SOURCE` absent ⇒ `none`).
-Enabling any requires `FMP_API_KEY` set + the env var above + a **backend** deploy.
+**Estimates / Analyst / Sector seams are OFF by default** (`*_SOURCE` absent ⇒
+`none`). **News (1C) is ON in prod** (`NEWS_FMP_SOURCE=fmp`, `FMP_API_KEY` funded).
+Enabling any other seam requires `FMP_API_KEY` set + the env var above + a
+**backend** deploy.

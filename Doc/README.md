@@ -1,5 +1,47 @@
 # MarketCatalyst — Market Intelligence Terminal
 
+> ## ⏱ State sync — 2026-08-16 · SCALE-TO-ZERO worker + premarket Cloud Run Job
+>
+> _Newest and authoritative on the sync/deployment topology where it differs from
+> the blocks below. Only the premarket delivery mechanism and worker scaling
+> change; the on-demand data layer, two-service split, and CDN rewrite are
+> unchanged._
+>
+> **Worker scales to zero now (bill ~$75–90/mo → <$15/mo).** The worker service
+> `market-catalyst-backend` was always-on (`--min-instances=1` +
+> `--no-cpu-throttling`, ≈$65/mo) *only* to host the detached premarket bundle
+> (returns `202`, runs past Cloud Run's 900s request limit). It is now
+> `--min-instances=0` + CPU throttling — it handles the short scheduled jobs +
+> admin and cold-starts per trigger. Safe because the remaining `@Cron` handlers
+> (auto-purge/retention) are gated off (`ENABLE_SCHEDULED_JOBS` unset → no-ops)
+> and the `@Interval` metering flush (`api-usage.service`) flushes on
+> `onModuleDestroy`/SIGTERM — the pattern already proven on the live service.
+>
+> **Premarket bundle → Cloud Run Job `premarket-job`.** Same image, entrypoint
+> overridden to `node dist/job-entry.js` (`src/job-entry.ts` boots a Nest
+> application context via `src/app-job.module.ts` — the worker's modules minus
+> `ServeStaticModule`, which crashes a no-HTTP context — runs
+> `SyncRegistry.get(SYNC_JOB ?? "premarket")()` then exits). Task-timeout 3600s,
+> max-retries 1, 2Gi/1cpu, SA `backend-runtime@`; ~18 min/weekday (~$0.50/mo).
+> Triggered by Cloud Scheduler `run-premarket-job` (`0 8 * * 1-5` ET) via the Run
+> Admin API (`…/jobs/premarket-job:run`, OAuth, `scheduler-invoker@` with
+> `roles/run.invoker` on the job). The old `sync-premarket` HTTP scheduler +
+> detached `POST /sync/premarket/run` are gone; manual run is now
+> `gcloud run jobs execute premarket-job`. See `deploy/DEPLOY.md` §3c/§5.
+>
+> **Intraday schedulers relaxed 2 min → 5 min** (`*/5 9-16 * * 1-5` ET):
+> `sync-market-quotes`/`movers`/`breadth`/`indices`/`fear-greed`.
+>
+> **On-demand completeness (D) + earnings full-US (E).** `/live/company`'s
+> first-time fetch now returns the full detail-page dataset (technicals + RS/tech
+> rating ranked against the cached universe, persisting ~2yr bars so the nightly
+> crons also rank the new ticker), so the premarket warm is no longer the only
+> path to a complete company doc. The forward earnings calendar now covers the
+> full US reporter set (resolved against the ~13k Polygon `tickers` reference,
+> not just the ~385 tracked `companies`).
+>
+> ---
+>
 > ## ⏱ State sync — 2026-07-27 · TWO ENVIRONMENTS (stage + prod), env-driven config
 >
 > _This block is newest and authoritative where it differs from the blocks

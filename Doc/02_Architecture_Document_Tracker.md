@@ -1,4 +1,82 @@
 
+> ## ⏱ State sync — 2026-08-16 · SCALE-TO-ZERO worker + premarket Cloud Run JOB, shared compute, self-heal, single-owner fields
+>
+> _Newest and authoritative where it differs below. Supersedes the "One premarket
+> cron" description in the 2026-07-26 on-demand block: premarket is now a Cloud
+> Run **Job**, not a detached `/sync/premarket/run` HTTP call. Per-environment
+> Cloud Run topology (§6) is otherwise unchanged; this block replaces the
+> premarket/worker cost shape and refines the nightly compute + field ownership._
+>
+> **Cost architecture — scale-to-zero + Cloud Run Job (bill ~$75–90/mo → <$15/mo).**
+> The dominant cost was the always-on worker (`min-instances=1` +
+> `--no-cpu-throttling` ≈ $65/mo), which existed ONLY to host the DETACHED
+> premarket bundle (returned 202, kept running past Cloud Run's 900 s request
+> limit).
+> · Worker `market-catalyst-backend` is now **`--min-instances=0` + CPU
+>   throttling (scale-to-zero)** — bills per request, handles short scheduled jobs
+>   + admin, cold-starts on trigger. (rev **00101**.)
+> · The premarket bundle is now a **Cloud Run JOB `premarket-job`** (same image;
+>   command `node dist/job-entry.js`). Entrypoint **`src/job-entry.ts`** boots a
+>   Nest application context via the NEW **`src/app-job.module.ts`** (worker
+>   modules MINUS `ServeStaticModule`, which crashes a no-HTTP context) and runs
+>   `SyncRegistry.get(process.env.SYNC_JOB ?? "premarket")()` then exits. Config:
+>   task-timeout 3600 s, max-retries 1, 2Gi/1cpu, SA `backend-runtime@`. Runs
+>   ~18 min/weekday (~$0.50/mo). Created + validated (execution completed 1091 s,
+>   exit 0).
+> · Scheduler **`run-premarket-job`** (`0 8 * * 1-5` America/New_York) triggers the
+>   job via an OAuth POST to the Cloud Run Admin API `…/jobs/premarket-job:run` as
+>   `scheduler-invoker@` (granted `roles/run.invoker` on the job). The old
+>   `sync-premarket` scheduler and the detached HTTP premarket path are **DELETED**.
+> · Intraday sync jobs relaxed **every 2 min → every 5 min** (`*/5 9-16 * * 1-5`):
+>   sync-market-quotes / movers / breadth / indices / fear-greed.
+> · Safe because `@Cron` auto-purge/retention are gated off (`ENABLE_SCHEDULED_JOBS`
+>   unset → no-ops) and the `@Interval` metering flush (`api-usage.service`)
+>   flushes on `onModuleDestroy`/SIGTERM — a pattern already proven on the
+>   scale-to-zero `live` service.
+> · Manual premarket is now **`gcloud run jobs execute premarket-job`** — NOT
+>   `POST /sync/premarket/run`, whose detached path would be killed on the
+>   scale-to-zero worker.
+>
+> **On-demand completeness + shared PURE compute.** `ondemand.getCompany`'s
+> first-time fetch now returns the FULL detail-page dataset: technicals
+> (RSI/MACD/Stoch/ADX, beta, MA ladder, 52-week range, keyLevels) AND RS + tech
+> rating ranked against the cached universe — so a brand-new ticker gets the whole
+> technical + RS/tech-rating set immediately. It persists ~2 yr bars to
+> `ohlcv_bars` so the nightly RS/tech-rating crons also rank the new ticker.
+> · The SAME pure compute functions run in BOTH the nightly crons AND the
+>   on-demand path (identical field sets): **`computeIndicators`**
+>   (technical-indicators.job.ts), **`computeRsScore` + `rsPercentile`**
+>   (rs-rating.job.ts), **`computeTechComponents` + `techRatingFromComponents`**
+>   (tech-rating.job.ts).
+> · Crons persist RAW scores that enable on-demand ranking: `rs-rating` writes
+>   **`rsScore`**; `tech-rating` writes **`techMomentum`/`techTrend`/`techRsi`**.
+> · RS/tech rating are universe-relative percentiles — a single ticker is ranked
+>   against the stored distribution ONLY when a brand-new ticker lacks a cron
+>   rating; existing cron ranks are authoritative.
+>
+> **stock-history self-heal.** Old bug: a ticker whose deep-history fetch once
+> failed was wrongly marked "backfilled" (`earliestSyncedFrom` set), so it never
+> re-attempted the deep window and stayed below rs-rating's 65-bar minimum —
+> ~250 tickers (incl. every mega-cap) were unscored. Fix
+> (**stock-history.job.ts**): a cheap `count()` guard re-triggers the deep window
+> when a "backfilled" ticker still has < `MIN_HEALTHY_BARS` (65) stored bars —
+> self-heals, self-limiting. rsRating coverage **70 → 376 / 385** (the remaining
+> are genuine recent IPOs with < 65 trading days).
+>
+> **Nightly sync integrity — single-owner fields, no clobber, no duplication.**
+> The `companies` job (**companies.job.ts**) no longer merge-writes placeholder
+> nulls `beta`, `volume`, `averageVolume`, `week52Range` — the profile write was
+> nulling `beta` (owned by technical-indicators) and `volume` (owned by
+> market-quotes) between runs; `averageVolume`/`week52Range` are dead (UI uses
+> `avgVolume20/50` and computes the 52-week range client-side). Field ownership is
+> now single-owner across the nightly chain: **companies** (profile) →
+> **technical-indicators** (indicators + beta + high52/low52 + keyLevels) →
+> **rs-rating** (rsRating + rsScore) → **tech-rating** (techRating + components +
+> sectorRank); **market-quotes** owns price/pctChange/volume. No duplication:
+> `companies` one doc/ticker (disjoint merges); `ohlcv_bars` keyed
+> `{ticker}_{barDate}` (overwrite); `earnings_events` full-refresh + stale-delete.
+
+
 > ## ⏱ State sync — 2026-07-27 · TWO ENVIRONMENTS (stage + prod), env-driven config
 >
 > _This block is newest and authoritative where it differs from the blocks

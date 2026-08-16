@@ -1,5 +1,38 @@
 # Market Intelligence Platform — API Vendor Tracker
 
+> ## ⏱ State sync — 2026-08-16 · FMP NEWS LIVE + full-US earnings (deployed to prod)
+>
+> _Newest block; authoritative where it differs from the blocks below. It records
+> the first FMP feed that **reaches users**, and corrects the 2026-08-03
+> vendor-key audit for FMP specifically._
+>
+> **FMP news is now IN SCOPE and LIVE in prod.** Previously FMP was worker-only
+> and "never served to the browser" (2026-07-24 block). That is no longer true
+> for news: the news feed now **merges Polygon + FMP** articles, deduped by URL
+> (**Polygon wins** a collision). Wiring: `FmpService.getStockNews()` →
+> `/stable/news/stock`; `src/adapters/fmp-news.adapter.ts` + `NEWS_FMP_ADAPTER`
+> token; env **`NEWS_FMP_SOURCE=fmp`**; merge loop in `news.job.ts`; `/live/news`
+> on-demand path (`ondemand.service.ts`) also writes `vendor`. Every article now
+> carries `vendor` (`"polygon"`|`"fmp"`), badged in the UI (`commentary.tsx`,
+> `stock.tsx`) alongside publisher `source` + `sentiment`.
+> · ⚠ **Redistribution licensing** for serving FMP news was flagged and
+>   **accepted by the user** — a deliberate exception to Polygon-only-to-users.
+> · ⚠ FMP article `sentiment` is **frequently null**.
+>
+> **`FMP_API_KEY` is now funded in prod.** The 2026-08-03 audit found it
+> present-but-empty in the local `.env`; news working in prod confirms the key is
+> populated in the runtime environment (Secret Manager via ADC). The R41/R42/R47
+> "data-dead" caveat in the 2026-08-03 block is therefore lifted for prod.
+>
+> **Earnings calendar is now full-US.** The FMP **forward** earnings calendar no
+> longer filters to the ~385 tracked `companies`. `earnings.job.ts`
+> (`loadRefNames`) resolves every FMP calendar symbol against the ~13,106-row
+> Polygon US ticker reference (`tickers` collection, written by
+> `ticker-universe.job`), keeping CS/ADRC US listings (Polygon names) and dropping
+> FMP's worldwide rows. Reported/historical rows were already full-US (Polygon
+> `getFinancialsByFilingDate`). `earnings_events` total ~7.3k → ~8.8k.
+> See `FMP-INTEGRATION.md` §3 (Tier 1C + Tier 1A full-US note).
+
 > ## ⏱ State sync — 2026-08-03 · VENDOR-KEY AUDIT (only Polygon is funded in the inspected `.env`)
 >
 > _Read alongside the 2026-07-27 block below: keys are supposed to come from
@@ -345,8 +378,8 @@ Listed here so the intent is recorded, **not** because anything is wired. State 
 | Real-time quotes (WebSocket) | Polygon.io (Paid) | Finnhub (Free, 50 symbols) | ✅ Finnhub free tier | Polygon WebSocket needs paid plan |
 | OHLCV historical data | Polygon.io (Paid) | Twelve Data (Free/Paid) | ✅ Twelve Data 800/day free | Backfill 2yr on first run |
 | Indices (S&P, Nasdaq, Dow, etc.) | Polygon.io | Finnhub | ✅ Finnhub free | Index quotes via same WS connection |
-| News and headlines | Benzinga (Paid) | Finnhub (Free) | ✅ Finnhub basic news | Benzinga needed for "Why It Matters" category tagging |
-| Earnings calendar + actuals | FMP (Paid) | Benzinga | ❌ Free tiers too limited | FMP has best earnings calendar coverage |
+| News and headlines | **Polygon** (primary) + **FMP** (merged, wired 2026-08-16) | Finnhub (Free) | ✅ | LIVE in prod: `news.job.ts` merges Polygon `/v2/reference/news` + FMP `/stable/news/stock` (`getStockNews()`, `fmp-news.adapter.ts`, `NEWS_FMP_SOURCE=fmp`), deduped by URL (**Polygon wins**), each article badged `vendor`. FMP redistribution flagged + accepted; FMP `sentiment` often null. |
+| Earnings calendar + actuals | FMP (Paid) | Benzinga | ❌ Free tiers too limited | FMP has best earnings calendar coverage. **Full-US since 2026-08-16:** forward FMP calendar resolved against the Polygon `tickers` reference (not just the ~385 tracked `companies`); reported rows already full-US via Polygon. |
 | Earnings transcripts | FMP (Paid — included in plan) | Intrinio ($250+/mo) | ❌ No free option | FMP includes transcripts on paid plans; avoid Motley Fool/Refinitiv |
 | Analyst ratings + targets | Benzinga (Paid) | FMP (Paid) | ❌ No meaningful free tier | Benzinga has real-time ratings stream |
 | 13F filings | SEC EDGAR (Free) | — | ✅ Completely free | Rate limit: 10 req/sec; parse XML directly |
@@ -1125,8 +1158,8 @@ Sub-collection: users/{uid}/notifications/{notificationId}
 |---|---|---|---|---|
 | Quote Ingestion | Polygon.io WS | Real-time | Redis quote cache (TTL 5s) | NOT Firestore — too expensive |
 | OHLCV Ingestion | Polygon.io REST | On-demand + backfill | ClickHouse | Historical tick + candle data |
-| News Ingestion | Benzinga WS | Real-time | Firestore `news` | Publish to Redis pub/sub for WS fan-out |
-| Earnings Calendar Sync | FMP REST | Every 15 min | Firestore `earnings_events` | Upsert by ticker+quarter key |
+| News Ingestion | **Polygon + FMP REST (merged)** *(FMP wired 2026-08-16)* | Premarket + on-demand | Firestore `news` | `news.job.ts` merges Polygon `/v2/reference/news` + FMP `/stable/news/stock`, deduped by URL (Polygon wins); each doc carries `vendor`. (Benzinga WS never wired.) |
+| Earnings Calendar Sync | FMP REST | Premarket (MARKET_WIDE phase) | Firestore `earnings_events` | Upsert by ticker+quarter key. **Full-US** since 2026-08-16 (forward calendar filtered via Polygon `tickers` ref). |
 | Analyst Actions Ingest | Benzinga REST | Every 5 min | Firestore `analyst_actions` | Real-time feed |
 | Macro Calendar Sync | Finnhub REST | Daily 6am ET | Firestore `macro_events` | Upsert by date+event slug |
 | Options Chain (on-demand) | Tradier REST | On-demand + 60s cache | Redis `options:{sym}:{expiry}` (NOT Firestore) | Powers `/menu/options` screen; never written to Firestore |
