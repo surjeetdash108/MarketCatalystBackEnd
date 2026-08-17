@@ -191,4 +191,23 @@ export class SyncMetaService {
       },
     );
   }
+
+  /**
+   * Wipes BOTH edges of an entity's synced range for a job by deleting its
+   * `sync_watermarks/{jobName}__{entityKey}` doc, so the next run sees the
+   * entity as never-synced and re-fetches its full window from scratch.
+   *
+   * Used by corporate-actions.job when a NEW split executes for a ticker
+   * (BUG-DATA-001): clearing stock-history's range forces a full adjusted
+   * re-backfill that rewrites every stored bar (merge:false) on ONE adjustment
+   * basis, instead of leaving pre-split bars on the old basis while the daily
+   * forward increment writes new bars on the post-split basis. Deleting a
+   * non-existent doc is a harmless no-op.
+   */
+  async clearSyncedRange(jobName: string, entityKey: string): Promise<void> {
+    await this.firebase.firestore
+      .collection("sync_watermarks")
+      .doc(`${jobName}__${entityKey}`)
+      .delete();
+  }
 }

@@ -23,6 +23,9 @@ import { PolygonService } from "../vendors/polygon/polygon.service";
  */
 
 const JOB_NAME = "corporate-actions";
+/** Must match stock-history.job.ts's JOB_NAME — the job whose synced range this
+ *  job clears when a new split executes (BUG-DATA-001). */
+const STOCK_HISTORY_JOB_NAME = "stock-history";
 const BATCH_SIZE = 40;
 const HISTORY_LIMIT = 200;
 const ANNUAL_YEARS = 10;
@@ -153,7 +156,9 @@ export class CorporateActionsJob implements OnModuleInit {
 
       const divDocs: { id: string; data: Record<string, unknown> }[] = [];
       const splitDocs: { id: string; data: Record<string, unknown> }[] = [];
+      const today = new Date().toISOString().slice(0, 10);
       let failed = 0;
+      let splitResets = 0;
 
       for (const ticker of batch) {
         try {
@@ -205,6 +210,57 @@ export class CorporateActionsJob implements OnModuleInit {
           });
 
           const splits = await this.polygon.getSplits(ticker);
+
+          // ── Stock-split re-adjustment trigger (BUG-DATA-001) ──────────────
+          // ohlcv_bars are stored adjusted=true. When a split EXECUTES after a
+          // ticker's history was last fully backfilled, stock-history.job's
+          // daily forward increment writes post-split-adjusted bars while the
+          // older stored bars keep the pre-split basis — so the series mixes two
+          // adjustment bases and every window spanning the split (52w range,
+          // SMA/EMA, MACD, beta, pivots) is computed on inconsistent data.
+          // Nothing else resets that watermark, so the corruption persists until
+          // the pre-split bars age out of the plan window.
+          //
+          // Trigger: the NEWEST split that has actually EXECUTED (executionDate
+          // on/before today — announced/future splits are ignored because
+          // adjusted data only changes on the execution date). When that split
+          // post-dates the one we last accounted for, wipe stock-history's
+          // synced range for JUST this ticker via clearSyncedRange; its next run
+          // then re-fetches the whole plan window adjusted=true and overwrites
+          // every stored bar (merge:false) on ONE basis. The per-ticker marker
+          // below (a `corporate-actions` watermark, isolated from the on-demand
+          // path that overwrites the splits doc) makes the reset fire AT MOST
+          // ONCE per split. A ticker with no executed split never enters this
+          // block, so the normal incremental path is fully preserved for it.
+          //
+          // First sighting sets a BASELINE without a re-backfill: the stored
+          // history was itself fetched adjusted=true and already reflects every
+          // past split on one basis, so re-fetching the whole (largely
+          // long-settled) split universe on deploy would be a needless mass
+          // reload. Only splits that execute AFTER the baseline can desync it,
+          // and those are exactly what force the reset.
+          const newestExecutedSplit =
+            splits.find((s) => s.executionDate && s.executionDate <= today) ??
+            null;
+          if (newestExecutedSplit) {
+            const execDate = newestExecutedSplit.executionDate;
+            const { lastSyncedThrough: reflectedSplitDate } =
+              await this.meta.getSyncedRange(JOB_NAME, ticker);
+            if (reflectedSplitDate == null) {
+              // Baseline only — no reset (see above).
+              await this.meta.setWatermark(JOB_NAME, ticker, execDate);
+            } else if (execDate > reflectedSplitDate) {
+              await this.meta.clearSyncedRange(STOCK_HISTORY_JOB_NAME, ticker);
+              await this.meta.setWatermark(JOB_NAME, ticker, execDate);
+              splitResets++;
+              this.logger.log(
+                `New split for ${ticker} (executed ${execDate}) — cleared ` +
+                  `stock-history range for a full adjusted re-backfill.`,
+              );
+            }
+            // else: newest executed split already reflected → no action.
+          }
+
           splitDocs.push({
             id: ticker,
             data: {
@@ -238,6 +294,7 @@ export class CorporateActionsJob implements OnModuleInit {
       return {
         dividendDocs: divDocs.length,
         splitDocs: splitDocs.length,
+        splitResets,
         failed,
       };
     } catch (err) {

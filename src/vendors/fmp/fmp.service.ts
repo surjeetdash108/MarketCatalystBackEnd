@@ -109,6 +109,15 @@ export interface FmpGradeRow {
   action: string | null;
 }
 
+/** One firm's price-target post (`/stable/price-target-news`) — the per-analyst
+ * target, keyed by the issuing firm. Used to give each grade its OWN target
+ * instead of repeating the ticker's consensus across every firm. */
+export interface FmpPriceTargetRow {
+  date: string;
+  firm: string | null;
+  priceTarget: number | null;
+}
+
 /** A macro/economic-calendar release (past or scheduled). */
 export interface FmpEconEventRow {
   date: string;
@@ -429,6 +438,33 @@ export class FmpService {
         action: o.action != null ? String(o.action) : null,
       };
     });
+  }
+
+  /**
+   * Per-firm price targets (`/stable/price-target-news`) — each covering firm's
+   * OWN 12-month target + the date it was posted. Joined to grades by firm so
+   * the "Per-firm analyst actions" table shows real per-firm PTs instead of the
+   * ticker's single consensus repeated on every row.
+   */
+  async getPriceTargets(
+    ticker: string,
+    limit = 60,
+  ): Promise<FmpPriceTargetRow[]> {
+    if (!this.apiKey) return [];
+    const rows = await this.get(
+      `price-target-news?symbol=${encodeURIComponent(ticker)}&limit=${limit}`,
+      { retries: 0 },
+    ).catch(() => [] as unknown[]);
+    return rows
+      .map((r) => {
+        const o = r as Record<string, unknown>;
+        return {
+          date: String(o.publishedDate ?? o.date ?? "").slice(0, 10),
+          firm: o.analystCompany != null ? String(o.analystCompany) : null,
+          priceTarget: num(o.priceTarget ?? o.adjPriceTarget),
+        };
+      })
+      .filter((r) => r.firm && r.priceTarget != null);
   }
 
   /**

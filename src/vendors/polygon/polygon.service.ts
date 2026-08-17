@@ -177,7 +177,23 @@ export class PolygonService {
       `${this.baseUrl}/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${from}/${to}` +
         `?adjusted=true&sort=asc&limit=${limit}&apiKey=${this.apiKey}`,
     );
-    return res.results ?? [];
+    const results = res.results ?? [];
+    // BUG-DATA-011 root cause + fix. `adjusted=true` makes Polygon return
+    // SPLIT-ADJUSTED volume, which it emits as a FLOAT: the raw session volume
+    // multiplied by the cumulative split factor (e.g. 18_569_371.05639 for a
+    // non-integer ratio such as 3:2). Real session volume is a whole number of
+    // shares, but every stored/served bar path reads `v`/`b.v` verbatim
+    // (ohlcv_bars via the bars adapter, on-demand stock_bars via
+    // fetchAndStore/refreshIncremental, intraday_bars via getIntradayBars), so
+    // the fraction propagates into 52w / SMA / EMA / RVOL / avgVolume. Normalise
+    // to whole shares HERE — the single vendor boundary all bar fetches flow
+    // through. Prices stay split-adjusted; only volume is rounded. Callers that
+    // read only OHLC (getDailyQuote, ipos/fear-greed/company-profile) are
+    // unaffected because they never read `v`.
+    for (const b of results) {
+      if (typeof b.v === "number") b.v = Math.round(b.v);
+    }
+    return results;
   }
 
   /**
