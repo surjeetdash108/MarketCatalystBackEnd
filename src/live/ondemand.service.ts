@@ -13,7 +13,15 @@ import {
   dividendCagr,
   increaseStreak,
 } from "../sync/corporate-actions.job";
-import { mapAnnualRow, mapQuarterRow } from "../sync/financials.job";
+import {
+  mapAnnualRow,
+  mapQuarterRow,
+  alignReportedEstimate,
+  buildEpsHistory,
+  ttmReportedEpsFromRows,
+  type SplitEvent,
+  type EpsHistoryRow,
+} from "../sync/financials.job";
 import {
   computeIndicators,
   type IndicatorBar,
@@ -694,14 +702,17 @@ export class OnDemandService implements OnModuleDestroy {
       const data = snap.data() as Record<string, unknown>;
       const created =
         typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
-      // 'description' in data → the doc was written by a build that includes the
-      // company profile blurb; older docs lack the key, so fall through to a
-      // refetch to backfill it rather than serving a description-less doc.
+      // 'description'/'instOwnershipPct' in data → the doc was written by a build
+      // that includes the profile blurb and the 13F institutional rollup; older
+      // docs lack these keys, so fall through to a refetch to backfill them
+      // rather than serving a stale doc missing those fields.
       if (
         Number.isFinite(created) &&
         Date.now() - created < COMPANY_TTL_MS &&
         data.price != null &&
-        "description" in data
+        "description" in data &&
+        "instOwnershipPct" in data &&
+        "epsTtm" in data
       ) {
         this.memCompany.set(ticker, { data, at: Date.now() });
         return data;
@@ -741,19 +752,48 @@ export class OnDemandService implements OnModuleDestroy {
       // cursor reaches the ticker. Each is independent and best-effort: a failed
       // or empty one degrades to null (same as the adapter's per-field try/catch)
       // rather than dropping the whole company doc. Parallel to keep latency low.
-      const [epsRes, peersRes, divRes, techRes] = await Promise.allSettled([
-        this.polygon.getTtmEps(ticker),
-        this.polygon.getRelatedCompanies(ticker),
-        this.polygon.getDividendHistory(ticker, 40),
-        // First-time technicals (RSI/MACD/Stoch/ADX, beta, MA ladder, 52-week
-        // range, key levels) so the detail page isn't a wall of N/A until the
-        // nightly cron reaches this ticker. Runs alongside the other fetches so
-        // it adds max(), not sum(), to latency. Best-effort — returns {} on any
-        // failure so the company doc still saves with profile + price.
-        this.computeFirstSyncTechnicals(ticker, !hadRating),
-      ]);
+      const [epsRes, peersRes, divRes, techRes, instRes, epsHistRes] =
+        await Promise.allSettled([
+          this.polygon.getTtmEps(ticker),
+          this.polygon.getRelatedCompanies(ticker),
+          this.polygon.getDividendHistory(ticker, 40),
+          // First-time technicals (RSI/MACD/Stoch/ADX, beta, MA ladder, 52-week
+          // range, key levels) so the detail page isn't a wall of N/A until the
+          // nightly cron reaches this ticker. Runs alongside the other fetches so
+          // it adds max(), not sum(), to latency. Best-effort — returns {} on any
+          // failure so the company doc still saves with profile + price.
+          this.computeFirstSyncTechnicals(ticker, !hadRating),
+          // FMP 13F institutional-ownership rollup (Inst. ownership % + holder
+          // count for the detail page's Institutional card). Best-effort — null
+          // for names FMP has no 13F rollup for. Short interest stays absent:
+          // Polygon 404s on it and FMP's stable API has no product.
+          this.fmp.getLatestInstitutionalOwnership(ticker),
+          // FMP reported EPS history → non-GAAP TTM EPS for a NASDAQ/IBD-basis
+          // P/E, instead of Polygon's GAAP TTM. Best-effort, [] when FMP is off.
+          this.estimatesAdapter
+            ? this.estimatesAdapter.getEpsHistory(ticker).catch(
+                () =>
+                  [] as Array<{
+                    date: string;
+                    epsActual: number | null;
+                    epsEstimate: number | null;
+                  }>,
+              )
+            : Promise.resolve(
+                [] as Array<{
+                  date: string;
+                  epsActual: number | null;
+                  epsEstimate: number | null;
+                }>,
+              ),
+        ]);
 
-      const eps = epsRes.status === "fulfilled" ? epsRes.value : null;
+      const gaapTtm = epsRes.status === "fulfilled" ? epsRes.value : null;
+      const epsTtmReported = ttmReportedEpsFromRows(
+        epsHistRes.status === "fulfilled" ? epsHistRes.value : [],
+      );
+      // Prefer the non-GAAP TTM (matches NASDAQ/IBD); GAAP is the fallback.
+      const eps = epsTtmReported ?? gaapTtm;
       const peRatio =
         eps != null && eps > 0 && price != null
           ? Math.round((price / eps) * 100) / 100
@@ -766,6 +806,9 @@ export class OnDemandService implements OnModuleDestroy {
 
       const technicals =
         techRes.status === "fulfilled" ? techRes.value : {};
+
+      const inst =
+        instRes.status === "fulfilled" ? instRes.value : null;
 
       // Trailing-twelve-month dividends by ex-date → per-share total and yield,
       // the same derivation the profile adapter uses (Polygon sells no yield
@@ -789,6 +832,13 @@ export class OnDemandService implements OnModuleDestroy {
       }
 
       const now = new Date().toISOString();
+      // Nightly fundamentals-growth writes epsGrowthYoY / revenueGrowthYoY /
+      // grossMargin to the company doc; this on-demand rebuild doesn't recompute
+      // them, so carry them forward (else the returned doc — the stock-detail's
+      // source — would drop them even though Firestore keeps them via merge).
+      const prevCo = snap.exists
+        ? (snap.data() as Record<string, unknown>)
+        : {};
       const doc: Record<string, unknown> = {
         ticker,
         name: details?.name ?? ticker,
@@ -809,9 +859,28 @@ export class OnDemandService implements OnModuleDestroy {
         volume: q?.volume ?? null,
         peRatio,
         eps,
+        epsTtm: epsTtmReported,
+        // Carried from the nightly fundamentals-growth write (non-GAAP basis).
+        epsGrowthYoY: (prevCo.epsGrowthYoY as number | null | undefined) ?? null,
+        revenueGrowthYoY:
+          (prevCo.revenueGrowthYoY as number | null | undefined) ?? null,
+        grossMargin: (prevCo.grossMargin as number | null | undefined) ?? null,
         dividendYield,
         dividendPerShare,
         peers,
+        // FMP 13F institutional-ownership rollup (Institutional card). Null for
+        // names with no 13F filers (small / recently-listed / non-US).
+        instOwnershipPct: inst?.ownershipPercent ?? null,
+        inst13FHolders: inst?.investorsHolding ?? null,
+        inst13FHoldersChange: inst?.investorsHoldingChange ?? null,
+        inst13FShares: inst?.numberOf13Fshares ?? null,
+        inst13FSharesChange: inst?.numberOf13FsharesChange ?? null,
+        instTotalInvested: inst?.totalInvested ?? null,
+        instPutCallRatio: inst?.putCallRatio ?? null,
+        instAsOf:
+          inst && inst.year != null && inst.quarter != null
+            ? `Q${inst.quarter} ${inst.year}`
+            : null,
         // Technical field set computed above (empty object when history is thin
         // or the fetch failed). Spread last so a real technicals result fills
         // rsi14/macd/beta/high52/keyLevels/... the same way the cron would.
@@ -1047,11 +1116,22 @@ export class OnDemandService implements OnModuleDestroy {
       const prev = snap.exists
         ? (snap.data() as {
             annualEstimates?: unknown[];
-            quarters?: Array<{ endDate?: string; epsEstimate?: number | null }>;
+            quarters?: Array<{
+              endDate?: string;
+              epsEstimate?: number | null;
+              epsActualReported?: number | null;
+              epsEstimateReported?: number | null;
+            }>;
           })
         : undefined;
       const prevEpsByEnd = new Map(
         (prev?.quarters ?? []).map((q) => [q.endDate, q.epsEstimate]),
+      );
+      const prevActualByEnd = new Map(
+        (prev?.quarters ?? []).map((q) => [q.endDate, q.epsActualReported ?? null]),
+      );
+      const prevEstReportedByEnd = new Map(
+        (prev?.quarters ?? []).map((q) => [q.endDate, q.epsEstimateReported ?? null]),
       );
 
       // FMP estimates fetched HERE (not only in the sync job) so any ticker a
@@ -1059,29 +1139,61 @@ export class OnDemandService implements OnModuleDestroy {
       // epsEstimate immediately — coverage no longer depends on the sync cursor
       // having already reached this ticker. earnings_events + the prior doc are
       // fallbacks so a transient FMP miss never downgrades what we already had.
-      const [rows, estimates, fmpAnnual, fmpQ] = await Promise.all([
-        this.polygon.getFinancialStatements(ticker, "quarterly", FIN_QUARTERS),
-        this.earningsEstimatesFor(ticker),
-        this.estimatesAdapter
-          ? this.estimatesAdapter
-              .getForwardAnnual(ticker)
-              .catch(() => [] as unknown[])
-          : Promise.resolve([] as unknown[]),
-        this.estimatesAdapter
-          ? this.estimatesAdapter
-              .getQuarterlyEstimates(ticker)
-              .catch(() => null)
-          : Promise.resolve(null),
-      ]);
-      const quarters = rows.map((r) =>
-        mapQuarterRow(
+      const [rows, estimates, fmpAnnual, fmpQ, splits, rawEpsHist] =
+        await Promise.all([
+          this.polygon.getFinancialStatements(ticker, "quarterly", FIN_QUARTERS),
+          this.earningsEstimatesFor(ticker),
+          this.estimatesAdapter
+            ? this.estimatesAdapter
+                .getForwardAnnual(ticker)
+                .catch(() => [] as unknown[])
+            : Promise.resolve([] as unknown[]),
+          this.estimatesAdapter
+            ? this.estimatesAdapter
+                .getQuarterlyEstimates(ticker)
+                .catch(() => null)
+            : Promise.resolve(null),
+          this.polygon.getSplits(ticker).catch(() => [] as SplitEvent[]),
+          this.estimatesAdapter
+            ? this.estimatesAdapter
+                .getEpsHistory(ticker)
+                .catch(
+                  () =>
+                    [] as Array<{
+                      date: string;
+                      epsActual: number | null;
+                      epsEstimate: number | null;
+                    }>,
+                )
+            : Promise.resolve(
+                [] as Array<{
+                  date: string;
+                  epsActual: number | null;
+                  epsEstimate: number | null;
+                }>,
+              ),
+        ]);
+      const quarters = rows.map((r) => {
+        const fmpActual = fmpQ?.epsActualFor(r.endDate) ?? null;
+        const fmpEstimate = alignReportedEstimate(
+          r.filingDate ?? r.endDate,
+          splits,
+          fmpActual,
+          fmpQ?.epsEstimateFor(r.endDate) ?? null,
+        );
+        return mapQuarterRow(
           r,
-          fmpQ?.epsEstimateFor(r.endDate) ??
+          fmpEstimate ??
             this.matchEpsEstimate(estimates, r.endDate) ??
             prevEpsByEnd.get(r.endDate) ??
             null,
-        ),
-      );
+          fmpActual ?? prevActualByEnd.get(r.endDate) ?? null,
+          fmpEstimate ??
+            (fmpActual == null
+              ? (prevEstReportedByEnd.get(r.endDate) ?? null)
+              : null),
+        );
+      });
 
       let annual: ReturnType<typeof mapAnnualRow>[] = [];
       try {
@@ -1095,11 +1207,20 @@ export class OnDemandService implements OnModuleDestroy {
         // Annual is a secondary tab — a failure there shouldn't block quarterly data.
       }
 
+      // Deep FMP quarterly EPS history → annual EPS (sum by fiscal year). Keep
+      // the prior one if FMP returned empty so a transient miss never wipes it.
+      let epsHistory: EpsHistoryRow[] = buildEpsHistory(rawEpsHist, quarters, splits);
+      const prevEpsHistory = (prev as { epsHistory?: EpsHistoryRow[] })?.epsHistory;
+      if (epsHistory.length === 0 && Array.isArray(prevEpsHistory)) {
+        epsHistory = prevEpsHistory;
+      }
+
       const now = new Date().toISOString();
       const doc: Record<string, unknown> = {
         ticker,
         quarters,
         annual,
+        epsHistory,
         // Freshly-fetched FMP forward estimates; fall back to the prior doc's
         // when FMP returns nothing this refresh so a transient miss never wipes.
         annualEstimates:

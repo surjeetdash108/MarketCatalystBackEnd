@@ -11,6 +11,10 @@ import { FmpService } from "../vendors/fmp/fmp.service";
 export interface EarningsEstimate {
   epsEstimate: number | null;
   revenueEstimate: number | null;
+  /** FMP's reported EPS actual for this report — the consensus (non-GAAP)
+   * basis, so beat/miss vs epsEstimate is like-for-like. Null for a future
+   * report or when FMP carries no actual. Prefer this over Polygon GAAP EPS. */
+  epsActual: number | null;
 }
 
 /** A preloaded window that answers "what did analysts expect for this report?". */
@@ -45,6 +49,10 @@ export interface ForwardAnnualEstimate {
 /** Per-ticker EPS-estimate history, matched to a quarter's period-end date. */
 export interface QuarterlyEstimatesLookup {
   epsEstimateFor(periodEnd: string | null): number | null;
+  /** FMP's reported EPS actual for that quarter — the consensus-basis
+   * (non-GAAP) figure, so beat/miss vs `epsEstimateFor` is apples-to-apples.
+   * Prefer this over Polygon's GAAP diluted EPS for surprise math. */
+  epsActualFor(periodEnd: string | null): number | null;
 }
 
 export interface EarningsEstimatesAdapter {
@@ -58,6 +66,15 @@ export interface EarningsEstimatesAdapter {
   getForwardAnnual(ticker: string): Promise<ForwardAnnualEstimate[]>;
   /** Full quarterly EPS-estimate history for one ticker (drives %surp). */
   getQuarterlyEstimates(ticker: string): Promise<QuarterlyEstimatesLookup>;
+  /** Raw reported EPS history — up to ~40 quarters of {reportDate, actual,
+   * estimate} on FMP's consensus (non-GAAP) basis. Drives the deep annual EPS
+   * series (sum of quarters per fiscal year) that Polygon's gappy financials
+   * can't. Empty array when the adapter is off or has no coverage. */
+  getEpsHistory(
+    ticker: string,
+  ): Promise<
+    Array<{ date: string; epsActual: number | null; epsEstimate: number | null }>
+  >;
 }
 
 /** Quarter period-end may sit a little off the surprise date; match within this. */
@@ -65,6 +82,7 @@ const QUARTER_MATCH_DAYS = 90;
 
 const EMPTY_QUARTERLY: QuarterlyEstimatesLookup = {
   epsEstimateFor: () => null,
+  epsActualFor: () => null,
 };
 
 /** How far a reported filing date may sit from FMP's earnings date and still match. */
@@ -139,6 +157,7 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
         est: {
           epsEstimate: r.epsEstimated ?? null,
           revenueEstimate: r.revenueEstimated ?? null,
+          epsActual: r.epsActual ?? null,
         },
       });
       byTicker.set(sym, list);
@@ -231,21 +250,47 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
       );
       return [];
     });
+    // Keep the estimate AND the matched actual from the SAME FMP `/earnings`
+    // row. FMP's epsActual is the consensus-basis (non-GAAP) figure, so it is
+    // apples-to-apples with epsEstimated — unlike Polygon's GAAP diluted EPS,
+    // which yields spurious huge beats/misses for names with heavy SBC or
+    // one-off tax items (PANW being a textbook case).
     const points = rows
-      .filter((r) => r.date && r.estimatedEarning != null)
-      .map((r) => ({ date: r.date, eps: r.estimatedEarning as number }));
+      .filter((r) => r.date && (r.estimatedEarning != null || r.actualEarningResult != null))
+      .map((r) => ({ date: r.date, eps: r.estimatedEarning, actual: r.actualEarningResult }));
     if (points.length === 0) return EMPTY_QUARTERLY;
-    return {
-      epsEstimateFor: (periodEnd) => {
-        if (!periodEnd) return null;
-        let best: { d: number; eps: number } | null = null;
-        for (const p of points) {
-          const d = daysBetween(p.date, periodEnd);
-          if (d <= QUARTER_MATCH_DAYS && (!best || d < best.d))
-            best = { d, eps: p.eps };
-        }
-        return best?.eps ?? null;
-      },
+    const nearest = (periodEnd: string | null) => {
+      if (!periodEnd) return null;
+      let best: { d: number; p: (typeof points)[number] } | null = null;
+      for (const p of points) {
+        const d = daysBetween(p.date, periodEnd);
+        if (d <= QUARTER_MATCH_DAYS && (!best || d < best.d)) best = { d, p };
+      }
+      return best?.p ?? null;
     };
+    return {
+      epsEstimateFor: (periodEnd) => nearest(periodEnd)?.eps ?? null,
+      epsActualFor: (periodEnd) => nearest(periodEnd)?.actual ?? null,
+    };
+  }
+
+  async getEpsHistory(
+    ticker: string,
+  ): Promise<
+    Array<{ date: string; epsActual: number | null; epsEstimate: number | null }>
+  > {
+    const rows = await this.fmp.getEarningsSurprises(ticker).catch((err) => {
+      this.logger.warn(
+        `FMP EPS history failed for ${ticker}: ${err.message}`,
+      );
+      return [];
+    });
+    return rows
+      .filter((r) => r.date)
+      .map((r) => ({
+        date: r.date,
+        epsActual: r.actualEarningResult,
+        epsEstimate: r.estimatedEarning,
+      }));
   }
 }

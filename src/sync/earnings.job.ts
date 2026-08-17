@@ -108,13 +108,62 @@ export class EarningsJob implements OnModuleInit {
               // adapter when configured, else null (Polygon has none).
               session: null,
               epsEstimate: e?.epsEstimate ?? null,
-              epsActual: r.epsActual,
+              // Beat/miss must be like-for-like: use FMP's consensus-basis
+              // actual (same basis as its estimate) when FMP matched this
+              // report; fall back to Polygon's GAAP diluted EPS only when FMP
+              // has no actual. Mixing GAAP actual with a non-GAAP estimate is
+              // what produced bogus ±100% surprises.
+              epsActual: e?.epsActual ?? r.epsActual,
               revenueEstimate: e?.revenueEstimate ?? null,
               revenueActual: r.revenueActual,
               updatedAt: new Date().toISOString(),
             },
           };
         });
+
+      // Reported rows carry Polygon's GAAP diluted EPS and (often) no estimate,
+      // because FMP's announcement date can sit >21d from the SEC filing date so
+      // the calendar overlay misses. The `financials/{ticker}` docs already hold
+      // the FMP matched pair (epsActualReported + epsEstimateReported, split-
+      // normalized, NASDAQ basis), so reuse THAT — keyed by periodEnd === the
+      // quarter endDate — as the source of truth. This makes the Hub's recent-
+      // reporter feed agree with its 10-quarter history and never surface a raw
+      // GAAP EPS. financials.job writes those docs; a one-run staleness is
+      // harmless since a reported quarter's numbers don't change.
+      const reportedTickers = [
+        ...new Set(docs.map((d) => d.data.ticker as string)),
+      ];
+      const finPair = new Map<string, { a: number | null; e: number | null }>();
+      for (let i = 0; i < reportedTickers.length; i += 300) {
+        const refs = reportedTickers
+          .slice(i, i + 300)
+          .map((t) => this.firebase.firestore.collection("financials").doc(t));
+        const snaps = await this.firebase.firestore.getAll(...refs);
+        for (const s of snaps) {
+          if (!s.exists) continue;
+          const qs = (s.data()?.quarters ?? []) as Array<{
+            endDate?: string;
+            epsActualReported?: number | null;
+            epsEstimateReported?: number | null;
+          }>;
+          for (const q of qs) {
+            if (!q.endDate) continue;
+            finPair.set(`${s.id}_${q.endDate}`, {
+              a: q.epsActualReported ?? null,
+              e: q.epsEstimateReported ?? null,
+            });
+          }
+        }
+      }
+      for (const d of docs) {
+        const pe = d.data.periodEnd as string | null;
+        if (!pe) continue;
+        const m = finPair.get(`${d.data.ticker as string}_${pe}`);
+        if (!m) continue;
+        if (m.a != null) d.data.epsActual = m.a;
+        if (m.e != null) d.data.epsEstimate = m.e;
+      }
+
       // Forward calendar (FMP): upcoming reports carry estimates but no actual
       // yet — written as `epsActual: null` rows so the hub shows today's and
       // coming reporters. Reported rows always win on id collision. Skipped

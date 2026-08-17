@@ -8,9 +8,16 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { activeUniverse } from "../common/ticker-universe";
 import { FINANCIALS_ADAPTER, type FinancialsAdapter } from "../adapters/types";
 import { SyncRegistry } from "../common/sync-registry.service";
+import {
+  ttmReportedEpsFromRows,
+  latestAnnualEpsGrowth,
+  type EpsHistoryRow,
+} from "./financials.job";
 
 const JOB_NAME = "fundamentals-growth";
-const BATCH_SIZE = 60;
+// Configurable so a backfill can cover the whole universe in one run
+// (FUNDAMENTALS_BATCH_SIZE=442), matching the financials job's pattern.
+const BATCH_SIZE = Number(process.env.FUNDAMENTALS_BATCH_SIZE) || 60;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const round = (n: number, p = 4) => Math.round(n * 10 ** p) / 10 ** p;
 
@@ -51,6 +58,25 @@ export class FundamentalsGrowthJob implements OnModuleInit {
         { length: Math.min(BATCH_SIZE, universe.length) },
         (_, i) => universe[(cursor + i) % universe.length],
       );
+      // Batch-read the fresh financials docs (for the FMP non-GAAP epsHistory —
+      // financials.job runs just before this in the premarket bundle) and the
+      // company docs (for the current price → non-GAAP P/E). Same-basis as the
+      // earnings/EPS fix so P/E + EPS growth match NASDAQ/IBD, not GAAP.
+      const finSnaps = await this.firebase.firestore.getAll(
+        ...batch.map((t) => this.firebase.firestore.collection("financials").doc(t)),
+      );
+      const coSnaps = await this.firebase.firestore.getAll(
+        ...batch.map((t) => this.firebase.firestore.collection("companies").doc(t)),
+      );
+      const epsHistByTicker = new Map<string, EpsHistoryRow[]>();
+      const priceByTicker = new Map<string, number | null>();
+      finSnaps.forEach((s) => {
+        if (s.exists) epsHistByTicker.set(s.id, (s.data()?.epsHistory ?? []) as EpsHistoryRow[]);
+      });
+      coSnaps.forEach((s) => {
+        if (s.exists) priceByTicker.set(s.id, (s.data()?.price ?? null) as number | null);
+      });
+
       const writes = [];
       let skipped = 0;
       for (const ticker of batch) {
@@ -90,14 +116,39 @@ export class FundamentalsGrowthJob implements OnModuleInit {
             gp != null && latest.revenue != null && latest.revenue > 0
               ? gp / latest.revenue
               : null;
+
+          // Non-GAAP (FMP consensus basis) — same as NASDAQ/IBD, from epsHistory.
+          // epsTtm = last 4 reported quarters; P/E = price ÷ epsTtm; EPS growth =
+          // latest-vs-prior full fiscal year. Fall back to the Polygon GAAP
+          // epsGrowth only when FMP has no history yet.
+          const epsHist = epsHistByTicker.get(ticker) ?? [];
+          const epsTtm = ttmReportedEpsFromRows(epsHist);
+          const price = priceByTicker.get(ticker) ?? null;
+          const peReported =
+            epsTtm != null && epsTtm > 0 && price != null && price > 0
+              ? Math.round((price / epsTtm) * 100) / 100
+              : null;
+          const epsGrowthReported = latestAnnualEpsGrowth(epsHist);
+          const epsGrowthFinal =
+            epsGrowthReported != null
+              ? epsGrowthReported
+              : epsGrowth == null
+                ? null
+                : round(epsGrowth);
+
           writes.push({
             ticker,
             data: {
               revenueGrowthYoY: revGrowth == null ? null : round(revGrowth),
-              epsGrowthYoY: epsGrowth == null ? null : round(epsGrowth),
+              epsGrowthYoY: epsGrowthFinal,
               grossMargin: grossMargin == null ? null : round(grossMargin),
               fundamentalsFiscalYear: latest.fiscalYear,
               fundamentalsUpdatedAt: new Date().toISOString(),
+              // Non-GAAP TTM EPS + P/E (null-safe: only override when we have the
+              // FMP history + a price, else leave the profile's existing value).
+              ...(epsTtm != null ? { epsTtm } : {}),
+              ...(peReported != null ? { peRatio: peReported } : {}),
+              ...(epsTtm != null ? { eps: epsTtm } : {}),
             },
           });
         } catch (err) {

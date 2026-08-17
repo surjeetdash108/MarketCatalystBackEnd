@@ -63,6 +63,15 @@ export interface QuarterFinancials {
   epsActual: number | null;
   /** From earnings_events when a same-quarter estimate exists, else null. */
   epsEstimate: number | null;
+  /** FMP's reported EPS actual (consensus/non-GAAP basis), matched to this
+   * quarter. Use THIS — not `epsActual` (Polygon GAAP diluted) — for beat/miss
+   * vs `epsEstimateReported`, so heavy-SBC / one-off-tax names don't show bogus
+   * surprises. Null when FMP has no surprise row for the quarter. */
+  epsActualReported: number | null;
+  /** FMP's estimate from the SAME surprise row as `epsActualReported`. Beat/miss
+   * pairs these two (identical basis) — never `epsActualReported` against the
+   * patchwork `epsEstimate`, whose old rows can be on a pre-split basis. */
+  epsEstimateReported: number | null;
 
   // ── Fields below come from the SAME vendor response that already served the
   // income statement. The balance-sheet and cash-flow panels were fabricated
@@ -95,10 +104,174 @@ export interface QuarterFinancials {
   filingDate: string | null;
 }
 
+export interface SplitEvent {
+  executionDate: string;
+  splitFrom: number;
+  splitTo: number;
+}
+
+/**
+ * Cumulative EPS split factor applied AFTER `reportDate` — the product of
+ * splitTo/splitFrom for every split executed later than the report. Post-split
+ * EPS = pre-split EPS / factor (a 2-for-1 split → factor 2).
+ */
+export function splitFactorAfter(
+  reportDate: string | null,
+  splits: SplitEvent[],
+): number {
+  if (!reportDate) return 1;
+  let f = 1;
+  for (const s of splits) {
+    if (!s.executionDate || !(s.splitFrom > 0) || !(s.splitTo > 0)) continue;
+    if (s.executionDate > reportDate) f *= s.splitTo / s.splitFrom;
+  }
+  return f;
+}
+
+/**
+ * FMP retroactively split-adjusts a historical *actual* EPS but often leaves the
+ * SAME row's *estimate* on the pre-split basis — turning a small beat into a
+ * fake ~50% miss (PANW's pre-Dec-2024 quarters are the textbook case). When a
+ * split sits between the report and today AND the estimate is ~factor× the
+ * actual (a clear split-factor gap, not a real surprise), rebase the estimate
+ * onto the actual's basis. The ratio guard leaves genuine beats/misses — and
+ * quarters FMP already adjusted — untouched.
+ */
+export function alignReportedEstimate(
+  reportDate: string | null,
+  splits: SplitEvent[],
+  actual: number | null,
+  estimate: number | null,
+): number | null {
+  if (actual == null || estimate == null || actual === 0) return estimate;
+  const f = splitFactorAfter(reportDate, splits);
+  if (f === 1) return estimate;
+  const r = Math.abs(estimate / actual);
+  const near = (a: number, b: number) => Math.abs(a - b) / b < 0.25;
+  if (near(r, f)) return estimate / f; // estimate un-adjusted → rebase down
+  if (near(r, 1 / f)) return estimate * f; // estimate over-adjusted → rebase up
+  return estimate;
+}
+
+export interface EpsHistoryRow {
+  fiscalYear: number;
+  fiscalPeriod: string; // "Q1".."Q4"
+  date: string; // FMP report date
+  epsActual: number | null; // FMP consensus (non-GAAP) actual
+  epsEstimate: number | null; // matched estimate, split-normalized
+}
+
+/**
+ * A deep quarterly reported-EPS series from FMP's earnings surprises (~40
+ * quarters / ~10 years), fiscal-year-labelled and split-normalized. Polygon's
+ * financials are gappy (drops quarters) and shallow (~10), so summing THIS by
+ * fiscal year is what makes annual EPS match IBD/NASDAQ all the way down.
+ *
+ * Fiscal labels: anchored to a Polygon quarter's exact fiscalYear/period where
+ * the two overlap (recent quarters), then carried outward by list position
+ * (FMP surprises are one contiguous row per quarter). Falls back to a
+ * fiscal-year-end-month derivation only when no Polygon quarter overlaps.
+ */
+export function buildEpsHistory(
+  raw: Array<{ date: string; epsActual: number | null; epsEstimate: number | null }>,
+  quarters: QuarterFinancials[],
+  splits: SplitEvent[],
+): EpsHistoryRow[] {
+  const rows = [...raw]
+    .filter((r) => r.date)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (rows.length === 0) return [];
+  const qnum = (p?: string | null) => {
+    const m = String(p ?? "").match(/[1-4]/);
+    return m ? Number(m[0]) : null;
+  };
+  const labeled = quarters.filter(
+    (q) => q.fiscalYear != null && qnum(q.fiscalPeriod) != null && (q.filingDate || q.endDate),
+  );
+  let anchor: { idx: number; abs: number } | null = null;
+  rows.forEach((s, idx) => {
+    for (const q of labeled) {
+      const qd = (q.filingDate ?? q.endDate) as string;
+      const days = Math.abs((Date.parse(s.date) - Date.parse(qd)) / 86_400_000);
+      if (days <= 40) anchor = { idx, abs: Number(q.fiscalYear) * 4 + (qnum(q.fiscalPeriod)! - 1) };
+    }
+  });
+  const q4 = labeled.find((q) => qnum(q.fiscalPeriod) === 4);
+  const fyEndMonth = q4?.endDate
+    ? new Date(q4.endDate + "T00:00:00").getUTCMonth() + 1
+    : 12;
+  return rows.map((s, idx) => {
+    let abs: number;
+    if (anchor) {
+      abs = anchor.abs + (idx - anchor.idx);
+    } else {
+      const pe = new Date(Date.parse(s.date) - 40 * 86_400_000);
+      const m = pe.getUTCMonth() + 1;
+      const y = pe.getUTCFullYear();
+      const fy = m > fyEndMonth ? y + 1 : y;
+      const fyStart = (fyEndMonth % 12) + 1;
+      const qi = Math.min(3, Math.max(0, Math.floor((((m - fyStart + 12) % 12)) / 3)));
+      abs = fy * 4 + qi;
+    }
+    return {
+      fiscalYear: Math.floor(abs / 4),
+      fiscalPeriod: `Q${(abs % 4) + 1}`,
+      date: s.date,
+      epsActual: s.epsActual,
+      epsEstimate: alignReportedEstimate(s.date, splits, s.epsActual, s.epsEstimate),
+    };
+  });
+}
+
+/** Non-GAAP TTM EPS = sum of the 4 most-recent reported quarters (FMP basis).
+ * Used for a NASDAQ/IBD-style P/E (price ÷ this) instead of Polygon GAAP TTM.
+ * Works off any rows carrying {date, epsActual} — raw FMP surprises or epsHistory. */
+export function ttmReportedEpsFromRows(
+  rows: Array<{ date: string; epsActual: number | null }>,
+): number | null {
+  const vals = [...rows]
+    .filter((r) => r.epsActual != null && r.date)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  if (vals.length < 4) return null;
+  return (
+    Math.round(
+      vals.slice(0, 4).reduce((s, r) => s + (r.epsActual as number), 0) * 100,
+    ) / 100
+  );
+}
+
+/** Non-GAAP YoY EPS growth from the two most-recent COMPLETE fiscal years in
+ * epsHistory (each = sum of its 4 quarterly reported EPS). null if <2 full years. */
+export function latestAnnualEpsGrowth(
+  epsHistory: EpsHistoryRow[],
+): number | null {
+  const byFY = new Map<number, Map<string, number>>();
+  for (const h of epsHistory) {
+    if (h.epsActual == null) continue;
+    if (!byFY.has(h.fiscalYear)) byFY.set(h.fiscalYear, new Map());
+    byFY.get(h.fiscalYear)!.set(h.fiscalPeriod, h.epsActual);
+  }
+  const complete = [...byFY.entries()]
+    .filter(([, qs]) => qs.size >= 4)
+    .map(
+      ([fy, qs]) =>
+        [fy, [...qs.values()].reduce((s, v) => s + v, 0)] as [number, number],
+    )
+    .sort((a, b) => b[0] - a[0]);
+  if (complete.length < 2) return null;
+  const latest = complete[0][1];
+  const prior = complete[1][1];
+  return prior !== 0
+    ? Math.round(((latest - prior) / Math.abs(prior)) * 10000) / 10000
+    : null;
+}
+
 /** Maps one quarterly Polygon financials row onto the doc shape `financials/{ticker}.quarters` stores. */
 export function mapQuarterRow(
   r: PolygonFinancialRow,
   epsEstimate: number | null,
+  epsActualReported: number | null = null,
+  epsEstimateReported: number | null = null,
 ): QuarterFinancials {
   const inc = r.income;
   const bs = r.balanceSheet;
@@ -126,6 +299,8 @@ export function mapQuarterRow(
     netIncome,
     epsActual: inc.diluted_earnings_per_share ?? null,
     epsEstimate,
+    epsActualReported,
+    epsEstimateReported,
 
     costOfRevenue: inc.cost_of_revenue ?? null,
     operatingExpenses: inc.operating_expenses ?? null,
@@ -304,18 +479,54 @@ export class FinancialsJob implements OnModuleInit {
           const fmpQ = this.estimates
             ? await this.estimates.getQuarterlyEstimates(ticker)
             : null;
+          // Splits let us rebase FMP's mixed-basis historical estimates onto the
+          // actual's (current) basis so beat/miss survives a stock split.
+          const splits: SplitEvent[] = await this.polygon
+            .getSplits(ticker)
+            .catch(() => [] as SplitEvent[]);
           const prevEpsByEnd = new Map(
             (prev?.quarters ?? []).map((q) => [q.endDate, q.epsEstimate]),
           );
-          const quarters: QuarterFinancials[] = rows.map((r) =>
-            mapQuarterRow(
+          const prevActualByEnd = new Map(
+            (prev?.quarters ?? []).map((q) => [
+              q.endDate,
+              (q as { epsActualReported?: number | null }).epsActualReported ??
+                null,
+            ]),
+          );
+          const prevEstReportedByEnd = new Map(
+            (prev?.quarters ?? []).map((q) => [
+              q.endDate,
+              (q as { epsEstimateReported?: number | null })
+                .epsEstimateReported ?? null,
+            ]),
+          );
+          const quarters: QuarterFinancials[] = rows.map((r) => {
+            // The matched FMP pair (same surprise row) — beat/miss uses ONLY
+            // these two so actual and estimate share a basis. The estimate is
+            // split-rebased onto the actual's basis when a split sits between.
+            const fmpActual = fmpQ?.epsActualFor(r.endDate) ?? null;
+            const fmpEstimate = alignReportedEstimate(
+              r.filingDate ?? r.endDate,
+              splits,
+              fmpActual,
+              fmpQ?.epsEstimateFor(r.endDate) ?? null,
+            );
+            return mapQuarterRow(
               r,
-              fmpQ?.epsEstimateFor(r.endDate) ??
+              fmpEstimate ??
                 this.matchEstimate(estimates, ticker, r.endDate) ??
                 prevEpsByEnd.get(r.endDate) ??
                 null,
-            ),
-          );
+              fmpActual ?? prevActualByEnd.get(r.endDate) ?? null,
+              // Only preserve a prior reported-estimate when we ALSO fell back to
+              // a prior actual, so the pair never crosses refresh boundaries.
+              fmpEstimate ??
+                (fmpActual == null
+                  ? (prevEstReportedByEnd.get(r.endDate) ?? null)
+                  : null),
+            );
+          });
           // ── Annual (fiscal-year) history — actuals only, Polygon ──────────
           // Same endpoint, timeframe=annual. Drives the Yearly tab's EPS +
           // Sales columns. Forward analyst estimates are NOT sourced here
@@ -348,6 +559,18 @@ export class FinancialsJob implements OnModuleInit {
           ) {
             annualEstimates = prev.annualEstimates;
           }
+          // Deep (~10yr) FMP quarterly EPS history → drives annual EPS (sum by
+          // fiscal year). Preserve the prior one if FMP returns empty this run.
+          const rawEpsHist = this.estimates
+            ? await this.estimates.getEpsHistory(ticker).catch(() => [])
+            : [];
+          let epsHistory: EpsHistoryRow[] = buildEpsHistory(rawEpsHist, quarters, splits);
+          if (
+            epsHistory.length === 0 &&
+            Array.isArray((prev as { epsHistory?: EpsHistoryRow[] })?.epsHistory)
+          ) {
+            epsHistory = (prev as { epsHistory?: EpsHistoryRow[] }).epsHistory!;
+          }
           docs.push({
             id: ticker,
             data: {
@@ -355,6 +578,7 @@ export class FinancialsJob implements OnModuleInit {
               quarters,
               annual,
               annualEstimates,
+              epsHistory,
               updatedAt: new Date().toISOString(),
             },
           });
