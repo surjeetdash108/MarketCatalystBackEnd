@@ -8,6 +8,7 @@ import {
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { sectorFromSic } from "../common/sic-sector.util";
+import { reconcileMarketCap } from "../common/validate.util";
 import {
   annualTotals,
   dividendCagr,
@@ -747,7 +748,25 @@ export class OnDemandService implements OnModuleDestroy {
           spyMap.set(x.barDate as string, x.close);
       }
 
-      const ind = computeIndicators(bars.slice(-300), spyMap);
+      const analysisBars = bars.slice(-300);
+      // OFFICIAL 16:00 close for the classic-pivot basis only, keeping keyLevels
+      // consistent with the cron path. The pivot basis is the last completed
+      // daily session; fetch the official close for the last 1–2 bar dates (the
+      // possible basis dates) and pass only non-null results — any miss (incl. a
+      // partial current-day bar, weekend, holiday) falls back to the stored bar
+      // close (no regression). Not fetched for historical bars.
+      const officialCloseByDate = new Map<string, number>();
+      for (const b of analysisBars.slice(-2)) {
+        if (!b.barDate) continue;
+        const oc = await this.polygon.getOfficialClose(ticker, b.barDate);
+        if (oc != null) officialCloseByDate.set(b.barDate, oc);
+      }
+      const ind = computeIndicators(
+        analysisBars,
+        spyMap,
+        undefined,
+        officialCloseByDate,
+      );
       if (!ind) return {};
 
       const closes = bars.map((b) => b.close);
@@ -990,7 +1009,13 @@ export class OnDemandService implements OnModuleDestroy {
                 details.sic_code as string | number | null | undefined,
               ),
               industry: details.sic_description ?? null,
-              marketCap: details.market_cap ?? null,
+              // Correct a grossly-stale Polygon market_cap with price × shares
+              // (see reconcileMarketCap); consistent values are left untouched.
+              marketCap: reconcileMarketCap(
+                details.market_cap,
+                price,
+                details.weighted_shares_outstanding,
+              ),
               exchange: details.primary_exchange ?? null,
             }
           : {}),

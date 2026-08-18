@@ -82,6 +82,11 @@ const EXACT: Record<number, Sector> = {
   3861: "Technology",
   3873: "Consumer Cyclical",
   5912: "Consumer Defensive",
+  // Health insurers / managed care (UnitedHealth, Humana, Centene, Cigna, Molina):
+  // SIC 632x sits in the 6000-6499 "Financial Services" range, but GICS/IBD class
+  // these as Healthcare. Exact overrides beat the range, so they land correctly.
+  6321: "Healthcare", // Accident & health insurance
+  6324: "Healthcare", // Hospital & medical service plans
   6798: "Real Estate",
   7812: "Communication Services",
   7819: "Communication Services",

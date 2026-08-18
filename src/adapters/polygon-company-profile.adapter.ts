@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { sectorFromSic } from "../common/sic-sector.util";
+import { reconcileMarketCap } from "../common/validate.util";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import {
   AdapterResult,
@@ -241,7 +242,13 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       name: details.name ?? null,
       price,
       pctChange,
-      marketCap: details.market_cap ?? null,
+      // Prefer the current price × shares when Polygon's reference market_cap is
+      // grossly stale (see reconcileMarketCap); otherwise keep Polygon's value.
+      marketCap: reconcileMarketCap(
+        details.market_cap,
+        price,
+        details.weighted_shares_outstanding,
+      ),
       beta: null,
       // sic_description is an INDUSTRY ("ELECTRONIC COMPUTERS"), not a sector.
       // Writing it to both fields put SIC descriptions in companies.sector,

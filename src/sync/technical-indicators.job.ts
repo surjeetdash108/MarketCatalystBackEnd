@@ -7,6 +7,7 @@ import {
 import { SyncMetaService } from "../common/sync-meta.service";
 import { activeUniverse } from "../common/ticker-universe";
 import { SyncRegistry } from "../common/sync-registry.service";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 
 const JOB_NAME = "technical-indicators";
 // >=252 so the 52-week high/low is a real rolling year rather than "whatever
@@ -309,6 +310,47 @@ function priorWeekHLC(
 }
 
 /**
+ * Current trading date and whether its regular session has closed, evaluated in
+ * US market time (America/New_York) so pivot selection can tell a still-forming
+ * current-session bar from a completed one. DST-safe via Intl.
+ *
+ * We have no market-status feed inside this pure function (it is shared by the
+ * cron and the on-demand rebuild, neither of which threads live session state
+ * in), so we use the regular-session close time as the completeness boundary:
+ *   - The regular NYSE/Nasdaq session closes at 16:00 ET. A bar dated for the
+ *     current ET calendar day is treated as complete only once 16:00 ET has
+ *     passed; before that it is a still-forming intraday aggregate and the prior
+ *     bar is the last completed session.
+ *   - This is CORRECT for the two common cases: mid-session → prior day;
+ *     after the close (still the same calendar day) → today's completed bar.
+ * Documented tradeoff: early-close half-days (13:00 ET) are conservatively
+ * treated as still-open until 16:00 ET, so between 13:00 and 16:00 on those days
+ * the basis falls back to the prior completed session rather than the (already
+ * finished) half-day — the safe direction, never a partial bar.
+ */
+function marketTimeEt(now: Date): {
+  etDate: string;
+  regularSessionClosed: boolean;
+} {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const etDate = `${get("year")}-${get("month")}-${get("day")}`;
+  let hour = Number(get("hour"));
+  if (hour === 24) hour = 0; // some engines emit "24" for midnight
+  // Regular session close is 16:00 ET.
+  const regularSessionClosed = hour >= 16;
+  return { etDate, regularSessionClosed };
+}
+
+/**
  * Annualized N-day realized (historical) volatility, as a percent. Sample
  * standard deviation of daily log returns over the window, scaled by √252.
  * This is what the "30d Vol" column shows — a real volatility measure computed
@@ -350,10 +392,42 @@ export interface IndicatorBar {
  * too thin, matching the cron's skip so a sparse ticker degrades identically on
  * both paths.
  */
+/**
+ * Drop everything up to and including the most recent EXTREME single-day price
+ * discontinuity. A spin-off or ticker reuse leaves such a gap (e.g. Western
+ * Digital ~$1,500 → SanDisk ~$45 when SNDK was carved out) that Polygon's
+ * split/dividend adjustment does NOT remove, so the prior entity's prices poison
+ * the 52-week range and pivots. A gradual crash never produces a single-day
+ * >90%-down / >900%-up move, and no genuine session does either — so this leaves
+ * every normal ticker's series byte-identical and only trims true structural
+ * breaks. Uses close-to-close ratios (already split-adjusted).
+ */
+function trimAtStructuralBreak(bars: IndicatorBar[]): IndicatorBar[] {
+  let start = 0;
+  for (let i = 1; i < bars.length; i++) {
+    const prev = bars[i - 1].close;
+    const cur = bars[i].close;
+    if (prev > 0 && cur > 0) {
+      const ratio = cur / prev;
+      if (ratio > 10 || ratio < 0.1) start = i;
+    }
+  }
+  return start > 0 ? bars.slice(start) : bars;
+}
+
 export function computeIndicators(
-  bars: IndicatorBar[],
+  inputBars: IndicatorBar[],
   mktByDate: Map<string, number>,
+  now: Date = new Date(),
+  // OFFICIAL 16:00 regular-session close keyed by barDate, supplied by callers to
+  // correct the keyLevels.daily pivot basis (Polygon's daily aggregate close is
+  // the extended-hours last trade). Optional and backward-compatible: when
+  // absent, every output — keyLevels.daily included — is byte-identical to before.
+  officialCloseByDate?: Map<string, number>,
 ) {
+  // Remove pre-spin-off / pre-ticker-reuse bars before any computation so the
+  // 52-week range, pivots and MAs are all built from one continuous entity.
+  const bars = trimAtStructuralBreak(inputBars);
   if (bars.length < MIN_BARS) return null;
   const closes = bars.map((b) => b.close);
   const volumes = bars.map((b) => b.volume);
@@ -383,6 +457,23 @@ export function computeIndicators(
   }
 
   const latestBar = bars[bars.length - 1];
+
+  // Pivot basis = the last FULLY-COMPLETED daily session, never a still-forming
+  // current-day bar. The last bar is only current-and-open when it is dated for
+  // today's ET session AND the 16:00 ET close has not passed; in that window the
+  // prior bar is the last completed session. After the close (or on any past
+  // calendar day), the last bar is itself a completed session. This excludes the
+  // partial current-day bar the on-demand rebuild fetches mid-session (it pulls
+  // Polygon aggs through `now`), so keyLevels never mix a live/partial close.
+  // NOTE: `latestBar` (and `latestClose` above) intentionally stay the raw last
+  // bar — VWAP and price-vs-MA reads want the current session, only the pivot
+  // BASIS must be a completed session.
+  const { etDate, regularSessionClosed } = marketTimeEt(now);
+  const lastIsCurrentOpenSession =
+    latestBar?.barDate === etDate && !regularSessionClosed;
+  const completedBars = lastIsCurrentOpenSession ? bars.slice(0, -1) : bars;
+  const pivotBasisBar = completedBars[completedBars.length - 1];
+
   const rsiHistory = rsiSeries(closes).slice(-RSI_SERIES_LEN);
   const stochKVal = stochK(highs, lows, closes);
   const adxVal = adx(highs, lows, closes);
@@ -446,16 +537,37 @@ export function computeIndicators(
      * prior-complete-weekly bar (Polygon has no S/R feed).
      */
     keyLevels: {
-      daily:
-        latestBar &&
-        typeof latestBar.high === "number" &&
-        typeof latestBar.low === "number" &&
-        typeof latestBar.close === "number"
-          ? pivotLevels(latestBar.high, latestBar.low, latestBar.close)
-          : null,
+      // Daily classic pivots from the last COMPLETED session (pivotBasisBar),
+      // using that bar's stored/finalized OHLC — never a partial current-day bar
+      // and never a substituted live price for the close.
+      daily: (() => {
+        if (
+          !pivotBasisBar ||
+          typeof pivotBasisBar.high !== "number" ||
+          typeof pivotBasisBar.low !== "number" ||
+          typeof pivotBasisBar.close !== "number"
+        ) {
+          return null;
+        }
+        // Prefer the OFFICIAL 16:00 regular-session close for the pivot CLOSE when
+        // the caller supplied one for this bar's date; Polygon's stored daily
+        // close is the extended-hours last trade, which skews the pivot. Falls
+        // back to the stored close when absent/null (zero-regression). Weekly
+        // pivots below could be corrected the same way later — intentionally left
+        // untouched in this zero-side-effect pass.
+        const pivotClose =
+          (pivotBasisBar.barDate != null
+            ? officialCloseByDate?.get(pivotBasisBar.barDate)
+            : undefined) ?? pivotBasisBar.close;
+        return pivotLevels(pivotBasisBar.high, pivotBasisBar.low, pivotClose);
+      })(),
+      // Weekly pivots from the last COMPLETE week. priorWeekHLC already returns
+      // the second-to-last week bucket (excluding the current in-progress week);
+      // feeding it `completedBars` also keeps a still-forming current-day bar out
+      // of the week aggregation so its H/L/C can never leak into the basis.
       weekly: (() => {
         const w = priorWeekHLC(
-          bars as Array<{
+          completedBars as Array<{
             barDate?: string;
             high?: number;
             low?: number;
@@ -476,6 +588,7 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
+    private readonly polygon: PolygonService,
   ) {}
 
   onModuleInit() {
@@ -514,7 +627,32 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
       .limit(BARS_TO_READ)
       .get();
     const bars = snap.docs.map((d) => d.data()).reverse() as IndicatorBar[];
-    return computeIndicators(bars, mktByDate);
+    // OFFICIAL 16:00 close for the classic-pivot basis only. The pivot basis is
+    // the last completed daily session; fetch the official close for the last 1–2
+    // bar dates (the possible basis dates) and pass only non-null results — any
+    // miss / weekend / holiday leaves the map empty and the pivot falls back to
+    // the stored bar close (no regression). Not fetched for historical bars.
+    const officialCloseByDate = await this.officialCloseMapFor(ticker, bars);
+    return computeIndicators(bars, mktByDate, undefined, officialCloseByDate);
+  }
+
+  /**
+   * Build the pivot-basis official-close map: at most the last two ascending bar
+   * dates, each looked up via Polygon's official (regular-session) close. Only
+   * non-null lookups are added, so an empty map (all failed / no dates) makes
+   * computeIndicators fall back to the stored daily close. 1–2 calls per build.
+   */
+  private async officialCloseMapFor(
+    ticker: string,
+    bars: IndicatorBar[],
+  ): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    for (const b of bars.slice(-2)) {
+      if (!b.barDate) continue;
+      const oc = await this.polygon.getOfficialClose(ticker, b.barDate);
+      if (oc != null) map.set(b.barDate, oc);
+    }
+    return map;
   }
 
   async run() {

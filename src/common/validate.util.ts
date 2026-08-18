@@ -22,3 +22,43 @@ export function nonNegIntOrNull(n: unknown): number | null {
     ? Math.round(n)
     : null;
 }
+
+/**
+ * Reconcile a vendor's reference market cap with a freshly-computed one.
+ *
+ * Polygon's `market_cap` is shares × a reference close refreshed on its own
+ * cadence, so a volatile name can carry a badly stale value — e.g. a sub-$10B
+ * small cap stored at ≥$10B, which then slips through a "market cap > $10B"
+ * screen. `price × weighted_shares_outstanding` is the current-price estimate.
+ *
+ * CONSERVATIVE by design: the stored value is kept whenever the two are within
+ * 3× of each other (so multi-class names and normal drift are untouched); only a
+ * gross discrepancy (>3×, i.e. clearly stale or a large recent move) is replaced
+ * with the fresh figure. Returns the fresh value when the stored one is missing,
+ * the stored value when the inputs for a fresh one are missing, else null.
+ */
+export function reconcileMarketCap(
+  storedMarketCap: unknown,
+  price: unknown,
+  weightedShares: unknown,
+): number | null {
+  const mc =
+    typeof storedMarketCap === "number" &&
+    Number.isFinite(storedMarketCap) &&
+    storedMarketCap > 0
+      ? storedMarketCap
+      : null;
+  const fresh =
+    typeof price === "number" &&
+    Number.isFinite(price) &&
+    price > 0 &&
+    typeof weightedShares === "number" &&
+    Number.isFinite(weightedShares) &&
+    weightedShares > 0
+      ? price * weightedShares
+      : null;
+  if (mc == null) return fresh;
+  if (fresh == null) return mc;
+  const ratio = fresh / mc;
+  return ratio > 3 || ratio < 1 / 3 ? fresh : mc;
+}

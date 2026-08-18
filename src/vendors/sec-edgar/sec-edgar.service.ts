@@ -12,6 +12,19 @@ const xmlParser = new XMLParser({
   parseTagValue: false,
 });
 
+// 13F information tables are frequently namespaced (<ns1:informationTable>,
+// <ns1:infoTable>, <ns1:value>…). The default parser keeps those prefixes as
+// literal keys, so `parsed.informationTable` is undefined and every field
+// coerces to 0 — which is exactly why some funds (e.g. Bridgewater) wrote
+// $0 / 0 positions. This parser strips namespace prefixes so both namespaced
+// and un-namespaced filings resolve to the same keys. Kept SEPARATE from
+// `xmlParser` so the Form 4 path (un-namespaced today) is not affected.
+const xmlParserNS = new XMLParser({
+  ignoreAttributes: false,
+  parseTagValue: false,
+  removeNSPrefix: true,
+});
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export interface SecFiling {
@@ -114,7 +127,7 @@ export class SecEdgarService {
     const xml = await this.throttledFetchText(
       `${ARCHIVES_BASE}/${this.pad10(cik)}/${accNoDash}/${infoTableFile}`,
     );
-    const parsed = xmlParser.parse(xml);
+    const parsed = xmlParserNS.parse(xml);
     const rows = parsed.informationTable?.infoTable ?? [];
     return Array.isArray(rows) ? rows : [rows];
   }

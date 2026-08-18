@@ -252,6 +252,30 @@ export class PolygonService {
   }
 
   /**
+   * The OFFICIAL 16:00 ET regular-session close for one ticker on one date, via
+   * the daily open-close endpoint. `/v2/aggs` daily `c` is the last trade over
+   * the FULL extended session (incl. after-hours), which skews classic pivots;
+   * this endpoint's `close` is the official regular-session close. Only used to
+   * correct the keyLevels.daily pivot basis — `afterHours`/`preMarket` are
+   * deliberately ignored.
+   *
+   * Fail-safe by design: any error / 404 / missing field returns null so callers
+   * fall back to the stored daily close (no new failure mode). Never throws.
+   * `date` is YYYY-MM-DD.
+   */
+  async getOfficialClose(ticker: string, date: string): Promise<number | null> {
+    try {
+      const res = await fetchJson<{ close?: unknown }>(
+        `${this.baseUrl}/v1/open-close/${ticker}/${date}` +
+          `?adjusted=true&apiKey=${this.apiKey}`,
+      );
+      return finiteOrNull(res.close);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Peer tickers. Polygon DOES have a peers product — earlier notes in this repo
    * recorded `peers` as "structurally null on this source", which was wrong: the
    * companies job simply never called this endpoint. Verified on the paid plan,
