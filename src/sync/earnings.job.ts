@@ -237,13 +237,24 @@ export class EarningsJob implements OnModuleInit {
       // upcoming window and are replaced by the reported quarter, or dropped).
       const keep = new Set(docs.map((d) => d.id));
       const col = this.firebase.firestore.collection("earnings_events");
-      const stale = (await col.listDocuments()).filter(
-        (ref) => !keep.has(ref.id),
-      );
-      for (let i = 0; i < stale.length; i += 400) {
-        const batch = this.firebase.firestore.batch();
-        for (const ref of stale.slice(i, i + 400)) batch.delete(ref);
-        await batch.commit();
+      // Data-loss guard: `docs` combines the reported set (Polygon financials)
+      // and the forward set (FMP upcoming). If BOTH came back empty the keep-set
+      // is empty and the delete-pass below would wipe the entire collection —
+      // exactly the wrong response to a non-throwing empty upstream (FMP's
+      // documented silent-empty or a Polygon soft error). Skip the delete and
+      // warn; a genuinely-empty upstream is a no-op, never a wipe.
+      let stale: FirebaseFirestore.DocumentReference[] = [];
+      if (keep.size === 0) {
+        this.logger.warn(
+          "earnings: refresh returned 0 rows (reported + forward both empty) — skipping delete-pass to avoid wiping collection earnings_events",
+        );
+      } else {
+        stale = (await col.listDocuments()).filter((ref) => !keep.has(ref.id));
+        for (let i = 0; i < stale.length; i += 400) {
+          const batch = this.firebase.firestore.batch();
+          for (const ref of stale.slice(i, i + 400)) batch.delete(ref);
+          await batch.commit();
+        }
       }
 
       await this.meta.record(JOB_NAME, { ok: true, count: docs.length });

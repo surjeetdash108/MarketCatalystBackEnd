@@ -139,9 +139,21 @@ export class FundamentalsGrowthJob implements OnModuleInit {
           writes.push({
             ticker,
             data: {
-              revenueGrowthYoY: revGrowth == null ? null : round(revGrowth),
-              epsGrowthYoY: epsGrowthFinal,
-              grossMargin: grossMargin == null ? null : round(grossMargin),
+              // Conditional (merge:true): revenueGrowthYoY/epsGrowthYoY/grossMargin
+              // are null when a period is missing or the prior-year base is
+              // non-positive — that's "couldn't compute", not a real value. Writing
+              // null onto the shared companies doc would clobber the last good
+              // figure, so omit each unless computed (mirrors the eps/peRatio spread
+              // below).
+              ...(revGrowth != null
+                ? { revenueGrowthYoY: round(revGrowth) }
+                : {}),
+              ...(epsGrowthFinal != null
+                ? { epsGrowthYoY: epsGrowthFinal }
+                : {}),
+              ...(grossMargin != null
+                ? { grossMargin: round(grossMargin) }
+                : {}),
               fundamentalsFiscalYear: latest.fiscalYear,
               fundamentalsUpdatedAt: new Date().toISOString(),
               // Non-GAAP TTM EPS + P/E (null-safe: only override when we have the

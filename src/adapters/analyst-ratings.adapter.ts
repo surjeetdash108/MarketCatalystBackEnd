@@ -52,8 +52,24 @@ export interface AnalystRatingsAdapter {
   getConsensus(ticker: string): Promise<AnalystConsensus | null>;
 }
 
+/**
+ * Coerce a rating tally to a non-null number for storage.
+ *
+ * KNOWN LIMITATION: this collapses a MISSING bucket (vendor didn't report that
+ * grade) to 0, so a stored `hold: 0` cannot be distinguished from "0 analysts
+ * hold" vs "hold not reported". The shape is preserved deliberately because the
+ * UI type (MarketCatalystUI/app/iq/types/analyst.ts) currently types the five
+ * tallies as non-null `number`, and the aggregate is salvaged when total === 0
+ * (below) — a covered ticker always has at least one non-zero bucket, so the
+ * salvage still fires correctly. FMP's `num()` now preserves a genuine 0
+ * (previously it dropped to null), so a real reported 0 survives to here.
+ *
+ * FOLLOW-UP (needs the UI change, out of scope here): widen the UI tallies to
+ * `number | null`, keep null for absent buckets, and sum with `(x ?? 0)` so the
+ * "not reported" vs "reported 0" distinction is preserved end to end.
+ */
 const n = (v: number | null | undefined): number =>
-  typeof v === "number" ? v : 0;
+  typeof v === "number" && Number.isFinite(v) ? v : 0;
 
 /** How many recent per-firm rating changes to keep per ticker. */
 const GRADES_LIMIT = 8;
@@ -65,6 +81,63 @@ const GRADES_LIMIT = 8;
  * row is worse than showing none (BUG-DATA-012).
  */
 const MAX_TARGET_AGE_DAYS = 45;
+
+// FMP's `grades` and `price-target-news` feeds spell the SAME firm differently
+// ("JP Morgan" vs "JPMorgan Chase", "TD Cowen" vs "Cowen", "Piper Sandler" vs
+// "Piper Jaffray"), so an exact normalized-name match dropped ~30% of per-firm
+// targets. canonicalFirm() strips generic corporate qualifiers and folds
+// well-known variants to one key so the feeds join — still an EXACT match on
+// the canonical key (no risky prefix/substring fallback that could attach a
+// different firm's number, BUG-DATA-012).
+const FIRM_QUALIFIERS =
+  /\b(and|co|inc|incorporated|llc|lp|plc|ltd|group|holdings|securities|research|partners|advisors|advisers|corp|corporation|company|financial)\b/g;
+const FIRM_ALIASES: Record<string, string> = {
+  jpmorganchase: "jpmorgan",
+  jpmorgan: "jpmorgan",
+  tdcowen: "cowen",
+  cowen: "cowen",
+  bankofamerica: "bofa",
+  bofa: "bofa",
+  merrilllynch: "bofa",
+  bofamerrilllynch: "bofa",
+  piperjaffray: "pipersandler",
+  pipersandler: "pipersandler",
+  evercoreisi: "evercore",
+  evercore: "evercore",
+  sanfordcbernstein: "bernstein",
+  bernstein: "bernstein",
+  citigroup: "citi",
+  citi: "citi",
+  robertwbaird: "baird",
+  baird: "baird",
+  stifelnicolaus: "stifel",
+  stifel: "stifel",
+  deutschebank: "deutsche",
+  deutsche: "deutsche",
+  goldmansachs: "goldman",
+  goldman: "goldman",
+  keybanccapitalmarkets: "keybanc",
+  keybanc: "keybanc",
+  rbccapitalmarkets: "rbc",
+  rbc: "rbc",
+  wellsfargo: "wellsfargo",
+  morganstanley: "morganstanley",
+  raymondjames: "raymondjames",
+  truist: "truist",
+  mizuho: "mizuho",
+  susquehanna: "susquehanna",
+};
+
+/** Fold a firm name to a stable key so the two FMP feeds can be joined. */
+function canonicalFirm(name: string | null): string {
+  if (!name) return "";
+  const stripped = name
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(FIRM_QUALIFIERS, " ")
+    .replace(/[^a-z0-9]/g, "");
+  return FIRM_ALIASES[stripped] ?? stripped;
+}
 
 /** FMP-backed ratings: grades-consensus + price-target + grades (per ticker). */
 export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
@@ -94,18 +167,16 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
     ]);
 
     // Index each firm's posted targets (newest first) so a grade can pick up its
-    // OWN firm's target near the grade date. Match on an EXACT normalized key:
-    // the earlier prefix fallback ("k.startsWith(gk) || gk.startsWith(k)") could
-    // collide between distinct firms (e.g. "Morgan" is a prefix of "Morgan
-    // Stanley") and attach the wrong firm's target, so it is deliberately gone —
-    // a firm whose name normalizes differently between the two FMP feeds simply
-    // yields null rather than borrowing another firm's number (BUG-DATA-012).
-    const norm = (s: string | null) =>
-      (s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    // OWN firm's target near the grade date. Match on an EXACT canonicalFirm()
+    // key: canonicalization folds spelling variants between the two FMP feeds
+    // ("JP Morgan"/"JPMorgan Chase") to one key, but it is still an exact key
+    // match — no prefix/substring fallback, which could collide between distinct
+    // firms ("Morgan" ⊂ "Morgan Stanley") and attach the wrong firm's number
+    // (BUG-DATA-012). An unmapped firm still yields null rather than a guess.
     const ptByFirm = new Map<string, Array<{ date: string; priceTarget: number }>>();
     for (const t of targets) {
       if (!t.firm || t.priceTarget == null) continue;
-      const k = norm(t.firm);
+      const k = canonicalFirm(t.firm);
       const list = ptByFirm.get(k) ?? [];
       list.push({ date: t.date, priceTarget: t.priceTarget });
       ptByFirm.set(k, list);
@@ -113,7 +184,7 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
     for (const list of ptByFirm.values())
       list.sort((a, b) => b.date.localeCompare(a.date));
     const targetFor = (firm: string | null, date: string): number | null => {
-      const gk = norm(firm);
+      const gk = canonicalFirm(firm);
       if (!gk) return null;
       // Exact normalized-name match only — no prefix fallback (see above).
       const list = ptByFirm.get(gk);

@@ -12,6 +12,98 @@ function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * Distribution-type codes Polygon uses for NON-regular payments (special cash,
+ * long-term / short-term capital-gains). Excluded from the forward run-rate so a
+ * one-off does not masquerade as the recurring dividend. Mirrors
+ * live/ondemand.service.ts.
+ */
+const SPECIAL_DIVIDEND_TYPES = new Set(["SC", "LT", "ST"]);
+
+/** Subset of a Polygon getDividendHistory() row the forward yield needs. */
+interface DivHistItem {
+  exDividendDate: string | null;
+  cashAmount: number | null;
+  dividendType: string | null;
+  frequency: number | null;
+}
+
+/**
+ * Polygon's `frequency` integer is a payments-per-year count when it is a real
+ * cadence (1 = annual, 2 = semi-annual, 4 = quarterly, 12 = monthly). 0 = one-
+ * time and null are not usable cadences → return null so the caller falls back
+ * to ex-date spacing.
+ */
+function paymentsPerYearFromFrequency(freq: number | null): number | null {
+  return freq === 1 || freq === 2 || freq === 4 || freq === 12 ? freq : null;
+}
+
+/**
+ * Infer payments-per-year from the median spacing of recent (newest-first)
+ * regular ex-dates: pick the cadence in {12,4,2,1} whose expected gap 365/n is
+ * closest to the observed median gap (~30d→12, ~91d→4, ~182d→2, ~365d→1).
+ * Needs at least two ex-dates to form a gap; returns null otherwise.
+ */
+function paymentsPerYearFromSpacing(regular: DivHistItem[]): number | null {
+  const dates = regular
+    .map((d) => (d.exDividendDate ? Date.parse(d.exDividendDate) : NaN))
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => b - a);
+  if (dates.length < 2) return null;
+  const gaps: number[] = [];
+  for (let i = 0; i < dates.length - 1; i++) {
+    gaps.push((dates[i] - dates[i + 1]) / 86_400_000);
+  }
+  gaps.sort((a, b) => a - b);
+  const mid = Math.floor(gaps.length / 2);
+  const median =
+    gaps.length % 2 === 0 ? (gaps[mid - 1] + gaps[mid]) / 2 : gaps[mid];
+  if (!(median > 0)) return null;
+  let best: number | null = null;
+  let bestErr = Infinity;
+  for (const n of [12, 4, 2, 1]) {
+    const err = Math.abs(median - 365 / n);
+    if (err < bestErr) {
+      bestErr = err;
+      best = n;
+    }
+  }
+  return best;
+}
+
+/**
+ * FORWARD-ANNUALIZED dividend per share from a ticker's dividend history
+ * (newest-first, as Polygon returns it):
+ *   perShare = (most-recent REGULAR per-payment amount) × (payments per year).
+ * Special / one-time distributions are excluded from both the per-payment amount
+ * and the spacing; cashAmount is read null-safe. Returns null when neither the
+ * frequency nor the ex-date spacing determines a cadence, so the caller leaves
+ * dividendYield null rather than falling back to a (misleading) TTM sum. Mirrors
+ * live/ondemand.service.ts.
+ */
+function forwardAnnualDividend(
+  history: DivHistItem[],
+): { perShare: number; paymentsPerYear: number } | null {
+  const regular = history.filter(
+    (d) =>
+      (d.cashAmount ?? 0) > 0 &&
+      d.frequency !== 0 &&
+      !(d.dividendType != null && SPECIAL_DIVIDEND_TYPES.has(d.dividendType)),
+  );
+  if (regular.length === 0) return null;
+
+  // history is newest-first, so the first regular row is the latest payment.
+  const perPayment = regular[0].cashAmount ?? 0;
+  if (!(perPayment > 0)) return null;
+
+  const paymentsPerYear =
+    paymentsPerYearFromFrequency(regular[0].frequency) ??
+    paymentsPerYearFromSpacing(regular);
+  if (paymentsPerYear == null) return null;
+
+  return { perShare: perPayment * paymentsPerYear, paymentsPerYear };
+}
+
 @Injectable()
 export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
   readonly sourceName = "polygon";
@@ -29,8 +121,9 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
     // wrong in different ways, verified against the live plan on 2026-07-21:
     //   peers  — /v1/related-companies is authorized and returns real tickers.
     //   yield  — there is indeed no yield PRODUCT, but the dividend history that
-    //            derives it is right there; a trailing-12-month sum over price
-    //            is the same number a vendor would sell back.
+    //            derives it is right there; a FORWARD-ANNUALIZED run-rate over
+    //            price is the number a vendor would sell back (see the helpers
+    //            below and the matching logic in live/ondemand.service.ts).
     const warnings: AdapterWarning[] = [];
     let price = null;
     let pctChange = null;
@@ -113,24 +206,23 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
     let dividendYield: number | null = null;
     try {
       const history = await this.polygon.getDividendHistory(ticker, 40);
-      const cutoff = new Date();
-      cutoff.setUTCFullYear(cutoff.getUTCFullYear() - 1);
-      const cutoffIso = isoDate(cutoff);
-      // Trailing twelve months by ex-date. Special/one-off distributions are
-      // included deliberately: TTM yield is what was actually paid out, not
-      // what the regular schedule implies.
-      const ttm = history.filter(
-        (d) => d.exDividendDate != null && d.exDividendDate >= cutoffIso,
-      );
-      if (ttm.length > 0) {
-        const total = ttm.reduce((sum, d) => sum + (d.cashAmount ?? 0), 0);
-        dividendPerShare = Math.round(total * 10000) / 10000;
+      // FORWARD-ANNUALIZED yield (matches live/ondemand.service.ts). Both
+      // dividendPerShare and dividendYield are built from the forward run-rate:
+      //   forwardAnnualDividend = (most-recent REGULAR per-payment amount)
+      //                           × (payments-per-year for the payer's cadence)
+      //   dividendYield         = forwardAnnualDividend / price   (price > 0)
+      // A trailing-12-month SUM overstates the yield whenever a rolling 365-day
+      // window happens to hold a 5th quarterly ex-date (PEP: ~5.25% TTM vs the
+      // true ~4.27% forward). Cadence comes from Polygon's `frequency` integer,
+      // else from the median ex-date spacing; special/one-time distributions are
+      // excluded. When the cadence is indeterminate BOTH stay null — never a TTM
+      // fallback. dividendPerShare keeps the forward-annual meaning throughout.
+      const fwd = forwardAnnualDividend(history);
+      if (fwd) {
+        dividendPerShare = Math.round(fwd.perShare * 10000) / 10000;
         if (price != null && price > 0) {
-          dividendYield = Math.round((total / price) * 10000) / 100;
+          dividendYield = Math.round((fwd.perShare / price) * 10000) / 100;
         }
-      } else if (history.length === 0) {
-        // A non-payer is a real answer, not a gap — leave both null silently.
-        dividendPerShare = null;
       }
     } catch (err) {
       const reason = err.message;

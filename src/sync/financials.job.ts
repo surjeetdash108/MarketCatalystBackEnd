@@ -544,6 +544,16 @@ export class FinancialsJob implements OnModuleInit {
               `annual financials failed for ${ticker}: ${err.message}`,
             );
           }
+          // Preserve the prior annual series when the fresh annual fetch came back
+          // empty (endpoint failure above, or a non-throwing empty response). The
+          // merge:true write would otherwise clobber a good stored `annual` with []
+          // — mirrors the annualEstimates/epsHistory preservation below.
+          if (
+            annual.length === 0 &&
+            Array.isArray((prev as { annual?: AnnualFinancials[] })?.annual)
+          ) {
+            annual = (prev as { annual?: AnnualFinancials[] }).annual!;
+          }
 
           // Forward annual estimates (the `*YYYY` rows) — only when the optional
           // estimates adapter is configured; empty array otherwise. If FMP

@@ -215,6 +215,107 @@ function isFresh(
   return age < 12 * 3600_000;
 }
 
+/**
+ * Polygon `dividend_type` codes for NON-regular distributions — special cash
+ * (SC), long-term (LT) and short-term (ST) capital-gains distributions. These
+ * carry no recurring cadence, so they are excluded from the forward figure.
+ */
+const SPECIAL_DIVIDEND_TYPES = new Set(["SC", "LT", "ST"]);
+
+/** Subset of a Polygon getDividendHistory() row the forward yield needs. */
+interface DivHistItem {
+  exDividendDate: string | null;
+  cashAmount: number;
+  dividendType: string | null;
+  frequency: number | null;
+}
+
+/**
+ * Polygon's `frequency` integer IS a payments-per-year count when it is a real
+ * cadence (1 = annual, 2 = semi-annual, 4 = quarterly, 12 = monthly). 0 = one-
+ * time and null are not usable cadences → return null so the caller falls back
+ * to ex-date spacing. Mirrors the PAYMENTS_PER_YEAR map in sync/dividends.job.ts
+ * (which maps the vendor's STRING frequency to the same 1/2/4/12 counts).
+ */
+function paymentsPerYearFromFrequency(freq: number | null): number | null {
+  return freq === 1 || freq === 2 || freq === 4 || freq === 12 ? freq : null;
+}
+
+/**
+ * Infer payments-per-year from the median spacing of recent (newest-first)
+ * regular ex-dates: pick the cadence in {12,4,2,1} whose expected gap 365/n is
+ * closest to the observed median gap (~30d→12, ~91d→4, ~182d→2, ~365d→1).
+ * Needs at least two ex-dates to form a gap; returns null otherwise.
+ */
+function paymentsPerYearFromSpacing(regular: DivHistItem[]): number | null {
+  const dates = regular
+    .map((d) => (d.exDividendDate ? Date.parse(d.exDividendDate) : NaN))
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => b - a);
+  if (dates.length < 2) return null;
+  const gaps: number[] = [];
+  for (let i = 0; i < dates.length - 1; i++) {
+    gaps.push((dates[i] - dates[i + 1]) / 86_400_000);
+  }
+  gaps.sort((a, b) => a - b);
+  const mid = Math.floor(gaps.length / 2);
+  const median =
+    gaps.length % 2 === 0 ? (gaps[mid - 1] + gaps[mid]) / 2 : gaps[mid];
+  if (!(median > 0)) return null;
+  let best: number | null = null;
+  let bestErr = Infinity;
+  for (const n of [12, 4, 2, 1]) {
+    const err = Math.abs(median - 365 / n);
+    if (err < bestErr) {
+      bestErr = err;
+      best = n;
+    }
+  }
+  return best;
+}
+
+/**
+ * FORWARD-ANNUALIZED dividend per share from a ticker's dividend history
+ * (newest-first, as Polygon returns it).
+ *
+ * perShare = (most-recent REGULAR per-payment amount) × (payments per year).
+ *
+ * This is the forward run-rate a data vendor quotes — NOT a trailing-12-month
+ * SUM. A TTM sum overstates the yield in any rolling 365-day window that happens
+ * to contain a 5th ex-date for a quarterly payer (e.g. PEP briefly shows 5
+ * payments → ~5.25% instead of the true ~4.27% forward yield).
+ *
+ * payments-per-year comes from Polygon's own `frequency` integer when it is a
+ * usable cadence, else from the median spacing of recent regular ex-dates.
+ * Special / one-time distributions are excluded from both the per-payment amount
+ * and the spacing. cashAmount is read null-safe (Polygon types it `number` but
+ * does not null-coalesce the raw field). Returns null when neither the frequency
+ * nor the ex-date spacing determines a cadence — the caller then leaves
+ * dividendYield null rather than falling back to a (misleading) TTM sum.
+ */
+function forwardAnnualDividend(
+  history: DivHistItem[],
+): { perShare: number; paymentsPerYear: number } | null {
+  const regular = history.filter(
+    (d) =>
+      (d.cashAmount ?? 0) > 0 &&
+      d.frequency !== 0 &&
+      !(d.dividendType != null && SPECIAL_DIVIDEND_TYPES.has(d.dividendType)),
+  );
+  if (regular.length === 0) return null;
+
+  // history is newest-first, so the first regular row is the latest payment.
+  const perPayment = regular[0].cashAmount ?? 0;
+  if (!(perPayment > 0)) return null;
+
+  const paymentsPerYear =
+    paymentsPerYearFromFrequency(regular[0].frequency) ??
+    paymentsPerYearFromSpacing(regular);
+  if (paymentsPerYear == null) return null;
+
+  return { perShare: perPayment * paymentsPerYear, paymentsPerYear };
+}
+
 @Injectable()
 export class OnDemandService implements OnModuleDestroy {
   private readonly logger = new Logger(OnDemandService.name);
@@ -253,7 +354,36 @@ export class OnDemandService implements OnModuleDestroy {
     string,
     { data: Record<string, unknown> | null; at: number }
   >();
-  /** Coalescing: concurrent misses for the same key share one vendor promise. */
+  /**
+   * Coalescing: concurrent misses for the same key share one vendor promise.
+   *
+   * SCOPE — this is per-PROCESS only. Two different Cloud Run instances that
+   * miss the same ticker at the same moment each run their own fetch: a small,
+   * NON-duplicating vendor "mini-storm" (both write the same cache doc; no data
+   * is corrupted, just a few redundant calls) that P2-8 asked us to assess.
+   *
+   * DECISION (P2-8): keep the in-process map; do NOT add a Firestore-lease-based
+   * cross-instance coalesce here. Reasoning:
+   *   - This is the USER-FACING hot path. A lease means every cache MISS pays a
+   *     Firestore transaction round-trip BEFORE fetching, and the LOSER of the
+   *     lease then POLLS the cache doc for a result.
+   *   - The company build behind a miss is heavy and highly VARIABLE in duration
+   *     (getTickerDetails + snapshot + TTM EPS + peers + 13F + a first-sync
+   *     technicals pass that pulls ~2y of bars, writes hundreds of ohlcv_bars
+   *     docs and ranks against the whole universe — often multiple seconds).
+   *     A bounded poll-wait tuned for that is a lose-lose: too short and the
+   *     loser fetches anyway (zero benefit), too long and every concurrent
+   *     viewer waits seconds on another instance that might still crash mid-run.
+   *   - Severity is low (wasteful, not incorrect) and the worker is min-
+   *     instances=0 / TTL-spread, so simultaneous cross-instance misses for the
+   *     SAME ticker are already rare.
+   * The added latency, new failure modes (stale-lease waits) and fail-open
+   * plumbing are disproportionate to a low-severity, self-healing inefficiency.
+   * If this ever becomes material, revisit with the job-lock.util.ts lease
+   * pattern (short TTL, fail-OPEN to a direct fetch, bounded poll of the cache
+   * doc) — but only guarding the CHEAP-to-recompute keys, not the heavy company
+   * build, and measure the hot-path p95 first.
+   */
   private readonly inflight = new Map<string, Promise<unknown>>();
 
   /** Usage accumulator — flushed as ONE batched write per interval. */
@@ -810,23 +940,23 @@ export class OnDemandService implements OnModuleDestroy {
       const inst =
         instRes.status === "fulfilled" ? instRes.value : null;
 
-      // Trailing-twelve-month dividends by ex-date → per-share total and yield,
-      // the same derivation the profile adapter uses (Polygon sells no yield
-      // product). Specials are included: TTM yield is what was actually paid.
+      // FORWARD-ANNUALIZED dividend per share and yield (Polygon sells no yield
+      // product). Methodology: (most-recent REGULAR per-payment amount) ×
+      // (payments-per-year for the payer's cadence) ÷ price. This is the forward
+      // run-rate a vendor quotes; unlike a trailing-12-month SUM it does NOT
+      // overstate the yield when a rolling 365-day window happens to contain a
+      // 5th quarterly ex-date (PEP: ~5.25% TTM vs the true ~4.27% forward).
+      // Specials/one-time distributions are excluded; cadence that can't be
+      // determined → null (NOT a TTM fallback). cashAmount read is null-safe.
       let dividendPerShare: number | null = null;
       let dividendYield: number | null = null;
       if (divRes.status === "fulfilled") {
-        const cutoff = new Date();
-        cutoff.setUTCFullYear(cutoff.getUTCFullYear() - 1);
-        const cutoffIso = cutoff.toISOString().slice(0, 10);
-        const ttm = divRes.value.filter(
-          (d) => d.exDividendDate != null && d.exDividendDate >= cutoffIso,
-        );
-        if (ttm.length > 0) {
-          const total = ttm.reduce((s, d) => s + (d.cashAmount ?? 0), 0);
-          dividendPerShare = Math.round(total * 10000) / 10000;
+        const fwd = forwardAnnualDividend(divRes.value);
+        if (fwd) {
+          // dividendPerShare stays the forward ANNUAL figure (consistent basis).
+          dividendPerShare = Math.round(fwd.perShare * 10000) / 10000;
           if (price != null && price > 0) {
-            dividendYield = Math.round((total / price) * 10000) / 100;
+            dividendYield = Math.round((fwd.perShare / price) * 10000) / 100;
           }
         }
       }
@@ -841,18 +971,29 @@ export class OnDemandService implements OnModuleDestroy {
         : {};
       const doc: Record<string, unknown> = {
         ticker,
-        name: details?.name ?? ticker,
-        description: details?.description ?? null,
-        homepageUrl: details?.homepage_url ?? null,
-        // sic_description is an INDUSTRY ("ELECTRONIC COMPUTERS"), not a sector —
-        // deriving the sector from sic_code (null when unmappable) matches the
-        // sync job so sectorRank grouping and the `sectors` join stay correct.
-        sector: sectorFromSic(
-          details?.sic_code as string | number | null | undefined,
-        ),
-        industry: details?.sic_description ?? null,
-        marketCap: details?.market_cap ?? null,
-        exchange: details?.primary_exchange ?? null,
+        // getTickerDetails failed (null) but the snapshot succeeded → keep the
+        // prior good name rather than overwriting it with the bare ticker.
+        name: details?.name ?? (prevCo.name as string | undefined) ?? ticker,
+        // Profile fields come ONLY from getTickerDetails. When that call failed
+        // (details === null) these are OMITTED so the merge:true write preserves
+        // the prior good values, instead of nulling description/homepageUrl/
+        // sector/industry/marketCap/exchange on a transient details outage.
+        ...(details
+          ? {
+              description: details.description ?? null,
+              homepageUrl: details.homepage_url ?? null,
+              // sic_description is an INDUSTRY ("ELECTRONIC COMPUTERS"), not a
+              // sector — deriving the sector from sic_code (null when unmappable)
+              // matches the sync job so sectorRank grouping and the `sectors`
+              // join stay correct.
+              sector: sectorFromSic(
+                details.sic_code as string | number | null | undefined,
+              ),
+              industry: details.sic_description ?? null,
+              marketCap: details.market_cap ?? null,
+              exchange: details.primary_exchange ?? null,
+            }
+          : {}),
         price,
         pctChange: q?.changePercent ?? null,
         prevClose: q?.previousClose ?? null,
@@ -1205,6 +1346,15 @@ export class OnDemandService implements OnModuleDestroy {
         annual = yr.map(mapAnnualRow);
       } catch {
         // Annual is a secondary tab — a failure there shouldn't block quarterly data.
+      }
+      // Preserve the prior annual series when the fresh fetch is empty (failure
+      // above or a non-throwing empty response). This doc is written with a full
+      // ref.set() (no merge), so an empty [] would drop a good stored annual —
+      // reuse prev like annualEstimates/epsHistory do.
+      const prevAnnual = (prev as { annual?: ReturnType<typeof mapAnnualRow>[] })
+        ?.annual;
+      if (annual.length === 0 && Array.isArray(prevAnnual)) {
+        annual = prevAnnual;
       }
 
       // Deep FMP quarterly EPS history → annual EPS (sum by fiscal year). Keep

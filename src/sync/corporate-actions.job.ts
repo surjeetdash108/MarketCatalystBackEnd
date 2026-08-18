@@ -31,6 +31,12 @@ const HISTORY_LIMIT = 200;
 const ANNUAL_YEARS = 10;
 const CAGR_YEARS = 5;
 const DELAY_MS = 120;
+// BUG-001 split re-adjustment is gated OFF by default. When a split executes it
+// would clear stock-history's synced range (a Firestore delete) and set a
+// baseline watermark (an insert) to force a full adjusted re-backfill. Held
+// disabled so ingestion performs NO watermark insert/delete; set
+// SPLIT_READJUST_ENABLED=true to activate once a DB-writing change is approved.
+const SPLIT_READJUST_ENABLED = process.env.SPLIT_READJUST_ENABLED === "true";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface AnnualTotal {
@@ -45,7 +51,9 @@ interface AnnualTotal {
  * for distributions.
  */
 export function annualTotals(
-  history: Array<{ exDividendDate: string | null; cashAmount: number }>,
+  // cashAmount is nullable (Polygon can omit it); the `?? 0` below keeps a null
+  // row out of the sum without fabricating a 0 amount anywhere it is stored.
+  history: Array<{ exDividendDate: string | null; cashAmount: number | null }>,
 ): AnnualTotal[] {
   const byYear = new Map<number, { total: number; payments: number }>();
   for (const d of history) {
@@ -176,38 +184,45 @@ export class CorporateActionsJob implements OnModuleInit {
           const ttmTotal = ttm.reduce((s, d) => s + (d.cashAmount ?? 0), 0);
           const price = priceByTicker.get(ticker) ?? null;
 
-          divDocs.push({
-            id: ticker,
-            data: {
-              ticker,
-              // Newest first, as returned. The chart reverses for display; the
-              // "next/most recent payment" reads are the common case.
-              history: history.map((d) => ({
-                exDividendDate: d.exDividendDate,
-                paymentDate: d.paymentDate,
-                declarationDate: d.declarationDate,
-                recordDate: d.recordDate,
-                amount: d.cashAmount,
-                dividendType: d.dividendType,
-                frequency: d.frequency,
-              })),
-              annualTotals: totals.slice(0, ANNUAL_YEARS),
-              ttmTotal:
-                ttm.length > 0 ? Math.round(ttmTotal * 10000) / 10000 : null,
-              ttmPayments: ttm.length,
-              yieldPct:
-                price != null && ttm.length > 0
-                  ? Math.round((ttmTotal / price) * 10000) / 100
-                  : null,
-              yieldBasisPrice: price,
-              cagr5yPct: dividendCagr(totals, CAGR_YEARS),
-              increaseStreakYears: increaseStreak(totals),
-              frequency: history[0]?.frequency ?? null,
-              isPayer: history.length > 0,
-              source: "polygon",
-              updatedAt: new Date().toISOString(),
-            },
-          });
+          // A non-throwing empty history means Polygon returned no dividends this
+          // run (often a transient/throttled miss). Writing the degenerate
+          // history:[]/isPayer:false/null aggregates through merge:true would
+          // clobber a prior good dividend record, so skip the whole write and let
+          // merge preserve it. A genuine non-payer simply never gets a doc created.
+          if (history.length > 0) {
+            divDocs.push({
+              id: ticker,
+              data: {
+                ticker,
+                // Newest first, as returned. The chart reverses for display; the
+                // "next/most recent payment" reads are the common case.
+                history: history.map((d) => ({
+                  exDividendDate: d.exDividendDate,
+                  paymentDate: d.paymentDate,
+                  declarationDate: d.declarationDate,
+                  recordDate: d.recordDate,
+                  amount: d.cashAmount,
+                  dividendType: d.dividendType,
+                  frequency: d.frequency,
+                })),
+                annualTotals: totals.slice(0, ANNUAL_YEARS),
+                ttmTotal:
+                  ttm.length > 0 ? Math.round(ttmTotal * 10000) / 10000 : null,
+                ttmPayments: ttm.length,
+                yieldPct:
+                  price != null && ttm.length > 0
+                    ? Math.round((ttmTotal / price) * 10000) / 100
+                    : null,
+                yieldBasisPrice: price,
+                cagr5yPct: dividendCagr(totals, CAGR_YEARS),
+                increaseStreakYears: increaseStreak(totals),
+                frequency: history[0]?.frequency ?? null,
+                isPayer: history.length > 0,
+                source: "polygon",
+                updatedAt: new Date().toISOString(),
+              },
+            });
+          }
 
           const splits = await this.polygon.getSplits(ticker);
 
@@ -242,7 +257,7 @@ export class CorporateActionsJob implements OnModuleInit {
           const newestExecutedSplit =
             splits.find((s) => s.executionDate && s.executionDate <= today) ??
             null;
-          if (newestExecutedSplit) {
+          if (SPLIT_READJUST_ENABLED && newestExecutedSplit) {
             const execDate = newestExecutedSplit.executionDate;
             const { lastSyncedThrough: reflectedSplitDate } =
               await this.meta.getSyncedRange(JOB_NAME, ticker);
@@ -261,16 +276,22 @@ export class CorporateActionsJob implements OnModuleInit {
             // else: newest executed split already reflected → no action.
           }
 
-          splitDocs.push({
-            id: ticker,
-            data: {
-              ticker,
-              splits,
-              latestSplit: splits[0] ?? null,
-              source: "polygon",
-              updatedAt: new Date().toISOString(),
-            },
-          });
+          // Empty splits (non-throwing) → Polygon returned none this run. Writing
+          // splits:[]/latestSplit:null through merge:true would clobber a good
+          // stored split record on a transient miss, so skip the write. A ticker
+          // that has genuinely never split simply never gets a doc created.
+          if (splits.length > 0) {
+            splitDocs.push({
+              id: ticker,
+              data: {
+                ticker,
+                splits,
+                latestSplit: splits[0] ?? null,
+                source: "polygon",
+                updatedAt: new Date().toISOString(),
+              },
+            });
+          }
         } catch (err) {
           this.logger.error(
             `corporate actions failed for ${ticker}: ${err.message}`,

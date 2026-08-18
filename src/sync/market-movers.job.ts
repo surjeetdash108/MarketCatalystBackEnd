@@ -137,13 +137,24 @@ export class MarketMoversJob implements OnModuleInit {
         ...gainers.map((g) => `gainer_${g.ticker}`),
         ...losers.map((l) => `loser_${l.ticker}`),
       ]);
-      const stale = (await col.listDocuments()).filter(
-        (ref) => !keepIds.has(ref.id),
-      );
-      for (let i = 0; i < stale.length; i += 400) {
-        const batch = this.firebase.firestore.batch();
-        for (const ref of stale.slice(i, i + 400)) batch.delete(ref);
-        await batch.commit();
+      // Data-loss guard: if the movers fetch returned no gainers AND no losers,
+      // the keep-set is empty and the delete-pass below would wipe the entire
+      // board — the wrong response to a non-throwing empty vendor response (a
+      // Polygon soft error). Skip the delete and warn; a genuinely-empty run is
+      // a no-op, never a wipe.
+      if (keepIds.size === 0) {
+        this.logger.warn(
+          "market-movers: refresh returned 0 rows — skipping delete-pass to avoid wiping collection market_movers",
+        );
+      } else {
+        const stale = (await col.listDocuments()).filter(
+          (ref) => !keepIds.has(ref.id),
+        );
+        for (let i = 0; i < stale.length; i += 400) {
+          const batch = this.firebase.firestore.batch();
+          for (const ref of stale.slice(i, i + 400)) batch.delete(ref);
+          await batch.commit();
+        }
       }
       await this.meta.record(JOB_NAME, {
         ok: true,

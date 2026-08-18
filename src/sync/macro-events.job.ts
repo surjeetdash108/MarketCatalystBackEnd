@@ -137,12 +137,22 @@ export class MacroEventsJob implements OnModuleInit {
             econWritten++;
           }
           // Drop stale FMP docs (passed/rescheduled) not in this run's set.
-          const existing = await col.where("source", "==", "fmp").get();
-          const stale = existing.docs.filter((d) => !keep.has(d.id));
-          for (let i = 0; i < stale.length; i += 400) {
-            const batch = this.firebase.firestore.batch();
-            for (const d of stale.slice(i, i + 400)) batch.delete(d.ref);
-            await batch.commit();
+          // Data-loss guard: if the FMP calendar came back empty (its documented
+          // silent-empty 200), the keep-set is empty and this delete would wipe
+          // every source==fmp doc. Skip it and warn; a genuinely-empty calendar
+          // is a no-op, never a wipe of the FMP-sourced macro events.
+          if (keep.size === 0) {
+            this.logger.warn(
+              "macro-events: FMP calendar returned 0 rows — skipping delete-pass to avoid wiping source==fmp docs in collection macro_events",
+            );
+          } else {
+            const existing = await col.where("source", "==", "fmp").get();
+            const stale = existing.docs.filter((d) => !keep.has(d.id));
+            for (let i = 0; i < stale.length; i += 400) {
+              const batch = this.firebase.firestore.batch();
+              for (const d of stale.slice(i, i + 400)) batch.delete(d.ref);
+              await batch.commit();
+            }
           }
         } catch (err) {
           this.logger.error(`FMP economic calendar failed: ${err.message}`);

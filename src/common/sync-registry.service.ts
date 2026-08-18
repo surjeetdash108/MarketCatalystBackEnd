@@ -23,6 +23,19 @@ export class SyncRegistry {
     this.jobs.set(name, { runner, isRunning: false, runningSince: null, meta });
   }
 
+  /**
+   * Wraps a job's runner so `isRunning` / `runningSince` reflect an in-flight
+   * run.
+   *
+   * ⚠ SCOPE: `isRunning` is a PER-PROCESS, in-memory flag. It is informational
+   * only and gives ZERO protection across separate Cloud Run Job processes
+   * (a scheduler double-fire, or a manual `gcloud run jobs execute` overlapping
+   * a scheduled run, are two distinct processes each with their own Map). It
+   * also does NOT dedupe concurrent callers within a process. For real
+   * cross-process mutual exclusion (so a job cannot run concurrently with
+   * itself) the job entrypoint acquires a Firestore-lease lock — see
+   * `common/job-lock.util.ts`, wired in `job-entry.ts`.
+   */
   get(name: string): SyncRunner | undefined {
     const job = this.jobs.get(name);
     if (!job) return undefined;

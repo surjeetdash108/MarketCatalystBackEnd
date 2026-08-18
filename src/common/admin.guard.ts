@@ -22,13 +22,17 @@ import { FirebaseAdminService } from "./firebase-admin.provider";
  *     token, not a Firebase one. Cloud Run's IAM has ALREADY verified that
  *     token's signature and checked the caller holds run.invoker BEFORE the
  *     request reaches this process (the service runs
- *     --no-allow-unauthenticated). Re-verifying would be redundant, so when
- *     `ADMIN_GUARD_TRUST_IAM` is on we accept it.
+ *     --no-allow-unauthenticated). Re-verifying would be redundant, so this
+ *     path is accepted ONLY when `ADMIN_GUARD_TRUST_IAM` is EXPLICITLY "true".
  *
- *     ⚠ If the service is ever made --allow-unauthenticated, that assumption
- *     breaks: anything could then present an arbitrary token. Set
- *     ADMIN_GUARD_TRUST_IAM=false at the same time, so ONLY a verified Firebase
- *     admin token is accepted.
+ *     ⚠ FAIL-CLOSED DEFAULT: path 2 is OFF unless the env var is explicitly
+ *     "true" (see `trustIam`). A missing/unset value denies no-token requests.
+ *     Enable it only on a service that genuinely runs
+ *     --no-allow-unauthenticated behind Cloud Run IAM and needs the scheduler /
+ *     proxy path. If the service is ever made --allow-unauthenticated, that
+ *     assumption breaks: anything could then present an arbitrary token — leave
+ *     ADMIN_GUARD_TRUST_IAM unset/false so ONLY a verified Firebase admin token
+ *     is accepted.
  *
  * Guarding /sync/:job/run without path 2 would silently break every scheduled
  * sync — which is why this guard exists in this shape rather than a plain
@@ -50,12 +54,30 @@ export class AdminGuard implements CanActivate {
       .toLowerCase();
   }
 
-  /** Whether a Cloud-Run-IAM-vetted Google token is accepted (see docblock). */
+  /**
+   * Whether a Cloud-Run-IAM-vetted Google token — or an unauthenticated,
+   * transport-authenticated `gcloud run services proxy` request that carries no
+   * Authorization header at all — is trusted WITHOUT a Firebase admin token
+   * (see docblock).
+   *
+   * FAIL-CLOSED: this is true ONLY when ADMIN_GUARD_TRUST_IAM is EXPLICITLY
+   * "true". A missing / unset / blank / any-other value returns false, so a
+   * no-token request is DENIED.
+   *
+   * Rationale for the default flip: the previous default was fail-OPEN (trusted
+   * unless the value was literally "false"), so a deploy that simply forgot to
+   * set ADMIN_GUARD_TRUST_IAM=false would silently re-open the hole where a
+   * no-token request is admitted to the powerful admin endpoints. Defaulting to
+   * false makes the CODE match the hardened prod env var (ADMIN_GUARD_TRUST_IAM
+   * was patched to false on the live service), so the safe posture no longer
+   * depends on remembering an env var at deploy time — a service that really
+   * needs path 2 must OPT IN explicitly.
+   */
   private get trustIam(): boolean {
     return (
-      String(this.config.get("ADMIN_GUARD_TRUST_IAM", "true"))
+      String(this.config.get("ADMIN_GUARD_TRUST_IAM", "false"))
         .trim()
-        .toLowerCase() !== "false"
+        .toLowerCase() === "true"
     );
   }
 

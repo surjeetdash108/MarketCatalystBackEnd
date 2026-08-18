@@ -21,8 +21,16 @@ import { fetchJson, type FetchJsonOptions } from "../../common/http.util";
 
 const DEFAULT_BASE_URL = "https://financialmodelingprep.com/stable";
 
-const num = (v: unknown): number | null =>
-  typeof v === "number" ? v : v == null ? null : Number(v) || null;
+// Parses a vendor field to a finite number, else null. The old
+// `Number(v) || null` had two data bugs: it turned a legitimate 0 into null
+// (0 is falsy) — so a real "0 analysts" / "$0 estimate" vanished — and it let
+// Infinity through (`Number("Infinity") || null` === Infinity). This preserves
+// 0 and negatives, and rejects NaN/±Infinity.
+const num = (v: unknown): number | null => {
+  if (v == null) return null;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+};
 
 /** Normalised earnings-calendar row (per report date, all companies). */
 export interface FmpEarningRow {

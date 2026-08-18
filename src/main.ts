@@ -24,6 +24,19 @@ process.on("uncaughtException", (err) => {
 });
 
 /**
+ * Conservative same-app default allowlist, used when CORS_ORIGINS is unset.
+ *
+ * These are the app's own known browser origins (the ticker-tape SSE stream is
+ * opened from marketcatalyst.web.app; .firebaseapp.com is the Hosting mirror).
+ * Deploys that forget CORS_ORIGINS keep the legitimate SSE stream working
+ * WITHOUT the service reflecting arbitrary origins.
+ */
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://marketcatalyst.web.app",
+  "https://marketcatalyst.firebaseapp.com",
+];
+
+/**
  * Browser origins allowed to call this service.
  *
  * This was `enableCors()` with no argument, i.e. `*` — harmless while the
@@ -33,13 +46,20 @@ process.on("uncaughtException", (err) => {
  * also meaning "any page on the internet may read this API in a visitor's
  * browser".
  *
- * Unset -> reflect any origin, so local dev and curl are unaffected.
+ * FAIL-CLOSED: an unset CORS_ORIGINS previously `return true` — reflecting ANY
+ * origin, so any page on the internet could read this API in a visitor's
+ * browser. It now falls back to DEFAULT_ALLOWED_ORIGINS (the app's own origins)
+ * instead of reflecting arbitrary origins. When CORS_ORIGINS IS set, its
+ * comma-separated allowlist is used verbatim (unchanged behaviour).
+ *
+ * Note: CORS is browser-enforced only — curl and server-to-server callers send
+ * no Origin header and are unaffected. Browser-based LOCAL DEV against this
+ * service should set CORS_ORIGINS (e.g. to include its http://localhost:PORT
+ * origin), since localhost is intentionally NOT in the default allowlist.
  */
 function corsOptions() {
   const raw = (process.env.CORS_ORIGINS ?? "").trim();
-  if (!raw) return true;
-  const origin = raw
-    .split(",")
+  const origin = (raw ? raw.split(",") : DEFAULT_ALLOWED_ORIGINS)
     .map((o) => o.trim().replace(/\/$/, ""))
     .filter(Boolean);
   // EventSource cannot send credentials cross-origin anyway and nothing here is
