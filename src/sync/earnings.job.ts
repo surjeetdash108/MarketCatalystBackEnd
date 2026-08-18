@@ -115,7 +115,12 @@ export class EarningsJob implements OnModuleInit {
               // what produced bogus ±100% surprises.
               epsActual: e?.epsActual ?? r.epsActual,
               revenueEstimate: e?.revenueEstimate ?? null,
-              revenueActual: r.revenueActual,
+              revenueActual: r.revenueActual ?? null,
+              // Year-ago comparables (same fiscal quarter, prior year) — filled
+              // from the financials history below. Drive the "1 Year Ago" EPS
+              // and "Yr/Yr Rev" columns of the at-a-glance snapshot.
+              epsActualYearAgo: null as number | null,
+              revenueYearAgo: null as number | null,
               updatedAt: new Date().toISOString(),
             },
           };
@@ -133,7 +138,18 @@ export class EarningsJob implements OnModuleInit {
       const reportedTickers = [
         ...new Set(docs.map((d) => d.data.ticker as string)),
       ];
-      const finPair = new Map<string, { a: number | null; e: number | null }>();
+      const finPair = new Map<
+        string,
+        { a: number | null; e: number | null; rev: number | null }
+      >();
+      // Same-quarter-a-year-ago lookup, keyed ticker_fiscalPeriod_fiscalYear, so
+      // a Q2-2026 report can read its Q2-2025 EPS/revenue for the year-over-year
+      // columns. Uses the FMP consensus-basis actual (epsActualReported) so the
+      // year-ago EPS shares a basis with the current one.
+      const finFiscal = new Map<
+        string,
+        { eps: number | null; rev: number | null }
+      >();
       for (let i = 0; i < reportedTickers.length; i += 300) {
         const refs = reportedTickers
           .slice(i, i + 300)
@@ -145,23 +161,49 @@ export class EarningsJob implements OnModuleInit {
             endDate?: string;
             epsActualReported?: number | null;
             epsEstimateReported?: number | null;
+            revenue?: number | null;
+            fiscalPeriod?: string | null;
+            fiscalYear?: string | number | null;
           }>;
           for (const q of qs) {
-            if (!q.endDate) continue;
-            finPair.set(`${s.id}_${q.endDate}`, {
-              a: q.epsActualReported ?? null,
-              e: q.epsEstimateReported ?? null,
-            });
+            if (q.endDate) {
+              finPair.set(`${s.id}_${q.endDate}`, {
+                a: q.epsActualReported ?? null,
+                e: q.epsEstimateReported ?? null,
+                rev: q.revenue ?? null,
+              });
+            }
+            if (q.fiscalPeriod && q.fiscalYear != null) {
+              finFiscal.set(`${s.id}_${q.fiscalPeriod}_${Number(q.fiscalYear)}`, {
+                eps: q.epsActualReported ?? null,
+                rev: q.revenue ?? null,
+              });
+            }
           }
         }
       }
       for (const d of docs) {
+        const ticker = d.data.ticker as string;
         const pe = d.data.periodEnd as string | null;
-        if (!pe) continue;
-        const m = finPair.get(`${d.data.ticker as string}_${pe}`);
-        if (!m) continue;
-        if (m.a != null) d.data.epsActual = m.a;
-        if (m.e != null) d.data.epsEstimate = m.e;
+        if (pe) {
+          const m = finPair.get(`${ticker}_${pe}`);
+          if (m) {
+            if (m.a != null) d.data.epsActual = m.a;
+            if (m.e != null) d.data.epsEstimate = m.e;
+            if (m.rev != null && d.data.revenueActual == null)
+              d.data.revenueActual = m.rev;
+          }
+        }
+        // Year-ago comparables: same fiscal quarter, previous fiscal year.
+        const fp = d.data.fiscalPeriod as string | null;
+        const fy = d.data.fiscalYear as string | number | null;
+        if (fp && fy != null) {
+          const ya = finFiscal.get(`${ticker}_${fp}_${Number(fy) - 1}`);
+          if (ya) {
+            d.data.epsActualYearAgo = ya.eps;
+            d.data.revenueYearAgo = ya.rev;
+          }
+        }
       }
 
       // Forward calendar (FMP): upcoming reports carry estimates but no actual
@@ -222,6 +264,10 @@ export class EarningsJob implements OnModuleInit {
               epsActual: u.epsActual,
               revenueEstimate: u.revenueEstimate,
               revenueActual: u.revenueActual,
+              // Upcoming/just-announced rows have no reported quarter yet, so no
+              // year-ago join (kept null for a uniform shape with reported docs).
+              epsActualYearAgo: null as number | null,
+              revenueYearAgo: null as number | null,
               updatedAt: new Date().toISOString(),
             },
           });
