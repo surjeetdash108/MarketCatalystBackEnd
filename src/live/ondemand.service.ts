@@ -2,7 +2,9 @@ import { Inject, Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { FieldValue } from "firebase-admin/firestore";
 import {
   NEWS_ADAPTER,
+  NEWS_FMP_ADAPTER,
   type NewsAdapter,
+  type CanonicalNewsArticle,
   EARNINGS_ESTIMATES_ADAPTER,
 } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
@@ -407,6 +409,10 @@ export class OnDemandService implements OnModuleDestroy {
     private readonly firebase: FirebaseAdminService,
     private readonly polygon: PolygonService,
     @Inject(NEWS_ADAPTER) private readonly news: NewsAdapter,
+    // Optional FMP news — merged into on-demand /live/news alongside Polygon so a
+    // ticker Polygon has no articles for (micro-cap movers) still gets coverage.
+    // null when NEWS_FMP_SOURCE=none. Mirrors what news.job does for the bulk sweep.
+    @Inject(NEWS_FMP_ADAPTER) private readonly newsFmp: NewsAdapter | null,
     // Optional FMP estimates (same adapter the sync job uses). null when
     // EARNINGS_ESTIMATES_SOURCE=none — on-demand then behaves Polygon-only.
     @Inject(EARNINGS_ESTIMATES_ADAPTER)
@@ -1495,13 +1501,35 @@ export class OnDemandService implements OnModuleDestroy {
       const to = new Date();
       const from = new Date(to.getTime() - NEWS_LOOKBACK_DAYS * 86_400_000);
       const isoDate = (d: Date) => d.toISOString().slice(0, 10);
-      const result = await this.news.fetchNews(
-        ticker,
-        isoDate(from),
-        isoDate(to),
+      // Pull Polygon AND FMP in parallel and merge — Polygon covers large caps
+      // well but is sparse for micro-caps, where FMP usually has the "why it
+      // moved" headline. Each is best-effort: a failure degrades to [].
+      const [polyData, fmpData] = await Promise.all([
+        this.news
+          .fetchNews(ticker, isoDate(from), isoDate(to))
+          .then((r) => r.data)
+          .catch(() => [] as CanonicalNewsArticle[]),
+        this.newsFmp
+          ? this.newsFmp
+              .fetchNews(ticker, isoDate(from), isoDate(to))
+              .then((r) => r.data)
+              .catch(() => [] as CanonicalNewsArticle[])
+          : Promise.resolve([] as CanonicalNewsArticle[]),
+      ]);
+      // Dedupe across vendors by url (fall back to id), newest first.
+      const seenNews = new Set<string>();
+      const merged: CanonicalNewsArticle[] = [];
+      for (const a of [...polyData, ...fmpData]) {
+        const k = (a.url || a.id || "").toLowerCase();
+        if (k && seenNews.has(k)) continue;
+        if (k) seenNews.add(k);
+        merged.push(a);
+      }
+      merged.sort((x, y) =>
+        String(y.publishedAt).localeCompare(String(x.publishedAt)),
       );
       const now = new Date().toISOString();
-      const articles = result.data.slice(0, NEWS_ARTICLE_CAP).map((a) => {
+      const articles = merged.slice(0, NEWS_ARTICLE_CAP).map((a) => {
         const docId = `${ticker}_${a.id}`;
         return {
           docId,
