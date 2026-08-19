@@ -1,5 +1,6 @@
 import { Logger } from "@nestjs/common";
 import { FmpService } from "../vendors/fmp/fmp.service";
+import { daysBetween } from "../common/date.util";
 
 /**
  * Earnings estimates seam — the data Polygon has no feed for. Kept behind an
@@ -90,9 +91,6 @@ const MATCH_TOLERANCE_DAYS = 21;
 
 const EMPTY_LOOKUP: EarningsEstimatesLookup = { estimateFor: () => null };
 
-function daysBetween(a: string, b: string): number {
-  return Math.abs((Date.parse(a) - Date.parse(b)) / 86_400_000);
-}
 
 /** Keep each earnings-calendar slice well under FMP's ~4000-row request cap. */
 const CALENDAR_CHUNK_DAYS = 45;

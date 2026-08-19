@@ -5,15 +5,13 @@ import { OPTIONS_UNIVERSE } from "../common/options-universe";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { SyncRegistry } from "../common/sync-registry.service";
+import { isoDate } from "../common/date.util";
 
 const JOB_NAME = "options-chains";
 const CONTRACTS_PER_TICKER = 20;
 const AGG_LOOKBACK_DAYS = 10;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 @Injectable()
 export class OptionsChainsJob implements OnModuleInit {

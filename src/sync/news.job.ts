@@ -15,6 +15,7 @@ import {
 import { SyncMetaService } from "../common/sync-meta.service";
 import { TICKER_UNIVERSE } from "../common/ticker-universe";
 import { SyncRegistry } from "../common/sync-registry.service";
+import { isoDate } from "../common/date.util";
 
 const JOB_NAME = "news";
 const BATCH_SIZE = 80;
@@ -22,9 +23,6 @@ const LOOKBACK_DAYS = 2;
 const DELAY_MS = 150;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 @Injectable()
 export class NewsJob implements OnModuleInit {

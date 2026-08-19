@@ -13,10 +13,8 @@ import {
   CanonicalCompany,
   CompanyProfileAdapter,
 } from "./types";
+import { isoDate } from "../common/date.util";
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 @Injectable()
 export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {

@@ -7,6 +7,7 @@ import { SyncRegistry } from "../common/sync-registry.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { FmpService } from "../vendors/fmp/fmp.service";
 import { resolveSector } from "../common/sic-sector.util";
+import { isoDate } from "../common/date.util";
 
 const JOB_NAME = "ipos";
 // Cover the full "Recent IPO performance" range so every displayed name is
@@ -15,9 +16,6 @@ const JOB_NAME = "ipos";
 const LOOKBACK_DAYS = 120;
 const LOOKAHEAD_DAYS = 90;
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 function slugify(name: string): string {
   return name

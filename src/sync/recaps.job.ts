@@ -3,6 +3,7 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { setWithCreatedAt } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
+import { isoDate } from "../common/date.util";
 
 /**
  * End-of-Day recap → `recaps/{date}` (delivery-plan R28).
@@ -23,9 +24,6 @@ import { SyncRegistry } from "../common/sync-registry.service";
 const JOB_NAME = "recaps";
 const TOP_N = 6;
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 @Injectable()
 export class RecapsJob implements OnModuleInit {

@@ -6,6 +6,7 @@ import { PolygonService } from "../vendors/polygon/polygon.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { EARNINGS_ESTIMATES_ADAPTER } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
+import { addDays, daysBetween, isoDate } from "../common/date.util";
 
 const JOB_NAME = "earnings";
 // Reported quarters come from Polygon SEC financials keyed on `filing_date`
@@ -23,19 +24,8 @@ const RECENT_REPORTED_DAYS = 30;
 // reported row for the same ticker as the same quarter (avoids a duplicate).
 const DUP_TOLERANCE_DAYS = 21;
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
-function addDays(d: Date, n: number): Date {
-  const out = new Date(d);
-  out.setUTCDate(out.getUTCDate() + n);
-  return out;
-}
 
-function daysBetween(a: string, b: string): number {
-  return Math.abs((Date.parse(a) - Date.parse(b)) / 86_400_000);
-}
 
 /**
  * Last calendar day of the NEXT quarter after `d`. The FMP upcoming-earnings

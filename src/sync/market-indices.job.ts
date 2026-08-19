@@ -8,12 +8,10 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { QUOTE_ADAPTER, type QuoteAdapter } from "../adapters/types";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
+import { isoDate } from "../common/date.util";
 
 const JOB_NAME = "market-indices";
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 // Same multiplier convention as TAPE_INDICES in tape-universe.ts — kept in
 // sync deliberately (see that file's docblock: this job and the tape render

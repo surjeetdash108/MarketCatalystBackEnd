@@ -44,6 +44,7 @@ import {
   PolygonAggBar,
 } from "../vendors/polygon/polygon.service";
 import { FmpService } from "../vendors/fmp/fmp.service";
+import { isoDate } from "../common/date.util";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -176,9 +177,6 @@ const NEWS_ARTICLE_CAP = 5;
 const OPTIONS_CONTRACTS_LIMIT = 20;
 const OPTIONS_AGG_LOOKBACK_DAYS = 10;
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 function byPublishedAtDesc(
   a: Record<string, unknown>,

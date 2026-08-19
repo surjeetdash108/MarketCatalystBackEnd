@@ -9,6 +9,7 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { FredService } from "../vendors/fred/fred.service";
 import { FmpService } from "../vendors/fmp/fmp.service";
 import { SyncRegistry } from "../common/sync-registry.service";
+import { addDays, isoDate } from "../common/date.util";
 
 const JOB_NAME = "macro-events";
 // FMP economic-calendar window: a little history so just-released prints show,
@@ -16,14 +17,6 @@ const JOB_NAME = "macro-events";
 const ECON_LOOKBACK_DAYS = 14;
 const ECON_LOOKAHEAD_DAYS = 60;
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-function addDays(d: Date, n: number): Date {
-  const out = new Date(d);
-  out.setUTCDate(out.getUTCDate() + n);
-  return out;
-}
 
 @Injectable()
 export class MacroEventsJob implements OnModuleInit {

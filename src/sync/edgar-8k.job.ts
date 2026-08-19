@@ -5,6 +5,7 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { TICKER_UNIVERSE } from "../common/ticker-universe";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { SyncRegistry } from "../common/sync-registry.service";
+import { addDays, isoDate } from "../common/date.util";
 
 /**
  * SEC-EDGAR 8-K ingestion → two collections, from ONE per-company submissions
@@ -28,14 +29,6 @@ const BATCH_SIZE = 20;
 const FILINGS_PER_COMPANY = 8;
 const LOOKBACK_DAYS = 120;
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-function addDays(d: Date, n: number): Date {
-  const out = new Date(d);
-  out.setUTCDate(out.getUTCDate() + n);
-  return out;
-}
 
 /**
  * Session from the SEC acceptance timestamp. EDGAR reports the acceptance

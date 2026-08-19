@@ -9,6 +9,7 @@ import { activeUniverse } from "../common/ticker-universe";
 import { MARKET_BARS_ADAPTER, type MarketBarsAdapter } from "../adapters/types";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { planHistoryFloor } from "../vendors/polygon/polygon.service";
+import { addDays, isoDate } from "../common/date.util";
 
 const JOB_NAME = "stock-history";
 const BATCH_SIZE = 60;
@@ -34,15 +35,7 @@ const BACKFILL_DAYS = 365 * 5;
 const MIN_HEALTHY_BARS = 65;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
-function addDays(d: Date, n: number): Date {
-  const copy = new Date(d);
-  copy.setUTCDate(copy.getUTCDate() + n);
-  return copy;
-}
 
 @Injectable()
 export class StockHistoryJob implements OnModuleInit {

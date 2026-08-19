@@ -3,6 +3,7 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { chunkedBatchSet } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
+import { isoDate } from "../common/date.util";
 
 /**
  * SEC-EDGAR registration pipeline → `ipo_pipeline`. The upcoming-IPO table needs
@@ -29,9 +30,6 @@ const TARGET_FORMS = new Set([
   "F-1/A",
 ]);
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 function quarterOf(month0: number): number {
   return Math.floor(month0 / 3) + 1;
 }
