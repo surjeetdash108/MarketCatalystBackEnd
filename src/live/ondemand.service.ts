@@ -166,7 +166,7 @@ const FIN_ANNUAL_YEARS = 8;
 // gap for a ticker the bulk sweep hasn't reached recently, so a shorter TTL is
 // fine — articles that age out just mean the next request re-checks the vendor.
 const NEWS_TTL_MS = 15 * 60_000;
-const NEWS_LOOKBACK_DAYS = 2;
+const NEWS_LOOKBACK_DAYS = 7;
 const NEWS_ARTICLE_CAP = 5;
 
 const OPTIONS_CONTRACTS_LIMIT = 20;
