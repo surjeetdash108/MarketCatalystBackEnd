@@ -276,7 +276,8 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
         description: details.description,
         fmpSector: fmpProfile?.sector ?? null,
       }),
-      industry: details.sic_description ?? null,
+      // Prefer FMP's clean GICS industry when wired; SIC description is fallback.
+      industry: fmpProfile?.industry ?? details.sic_description ?? null,
       exchange: details.primary_exchange ?? null,
       week52Range: null,
       volume: null,

@@ -1034,7 +1034,9 @@ export class OnDemandService implements OnModuleDestroy {
                   fmpSector: fmpProfile?.sector ?? null,
                 },
               ),
-              industry: details.sic_description ?? null,
+              // Prefer FMP's clean GICS industry (e.g. "Consumer Electronics")
+              // when FMP is wired; fall back to Polygon's coarse SIC description.
+              industry: fmpProfile?.industry ?? details.sic_description ?? null,
               // Correct a grossly-stale Polygon market_cap with price × shares
               // (see reconcileMarketCap); consistent values are left untouched.
               marketCap: reconcileMarketCap(
