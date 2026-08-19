@@ -57,6 +57,20 @@ export interface FmpNewsRow {
   sentiment: string | null;
 }
 
+/**
+ * Normalised company profile (`/stable/profile`) — only the classification
+ * fields. Used to REFINE the sector Polygon's SIC code produces (FMP carries a
+ * clean GICS `sector`/`industry` where Polygon has only a free-text SIC that
+ * dumps e.g. Bitcoin miners into "Finance Services"). Price/marketCap/name stay
+ * Polygon-owned — this never becomes a second price source.
+ */
+export interface FmpCompanyProfileRow {
+  symbol: string;
+  companyName: string | null;
+  sector: string | null;
+  industry: string | null;
+}
+
 /** Normalised analyst grades consensus (rating tallies + label). */
 export interface FmpConsensusRow {
   symbol: string;
@@ -286,6 +300,35 @@ export class FmpService {
       image: (r.image as string) ?? null,
       sentiment: (r.sentiment as string) ?? null,
     }));
+  }
+
+  /**
+   * Company profile (`/stable/profile`) — used ONLY for FMP's GICS `sector`/
+   * `industry` classification, which is cleaner than the free-text SIC Polygon
+   * returns (e.g. FMP codes IREN "Technology" where Polygon's SIC lands on
+   * "Finance Services"). Best-effort: `retries:0` so a momentary 429 degrades to
+   * the SIC-derived sector fast; null when the key is absent or FMP has no row.
+   * The caller whitelists FMP's sector string against the app's canonical set
+   * (see resolveSector/normalizeFmpSector) so an unrecognised label is ignored.
+   */
+  async getCompanyProfile(
+    ticker: string,
+  ): Promise<FmpCompanyProfileRow | null> {
+    if (!this.apiKey) return null;
+    const rows = await this.get(
+      `profile?symbol=${encodeURIComponent(ticker)}`,
+      { retries: 0 },
+    );
+    if (rows.length === 0) return null;
+    const o = rows[0] as Record<string, unknown>;
+    const str = (v: unknown): string | null =>
+      v != null && String(v).trim() !== "" ? String(v).trim() : null;
+    return {
+      symbol: String(o.symbol ?? ticker),
+      companyName: str(o.companyName),
+      sector: str(o.sector),
+      industry: str(o.industry),
+    };
   }
 
   /**

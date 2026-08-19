@@ -1,7 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { sectorFromSic } from "../common/sic-sector.util";
+import { resolveSector } from "../common/sic-sector.util";
 import { reconcileMarketCap } from "../common/validate.util";
 import { PolygonService } from "../vendors/polygon/polygon.service";
+import { FmpService } from "../vendors/fmp/fmp.service";
 import {
   AdapterResult,
   AdapterWarning,
@@ -110,13 +111,24 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
   readonly sourceName = "polygon";
   private readonly logger = new Logger(PolygonCompanyProfileAdapter.name);
 
-  constructor(private readonly polygon: PolygonService) {}
+  constructor(
+    private readonly polygon: PolygonService,
+    // FMP is used ONLY to refine the sector classification (its GICS `sector` is
+    // cleaner than Polygon's free-text SIC). Best-effort and self-disabling when
+    // no key is set — the sector then falls back to the SIC mapping.
+    private readonly fmp: FmpService,
+  ) {}
 
   async fetchCompany(
     ticker: string,
   ): Promise<AdapterResult<CanonicalCompany> | null> {
     const details = await this.polygon.getTickerDetails(ticker);
     if (!details) return null;
+    // Kicked off in parallel with the price/eps/peers/dividend fetches below so
+    // it adds max(), not sum(), to latency. Null on any failure → SIC fallback.
+    const fmpProfilePromise = this.fmp.enabled
+      ? this.fmp.getCompanyProfile(ticker).catch(() => null)
+      : Promise.resolve(null);
     // These three used to be declared FIELD_NOT_SUPPORTED here, on the belief
     // that Polygon sells neither a peer list nor a dividend yield. Both were
     // wrong in different ways, verified against the live plan on 2026-07-21:
@@ -237,6 +249,8 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       });
     }
 
+    const fmpProfile = await fmpProfilePromise;
+
     const data: CanonicalCompany = {
       ticker,
       name: details.name ?? null,
@@ -256,7 +270,12 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       // computed within an SIC code rather than a sector, and the field could
       // never be joined against the `sectors` collection. Derive the sector
       // from sic_code instead; null when unmappable, never a guess.
-      sector: sectorFromSic(details.sic_code),
+      sector: resolveSector(details.sic_code, {
+        ticker: details.ticker,
+        name: details.name,
+        description: details.description,
+        fmpSector: fmpProfile?.sector ?? null,
+      }),
       industry: details.sic_description ?? null,
       exchange: details.primary_exchange ?? null,
       week52Range: null,

@@ -116,15 +116,15 @@ function buildComposite(
     PolygonNewsAdapter,
     {
       provide: COMPANY_PROFILE_ADAPTER,
-      inject: [ConfigService, PolygonService],
-      useFactory: (config, polygon) =>
+      inject: [ConfigService, PolygonService, FmpService],
+      useFactory: (config, polygon, fmp: FmpService) =>
         buildComposite(
           config,
           "COMPANY_PROFILE",
           POLYGON_ONLY_SOURCES,
           { primary: "polygon", fallback: "none" },
           {
-            polygon: () => new PolygonCompanyProfileAdapter(polygon),
+            polygon: () => new PolygonCompanyProfileAdapter(polygon, fmp),
             none: () => null,
           },
           CompositeCompanyProfileAdapter,
@@ -148,15 +148,15 @@ function buildComposite(
     },
     {
       provide: MOVER_ENRICHMENT_ADAPTER,
-      inject: [ConfigService, PolygonService],
-      useFactory: (config, polygon) =>
+      inject: [ConfigService, PolygonService, FmpService],
+      useFactory: (config, polygon, fmp: FmpService) =>
         buildComposite(
           config,
           "MOVER_ENRICHMENT",
           POLYGON_ONLY_SOURCES,
           { primary: "polygon", fallback: "none" },
           {
-            polygon: () => new PolygonMoverEnrichmentAdapter(polygon),
+            polygon: () => new PolygonMoverEnrichmentAdapter(polygon, fmp),
             none: () => null,
           },
           CompositeMoverEnrichmentAdapter,

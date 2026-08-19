@@ -9,7 +9,7 @@ import {
 } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
-import { sectorFromSic } from "../common/sic-sector.util";
+import { resolveSector } from "../common/sic-sector.util";
 import { reconcileMarketCap } from "../common/validate.util";
 import {
   annualTotals,
@@ -907,8 +907,15 @@ export class OnDemandService implements OnModuleDestroy {
       // cursor reaches the ticker. Each is independent and best-effort: a failed
       // or empty one degrades to null (same as the adapter's per-field try/catch)
       // rather than dropping the whole company doc. Parallel to keep latency low.
-      const [epsRes, peersRes, divRes, techRes, instRes, epsHistRes] =
-        await Promise.allSettled([
+      const [
+        epsRes,
+        peersRes,
+        divRes,
+        techRes,
+        instRes,
+        epsHistRes,
+        fmpProfileRes,
+      ] = await Promise.allSettled([
           this.polygon.getTtmEps(ticker),
           this.polygon.getRelatedCompanies(ticker),
           this.polygon.getDividendHistory(ticker, 40),
@@ -941,6 +948,10 @@ export class OnDemandService implements OnModuleDestroy {
                   epsEstimate: number | null;
                 }>,
               ),
+          // FMP company profile → GICS `sector` used to refine the SIC-derived
+          // sector (e.g. IREN: SIC "Finance Services" → FMP "Technology"). Best-
+          // effort; null when FMP is off or has no row → SIC fallback.
+          this.fmp.getCompanyProfile(ticker),
         ]);
 
       const gaapTtm = epsRes.status === "fulfilled" ? epsRes.value : null;
@@ -964,6 +975,9 @@ export class OnDemandService implements OnModuleDestroy {
 
       const inst =
         instRes.status === "fulfilled" ? instRes.value : null;
+
+      const fmpProfile =
+        fmpProfileRes.status === "fulfilled" ? fmpProfileRes.value : null;
 
       // FORWARD-ANNUALIZED dividend per share and yield (Polygon sells no yield
       // product). Methodology: (most-recent REGULAR per-payment amount) ×
@@ -1011,8 +1025,14 @@ export class OnDemandService implements OnModuleDestroy {
               // sector — deriving the sector from sic_code (null when unmappable)
               // matches the sync job so sectorRank grouping and the `sectors`
               // join stay correct.
-              sector: sectorFromSic(
+              sector: resolveSector(
                 details.sic_code as string | number | null | undefined,
+                {
+                  ticker: details.ticker as string | null | undefined,
+                  name: details.name as string | null | undefined,
+                  description: details.description as string | null | undefined,
+                  fmpSector: fmpProfile?.sector ?? null,
+                },
               ),
               industry: details.sic_description ?? null,
               // Correct a grossly-stale Polygon market_cap with price × shares
@@ -1053,6 +1073,19 @@ export class OnDemandService implements OnModuleDestroy {
           inst && inst.year != null && inst.quarter != null
             ? `Q${inst.quarter} ${inst.year}`
             : null,
+        // Carry the cron's universe-wide RS / tech RANK forward when this rebuild
+        // didn't recompute it (hadRating → computeFirstSyncTechnicals skipped the
+        // ranking, so `technicals` has no rsRating/techRating). merge:true already
+        // keeps Firestore's value, but the RETURNED doc — the stock detail's
+        // source — must keep it too, else the page shows rs=null on a rebuild even
+        // though the ticker IS ranked. When the rebuild DID rank a brand-new
+        // ticker, `...technicals` below overrides these with the fresh values.
+        rsRating: (prevCo.rsRating as number | null | undefined) ?? null,
+        rsRatingUpdatedAt:
+          (prevCo.rsRatingUpdatedAt as string | null | undefined) ?? null,
+        techRating: (prevCo.techRating as number | null | undefined) ?? null,
+        techRatingUpdatedAt:
+          (prevCo.techRatingUpdatedAt as string | null | undefined) ?? null,
         // Technical field set computed above (empty object when history is thin
         // or the fetch failed). Spread last so a real technicals result fills
         // rsi14/macd/beta/high52/keyLevels/... the same way the cron would.

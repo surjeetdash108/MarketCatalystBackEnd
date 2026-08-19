@@ -5,7 +5,8 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { IPOS_ADAPTER, type IposAdapter } from "../adapters/types";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
-import { sectorFromSic } from "../common/sic-sector.util";
+import { FmpService } from "../vendors/fmp/fmp.service";
+import { resolveSector } from "../common/sic-sector.util";
 
 const JOB_NAME = "ipos";
 // Cover the full "Recent IPO performance" range so every displayed name is
@@ -44,6 +45,7 @@ export class IposJob implements OnModuleInit {
   constructor(
     @Inject(IPOS_ADAPTER) private readonly ipos: IposAdapter,
     private readonly polygon: PolygonService,
+    private readonly fmp: FmpService,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
@@ -119,8 +121,21 @@ export class IposJob implements OnModuleInit {
         let sector: string | null = null;
         if (e.symbol) {
           try {
-            const details = await this.polygon.getTickerDetails(e.symbol);
-            sector = sectorFromSic(details?.sic_code as string | number | undefined);
+            const [details, fmpProfile] = await Promise.all([
+              this.polygon.getTickerDetails(e.symbol),
+              this.fmp.enabled
+                ? this.fmp.getCompanyProfile(e.symbol).catch(() => null)
+                : Promise.resolve(null),
+            ]);
+            sector = resolveSector(
+              details?.sic_code as string | number | undefined,
+              {
+                ticker: e.symbol,
+                name: details?.name,
+                description: details?.description,
+                fmpSector: fmpProfile?.sector ?? null,
+              },
+            );
           } catch {
             // Best-effort; leave null if the reference lookup fails.
           }

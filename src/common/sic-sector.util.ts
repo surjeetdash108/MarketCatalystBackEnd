@@ -31,7 +31,14 @@ export type Sector =
   | "Utilities"
   | "Basic Materials"
   | "Real Estate"
-  | "Communication Services";
+  | "Communication Services"
+  // Bitcoin miners / crypto-compute / blockchain-infra names. The vendor dumps
+  // them into SIC 6199 "Finance Services", so `sectorFromSic` alone mislabels
+  // them Financial Services. Use `resolveSector` (with ticker/description) to
+  // land them here instead. NOTE: this is a 12th sector OUTSIDE the 11 SPDR
+  // set, so these names have no SPDR sector-performance benchmark to join —
+  // correct, since there is no standard crypto sector ETF.
+  | "Crypto / Blockchain";
 
 /**
  * Specific 4-digit codes whose major group would otherwise mis-assign them.
@@ -162,4 +169,112 @@ export function sectorFromSic(
     if (code >= lo && code <= hi) return sector;
   }
   return null;
+}
+
+/**
+ * Curated Bitcoin-mining / crypto-compute / blockchain-infrastructure tickers
+ * the vendor miscodes as Financial Services (SIC 6199 "Finance Services"). These
+ * are reclassified to "Crypto / Blockchain" regardless of description. Legit
+ * financials that merely touch crypto (HOOD brokerage, FIGR capital markets)
+ * are deliberately absent.
+ */
+const CRYPTO_TICKERS = new Set([
+  "IREN", "HUT", "MARA", "RIOT", "CLSK", "CIFR", "HIVE", "ABTC", "SECZ",
+  "BITF", "WULF", "CORZ", "BTBT", "BTDR", "SDIG", "APLD", "CANG", "CAN",
+  "SOS", "BTCM", "NCTY", "GREE", "ARBK", "SLNH", "DGHI", "BTOG", "CCG",
+  "BTM", "HODL", "MIGI", "SATO", "GLXY", "BMNR",
+]);
+
+/** True when name+description clearly reads as a crypto-mining / blockchain-
+ *  compute business, and NOT a conventional financial firm that merely mentions
+ *  crypto (broker, lender, asset manager, insurer, capital-markets fintech). */
+function looksCrypto(text: string): boolean {
+  const t = text.toLowerCase();
+  const cryptoSignal =
+    /\bbitcoin\b|\bcrypto(currency)?\b|\bblockchain\b|\bdigital asset|\bhash\s?rate\b/.test(
+      t,
+    );
+  if (!cryptoSignal) return false;
+  const financialGuard =
+    /\bbrokerage\b|broker-dealer|retail broker|\blending\b|\bloans?\b|\bmortgage\b|\binsurance\b|asset management|capital markets|\bbank\b|\bexchange\b/.test(
+      t,
+    );
+  const computeSignal =
+    /\bmining\b|\bminer\b|\bhash|data cent(er|re)|high-performance computing|\bhpc\b|\bcompute\b/.test(
+      t,
+    );
+  return computeSignal && !financialGuard;
+}
+
+/**
+ * FMP's `/stable/profile` `sector` is a GICS label whose vocabulary happens to
+ * match this app's canonical 11 sectors EXACTLY (Technology, Financial Services,
+ * Healthcare, …). Accept a value ONLY when it is exactly one of those names
+ * (case-insensitive) — an unrecognised or renamed vendor label degrades to null
+ * so the caller falls back to the SIC mapping instead of writing a stray string
+ * that `companies.sector` can never join against `sectors` or group for
+ * sectorRank. This exact-match whitelist IS the "verify the mapping" the
+ * apphosting.yaml SECTORS_FALLBACK caveat asked for.
+ *
+ * "Crypto / Blockchain" is intentionally NOT reachable from FMP: FMP miscodes
+ * miners inconsistently (IREN→Technology but MARA/RIOT/WULF→Financial Services),
+ * so that reclassification stays with the curated CRYPTO_TICKERS set / the
+ * looksCrypto description guard, which resolveSector applies ABOVE this.
+ */
+const FMP_SECTOR_WHITELIST: Record<string, Sector> = {
+  technology: "Technology",
+  "financial services": "Financial Services",
+  energy: "Energy",
+  healthcare: "Healthcare",
+  industrials: "Industrials",
+  "consumer defensive": "Consumer Defensive",
+  "consumer cyclical": "Consumer Cyclical",
+  utilities: "Utilities",
+  "basic materials": "Basic Materials",
+  "real estate": "Real Estate",
+  "communication services": "Communication Services",
+};
+
+/** FMP profile `sector` → canonical Sector, or null when unrecognised. */
+export function normalizeFmpSector(
+  raw: string | null | undefined,
+): Sector | null {
+  if (!raw) return null;
+  return FMP_SECTOR_WHITELIST[raw.trim().toLowerCase()] ?? null;
+}
+
+/**
+ * Canonical sector with two refinements layered on the raw SIC mapping:
+ *
+ *   1. Crypto miners — the vendor dumps them into SIC 6199 "Finance Services",
+ *      so a curated ticker set (always) plus a guarded description rule (only
+ *      when the resolved sector is the ambiguous "Financial Services")
+ *      reclassify them to "Crypto / Blockchain". This wins over everything.
+ *   2. FMP's GICS `sector` (when provided via meta.fmpSector and it is one of
+ *      the canonical 11 names) is PREFERRED over the SIC mapping, because SIC is
+ *      a coarse free-text bucket (IREN → "Finance Services") while FMP carries a
+ *      real sector classification (IREN → "Technology"). SIC remains the
+ *      fallback when FMP is off / unknown / an unrecognised label.
+ *
+ * Everything else falls back to `sectorFromSic`.
+ */
+export function resolveSector(
+  sicCode: string | number | null | undefined,
+  meta?: {
+    ticker?: string | null;
+    name?: string | null;
+    description?: string | null;
+    fmpSector?: string | null;
+  },
+): Sector | null {
+  const ticker = meta?.ticker?.toUpperCase();
+  if (ticker && CRYPTO_TICKERS.has(ticker)) return "Crypto / Blockchain";
+  // Prefer FMP's verified GICS sector over the coarse SIC bucket; SIC is the
+  // fallback when FMP gave nothing usable.
+  const base = normalizeFmpSector(meta?.fmpSector) ?? sectorFromSic(sicCode);
+  if (base === "Financial Services") {
+    const text = `${meta?.name ?? ""} ${meta?.description ?? ""}`.trim();
+    if (text && looksCrypto(text)) return "Crypto / Blockchain";
+  }
+  return base;
 }
