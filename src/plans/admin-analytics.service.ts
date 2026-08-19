@@ -194,8 +194,7 @@ export class AdminAnalyticsService {
     const [adoptSnap, userSnap] = await Promise.all([
       this.firebase.firestore
         .collection("feature_adoption")
-        .get()
-        .catch(() => null),
+        .get(),
       this.firebase.firestore.collection("users").get(),
     ]);
 
@@ -246,8 +245,7 @@ export class AdminAnalyticsService {
         .collection("payments")
         .orderBy("paymentDate", "desc")
         .limit(limit)
-        .get()
-        .catch(() => null),
+        .get(),
       this.firebase.firestore.collection("users").limit(1000).get(),
     ]);
     const emailByUid = new Map(
@@ -287,8 +285,7 @@ export class AdminAnalyticsService {
     const [paySnap, userSnap, plans] = await Promise.all([
       this.firebase.firestore
         .collection("payments")
-        .get()
-        .catch(() => null),
+        .get(),
       this.firebase.firestore.collection("users").get(),
       this.plans.list(),
     ]);
@@ -303,17 +300,25 @@ export class AdminAnalyticsService {
     let totalMinor = 0;
     let currentYearMinor = 0;
     let paymentsCounted = 0;
+    // Reporting currency = the first SUCCESS payment's currency. Payments in any
+    // OTHER currency are still recorded in `currencies` (so `mixedCurrencies`
+    // flags them) but EXCLUDED from every monetary total — summing minor units
+    // across currencies produces a meaningless number.
+    let primary: string | null = null;
 
     const thisYear = String(new Date().getUTCFullYear());
 
     for (const doc of paySnap?.docs ?? []) {
       const p = doc.data();
       if (p.paymentStatus !== "SUCCESS") continue;
-      const amount = typeof p.amount === "number" ? p.amount : 0;
-      const date: string = p.paymentDate ?? "";
       // Fallback matches the USD plan catalog (plans.registry.ts), not INR — see
       // subscriptionRows above (BUG-DATA-013).
-      currencies.add(p.currency ?? "USD");
+      const cur = p.currency ?? "USD";
+      currencies.add(cur);
+      if (primary === null) primary = cur;
+      if (cur !== primary) continue; // never mix currencies into the totals
+      const amount = typeof p.amount === "number" ? p.amount : 0;
+      const date: string = p.paymentDate ?? "";
 
       totalMinor += amount;
       paymentsCounted++;
@@ -357,9 +362,9 @@ export class AdminAnalyticsService {
 
     // Default to USD (the plan catalog's currency) when no payments carry one,
     // rather than INR which contradicts the $-priced plans (BUG-DATA-013).
-    const primary = currencies.size > 0 ? [...currencies][0] : "USD";
+    const primaryCur = primary ?? "USD";
     return {
-      currency: primary,
+      currency: primaryCur,
       totalMinor,
       currentYearMinor,
       byPlan: [...byPlan.entries()]
@@ -384,7 +389,7 @@ export class AdminAnalyticsService {
       paymentsCounted,
       // Summing across currencies would be meaningless; surfaced so the UI can
       // warn rather than silently mixing currencies.
-      mixedCurrencies: [...currencies].filter((c) => c !== primary),
+      mixedCurrencies: [...currencies].filter((c) => c !== primaryCur),
     };
   }
 }

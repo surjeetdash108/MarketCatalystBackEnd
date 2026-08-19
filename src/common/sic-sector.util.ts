@@ -178,7 +178,7 @@ export function sectorFromSic(
  * financials that merely touch crypto (HOOD brokerage, FIGR capital markets)
  * are deliberately absent.
  */
-const CRYPTO_TICKERS = new Set([
+export const CRYPTO_TICKERS = new Set([
   "IREN", "HUT", "MARA", "RIOT", "CLSK", "CIFR", "HIVE", "ABTC", "SECZ",
   "BITF", "WULF", "CORZ", "BTBT", "BTDR", "SDIG", "APLD", "CANG", "CAN",
   "SOS", "BTCM", "NCTY", "GREE", "ARBK", "SLNH", "DGHI", "BTOG", "CCG",
@@ -195,8 +195,11 @@ function looksCrypto(text: string): boolean {
       t,
     );
   if (!cryptoSignal) return false;
+  // Bare "bank" and "exchange" were too broad — they appear in most filings
+  // ("listed on the Nasdaq Stock Exchange", "cash held at our bank") and were
+  // suppressing genuine miners. Use the specific business phrases instead.
   const financialGuard =
-    /\bbrokerage\b|broker-dealer|retail broker|\blending\b|\bloans?\b|\bmortgage\b|\binsurance\b|asset management|capital markets|\bbank\b|\bexchange\b/.test(
+    /\bbrokerage\b|broker-dealer|retail broker|\blending\b|\bloans?\b|\bmortgage\b|\binsurance\b|asset management|capital markets|\bbanking\b|securities exchange|\bexchange operator/.test(
       t,
     );
   const computeSignal =

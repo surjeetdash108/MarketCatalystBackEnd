@@ -1,6 +1,10 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { resolveSector } from "../common/sic-sector.util";
 import { reconcileMarketCap } from "../common/validate.util";
+import {
+  forwardAnnualDividend,
+  type DivHistItem,
+} from "../common/dividend-annualization.util";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { FmpService } from "../vendors/fmp/fmp.service";
 import {
@@ -12,98 +16,6 @@ import {
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
-}
-
-/**
- * Distribution-type codes Polygon uses for NON-regular payments (special cash,
- * long-term / short-term capital-gains). Excluded from the forward run-rate so a
- * one-off does not masquerade as the recurring dividend. Mirrors
- * live/ondemand.service.ts.
- */
-const SPECIAL_DIVIDEND_TYPES = new Set(["SC", "LT", "ST"]);
-
-/** Subset of a Polygon getDividendHistory() row the forward yield needs. */
-interface DivHistItem {
-  exDividendDate: string | null;
-  cashAmount: number | null;
-  dividendType: string | null;
-  frequency: number | null;
-}
-
-/**
- * Polygon's `frequency` integer is a payments-per-year count when it is a real
- * cadence (1 = annual, 2 = semi-annual, 4 = quarterly, 12 = monthly). 0 = one-
- * time and null are not usable cadences → return null so the caller falls back
- * to ex-date spacing.
- */
-function paymentsPerYearFromFrequency(freq: number | null): number | null {
-  return freq === 1 || freq === 2 || freq === 4 || freq === 12 ? freq : null;
-}
-
-/**
- * Infer payments-per-year from the median spacing of recent (newest-first)
- * regular ex-dates: pick the cadence in {12,4,2,1} whose expected gap 365/n is
- * closest to the observed median gap (~30d→12, ~91d→4, ~182d→2, ~365d→1).
- * Needs at least two ex-dates to form a gap; returns null otherwise.
- */
-function paymentsPerYearFromSpacing(regular: DivHistItem[]): number | null {
-  const dates = regular
-    .map((d) => (d.exDividendDate ? Date.parse(d.exDividendDate) : NaN))
-    .filter((t) => Number.isFinite(t))
-    .sort((a, b) => b - a);
-  if (dates.length < 2) return null;
-  const gaps: number[] = [];
-  for (let i = 0; i < dates.length - 1; i++) {
-    gaps.push((dates[i] - dates[i + 1]) / 86_400_000);
-  }
-  gaps.sort((a, b) => a - b);
-  const mid = Math.floor(gaps.length / 2);
-  const median =
-    gaps.length % 2 === 0 ? (gaps[mid - 1] + gaps[mid]) / 2 : gaps[mid];
-  if (!(median > 0)) return null;
-  let best: number | null = null;
-  let bestErr = Infinity;
-  for (const n of [12, 4, 2, 1]) {
-    const err = Math.abs(median - 365 / n);
-    if (err < bestErr) {
-      bestErr = err;
-      best = n;
-    }
-  }
-  return best;
-}
-
-/**
- * FORWARD-ANNUALIZED dividend per share from a ticker's dividend history
- * (newest-first, as Polygon returns it):
- *   perShare = (most-recent REGULAR per-payment amount) × (payments per year).
- * Special / one-time distributions are excluded from both the per-payment amount
- * and the spacing; cashAmount is read null-safe. Returns null when neither the
- * frequency nor the ex-date spacing determines a cadence, so the caller leaves
- * dividendYield null rather than falling back to a (misleading) TTM sum. Mirrors
- * live/ondemand.service.ts.
- */
-function forwardAnnualDividend(
-  history: DivHistItem[],
-): { perShare: number; paymentsPerYear: number } | null {
-  const regular = history.filter(
-    (d) =>
-      (d.cashAmount ?? 0) > 0 &&
-      d.frequency !== 0 &&
-      !(d.dividendType != null && SPECIAL_DIVIDEND_TYPES.has(d.dividendType)),
-  );
-  if (regular.length === 0) return null;
-
-  // history is newest-first, so the first regular row is the latest payment.
-  const perPayment = regular[0].cashAmount ?? 0;
-  if (!(perPayment > 0)) return null;
-
-  const paymentsPerYear =
-    paymentsPerYearFromFrequency(regular[0].frequency) ??
-    paymentsPerYearFromSpacing(regular);
-  if (paymentsPerYear == null) return null;
-
-  return { perShare: perPayment * paymentsPerYear, paymentsPerYear };
 }
 
 @Injectable()
@@ -140,7 +52,21 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
     const warnings: AdapterWarning[] = [];
     let price = null;
     let pctChange = null;
-    try {
+    // Prefer the universal snapshot — the SAME source the on-demand path uses —
+    // so a swept doc and a viewed doc derive price/pctChange identically, instead
+    // of the sweep writing a stale daily-bar close over the live snapshot value.
+    const snap = (
+      (await this.polygon.getUniversalSnapshot([ticker]).catch(() => [])) as Array<{
+        price?: number | null;
+        changePercent?: number | null;
+      }>
+    )[0];
+    if (snap?.price != null) {
+      price = snap.price;
+      pctChange = snap.changePercent ?? null;
+    }
+    // Daily-bar close as a coverage fallback for thin names the snapshot misses.
+    if (price == null) try {
       const to = new Date();
       const from = new Date(to);
       from.setUTCDate(from.getUTCDate() - 7);

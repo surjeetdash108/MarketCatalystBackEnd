@@ -10,6 +10,10 @@ import {
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { resolveSector } from "../common/sic-sector.util";
+import {
+  forwardAnnualDividend,
+  type DivHistItem,
+} from "../common/dividend-annualization.util";
 import { reconcileMarketCap } from "../common/validate.util";
 import {
   annualTotals,
@@ -218,106 +222,10 @@ function isFresh(
   return age < 12 * 3600_000;
 }
 
-/**
- * Polygon `dividend_type` codes for NON-regular distributions — special cash
- * (SC), long-term (LT) and short-term (ST) capital-gains distributions. These
- * carry no recurring cadence, so they are excluded from the forward figure.
- */
-const SPECIAL_DIVIDEND_TYPES = new Set(["SC", "LT", "ST"]);
-
-/** Subset of a Polygon getDividendHistory() row the forward yield needs. */
-interface DivHistItem {
-  exDividendDate: string | null;
-  cashAmount: number;
-  dividendType: string | null;
-  frequency: number | null;
-}
-
-/**
- * Polygon's `frequency` integer IS a payments-per-year count when it is a real
- * cadence (1 = annual, 2 = semi-annual, 4 = quarterly, 12 = monthly). 0 = one-
- * time and null are not usable cadences → return null so the caller falls back
- * to ex-date spacing. Mirrors the PAYMENTS_PER_YEAR map in sync/dividends.job.ts
- * (which maps the vendor's STRING frequency to the same 1/2/4/12 counts).
- */
-function paymentsPerYearFromFrequency(freq: number | null): number | null {
-  return freq === 1 || freq === 2 || freq === 4 || freq === 12 ? freq : null;
-}
-
-/**
- * Infer payments-per-year from the median spacing of recent (newest-first)
- * regular ex-dates: pick the cadence in {12,4,2,1} whose expected gap 365/n is
- * closest to the observed median gap (~30d→12, ~91d→4, ~182d→2, ~365d→1).
- * Needs at least two ex-dates to form a gap; returns null otherwise.
- */
-function paymentsPerYearFromSpacing(regular: DivHistItem[]): number | null {
-  const dates = regular
-    .map((d) => (d.exDividendDate ? Date.parse(d.exDividendDate) : NaN))
-    .filter((t) => Number.isFinite(t))
-    .sort((a, b) => b - a);
-  if (dates.length < 2) return null;
-  const gaps: number[] = [];
-  for (let i = 0; i < dates.length - 1; i++) {
-    gaps.push((dates[i] - dates[i + 1]) / 86_400_000);
-  }
-  gaps.sort((a, b) => a - b);
-  const mid = Math.floor(gaps.length / 2);
-  const median =
-    gaps.length % 2 === 0 ? (gaps[mid - 1] + gaps[mid]) / 2 : gaps[mid];
-  if (!(median > 0)) return null;
-  let best: number | null = null;
-  let bestErr = Infinity;
-  for (const n of [12, 4, 2, 1]) {
-    const err = Math.abs(median - 365 / n);
-    if (err < bestErr) {
-      bestErr = err;
-      best = n;
-    }
-  }
-  return best;
-}
-
-/**
- * FORWARD-ANNUALIZED dividend per share from a ticker's dividend history
- * (newest-first, as Polygon returns it).
- *
- * perShare = (most-recent REGULAR per-payment amount) × (payments per year).
- *
- * This is the forward run-rate a data vendor quotes — NOT a trailing-12-month
- * SUM. A TTM sum overstates the yield in any rolling 365-day window that happens
- * to contain a 5th ex-date for a quarterly payer (e.g. PEP briefly shows 5
- * payments → ~5.25% instead of the true ~4.27% forward yield).
- *
- * payments-per-year comes from Polygon's own `frequency` integer when it is a
- * usable cadence, else from the median spacing of recent regular ex-dates.
- * Special / one-time distributions are excluded from both the per-payment amount
- * and the spacing. cashAmount is read null-safe (Polygon types it `number` but
- * does not null-coalesce the raw field). Returns null when neither the frequency
- * nor the ex-date spacing determines a cadence — the caller then leaves
- * dividendYield null rather than falling back to a (misleading) TTM sum.
- */
-function forwardAnnualDividend(
-  history: DivHistItem[],
-): { perShare: number; paymentsPerYear: number } | null {
-  const regular = history.filter(
-    (d) =>
-      (d.cashAmount ?? 0) > 0 &&
-      d.frequency !== 0 &&
-      !(d.dividendType != null && SPECIAL_DIVIDEND_TYPES.has(d.dividendType)),
-  );
-  if (regular.length === 0) return null;
-
-  // history is newest-first, so the first regular row is the latest payment.
-  const perPayment = regular[0].cashAmount ?? 0;
-  if (!(perPayment > 0)) return null;
-
-  const paymentsPerYear =
-    paymentsPerYearFromFrequency(regular[0].frequency) ??
-    paymentsPerYearFromSpacing(regular);
-  if (paymentsPerYear == null) return null;
-
-  return { perShare: perPayment * paymentsPerYear, paymentsPerYear };
-}
+// Forward-annualized dividend helpers (SPECIAL_DIVIDEND_TYPES, DivHistItem,
+// forwardAnnualDividend, …) moved to common/dividend-annualization.util.ts so
+// this on-view path and the nightly profile-adapter sweep share ONE definition
+// and can never drift the derived yield apart.
 
 @Injectable()
 export class OnDemandService implements OnModuleDestroy {

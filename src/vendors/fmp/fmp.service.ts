@@ -213,6 +213,15 @@ export class FmpService {
   // when callers fire concurrently.
   private readonly minIntervalMs: number;
   private nextSlot = 0;
+  // Short-TTL memo for `/stable/earnings` — both getQuarterlyEstimates and
+  // getEpsHistory derive from it and are called back-to-back per ticker, so
+  // without this the same endpoint is fetched twice per ticker across the whole
+  // universe. TTL only needs to bridge those two calls; purged on growth.
+  private readonly earningsCache = new Map<
+    string,
+    { at: number; rows: FmpEarningsSurpriseRow[] }
+  >();
+  private static readonly EARNINGS_CACHE_TTL_MS = 60_000;
 
   constructor(private readonly config: ConfigService) {
     this.apiKey = this.config.get("FMP_API_KEY", "");
@@ -403,10 +412,16 @@ export class FmpService {
     ticker: string,
   ): Promise<FmpEarningsSurpriseRow[]> {
     if (!this.apiKey) return [];
+    const key = ticker.toUpperCase();
+    const now = Date.now();
+    const cached = this.earningsCache.get(key);
+    if (cached && now - cached.at < FmpService.EARNINGS_CACHE_TTL_MS) {
+      return cached.rows;
+    }
     const rows = await this.get(
       `earnings?symbol=${encodeURIComponent(ticker)}&limit=40`,
     );
-    return rows.map((r) => {
+    const mapped = rows.map((r) => {
       const o = r as Record<string, unknown>;
       return {
         date: String(o.date ?? ""),
@@ -415,6 +430,16 @@ export class FmpService {
         estimatedEarning: num(o.epsEstimated ?? o.estimatedEarning),
       };
     });
+    // Bound memory across a full-universe sweep: purge expired entries on growth.
+    if (this.earningsCache.size > 256) {
+      for (const [k, v] of this.earningsCache) {
+        if (now - v.at >= FmpService.EARNINGS_CACHE_TTL_MS) {
+          this.earningsCache.delete(k);
+        }
+      }
+    }
+    this.earningsCache.set(key, { at: now, rows: mapped });
+    return mapped;
   }
 
   /**

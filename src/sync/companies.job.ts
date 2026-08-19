@@ -76,14 +76,20 @@ export class CompaniesJob implements OnModuleInit {
           // market-quotes. Merge-writing them here would clobber the real values
           // those jobs computed back to null between runs. `averageVolume` and
           // `week52Range` are dead placeholders (nothing reads them; the UI uses
-          // avgVolume20/50 and computes the 52-week range client-side). Strip all
-          // four so this job writes only the fields it actually owns — no
-          // cross-job clobbering, no duplicate ownership.
+          // avgVolume20/50 and computes the 52-week range client-side).
+          // `eps`/`peRatio` are stripped too: the adapter derives them from
+          // Polygon GAAP TTM, but fundamentals-growth.job and the on-demand path
+          // both write the FMP NON-GAAP (NASDAQ/IBD) basis. Writing GAAP here made
+          // P/E flip basis depending on which writer ran last — so leave EPS to
+          // the non-GAAP owners. Strip all six so this job writes only fields it
+          // owns — no cross-job clobbering, no duplicate ownership, no basis flip.
           const {
             beta: _beta,
             volume: _volume,
             averageVolume: _averageVolume,
             week52Range: _week52Range,
+            eps: _eps,
+            peRatio: _peRatio,
             ...profile
           } = data;
           await setWithCreatedAt(this.firebase.firestore, col.doc(symbol), {
