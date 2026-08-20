@@ -19,8 +19,16 @@ import { fetchJson } from "../../common/http.util";
  */
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-/** A strong free model; overridable per environment via OPENROUTER_MODEL. */
-const DEFAULT_MODEL = "deepseek/deepseek-chat-v3:free";
+/**
+ * A free instruction-tuned model; overridable per environment via
+ * OPENROUTER_MODEL. Prefer a plain "-it"/instruct model over a *reasoning*
+ * model here: reasoning models spend the token budget on thinking and can come
+ * back with an empty `message.content`. OpenRouter also retires free slugs
+ * without notice (the previous default, deepseek-chat-v3:free, started 404ing
+ * with "unavailable for free") — check https://openrouter.ai/api/v1/models for
+ * entries priced at 0 before changing this.
+ */
+const DEFAULT_MODEL = "google/gemma-4-31b-it:free";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -28,7 +36,12 @@ export interface ChatMessage {
 }
 
 interface OpenRouterChatResponse {
-  choices?: Array<{ message?: { content?: string } }>;
+  choices?: Array<{
+    finish_reason?: string;
+    // Reasoning models leave `content` empty and put the text in `reasoning`.
+    message?: { content?: string; reasoning?: string };
+  }>;
+  error?: { message?: string };
 }
 
 @Injectable()
@@ -88,17 +101,42 @@ export class OpenRouterService {
           model,
           messages,
           temperature: 0.3,
-          max_tokens: 900,
+          // Generous enough that a reasoning model still has budget left for the
+          // answer after its thinking tokens — an exhausted budget returns an
+          // empty `content` and the read silently degrades to "unavailable".
+          // The answer itself is ~200 tokens; the rest is thinking headroom.
+          max_tokens: 4000,
           // Best-effort structured output; we still parse defensively because
           // free models don't reliably honour response_format.
           response_format: { type: "json_object" },
         }),
-        // Keep the user-facing path snappy; :online web search can be slow.
-        retries: 1,
-        timeoutMs: opts.web ? 60_000 : 45_000,
+        // HARD CONSTRAINT: this route is reached through a Firebase Hosting
+        // rewrite, which kills the request at 60s and hands the browser a 503
+        // that never reaches our error handling. So the WHOLE call — every
+        // attempt — must finish inside that window. retries:1 at 45s each was
+        // ~90s worst case and did exactly that on a slow upstream. One attempt,
+        // generous budget: a failure caches briefly and the next view retries.
+        retries: 0,
+        timeoutMs: opts.web ? 50_000 : 40_000,
       });
-      const text = res?.choices?.[0]?.message?.content;
-      return typeof text === "string" && text.trim() ? text : null;
+      const choice = res?.choices?.[0];
+      // Prefer `content`; fall back to `reasoning` so a reasoning model that
+      // emitted its JSON as "thinking" still yields a usable read.
+      const text = choice?.message?.content?.trim()
+        ? choice.message.content
+        : choice?.message?.reasoning;
+      if (typeof text === "string" && text.trim()) return text;
+      // Empty completion: a 200 with nothing usable. Log enough to tell a
+      // retired/incompatible model apart from a truncated one without having to
+      // redeploy for diagnostics. The key is header-only, so nothing leaks here.
+      this.logger.warn(
+        `OpenRouter returned an empty completion (${model}): finish_reason=${
+          choice?.finish_reason ?? "n/a"
+        } error=${res?.error?.message ?? "none"} choices=${
+          res?.choices?.length ?? 0
+        }`,
+      );
+      return null;
     } catch (err) {
       this.logger.warn(
         `OpenRouter chat failed (${model}): ${(err as Error).message}`,

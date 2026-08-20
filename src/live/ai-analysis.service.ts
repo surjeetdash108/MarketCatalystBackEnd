@@ -23,7 +23,10 @@ import { OnDemandService } from "./ondemand.service";
  */
 
 const AI_TTL_MS = 30 * 60_000; // regenerate an analysis older than 30 min
-const AI_ERR_TTL_MS = 5 * 60_000; // re-try a failed/no-result analysis after 5 min
+// Short, because free models fail transiently (upstream rate limits) far more
+// often than permanently — a long error TTL would strand a ticker on
+// "unavailable" well after the provider recovered.
+const AI_ERR_TTL_MS = 2 * 60_000; // re-try a failed/no-result analysis after 2 min
 
 export type AiKind = "stock_technical";
 
@@ -44,30 +47,73 @@ Rules:
 }`;
 
 /**
- * Defensive JSON extraction — free models sometimes wrap JSON in prose or code
- * fences. Try a straight parse, then a fenced-block strip, then the first
- * balanced-looking {...} substring. Returns null when nothing parses.
+ * Every balanced {...} substring in the text, outermost-first, in document
+ * order. Brace counting is string- and escape-aware so a `{` inside a quoted
+ * value can't throw the depth off.
+ */
+function balancedObjects(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        out.push(text.slice(start, i + 1));
+        start = -1;
+      } else if (depth < 0) {
+        depth = 0; // stray closer — resync
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Defensive JSON extraction — free models wrap JSON in prose or code fences,
+ * and reasoning models emit a whole thinking trace around it (the trace itself
+ * often quotes fragments of the schema, so "first { to last }" grabs garbage).
+ * Strategy: try a straight parse, then fenced blocks, then every balanced
+ * object — preferring the LAST one that actually carries our schema, since the
+ * real answer comes after the thinking. Returns null when nothing parses.
  */
 function safeParseJson(raw: string): Record<string, unknown> | null {
-  const attempts: string[] = [];
   const trimmed = raw.trim();
-  attempts.push(trimmed);
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) attempts.push(fenced[1].trim());
-  const first = trimmed.indexOf("{");
-  const last = trimmed.lastIndexOf("}");
-  if (first !== -1 && last > first) attempts.push(trimmed.slice(first, last + 1));
+  const attempts: string[] = [trimmed];
+  for (const m of trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+    attempts.push(m[1].trim());
+  }
+  // Later objects first: the answer trails the reasoning.
+  attempts.push(...balancedObjects(trimmed).reverse());
+
+  const parsedAll: Record<string, unknown>[] = [];
   for (const a of attempts) {
     try {
       const parsed = JSON.parse(a);
-      if (parsed && typeof parsed === "object") {
-        return parsed as Record<string, unknown>;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const obj = parsed as Record<string, unknown>;
+        // A candidate carrying the schema wins outright.
+        if ("headline" in obj || "analysis" in obj) return obj;
+        parsedAll.push(obj);
       }
     } catch {
       /* try next */
     }
   }
-  return null;
+  return parsedAll[0] ?? null;
 }
 
 @Injectable()
@@ -160,6 +206,14 @@ export class AiAnalysisService {
     const parsed = raw ? safeParseJson(raw) : null;
 
     if (!parsed) {
+      // Distinguish "no completion at all" (already logged by the vendor) from
+      // "the model replied but not with JSON" — the latter needs a prompt or
+      // model change, so keep a short preview of what it actually said.
+      if (raw) {
+        this.logger.warn(
+          `AI read for ${sym}: model replied but no JSON could be parsed (${this.ai.modelName}). First 200 chars: ${raw.slice(0, 200).replace(/\s+/g, " ")}`,
+        );
+      }
       return {
         ticker: sym,
         ok: false,
