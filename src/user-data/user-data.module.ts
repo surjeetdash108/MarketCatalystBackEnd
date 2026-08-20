@@ -1,4 +1,6 @@
 import { Module } from "@nestjs/common";
+import { LiveModule } from "../live/live.module";
+import { AiUserController } from "./ai-user.controller";
 import { FeatureRequestsController } from "./feature-requests.controller";
 import { NotificationsController } from "./notifications.controller";
 import { PortfolioController } from "./portfolio.controller";
@@ -13,7 +15,10 @@ import { WhoamiUserController } from "./whoami-user.controller";
  * Firebase uid (never a client-supplied one).
  */
 @Module({
+  // LiveModule exports AiAnalysisService, which the aggregate routes use.
+  imports: [LiveModule],
   controllers: [
+    AiUserController,
     WhoamiUserController,
     StockNotesController,
     WatchlistController,

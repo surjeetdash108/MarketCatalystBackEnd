@@ -14,6 +14,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { CurrentUser } from "../common/current-user.decorator";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
+import { AiAnalysisService } from "../live/ai-analysis.service";
 import { setWithCreatedAt } from "../common/firestore-batch.util";
 
 const TICKER_RE = /^[A-Z][A-Z0-9.-]{0,9}$/;
@@ -41,7 +42,10 @@ interface WatchlistSummary {
 @Controller("api")
 @UseGuards(FirebaseAuthGuard)
 export class WatchlistController {
-  constructor(private readonly firebase: FirebaseAdminService) {}
+  constructor(
+    private readonly firebase: FirebaseAdminService,
+    private readonly aiAnalysis: AiAnalysisService,
+  ) {}
 
   private col(uid: string) {
     return this.firebase.firestore.collection(`users/${uid}/watchlists`);
@@ -152,6 +156,9 @@ export class WatchlistController {
     if (all.size <= 1)
       throw new BadRequestException("Cannot delete your only watchlist");
     await this.col(uid).doc(id).delete();
+    // Drop the list's cached AI summary too — nothing else ever revisits that
+    // doc id, so without this it would linger in ai_watchlist_analysis forever.
+    await this.aiAnalysis.deleteWatchlistSummary(uid, id);
     return { watchlists: await this.listAll(uid) };
   }
 

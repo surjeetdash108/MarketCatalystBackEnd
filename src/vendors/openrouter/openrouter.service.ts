@@ -104,7 +104,7 @@ export class OpenRouterService {
    */
   async chat(
     messages: ChatMessage[],
-    opts: { web?: boolean; model?: string } = {},
+    opts: { web?: boolean; model?: string; timeoutMs?: number } = {},
   ): Promise<string | null> {
     if (!this.apiKey) return null;
     const base = opts.model?.trim() || this.model;
@@ -141,7 +141,10 @@ export class OpenRouterService {
         retries: 0,
         // Budget is per attempt, and the caller may make TWO (primary then
         // fallback), so both together must still clear Hosting's 60s cutoff.
-        timeoutMs: opts.web ? 26_000 : 22_000,
+        // Caller may tighten this: the whole request also pays a COLD START
+        // (this service scales to zero), and that boot time counts against
+        // Hosting's 60s just like the LLM does.
+        timeoutMs: opts.timeoutMs ?? (opts.web ? 26_000 : 22_000),
       });
       const choice = res?.choices?.[0];
       // Prefer `content`; fall back to `reasoning` so a reasoning model that
