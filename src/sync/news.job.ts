@@ -1,6 +1,11 @@
 import { Inject, Injectable, Logger, Optional, OnModuleInit } from "@nestjs/common";
 import { AllSourcesFailedError } from "../adapters/adapter-error";
-import { NEWS_ADAPTER, NEWS_FMP_ADAPTER, type NewsAdapter } from "../adapters/types";
+import {
+  NEWS_ADAPTER,
+  NEWS_FMP_ADAPTER,
+  type CanonicalNewsArticle,
+  type NewsAdapter,
+} from "../adapters/types";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import {
   batchSetWithCreatedAt,
@@ -111,6 +116,69 @@ export class NewsJob implements OnModuleInit {
     return writes.length;
   }
 
+  /**
+   * Score one article's importance (merging multi-ticker stories into one
+   * notification, keyed by article id) and queue its `news` doc under
+   * `${symbol}_${id}`. Shared by the per-ticker sweep and the market-wide head
+   * fetch so both paths write identical docs and de-duplicate on the same id.
+   */
+  private ingestArticle(
+    a: CanonicalNewsArticle,
+    symbol: string,
+    docs: Array<{ id: string; data: Record<string, unknown> }>,
+    important: Map<string, NotificationInput>,
+  ): void {
+    // Importance is derived, not vendor-supplied — see news-importance.util.ts
+    // for why and how. Notifications reuse the news doc id so a re-run updates in
+    // place instead of duplicating.
+    const verdict = scoreImportance(a);
+    if (verdict.important) {
+      // Keyed on the ARTICLE id, not ticker_article. One story that mentions
+      // several tickers is fetched once per ticker, which previously produced a
+      // separate notification each time — the same headline appeared 4x in the
+      // bell (NVDA, GOOG, GOOGL, ...). Merging tickers into the existing entry
+      // keeps one row per story.
+      const existing = important.get(a.id);
+      if (existing) {
+        if (a.ticker && !existing.tickers.includes(a.ticker)) {
+          existing.tickers.push(a.ticker);
+        }
+      } else {
+        important.set(a.id, {
+          id: a.id,
+          type: "news",
+          header: a.headline,
+          detail: a.summary,
+          imageUrl: a.imageUrl,
+          tickers: a.ticker ? [a.ticker] : [],
+          source: a.source,
+          url: a.url,
+          publishedAt: a.publishedAt,
+          direction: verdict.direction,
+          reasons: verdict.reasons,
+        });
+      }
+    }
+    docs.push({
+      id: `${symbol}_${a.id}`,
+      data: {
+        ticker: a.ticker,
+        headline: a.headline,
+        summary: a.summary,
+        source: a.source,
+        vendor: a.vendor,
+        url: a.url,
+        category: a.category,
+        sentiment: a.sentiment,
+        sentimentReasoning: a.sentimentReasoning,
+        keywords: a.keywords,
+        imageUrl: a.imageUrl,
+        publishedAt: a.publishedAt,
+        updatedAt: new Date().toISOString(),
+      },
+    });
+  }
+
   async run() {
     try {
       const cursor = await this.meta.getCursor(JOB_NAME);
@@ -121,7 +189,7 @@ export class NewsJob implements OnModuleInit {
       const to = new Date();
       const from = new Date();
       from.setUTCDate(from.getUTCDate() - LOOKBACK_DAYS);
-      const docs = [];
+      const docs: Array<{ id: string; data: Record<string, unknown> }> = [];
       let fallbackCount = 0;
       // Keyed by article id so a multi-ticker story collapses to one entry.
       const important = new Map<string, NotificationInput>();
@@ -163,55 +231,7 @@ export class NewsJob implements OnModuleInit {
             (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""),
           );
           for (const a of articles.slice(0, 8)) {
-            // Importance is derived, not vendor-supplied — see
-            // news-importance.util.ts for why and how. Notifications reuse the
-            // news doc id so a re-run updates in place instead of duplicating.
-            const verdict = scoreImportance(a);
-            if (verdict.important) {
-              // Keyed on the ARTICLE id, not ticker_article. One story that
-              // mentions several tickers is fetched once per ticker, which
-              // previously produced a separate notification each time — the same
-              // headline appeared 4x in the bell (NVDA, GOOG, GOOGL, ...).
-              // Merging tickers into the existing entry keeps one row per story.
-              const existing = important.get(a.id);
-              if (existing) {
-                if (a.ticker && !existing.tickers.includes(a.ticker)) {
-                  existing.tickers.push(a.ticker);
-                }
-              } else {
-                important.set(a.id, {
-                  id: a.id,
-                  type: "news",
-                  header: a.headline,
-                  detail: a.summary,
-                  imageUrl: a.imageUrl,
-                  tickers: a.ticker ? [a.ticker] : [],
-                  source: a.source,
-                  url: a.url,
-                  publishedAt: a.publishedAt,
-                  direction: verdict.direction,
-                  reasons: verdict.reasons,
-                });
-              }
-            }
-            docs.push({
-              id: `${symbol}_${a.id}`,
-              data: {
-                ticker: a.ticker,
-                headline: a.headline,
-                summary: a.summary,
-                source: a.source,
-                vendor: a.vendor,
-                url: a.url,
-                category: a.category,
-                sentiment: a.sentiment,
-                sentimentReasoning: a.sentimentReasoning,
-                keywords: a.keywords,
-                imageUrl: a.imageUrl,
-                publishedAt: a.publishedAt,
-                updatedAt: new Date().toISOString(),
-              },
-            });
+            this.ingestArticle(a, symbol, docs, important);
           }
         } catch (err) {
           if (err instanceof AllSourcesFailedError) {
@@ -226,6 +246,34 @@ export class NewsJob implements OnModuleInit {
         }
         await sleep(DELAY_MS);
       }
+
+      // MARKET-WIDE head fetch (once per run): the per-ticker cursor refreshes
+      // only BATCH_SIZE of ~241 tickers each run, so the freshest market story
+      // can lag hours until its ticker's batch comes around — leaving the "Live"
+      // feed (and the Dashboard, which reads the same `news` collection) frozen.
+      // One extra Polygon call for the newest market-wide articles keeps the feed
+      // head current regardless of the cursor. Each is scoped to its primary
+      // ticker and flows through the SAME ingest path, so a doc id collides
+      // idempotently with any per-ticker write of the same story (no duplicates).
+      // Best-effort — a failure just leaves the feed on the per-ticker sweep.
+      let marketCount = 0;
+      if (typeof this.news.fetchMarketNews === "function") {
+        try {
+          const market = await this.news.fetchMarketNews(
+            isoDate(from),
+            isoDate(to),
+          );
+          for (const a of market.data) {
+            this.ingestArticle(a, a.ticker, docs, important);
+          }
+          marketCount = market.data.length;
+        } catch (err) {
+          this.logger.warn(
+            `Market-wide news fetch failed: ${(err as Error).message}`,
+          );
+        }
+      }
+
       await chunkedBatchSet(this.firebase.firestore, "news", docs);
       const counted = await this.writeNewsCounts(batch);
       // Only stories matching some user's watchlist/portfolio are stored; the
@@ -234,7 +282,8 @@ export class NewsJob implements OnModuleInit {
       const pub = await this.notifications.publish([...important.values()]);
       await this.notifications.prune();
       this.logger.log(
-        `${important.size}/${docs.length} articles important; ` +
+        `${important.size}/${docs.length} articles important ` +
+          `(${marketCount} market-wide head); ` +
           `${pub.written} notification(s) to ${pub.recipients} user(s); ` +
           `${pub.skipped} matched no subscriber; ` +
           `newsCount refreshed for ${counted} ticker(s)`,

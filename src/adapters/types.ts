@@ -182,6 +182,16 @@ export interface NewsAdapter {
     from: string,
     to: string,
   ): Promise<AdapterResult<CanonicalNewsArticle[]>>;
+  /**
+   * OPTIONAL market-wide newest-news fetch (no ticker filter), used to keep the
+   * "Live" feed head current independent of the per-ticker cursor. Only vendors
+   * with a market-wide endpoint implement it (Polygon does; FMP per-ticker does
+   * not) — callers must feature-detect before calling.
+   */
+  fetchMarketNews?(
+    from: string,
+    to: string,
+  ): Promise<AdapterResult<CanonicalNewsArticle[]>>;
 }
 
 export interface DividendsAdapter {

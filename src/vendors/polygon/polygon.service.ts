@@ -981,4 +981,25 @@ export class PolygonService {
     );
     return res.results ?? [];
   }
+
+  /**
+   * MARKET-WIDE newest news (NO ticker filter) — the freshest stories across the
+   * whole market, newest-first. Feeds the "Live" intraday feed's HEAD so its top
+   * is always the absolute-newest article regardless of the per-ticker cursor
+   * batch (which refreshes only ~80 tickers/run and can lag a fresh story by
+   * hours). `limit` is higher than the per-ticker call because one request must
+   * span many tickers. Same shape as getNews so the adapter maps them identically.
+   */
+  async getMarketNews(
+    from: string,
+    to: string,
+    limit = 100,
+  ): Promise<PolygonNewsArticle[]> {
+    const res = await fetchJson<{ results?: PolygonNewsArticle[] }>(
+      `${this.baseUrl}/v2/reference/news` +
+        `?published_utc.gte=${from}&published_utc.lte=${to}` +
+        `&order=desc&sort=published_utc&limit=${limit}&apiKey=${this.apiKey}`,
+    );
+    return res.results ?? [];
+  }
 }

@@ -24,6 +24,22 @@ export class CompositeNewsAdapter implements NewsAdapter {
       : primary.sourceName;
   }
 
+  /**
+   * Market-wide newest news, proxied to the PRIMARY source only (the head-fetch
+   * is a Polygon capability; there is no per-story fallback semantics here). When
+   * the primary has no market-wide endpoint this degrades to an empty result, so
+   * the caller's feed simply omits the head-fetch instead of erroring.
+   */
+  async fetchMarketNews(
+    from: string,
+    to: string,
+  ): Promise<AdapterResult<CanonicalNewsArticle[]>> {
+    if (!this.primary.fetchMarketNews) {
+      return { data: [], source: this.sourceName, warnings: [] };
+    }
+    return this.primary.fetchMarketNews(from, to);
+  }
+
   async fetchNews(
     ticker: string,
     from: string,
