@@ -185,7 +185,16 @@ env:
   # with "unavailable for free"). Pick a replacement from the entries priced at
   # 0 in https://openrouter.ai/api/v1/models, and prefer an instruct ("-it")
   # model over a reasoning one — reasoning models can return empty content.
+  # "openrouter/free" is an auto-router across free models, so it survives both
+  # retirements and per-model rate limits.
   - variable: OPENROUTER_MODEL
+    value: "openrouter/free"
+  # Second-chance model, used only when the primary returns no parseable JSON
+  # (bad auto-route, upstream 429, or a 402 on the paid :online web plugin).
+  # It is always called WITHOUT web search, so a no-news ticker still gets a
+  # technicals-only read instead of a blank widget. Must be a CAPABLE instruct
+  # model: a small one returns a half-filled object.
+  - variable: OPENROUTER_FALLBACK_MODEL
     value: "google/gemma-4-31b-it:free"
 
   # Optional vendors (code warns and no-ops if unset — see the vendor services'

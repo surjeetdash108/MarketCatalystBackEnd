@@ -15,7 +15,10 @@ import { OnDemandService } from "./ondemand.service";
  *
  * The read SYNTHESISES the technical indicators AND the news together — both are
  * passed to the model — rather than summarising news alone. When Polygon+FMP
- * have no news for the ticker, OpenRouter's :online web-search fills the gap.
+ * have no news for the ticker we ask OpenRouter's :online web-search to fill the
+ * gap, but that plugin is a PAID add-on: on an account without credits it 402s,
+ * so the second attempt always retries WITHOUT web and returns a technicals-only
+ * read rather than nothing.
  *
  * Generic by design: `generate(kind, ...)` is the single entry point that later
  * phases (movers / portfolio / watchlist / dashboard / recap) extend with new
@@ -37,6 +40,8 @@ Rules:
 - Ground every claim in the provided numbers/news. Never invent figures or events.
 - If the technicals and the news point in different directions, say so explicitly.
 - Keep it tight and factual. No hype.
+- Do NOT think out loud, restate the task, or write any preamble, explanation or
+  markdown. Your reply must begin with { and end with } and contain nothing else.
 - Respond with ONLY a valid JSON object (no markdown, no prose), matching EXACTLY this shape:
 {
   "headline": "one-line takeaway, <= 12 words",
@@ -202,8 +207,47 @@ export class AiAnalysisService {
       { role: "user", content: userMsg },
     ];
 
-    const raw = await this.ai.chat(messages, { web: useWeb });
-    const parsed = raw ? safeParseJson(raw) : null;
+    // At most TWO attempts, to stay inside Hosting's 60s ceiling:
+    //   1. primary model — with :online web search when we have no first-party news
+    //   2. fallback model — NEVER web search
+    //
+    // Two independent reasons for the second attempt:
+    //   * free models are individually unreliable (one may emit only a reasoning
+    //     trace and never produce the object; another may be rate-limited),
+    //   * :online is a PAID OpenRouter add-on and returns 402 on an account with
+    //     no credits — so on a no-news ticker attempt 1 can NEVER succeed until
+    //     credits are bought. A technicals-only read beats showing nothing, and
+    //     the prompt already tells the model to say "No notable recent news."
+    const attempts: Array<{ model: string; web: boolean }> = [
+      { model: this.ai.modelName, web: useWeb },
+    ];
+    const fb = this.ai.fallbackModelName;
+    if (fb && fb !== this.ai.modelName) attempts.push({ model: fb, web: false });
+    else if (useWeb) attempts.push({ model: this.ai.modelName, web: false });
+
+    let usedModel = this.ai.modelName;
+    let usedWeb = useWeb;
+    let raw: string | null = null;
+    let parsed: Record<string, unknown> | null = null;
+
+    for (let i = 0; i < attempts.length; i++) {
+      const a = attempts[i];
+      if (i > 0) {
+        this.logger.warn(
+          `AI read for ${sym}: attempt ${i} produced no JSON — retrying on ${a.model}${a.web ? " (web)" : " (no web)"}`,
+        );
+      }
+      const r = await this.ai.chat(messages, { web: a.web, model: a.model });
+      if (r) raw = r;
+      const pj = r ? safeParseJson(r) : null;
+      if (pj) {
+        parsed = pj;
+        usedModel = a.model;
+        usedWeb = a.web;
+        break;
+      }
+      if (!this.ai.enabled) break; // no key — retrying can't help
+    }
 
     if (!parsed) {
       // Distinguish "no completion at all" (already logged by the vendor) from
@@ -211,14 +255,14 @@ export class AiAnalysisService {
       // model change, so keep a short preview of what it actually said.
       if (raw) {
         this.logger.warn(
-          `AI read for ${sym}: model replied but no JSON could be parsed (${this.ai.modelName}). First 200 chars: ${raw.slice(0, 200).replace(/\s+/g, " ")}`,
+          `AI read for ${sym}: model replied but no JSON could be parsed (tried ${usedModel} + ${this.ai.fallbackModelName}). First 200 chars: ${raw.slice(0, 200).replace(/\s+/g, " ")}`,
         );
       }
       return {
         ticker: sym,
         ok: false,
-        model: this.ai.modelName,
-        usedWebSearch: useWeb,
+        model: usedModel,
+        usedWebSearch: usedWeb,
         newsCount: news.length,
         sourcesUsed: [],
         analysis: null,
@@ -232,10 +276,14 @@ export class AiAnalysisService {
     return {
       ticker: sym,
       ok: true,
-      model: this.ai.modelName,
-      usedWebSearch: useWeb,
+      model: usedModel,
+      usedWebSearch: usedWeb,
       newsCount: news.length,
-      sourcesUsed: useWeb ? ["openrouter-web"] : ["polygon", "fmp"],
+      sourcesUsed: usedWeb
+        ? ["openrouter-web"]
+        : news.length > 0
+          ? ["polygon", "fmp"]
+          : [],
       analysis: {
         headline: a.headline ?? null,
         volatility: a.volatility ?? null,

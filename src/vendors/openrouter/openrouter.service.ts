@@ -28,7 +28,15 @@ const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
  * with "unavailable for free") — check https://openrouter.ai/api/v1/models for
  * entries priced at 0 before changing this.
  */
-const DEFAULT_MODEL = "google/gemma-4-31b-it:free";
+const DEFAULT_MODEL = "openrouter/free";
+/**
+ * Tried only if the primary returns nothing parseable. Override with
+ * OPENROUTER_FALLBACK_MODEL. Must be a capable INSTRUCT model — a small one
+ * (nemotron-3-nano-30b-a3b, ~3B active) parsed fine but returned a half-filled
+ * object: headline only, no momentum/news/setup. Gemma-4-31b-it fills the whole
+ * schema.
+ */
+const DEFAULT_FALLBACK_MODEL = "google/gemma-4-31b-it:free";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -49,12 +57,20 @@ export class OpenRouterService {
   private readonly logger = new Logger(OpenRouterService.name);
   private readonly apiKey: string;
   private readonly model: string;
+  private readonly fallbackModel: string;
 
   constructor(private readonly config: ConfigService) {
     this.apiKey = String(this.config.get("OPENROUTER_API_KEY", "")).trim();
     this.model =
       String(this.config.get("OPENROUTER_MODEL", DEFAULT_MODEL)).trim() ||
       DEFAULT_MODEL;
+    // Second-chance model, tried only when the primary produces nothing usable.
+    // Deliberately a different family from the primary so a provider-side
+    // outage or a bad auto-route doesn't take both attempts down together.
+    this.fallbackModel =
+      String(
+        this.config.get("OPENROUTER_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL),
+      ).trim() || DEFAULT_FALLBACK_MODEL;
     if (!this.apiKey) {
       this.logger.warn(
         "OPENROUTER_API_KEY not set — AI features stay disabled (endpoints return an ai-disabled result). Set the key to enable.",
@@ -72,6 +88,11 @@ export class OpenRouterService {
     return this.model;
   }
 
+  /** The second-chance model id, tried when the primary yields no usable JSON. */
+  get fallbackModelName(): string {
+    return this.fallbackModel;
+  }
+
   /**
    * One chat completion. Returns the raw assistant string, or null when the
    * vendor is disabled or the call fails (best-effort — never throws to the
@@ -83,10 +104,11 @@ export class OpenRouterService {
    */
   async chat(
     messages: ChatMessage[],
-    opts: { web?: boolean } = {},
+    opts: { web?: boolean; model?: string } = {},
   ): Promise<string | null> {
     if (!this.apiKey) return null;
-    const model = opts.web ? `${this.model}:online` : this.model;
+    const base = opts.model?.trim() || this.model;
+    const model = opts.web ? `${base}:online` : base;
     try {
       const res = await fetchJson<OpenRouterChatResponse>(OPENROUTER_URL, {
         method: "POST",
@@ -117,7 +139,9 @@ export class OpenRouterService {
         // ~90s worst case and did exactly that on a slow upstream. One attempt,
         // generous budget: a failure caches briefly and the next view retries.
         retries: 0,
-        timeoutMs: opts.web ? 50_000 : 40_000,
+        // Budget is per attempt, and the caller may make TWO (primary then
+        // fallback), so both together must still clear Hosting's 60s cutoff.
+        timeoutMs: opts.web ? 26_000 : 22_000,
       });
       const choice = res?.choices?.[0];
       // Prefer `content`; fall back to `reasoning` so a reasoning model that
