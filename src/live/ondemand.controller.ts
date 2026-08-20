@@ -9,13 +9,16 @@ import {
   Query,
   Req,
   Res,
+  UseGuards,
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { createHash } from "crypto";
 import { OnDemandService, BARS_TFS } from "./ondemand.service";
+import { AiAnalysisService } from "./ai-analysis.service";
 import { TickerSearchService } from "./ticker-search.service";
 import { SearchedTickersService } from "./searched-tickers.service";
 import { OPTIONS_UNIVERSE } from "../common/options-universe";
+import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
 /**
  * On-demand data endpoints (see ondemand.service.ts for the caching design).
@@ -56,9 +59,33 @@ function sendWithEtag(req: Request, res: Response, body: unknown): void {
 export class OnDemandController {
   constructor(
     private readonly ondemand: OnDemandService,
+    private readonly aiAnalysis: AiAnalysisService,
     private readonly search: TickerSearchService,
     private readonly searchedTickers: SearchedTickersService,
   ) {}
+
+  /**
+   * On-demand AI technical read for one ticker (technicals + news, synthesised
+   * by OpenRouter, cached 30 min in ai_technical_analysis). Auth-only — open to
+   * every signed-in user (no plan/entitlement gate) but not anonymous, so the
+   * paid OpenRouter calls can't be triggered without a login. Cache-Control is
+   * `private` precisely because the route is authenticated.
+   */
+  @Get("ai-analysis")
+  @UseGuards(FirebaseAuthGuard)
+  @Header("Cache-Control", "private, max-age=300")
+  async aiAnalysisRead(
+    @Query("ticker") ticker: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? "").toUpperCase().trim();
+    if (!TICKER_RE.test(sym)) {
+      throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+    }
+    const doc = await this.aiAnalysis.getStockTechnical(sym);
+    sendWithEtag(req, res, doc);
+  }
 
   @Get("bars")
   @Header(

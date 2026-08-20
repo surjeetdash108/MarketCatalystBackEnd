@@ -170,6 +170,20 @@ env:
   - variable: FRED_API_KEY
     secret: FRED_API_KEY
 
+  # AI (OpenRouter) — the LLM gateway for AI analysis. The KEY is a secret; the
+  # MODEL is a plain, overridable env var (default a free model). Create + grant
+  # the secret first, same steps as above:
+  #   firebase apphosting:secrets:set OPENROUTER_API_KEY --project market-catalyst-502415
+  #   firebase apphosting:secrets:grantaccess OPENROUTER_API_KEY --backend <BACKEND_ID> --project market-catalyst-502415
+  # Unset key ⇒ OpenRouterService.enabled is false and AI endpoints return an
+  # ai-disabled result (no crash). NOTE: the AI endpoint runs on the LIVE service
+  # too — add OPENROUTER_API_KEY/OPENROUTER_MODEL to its `gcloud run deploy
+  # --set-secrets/--set-env-vars` as well (see deploy/DEPLOY.md).
+  - variable: OPENROUTER_API_KEY
+    secret: OPENROUTER_API_KEY
+  - variable: OPENROUTER_MODEL
+    value: "deepseek/deepseek-chat-v3:free"
+
   # Optional vendors (code warns and no-ops if unset — see the vendor services'
   # onModuleInit). Uncomment once the secret exists for this project.
   # - variable: BENZINGA_API_KEY
