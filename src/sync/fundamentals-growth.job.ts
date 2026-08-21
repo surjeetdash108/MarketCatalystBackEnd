@@ -74,12 +74,8 @@ export class FundamentalsGrowthJob implements OnModuleInit {
       finSnaps.forEach((s) => {
         if (s.exists) epsHistByTicker.set(s.id, (s.data()?.epsHistory ?? []) as EpsHistoryRow[]);
       });
-      const storedEpsByTicker = new Map<string, number | null>();
       coSnaps.forEach((s) => {
-        if (s.exists) {
-          priceByTicker.set(s.id, (s.data()?.price ?? null) as number | null);
-          storedEpsByTicker.set(s.id, (s.data()?.eps ?? null) as number | null);
-        }
+        if (s.exists) priceByTicker.set(s.id, (s.data()?.price ?? null) as number | null);
       });
 
       const writes = [];
@@ -162,21 +158,16 @@ export class FundamentalsGrowthJob implements OnModuleInit {
           // contradiction — GILD showed "+77%" against EPS -0.39 — so drop the
           // fallback when the two bases disagree in sign. The FMP path is exempt:
           // it is computed from the same actuals epsTtm is.
-          // Compare against what the card ACTUALLY shows. `epsTtm` is null for
-          // exactly the tickers this guard is for — no FMP history is why the
-          // GAAP fallback ran — so fall back to the stored eps, which is the
-          // number rendered beside the growth figure. Without this, ANGI and
-          // GILD kept publishing positive growth next to a negative EPS.
-          const displayedEps = epsTtm ?? storedEpsByTicker.get(ticker) ?? null;
-          const gaapContradictsDisplayedEps =
-            epsGrowth != null &&
-            epsGrowth > 0 &&
-            displayedEps != null &&
-            displayedEps < 0;
+          // NOTE: positive growth beside a NEGATIVE eps is not a contradiction
+          // and must not be suppressed. Growth is last-completed-fiscal-year;
+          // eps is trailing-twelve-month. GILD is the worked example — FY25 8.15
+          // vs FY24 4.61 is a real +76.8%, while its TTM is -0.39 because Q2 FY26
+          // took a -6.75 charge. Both figures are correct for their own window.
+          // An earlier revision nulled these out and was throwing away good data.
           const epsGrowthFinal =
             epsGrowthReported != null
               ? epsGrowthReported
-              : epsGrowth == null || gaapContradictsDisplayedEps
+              : epsGrowth == null
                 ? null
                 : round(epsGrowth);
 
