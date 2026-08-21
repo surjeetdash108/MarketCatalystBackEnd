@@ -179,15 +179,14 @@ export class FundamentalsGrowthJob implements OnModuleInit {
               ...(revGrowth != null
                 ? { revenueGrowthYoY: round(revGrowth) }
                 : {}),
-              // Three-way, not two: a value writes it; "we had the inputs and
-              // they don't support a figure" CLEARS it; only "no inputs yet"
-              // leaves the stored value alone. Without the middle case a wrong
-              // number computed under older data survives every later run.
-              ...(epsGrowthFinal != null
-                ? { epsGrowthYoY: epsGrowthFinal }
-                : annualEpsGrowthInputsPresent(epsHist)
-                  ? { epsGrowthYoY: null }
-                  : {}),
+              // Reaching this line means the Polygon annual statement WAS
+              // fetched (the !latest branch above returns early), so inputs were
+              // evaluated by definition — a null result is "these inputs support
+              // no figure" and the stored value must be cleared, not preserved.
+              // Gating this on FMP epsHistory instead left ANV/SPRY/ANGI/GILD
+              // stale: they have no FMP history, which is precisely why the GAAP
+              // fallback ran for them in the first place.
+              epsGrowthYoY: epsGrowthFinal,
               ...(grossMargin != null
                 ? { grossMargin: round(grossMargin) }
                 : {}),
