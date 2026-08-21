@@ -13,6 +13,7 @@ import { MacroEventsJob } from "./macro-events.job";
 import { MarketIndicesJob } from "./market-indices.job";
 import { MarketMoversJob } from "./market-movers.job";
 import { MarketQuotesJob } from "./market-quotes.job";
+import { CompanyQuotesJob } from "./company-quotes.job";
 import { NewsJob } from "./news.job";
 import { OptionsChainsJob } from "./options-chains.job";
 import { FearGreedJob } from "./fear-greed.job";
@@ -75,6 +76,7 @@ import { LiveModule } from "../live/live.module";
     IntradayBarsJob,
     CorporateActionsJob,
     MarketQuotesJob,
+    CompanyQuotesJob,
     RsRatingJob,
     TechnicalIndicatorsJob,
     TechRatingJob,

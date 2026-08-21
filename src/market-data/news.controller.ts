@@ -8,7 +8,15 @@ import { MarketDataService } from "./market-data.service";
 // per ticker per article), so a flat cache-aside read there would ship the
 // entire collection into memory just to show the 30-60 most recent items two
 // screens actually want. This keeps its own small cache instead.
-const NEWS_FEED_LIMIT = 60;
+// Must cover a FULL trading day, not just the last hour or two. commentary.tsx
+// splits this single response client-side into "Before the Bell" (published
+// before 09:30 ET), "After the Close" (>= 16:00 ET), Macro and My Feed. At 60
+// the window only ever held the newest couple of hours, so once ~60 regular-
+// session stories published, every pre-market article fell out of the response
+// and "Before the Bell" rendered its empty state for the rest of the day —
+// even though the articles existed in Firestore. ~340KB uncompressed, ~50KB
+// gzipped, behind a 2-min server cache + 120s CDN cache.
+const NEWS_FEED_LIMIT = 300;
 const NEWS_FEED_CACHE_MS = 2 * 60_000;
 // news.job.ts's own cron runs every 30 min — ensureFresh only needs to trigger
 // a refresh when nothing has synced in roughly that window, not MarketDataService's

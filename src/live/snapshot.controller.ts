@@ -25,7 +25,12 @@ import { MarketStatusService } from "./market-status.service";
  */
 
 const TICKER_RE = /^[A-Z.]{1,10}$/;
-const MAX_TICKERS = 50;
+// Matches the vendor's own per-call ceiling (`limit=250` on the universal
+// snapshot), so a whole-screen request is ONE upstream call rather than several.
+// Was 50, which forced the heatmap (~455 tiles) into 10 round-trips just to
+// overlay live prices. Raising it costs no extra vendor load: SnapshotCacheService
+// refreshes the demanded set on a shared timer, so upstream stays O(1) in users.
+const MAX_TICKERS = 250;
 
 @Controller("live")
 export class SnapshotController {
