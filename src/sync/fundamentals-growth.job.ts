@@ -90,7 +90,20 @@ export class FundamentalsGrowthJob implements OnModuleInit {
           const periods = result.data;
           const [latest, prior] = periods;
           if (!latest) {
-            skipped++;
+            // No Polygon annual statement — every field below is Polygon-derived,
+            // so there is nothing to recompute. But epsGrowthYoY comes from the
+            // FMP epsHistory we already batch-read, and a stale one must still be
+            // cleared here: SNDK is skipped on this branch, which is why its wrong
+            // -7.22% survived the first pass of this fix entirely.
+            const hist = epsHistByTicker.get(ticker) ?? [];
+            if (
+              latestAnnualEpsGrowth(hist) == null &&
+              annualEpsGrowthInputsPresent(hist)
+            ) {
+              writes.push({ ticker, data: { epsGrowthYoY: null } });
+            } else {
+              skipped++;
+            }
             await sleep(this.financials.requestDelayMs);
             continue;
           }
