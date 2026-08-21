@@ -11,7 +11,17 @@ import { activeUniverse } from "../common/ticker-universe";
 import { SyncRegistry } from "../common/sync-registry.service";
 
 const JOB_NAME = "companies";
-const BATCH_SIZE = 60;
+// Covers the WHOLE universe (~575 names) in one nightly run. Was 60/day, which
+// made a full profile refresh take ~9.5 DAYS — so at any moment most companies
+// carried a sector/name/marketCap (and, before company-quotes.job, a price) from
+// over a week ago, and a delisted ticker took just as long to be noticed.
+//
+// Sized against cost deliberately: ~6 vendor calls x 575 = ~3.5k/day. Polygon is
+// flat-rate (POLYGON_PAGE_DELAY_MS=0 — not per-call metered) and FMP paces
+// itself, so the marginal spend is Firestore only: ~17k writes + 17k reads a
+// month ≈ $0.04. The worker already runs minInstances=1, so the ~10-15 min of
+// work each night costs nothing extra. Total well under a dollar a month.
+const BATCH_SIZE = 600;
 // A ticker must be missing from the vendor for this long before it is flagged
 // delisted — one bad response should never retire a live company.
 const DELIST_GRACE_MS = 3 * 24 * 60 * 60 * 1000;
