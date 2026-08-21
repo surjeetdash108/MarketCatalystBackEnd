@@ -114,12 +114,22 @@ export class FundamentalsGrowthJob implements OnModuleInit {
             latest.revenue != null
               ? (latest.revenue - prior.revenue) / prior.revenue
               : null;
-          const epsGrowth =
+          // GAAP fallback, used only when FMP has no history. Same two guards as
+          // the FMP path (latestAnnualEpsGrowth): a positive base, and a
+          // magnitude cap — without the cap a near-zero prior year produced
+          // ANV -49,100% and SPRY -2,275%.
+          const epsGrowthRaw =
             prior &&
             prior.dilutedEps != null &&
             prior.dilutedEps > 0 &&
             latest.dilutedEps != null
               ? (latest.dilutedEps - prior.dilutedEps) / prior.dilutedEps
+              : null;
+          const epsGrowth =
+            epsGrowthRaw != null &&
+            Number.isFinite(epsGrowthRaw) &&
+            Math.abs(epsGrowthRaw) <= 10
+              ? epsGrowthRaw
               : null;
           const gp =
             latest.grossProfit ??
@@ -143,10 +153,17 @@ export class FundamentalsGrowthJob implements OnModuleInit {
               ? Math.round((price / epsTtm) * 100) / 100
               : null;
           const epsGrowthReported = latestAnnualEpsGrowth(epsHist);
+          // The figure is rendered beside epsTtm (non-GAAP). A GAAP-derived
+          // POSITIVE growth next to a negative non-GAAP EPS reads as a
+          // contradiction — GILD showed "+77%" against EPS -0.39 — so drop the
+          // fallback when the two bases disagree in sign. The FMP path is exempt:
+          // it is computed from the same actuals epsTtm is.
+          const gaapContradictsDisplayedEps =
+            epsGrowth != null && epsGrowth > 0 && epsTtm != null && epsTtm < 0;
           const epsGrowthFinal =
             epsGrowthReported != null
               ? epsGrowthReported
-              : epsGrowth == null
+              : epsGrowth == null || gaapContradictsDisplayedEps
                 ? null
                 : round(epsGrowth);
 
