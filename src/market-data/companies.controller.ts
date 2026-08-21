@@ -23,6 +23,13 @@ export class CompaniesController {
   async companies() {
     await this.marketData.ensureFresh("companies");
     const { companies } = await this.cached.get(["companies"]);
-    return companies;
+    // Drop tickers the vendor no longer knows (acquired / taken private /
+    // renamed — CYBR, WBA, ZI, BOBJ…). companies.job flags these only after
+    // they've been missing for days, and clears the flag if they come back.
+    // Without this they linger in every list, screener and heatmap showing a
+    // frozen last price as though it were live.
+    return (companies as Array<Record<string, unknown>>).filter(
+      (c) => c.delisted !== true,
+    );
   }
 }

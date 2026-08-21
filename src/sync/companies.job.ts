@@ -12,6 +12,9 @@ import { SyncRegistry } from "../common/sync-registry.service";
 
 const JOB_NAME = "companies";
 const BATCH_SIZE = 60;
+// A ticker must be missing from the vendor for this long before it is flagged
+// delisted — one bad response should never retire a live company.
+const DELIST_GRACE_MS = 3 * 24 * 60 * 60 * 1000;
 const DELAY_MS = 200;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -60,7 +63,32 @@ export class CompaniesJob implements OnModuleInit {
         try {
           const result = await this.companyProfile.fetchCompany(symbol);
           if (!result) {
-            const msg = `No profile found for ${symbol} on ${this.companyProfile.sourceName}`;
+            // The vendor has no reference row for this ticker. `fetchJson`
+            // THROWS on a transient/5xx error, so reaching here means a genuine
+            // NOT_FOUND — a delisted, acquired or renamed name (a live audit
+            // found CYBR/WBA/ZI/BOBJ still serving frozen prices as if current,
+            // e.g. CYBR at $420 long after the acquisition closed).
+            //
+            // Still not delisted on a single miss: stamp `missingSince` and only
+            // flag once it has persisted, so one malformed 200 can't retire a
+            // live company. Flagged rather than deleted — reversible, auditable,
+            // and the doc's history survives if the ticker comes back.
+            const now = Date.now();
+            const prior = await col.doc(symbol).get();
+            const since = (prior.get("missingSince") as string | undefined) ?? null;
+            const sinceMs = since ? Date.parse(since) : NaN;
+            const persisted =
+              Number.isFinite(sinceMs) && now - sinceMs >= DELIST_GRACE_MS;
+            await col.doc(symbol).set(
+              {
+                missingSince: since ?? new Date(now).toISOString(),
+                ...(persisted
+                  ? { delisted: true, delistedAt: new Date(now).toISOString() }
+                  : {}),
+              },
+              { merge: true },
+            );
+            const msg = `No profile found for ${symbol} on ${this.companyProfile.sourceName}${persisted ? " — flagged delisted" : " — first miss, watching"}`;
             this.logger.warn(msg);
             failed.push({ ticker: symbol, error: msg });
             continue;
@@ -96,6 +124,10 @@ export class CompaniesJob implements OnModuleInit {
             ...profile,
             source,
             warnings,
+            // Resolved again — clear any delisted/missing flags so a ticker that
+            // returns (or a false positive) recovers on its own.
+            missingSince: null,
+            delisted: false,
             updatedAt: new Date().toISOString(),
           });
           written++;
