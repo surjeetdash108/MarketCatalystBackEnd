@@ -45,7 +45,11 @@ export class NewsJob implements OnModuleInit {
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
       collections: ["news"],
-      cronExpression: "*/30 9-16 * * 1-5",
+      // Every 30 minutes, around the clock, 7 days a week. Market-hours-only
+      // (was "*/30 9-16 * * 1-5") left the feed stale overnight, over weekends
+      // and through holidays — but news breaks after the close, pre-market and
+      // at weekends, which is exactly when the Live Feed looked dead.
+      cronExpression: "*/30 * * * *",
       timeZone: "America/New_York",
     });
   }
