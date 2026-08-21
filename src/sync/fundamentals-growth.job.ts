@@ -74,8 +74,12 @@ export class FundamentalsGrowthJob implements OnModuleInit {
       finSnaps.forEach((s) => {
         if (s.exists) epsHistByTicker.set(s.id, (s.data()?.epsHistory ?? []) as EpsHistoryRow[]);
       });
+      const storedEpsByTicker = new Map<string, number | null>();
       coSnaps.forEach((s) => {
-        if (s.exists) priceByTicker.set(s.id, (s.data()?.price ?? null) as number | null);
+        if (s.exists) {
+          priceByTicker.set(s.id, (s.data()?.price ?? null) as number | null);
+          storedEpsByTicker.set(s.id, (s.data()?.eps ?? null) as number | null);
+        }
       });
 
       const writes = [];
@@ -158,8 +162,17 @@ export class FundamentalsGrowthJob implements OnModuleInit {
           // contradiction — GILD showed "+77%" against EPS -0.39 — so drop the
           // fallback when the two bases disagree in sign. The FMP path is exempt:
           // it is computed from the same actuals epsTtm is.
+          // Compare against what the card ACTUALLY shows. `epsTtm` is null for
+          // exactly the tickers this guard is for — no FMP history is why the
+          // GAAP fallback ran — so fall back to the stored eps, which is the
+          // number rendered beside the growth figure. Without this, ANGI and
+          // GILD kept publishing positive growth next to a negative EPS.
+          const displayedEps = epsTtm ?? storedEpsByTicker.get(ticker) ?? null;
           const gaapContradictsDisplayedEps =
-            epsGrowth != null && epsGrowth > 0 && epsTtm != null && epsTtm < 0;
+            epsGrowth != null &&
+            epsGrowth > 0 &&
+            displayedEps != null &&
+            displayedEps < 0;
           const epsGrowthFinal =
             epsGrowthReported != null
               ? epsGrowthReported
