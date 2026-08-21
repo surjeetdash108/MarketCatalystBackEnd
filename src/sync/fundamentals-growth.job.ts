@@ -11,7 +11,7 @@ import { SyncRegistry } from "../common/sync-registry.service";
 import {
   ttmReportedEpsFromRows,
   latestAnnualEpsGrowth,
-  annualEpsGrowthDecidable,
+  annualEpsGrowthInputsPresent,
   type EpsHistoryRow,
 } from "./financials.job";
 
@@ -155,7 +155,7 @@ export class FundamentalsGrowthJob implements OnModuleInit {
               // number computed under older data survives every later run.
               ...(epsGrowthFinal != null
                 ? { epsGrowthYoY: epsGrowthFinal }
-                : annualEpsGrowthDecidable(epsHist)
+                : annualEpsGrowthInputsPresent(epsHist)
                   ? { epsGrowthYoY: null }
                   : {}),
               ...(grossMargin != null

@@ -320,22 +320,21 @@ export function latestAnnualEpsGrowth(
 }
 
 /**
- * True when epsHistory holds enough complete fiscal years to DECIDE growth. A
- * null from latestAnnualEpsGrowth is then "not meaningful" rather than "no data
- * yet", which lets the caller CLEAR a stale stored value instead of preserving
- * it forever — SNDK kept showing -7.22% long after the inputs stopped
- * supporting any figure at all.
+ * True when the vendor actually returned reported EPS for this ticker, i.e. we
+ * EVALUATED real inputs. A null from latestAnnualEpsGrowth is then "these
+ * inputs support no figure" rather than "nothing arrived", which lets the
+ * caller CLEAR a stale stored value instead of preserving it forever.
+ *
+ * Deliberately NOT "has two complete fiscal years": SNDK has only one, yet was
+ * still displaying a -7.22% computed back when predecessor-company rows made a
+ * second year look complete. Requiring two years here would have kept exactly
+ * the stale value this is meant to clear. Only a genuinely empty response —
+ * a transient vendor failure — leaves the stored figure alone.
  */
-export function annualEpsGrowthDecidable(
+export function annualEpsGrowthInputsPresent(
   epsHistory: EpsHistoryRow[],
 ): boolean {
-  const byFY = new Map<number, Set<string>>();
-  for (const h of epsHistory) {
-    if (h.epsActual == null) continue;
-    if (!byFY.has(h.fiscalYear)) byFY.set(h.fiscalYear, new Set());
-    byFY.get(h.fiscalYear)!.add(h.fiscalPeriod);
-  }
-  return [...byFY.values()].filter((qs) => qs.size >= 4).length >= 2;
+  return epsHistory.some((h) => h.epsActual != null);
 }
 
 /** Maps one quarterly Polygon financials row onto the doc shape `financials/{ticker}.quarters` stores. */
