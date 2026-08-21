@@ -61,9 +61,15 @@ export class PolygonNewsAdapter implements NewsAdapter {
     const articles = await this.polygon.getMarketNews(from, to);
     const data: CanonicalNewsArticle[] = [];
     for (const a of articles) {
-      const primary = a.tickers?.[0];
-      if (!primary) continue;
-      data.push(this.toCanonical(a, primary));
+      // Emit one entry per MENTIONED ticker, not just `tickers[0]`. A story that
+      // names NVDA, GOOG and MSFT is relevant to all three, and the bulk sweep
+      // relies on this to reach the whole universe from one call — taking only
+      // the first ticker silently dropped the rest. Downstream keys docs by
+      // `${ticker}_${articleId}`, so this is exactly what the old per-ticker
+      // fetch produced, and duplicates collapse on that id.
+      for (const t of a.tickers ?? []) {
+        if (t) data.push(this.toCanonical(a, t));
+      }
     }
     return { data, source: this.sourceName, warnings: [] };
   }

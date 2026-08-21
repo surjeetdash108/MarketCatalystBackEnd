@@ -1,5 +1,4 @@
 import { Inject, Injectable, Logger, Optional, OnModuleInit } from "@nestjs/common";
-import { AllSourcesFailedError } from "../adapters/adapter-error";
 import {
   NEWS_ADAPTER,
   NEWS_FMP_ADAPTER,
@@ -18,15 +17,15 @@ import {
   type NotificationInput,
 } from "../common/notifications.service";
 import { SyncMetaService } from "../common/sync-meta.service";
-import { TICKER_UNIVERSE } from "../common/ticker-universe";
+import { TICKER_UNIVERSE, activeUniverse } from "../common/ticker-universe";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { isoDate } from "../common/date.util";
 
 const JOB_NAME = "news";
-const BATCH_SIZE = 80;
+// Newest articles kept per ticker — unchanged from the per-ticker sweep, so the
+// stored shape and volume stay the same now that the FETCH is bulk.
+const ARTICLES_PER_TICKER = 8;
 const LOOKBACK_DAYS = 2;
-const DELAY_MS = 150;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 
 @Injectable()
@@ -87,7 +86,8 @@ export class NewsJob implements OnModuleInit {
    *
    * `count()` is a server-side aggregation: it returns a number rather than the
    * documents, and bills one read per 1,000 counted. 80 of these per run is far
-   * cheaper than every browser pulling the whole collection.
+   * cheaper than every browser pulling the whole collection. Called only for
+   * tickers that actually received news in the run.
    */
   private async writeNewsCounts(tickers: string[]): Promise<number> {
     const col = this.firebase.firestore.collection("news");
@@ -123,8 +123,8 @@ export class NewsJob implements OnModuleInit {
   /**
    * Score one article's importance (merging multi-ticker stories into one
    * notification, keyed by article id) and queue its `news` doc under
-   * `${symbol}_${id}`. Shared by the per-ticker sweep and the market-wide head
-   * fetch so both paths write identical docs and de-duplicate on the same id.
+   * `${symbol}_${id}`. Shared by both bulk sources so Polygon and FMP articles
+   * write identical docs and de-duplicate on the same id.
    */
   private ingestArticle(
     a: CanonicalNewsArticle,
@@ -185,127 +185,141 @@ export class NewsJob implements OnModuleInit {
 
   async run() {
     try {
-      const cursor = await this.meta.getCursor(JOB_NAME);
-      const batch = Array.from(
-        { length: BATCH_SIZE },
-        (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
+      // Sweep the LIVE company universe (~575) rather than the hardcoded
+      // TICKER_UNIVERSE (241): news covered under half the companies the app
+      // actually shows, so most tickers could never surface an article. Falls
+      // back to the static list if the collection read comes back empty, so a
+      // Firestore blip degrades to the old behaviour instead of skipping the run.
+      const universe = await activeUniverse(this.firebase.firestore).catch(
+        () => [] as string[],
       );
+      const list = universe.length > 0 ? universe : TICKER_UNIVERSE;
+      const tracked = new Set(list);
       const to = new Date();
       const from = new Date();
       from.setUTCDate(from.getUTCDate() - LOOKBACK_DAYS);
       const docs: Array<{ id: string; data: Record<string, unknown> }> = [];
-      let fallbackCount = 0;
       // Keyed by article id so a multi-ticker story collapses to one entry.
       const important = new Map<string, NotificationInput>();
-      for (const symbol of batch) {
-        try {
-          const result = await this.news.fetchNews(
-            symbol,
-            isoDate(from),
-            isoDate(to),
-          );
-          if (result.warnings.some((w) => w.code === "FALLBACK_USED")) {
-            fallbackCount++;
-          }
-          // Merge FMP news (when NEWS_FMP_SOURCE=fmp) alongside Polygon's,
-          // deduped by URL — Polygon wins a collision. Each article keeps its own
-          // `vendor` so the UI can badge Polygon vs FMP.
-          const articles = [...result.data];
-          if (this.newsFmp) {
-            try {
-              const fmpRes = await this.newsFmp.fetchNews(
-                symbol,
-                isoDate(from),
-                isoDate(to),
-              );
-              const seenUrls = new Set(articles.map((a) => a.url));
-              for (const a of fmpRes.data) {
-                if (a.url && !seenUrls.has(a.url)) {
-                  seenUrls.add(a.url);
-                  articles.push(a);
-                }
-              }
-            } catch (e) {
-              this.logger.warn(
-                `FMP news failed for ${symbol}: ${(e as Error).message}`,
-              );
-            }
-          }
-          articles.sort((a, b) =>
-            (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""),
-          );
-          for (const a of articles.slice(0, 8)) {
-            this.ingestArticle(a, symbol, docs, important);
-          }
-        } catch (err) {
-          if (err instanceof AllSourcesFailedError) {
-            this.logger.error(
-              `${symbol}: every configured news source failed — ${err.attempts.map((a) => `${a.source}: ${a.error}`).join(" | ")}`,
-            );
-          } else {
-            this.logger.error(
-              `Failed fetching news for ${symbol}: ${err.message}`,
-            );
-          }
-        }
-        await sleep(DELAY_MS);
-      }
 
-      // MARKET-WIDE head fetch (once per run): the per-ticker cursor refreshes
-      // only BATCH_SIZE of ~241 tickers each run, so the freshest market story
-      // can lag hours until its ticker's batch comes around — leaving the "Live"
-      // feed (and the Dashboard, which reads the same `news` collection) frozen.
-      // One extra Polygon call for the newest market-wide articles keeps the feed
-      // head current regardless of the cursor. Each is scoped to its primary
-      // ticker and flows through the SAME ingest path, so a doc id collides
-      // idempotently with any per-ticker write of the same story (no duplicates).
-      // Best-effort — a failure just leaves the feed on the per-ticker sweep.
-      let marketCount = 0;
+      // ── BULK fetch ────────────────────────────────────────────────────────
+      // Was a per-ticker sweep: BATCH_SIZE tickers per run, one vendor call
+      // each, so a given ticker was only revisited every ~90 minutes and a story
+      // could sit unseen that long. Both vendors expose market-wide feeds — one
+      // Polygon call at limit=1000 returns ~859 DISTINCT tickers, more than the
+      // whole tracked universe — so a handful of calls now covers EVERY ticker
+      // on every 30-minute run.
+      //
+      // Only the FETCH changes. Articles are still stored per ticker under
+      // `${ticker}_${articleId}`, still carry their own vendor badge, and are
+      // still deduped by URL with Polygon winning — so the feed, its search,
+      // sector/cap filters and notifications behave exactly as before.
+      const collected: CanonicalNewsArticle[] = [];
+      let polygonCount = 0;
+      let fmpCount = 0;
+
       if (typeof this.news.fetchMarketNews === "function") {
         try {
           const market = await this.news.fetchMarketNews(
             isoDate(from),
             isoDate(to),
           );
-          for (const a of market.data) {
-            this.ingestArticle(a, a.ticker, docs, important);
-          }
-          marketCount = market.data.length;
+          collected.push(...market.data);
+          polygonCount = market.data.length;
         } catch (err) {
           this.logger.warn(
-            `Market-wide news fetch failed: ${(err as Error).message}`,
+            `Bulk news fetch (${this.news.sourceName}) failed: ${(err as Error).message}`,
+          );
+        }
+      }
+      if (this.newsFmp && typeof this.newsFmp.fetchMarketNews === "function") {
+        try {
+          const fmpRes = await this.newsFmp.fetchMarketNews(
+            isoDate(from),
+            isoDate(to),
+          );
+          collected.push(...fmpRes.data);
+          fmpCount = fmpRes.data.length;
+        } catch (err) {
+          this.logger.warn(
+            `Bulk news fetch (fmp) failed: ${(err as Error).message}`,
           );
         }
       }
 
+      // Data-loss guard: if BOTH vendors come back empty, write nothing rather
+      // than recording a "successful" run that refreshed no articles.
+      if (collected.length === 0) {
+        this.logger.warn(
+          "news: both bulk sources returned 0 articles — skipping write",
+        );
+        await this.meta.record(JOB_NAME, {
+          ok: false,
+          error: "bulk news returned no articles from any source",
+        });
+        return { count: 0 };
+      }
+
+      // Group by TRACKED ticker, newest first, keeping the same per-ticker cap
+      // the sweep used. Untracked tickers are dropped: the feed's sector and
+      // market-cap filters join each article against `companies`, so an article
+      // with no company doc would vanish the moment a user picked a filter.
+      const byTicker = new Map<string, CanonicalNewsArticle[]>();
+      const seenUrlByTicker = new Map<string, Set<string>>();
+      for (const a of collected) {
+        const t = a.ticker;
+        if (!t || !tracked.has(t)) continue;
+        // Dedupe by URL within a ticker — Polygon is pushed first, so it wins.
+        const seen = seenUrlByTicker.get(t) ?? new Set<string>();
+        if (a.url && seen.has(a.url)) continue;
+        if (a.url) seen.add(a.url);
+        seenUrlByTicker.set(t, seen);
+        const bucket = byTicker.get(t) ?? [];
+        bucket.push(a);
+        byTicker.set(t, bucket);
+      }
+      for (const [symbol, articles] of byTicker) {
+        articles.sort((a, b) =>
+          (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""),
+        );
+        for (const a of articles.slice(0, ARTICLES_PER_TICKER)) {
+          this.ingestArticle(a, symbol, docs, important);
+        }
+      }
+
       await chunkedBatchSet(this.firebase.firestore, "news", docs);
-      const counted = await this.writeNewsCounts(batch);
+      // Refresh the denormalised count only for tickers that actually got news
+      // this run — the whole universe every 30 min would be a needless read/write
+      // per ticker for names with nothing new.
+      const counted = await this.writeNewsCounts([...byTicker.keys()]);
       // Only stories matching some user's watchlist/portfolio are stored; the
       // article itself already lives in `news`, so nothing is lost by skipping
       // the rest.
       const pub = await this.notifications.publish([...important.values()]);
       await this.notifications.prune();
       this.logger.log(
-        `${important.size}/${docs.length} articles important ` +
-          `(${marketCount} market-wide head); ` +
+        `bulk news: ${polygonCount} polygon + ${fmpCount} fmp rows -> ` +
+          `${docs.length} docs across ${byTicker.size}/${list.length} tracked tickers; ` +
+          `${important.size} important; ` +
           `${pub.written} notification(s) to ${pub.recipients} user(s); ` +
           `${pub.skipped} matched no subscriber; ` +
           `newsCount refreshed for ${counted} ticker(s)`,
       );
-      await this.meta.setCursor(
-        JOB_NAME,
-        (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length,
-      );
       await this.meta.record(JOB_NAME, {
         ok: true,
         count: docs.length,
-        ...(fallbackCount > 0
+        ...(polygonCount === 0 || fmpCount === 0
           ? {
-              error: `${fallbackCount}/${batch.length} tickers served by fallback news source`,
+              error: `one bulk source returned nothing (polygon=${polygonCount}, fmp=${fmpCount})`,
             }
           : {}),
       });
-      return { count: docs.length, fallbackCount };
+      return {
+        count: docs.length,
+        tickersCovered: byTicker.size,
+        polygonCount,
+        fmpCount,
+      };
     } catch (err) {
       await this.meta.record(JOB_NAME, {
         ok: false,

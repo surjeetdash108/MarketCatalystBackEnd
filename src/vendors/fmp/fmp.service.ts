@@ -290,6 +290,39 @@ export class FmpService {
    * Per-ticker stock news (`/stable/news/stock`). `site` is the publishing
    * outlet; some responses also carry a `sentiment` label which we pass through.
    */
+  /**
+   * BULK latest stock news (`/stable/news/stock-latest`) — every symbol at once,
+   * newest first, instead of one call per ticker. 250 rows per page covers ~217
+   * distinct symbols, so a couple of pages reach far more tickers than a
+   * per-ticker sweep ever did, for a fraction of the calls.
+   *
+   * Pages are fetched in order and stop early once a page comes back short (the
+   * end of the feed) so we never spend calls on empty pages.
+   */
+  async getLatestStockNews(pages = 2, limit = 250): Promise<FmpNewsRow[]> {
+    if (!this.apiKey) return [];
+    const out: FmpNewsRow[] = [];
+    for (let page = 0; page < pages; page++) {
+      const rows = (await this.get(
+        `news/stock-latest?page=${page}&limit=${limit}`,
+      ).catch(() => [])) as Record<string, unknown>[];
+      for (const r of rows) {
+        out.push({
+          symbol: (r.symbol as string) ?? null,
+          publishedDate: String(r.publishedDate ?? r.date ?? ""),
+          title: String(r.title ?? ""),
+          text: (r.text as string) ?? null,
+          site: (r.site as string) ?? (r.publisher as string) ?? null,
+          url: String(r.url ?? ""),
+          image: (r.image as string) ?? null,
+          sentiment: (r.sentiment as string) ?? null,
+        });
+      }
+      if (rows.length < limit) break; // short page = end of feed
+    }
+    return out;
+  }
+
   async getStockNews(
     symbol: string,
     from: string,

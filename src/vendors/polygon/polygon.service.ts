@@ -990,10 +990,16 @@ export class PolygonService {
    * hours). `limit` is higher than the per-ticker call because one request must
    * span many tickers. Same shape as getNews so the adapter maps them identically.
    */
+  /**
+   * Market-wide news, newest first. `limit` goes to 1000 per call — measured
+   * live, limit=1000 returns 1000 articles spanning 859 DISTINCT tickers in a
+   * single request, which is why the news sync fetches in bulk here rather than
+   * once per ticker.
+   */
   async getMarketNews(
     from: string,
     to: string,
-    limit = 100,
+    limit = 1000,
   ): Promise<PolygonNewsArticle[]> {
     const res = await fetchJson<{ results?: PolygonNewsArticle[] }>(
       `${this.baseUrl}/v2/reference/news` +
