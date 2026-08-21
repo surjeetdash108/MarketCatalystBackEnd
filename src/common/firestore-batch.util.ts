@@ -10,8 +10,14 @@ const MAX_BATCH_WRITES = 500;
  * the same way. Budget well under the cap: the estimate below counts JSON
  * characters, while the wire format adds field names, type tags and index
  * entries the estimate cannot see.
+ *
+ * The margin has to be wide, not cosmetic. intraday_bars documents are arrays
+ * of ~780 seven-field maps, and Firestore re-encodes every field NAME for every
+ * element, so the stored form runs several times the JSON character count. A
+ * 6 MiB budget still produced a single oversized commit for one run of this job;
+ * 1.5 MiB is sized so that even a 4-5x expansion stays under the 10 MiB cap.
  */
-const MAX_BATCH_BYTES = 6 * 1024 * 1024;
+const MAX_BATCH_BYTES = 1.5 * 1024 * 1024;
 
 /** Rough serialized size of a document's payload. Only needs to be good enough
  *  to keep a commit under the cap, so a cheap JSON length beats an exact walk. */
