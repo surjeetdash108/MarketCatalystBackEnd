@@ -11,6 +11,7 @@ import { SyncRegistry } from "../common/sync-registry.service";
 import {
   ttmReportedEpsFromRows,
   latestAnnualEpsGrowth,
+  annualEpsGrowthDecidable,
   type EpsHistoryRow,
 } from "./financials.job";
 
@@ -148,9 +149,15 @@ export class FundamentalsGrowthJob implements OnModuleInit {
               ...(revGrowth != null
                 ? { revenueGrowthYoY: round(revGrowth) }
                 : {}),
+              // Three-way, not two: a value writes it; "we had the inputs and
+              // they don't support a figure" CLEARS it; only "no inputs yet"
+              // leaves the stored value alone. Without the middle case a wrong
+              // number computed under older data survives every later run.
               ...(epsGrowthFinal != null
                 ? { epsGrowthYoY: epsGrowthFinal }
-                : {}),
+                : annualEpsGrowthDecidable(epsHist)
+                  ? { epsGrowthYoY: null }
+                  : {}),
               ...(grossMargin != null
                 ? { grossMargin: round(grossMargin) }
                 : {}),

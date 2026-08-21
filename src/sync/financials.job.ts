@@ -32,6 +32,50 @@ const JOB_NAME = "financials";
 const BATCH_SIZE = Number(process.env.FINANCIALS_BATCH_SIZE) || 40;
 const QUARTERS = 10;
 const ANNUAL_YEARS = 8;
+/**
+ * Largest believable gap between consecutive reporting periods before we treat
+ * the series as spanning TWO different companies. Tickers get reused: SNDK
+ * belonged to the SanDisk that Western Digital bought in 2016, then was
+ * reissued to the SanDisk spun out of WDC in 2025, and the vendor returns both
+ * under the one symbol — leaving a 107-month hole mid-series. Anything older
+ * than the hole belongs to the predecessor and must not be charted, averaged or
+ * used as a growth baseline alongside the current entity.
+ */
+const MAX_QUARTER_GAP_MONTHS = 18;
+const MAX_ANNUAL_GAP_MONTHS = 30;
+
+function monthsBetween(a: string, b: string): number | null {
+  const da = new Date(a);
+  const db = new Date(b);
+  if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return null;
+  return Math.abs(
+    (da.getFullYear() - db.getFullYear()) * 12 + (da.getMonth() - db.getMonth()),
+  );
+}
+
+/**
+ * Keep only the most recent CONTINUOUS run of periods. Rows are newest-first;
+ * the first gap wider than `maxGapMonths` marks where the predecessor entity's
+ * history begins, and everything from there on is dropped.
+ */
+export function dropPredecessorHistory<T extends { endDate?: string | null }>(
+  rows: T[],
+  maxGapMonths: number,
+): T[] {
+  const dated = rows.filter((r) => !!r.endDate);
+  if (dated.length < 2) return rows;
+  const sorted = [...dated].sort((a, b) =>
+    String(b.endDate).localeCompare(String(a.endDate)),
+  );
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const gap = monthsBetween(
+      String(sorted[i].endDate),
+      String(sorted[i + 1].endDate),
+    );
+    if (gap != null && gap > maxGapMonths) return sorted.slice(0, i + 1);
+  }
+  return sorted;
+}
 const DELAY_MS = 120;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -261,9 +305,37 @@ export function latestAnnualEpsGrowth(
   if (complete.length < 2) return null;
   const latest = complete[0][1];
   const prior = complete[1][1];
-  return prior !== 0
-    ? Math.round(((latest - prior) / Math.abs(prior)) * 10000) / 10000
-    : null;
+  // A percentage change is only meaningful from a POSITIVE base. Dividing by
+  // |prior| when the prior year was a loss produced numbers that read as
+  // growth but aren't: SNDK showed "-7.22%" for a swing from -11.32 to +73.76,
+  // and 38 loss-making tickers displayed a positive "EPS growth" beside a
+  // negative EPS. "Loss -> profit" is a real story, but it is not a percentage,
+  // so report nothing rather than something wrong.
+  if (!(prior > 0)) return null;
+  // Guard the near-zero base too — a prior year of $0.01 turns any move into
+  // thousands of percent (ANV showed -49,100%). Above this the figure is noise.
+  const growth = (latest - prior) / prior;
+  if (!Number.isFinite(growth) || Math.abs(growth) > 10) return null;
+  return Math.round(growth * 10000) / 10000;
+}
+
+/**
+ * True when epsHistory holds enough complete fiscal years to DECIDE growth. A
+ * null from latestAnnualEpsGrowth is then "not meaningful" rather than "no data
+ * yet", which lets the caller CLEAR a stale stored value instead of preserving
+ * it forever — SNDK kept showing -7.22% long after the inputs stopped
+ * supporting any figure at all.
+ */
+export function annualEpsGrowthDecidable(
+  epsHistory: EpsHistoryRow[],
+): boolean {
+  const byFY = new Map<number, Set<string>>();
+  for (const h of epsHistory) {
+    if (h.epsActual == null) continue;
+    if (!byFY.has(h.fiscalYear)) byFY.set(h.fiscalYear, new Set());
+    byFY.get(h.fiscalYear)!.add(h.fiscalPeriod);
+  }
+  return [...byFY.values()].filter((qs) => qs.size >= 4).length >= 2;
 }
 
 /** Maps one quarterly Polygon financials row onto the doc shape `financials/{ticker}.quarters` stores. */
@@ -527,6 +599,19 @@ export class FinancialsJob implements OnModuleInit {
                   : null),
             );
           });
+          // Cut the series at the first implausible gap: anything beyond it is a
+          // predecessor company that merely shared this ticker (see
+          // dropPredecessorHistory). Charting the two together made the earnings
+          // history jump from 2026 straight to 2016 on SNDK.
+          const quartersContinuous = dropPredecessorHistory(
+            quarters,
+            MAX_QUARTER_GAP_MONTHS,
+          );
+          if (quartersContinuous.length !== quarters.length) {
+            this.logger.warn(
+              `${ticker}: dropped ${quarters.length - quartersContinuous.length} pre-gap quarter(s) — ticker reused by a predecessor entity`,
+            );
+          }
           // ── Annual (fiscal-year) history — actuals only, Polygon ──────────
           // Same endpoint, timeframe=annual. Drives the Yearly tab's EPS +
           // Sales columns. Forward analyst estimates are NOT sourced here
@@ -554,6 +639,13 @@ export class FinancialsJob implements OnModuleInit {
           ) {
             annual = (prev as { annual?: AnnualFinancials[] }).annual!;
           }
+          const annualBefore = annual.length;
+          annual = dropPredecessorHistory(annual, MAX_ANNUAL_GAP_MONTHS);
+          if (annual.length !== annualBefore) {
+            this.logger.warn(
+              `${ticker}: dropped ${annualBefore - annual.length} pre-gap annual row(s) — ticker reused by a predecessor entity`,
+            );
+          }
 
           // Forward annual estimates (the `*YYYY` rows) — only when the optional
           // estimates adapter is configured; empty array otherwise. If FMP
@@ -574,7 +666,7 @@ export class FinancialsJob implements OnModuleInit {
           const rawEpsHist = this.estimates
             ? await this.estimates.getEpsHistory(ticker).catch(() => [])
             : [];
-          let epsHistory: EpsHistoryRow[] = buildEpsHistory(rawEpsHist, quarters, splits);
+          let epsHistory: EpsHistoryRow[] = buildEpsHistory(rawEpsHist, quartersContinuous, splits);
           if (
             epsHistory.length === 0 &&
             Array.isArray((prev as { epsHistory?: EpsHistoryRow[] })?.epsHistory)
@@ -585,7 +677,7 @@ export class FinancialsJob implements OnModuleInit {
             id: ticker,
             data: {
               ticker,
-              quarters,
+              quarters: quartersContinuous,
               annual,
               annualEstimates,
               epsHistory,
