@@ -128,9 +128,14 @@ export class OnDemandController {
   }
 
   @Get("quotes")
+  // Matches /live/snapshot exactly. Both now serve the SAME shared-cache entries,
+  // so a longer TTL here would re-introduce the very drift this unification
+  // removes: an edge could hand out a 60s-old quote beside a 5s-old heatmap tile
+  // and the same ticker would read differently on two screens. Caching longer
+  // than the cache's own refresh interval buys nothing anyway.
   @Header(
     "Cache-Control",
-    "public, max-age=60, s-maxage=60, stale-while-revalidate=120",
+    "public, max-age=5, s-maxage=10, stale-while-revalidate=30",
   )
   async quotes(
     @Query("tickers") tickers: string | undefined,
@@ -141,7 +146,7 @@ export class OnDemandController {
       .split(",")
       .map((t) => t.toUpperCase().trim())
       .filter((t) => TICKER_RE.test(t))
-      .slice(0, 25);
+      .slice(0, 250);
     if (syms.length === 0) {
       sendWithEtag(req, res, []);
       return;

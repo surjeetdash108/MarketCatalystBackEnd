@@ -10,6 +10,7 @@ import {
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { resolveSector } from "../common/sic-sector.util";
+import { SnapshotCacheService } from "./snapshot-cache.service";
 import {
   forwardAnnualDividend,
   type DivHistItem,
@@ -314,6 +315,9 @@ export class OnDemandService implements OnModuleDestroy {
   constructor(
     private readonly firebase: FirebaseAdminService,
     private readonly polygon: PolygonService,
+    // Shared price cache — /live/quotes serves from the SAME entries as
+    // /live/snapshot so every surface shows one number.
+    private readonly snapshots: SnapshotCacheService,
     @Inject(NEWS_ADAPTER) private readonly news: NewsAdapter,
     // Optional FMP news — merged into on-demand /live/news alongside Polygon so a
     // ticker Polygon has no articles for (micro-cap movers) still gets coverage.
@@ -1027,15 +1031,28 @@ export class OnDemandService implements OnModuleDestroy {
   > {
     const syms = [
       ...new Set(tickers.map((t) => t.toUpperCase().trim()).filter(Boolean)),
-    ].slice(0, 25);
+    ].slice(0, 250);
     if (syms.length === 0) return [];
     syms.forEach((t) => this.recordUsage(t));
-    const snaps = await this.polygon.getUniversalSnapshot(syms).catch(() => []);
-    return (snaps as Array<Record<string, unknown>>).map((s) => ({
-      ticker: String(s.ticker),
-      name: (s.name as string) ?? null,
-      price: (s.price as number) ?? null,
-      pctChange: (s.changePercent as number) ?? null,
+    // Served from the SHARED snapshot cache — the same entries /live/snapshot
+    // hands the heatmap — rather than its own direct vendor call. Previously the
+    // two paths hit the vendor on independent clocks, so the same ticker could
+    // read 215.26 on a heatmap tile and 215.31 in the drawer at the same moment.
+    // One cache = one number everywhere, and it also drops upstream load (the
+    // cache refreshes a demanded ticker once per interval no matter how many
+    // surfaces ask for it).
+    //
+    // `name` is kept in the response shape for compatibility but is always null:
+    // the snapshot cache doesn't carry it and no caller reads it (every screen
+    // takes the display name from its own companies doc).
+    const { quotes } = await this.snapshots
+      .get(syms)
+      .catch(() => ({ quotes: [] as Array<{ ticker: string; price: number | null; changePct: number | null }> }));
+    return quotes.map((q) => ({
+      ticker: q.ticker,
+      name: null,
+      price: q.price ?? null,
+      pctChange: q.changePct ?? null,
     }));
   }
 
