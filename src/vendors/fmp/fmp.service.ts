@@ -557,7 +557,12 @@ export class FmpService {
    */
   async getPriceTargets(
     ticker: string,
-    limit = 60,
+    // 100 is FMP's own server-side ceiling for this endpoint — asking for 200
+    // still returns 100. We were asking for 60 and throwing away the rest: on a
+    // heavily-covered name like GOOG the first 60 posts carry 28 distinct firms
+    // while the full 100 carry 37, so nine firms' targets were being dropped
+    // before the join could ever see them.
+    limit = 100,
   ): Promise<FmpPriceTargetRow[]> {
     if (!this.apiKey) return [];
     const rows = await this.get(

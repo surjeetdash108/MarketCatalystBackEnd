@@ -82,6 +82,14 @@ const GRADES_LIMIT = 8;
  */
 const MAX_TARGET_AGE_DAYS = 45;
 
+// COVERAGE NOTE: some firms publish rating changes to `grades` but never post
+// to `price-target-news` — verified against the raw feed, where Citigroup (169
+// actions), JP Morgan (148), TD Cowen (125), B of A, Keefe Bruyette, Benchmark
+// and Citizens are absent from all 100 rows FMP will return. Their PT cells stay
+// blank by design; substituting the ticker's consensus would pin a number those
+// firms never published (BUG-DATA-012). ~80% coverage is the ceiling this feed
+// supports, not a defect in the join below.
+//
 // FMP's `grades` and `price-target-news` feeds spell the SAME firm differently
 // ("JP Morgan" vs "JPMorgan Chase", "TD Cowen" vs "Cowen", "Piper Sandler" vs
 // "Piper Jaffray"), so an exact normalized-name match dropped ~30% of per-firm
