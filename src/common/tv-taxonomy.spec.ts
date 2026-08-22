@@ -49,6 +49,19 @@ describe("TradingView taxonomy", () => {
     }
   });
 
+  // Sectors specifically must be Title Case — EVERY word capitalised, including
+  // both halves of a hyphenated one ("Non-Energy Minerals"). Four dropdowns
+  // (screener, themes, movers, IPOs) were rendering them .toLowerCase(), which
+  // is what this guards against reappearing.
+  it("capitalises every word of every sector", () => {
+    for (const sector of TV_SECTORS) {
+      for (const word of sector.split(/[\s-]+/)) {
+        if (!word) continue;
+        expect(word[0]).toBe(word[0].toUpperCase());
+      }
+    }
+  });
+
   it("never emits an ALL-CAPS name (the raw-SIC signature)", () => {
     for (const v of [...TV_SECTORS, ...TV_INDUSTRIES]) {
       const letters = v.replace(/[^A-Za-z]/g, "");
