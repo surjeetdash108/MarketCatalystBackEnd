@@ -92,8 +92,23 @@ const MATCH_TOLERANCE_DAYS = 21;
 const EMPTY_LOOKUP: EarningsEstimatesLookup = { estimateFor: () => null };
 
 
-/** Keep each earnings-calendar slice well under FMP's ~4000-row request cap. */
-const CALENDAR_CHUNK_DAYS = 45;
+/**
+ * Keep each earnings-calendar slice well under FMP's ~4000-row request cap.
+ *
+ * MUST stay small: the calendar is GLOBAL, not US-only, and runs ~700-750 rows
+ * PER DAY in season (a 24-25 Aug 2026 probe returned 1,467 for two days). At
+ * the previous 45 this asked for ~33,000 rows in one request — 8x the cap — and
+ * FMP silently returns only the far end, so every near-term date was thrown
+ * away before our US filter ever saw it. That is why the dashboard showed no
+ * earnings for the next few days while November rows were present: DKS, BNS,
+ * VIPS and ~600 other US symbols reporting on 24-25 Aug never arrived.
+ *
+ * 5 days x ~750 = ~3,750, inside the cap with headroom. The extra requests are
+ * cheap: a 180-day window is 36 calls on a daily job.
+ */
+const CALENDAR_CHUNK_DAYS = 5;
+/** Row count at which a slice is assumed truncated by the vendor cap. */
+const CALENDAR_TRUNCATION_WARN = 3500;
 
 /** Split [from,to] (inclusive, YYYY-MM-DD) into <=`days`-long [start,end] slices. */
 function chunkWindow(
@@ -191,6 +206,13 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
         );
         return [];
       });
+      // The cap is enforced by silent truncation, so a slice that comes back
+      // near it has probably lost rows. Shout rather than quietly under-report.
+      if (rows.length >= CALENDAR_TRUNCATION_WARN) {
+        this.logger.warn(
+          `FMP earnings-calendar ${f}..${t} returned ${rows.length} rows — at or near the vendor cap, so earlier dates in this slice may have been dropped. Lower CALENDAR_CHUNK_DAYS.`,
+        );
+      }
       for (const r of rows) {
         if (!r.symbol || !r.date) continue;
         // Keep a row if it carries ANY of estimate/actual (a just-announced row

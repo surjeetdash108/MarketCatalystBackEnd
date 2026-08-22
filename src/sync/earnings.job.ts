@@ -230,16 +230,30 @@ export class EarningsJob implements OnModuleInit {
         const refNames = await this.loadRefNames(
           upcomingSyms.filter((s) => !nameByTicker.has(s)),
         );
+        // Both `continue`s below discard rows. Counted so a coverage problem is
+        // visible in the run log: an empty calendar and a broken filter looked
+        // identical until a manual FMP probe showed 604 US symbols being lost.
+        let droppedNonUs = 0;
+        let droppedDuplicate = 0;
         for (const u of upcoming) {
           const sym = u.ticker.toUpperCase();
           const name = nameByTicker.get(sym) ?? refNames.get(sym);
-          if (!name) continue; // non-US / not an equity in the US reference
+          if (!name) {
+            droppedNonUs++;
+            continue; // non-US / not an equity in the US reference
+          }
           const id = `${u.ticker}_${u.date}`;
-          if (reportedIds.has(id)) continue; // exact reported row already covers it
+          if (reportedIds.has(id)) {
+            droppedDuplicate++;
+            continue; // exact reported row already covers it
+          }
           const near = (reportedDates.get(u.ticker) ?? []).some(
             (d) => daysBetween(d, u.date) <= DUP_TOLERANCE_DAYS,
           );
-          if (near) continue; // same quarter already present via Polygon 10-Q
+          if (near) {
+            droppedDuplicate++;
+            continue; // same quarter already present via Polygon 10-Q
+          }
           docs.push({
             id,
             data: {
@@ -263,6 +277,9 @@ export class EarningsJob implements OnModuleInit {
           });
           forwardCount++;
         }
+        this.logger.log(
+          `upcoming calendar: ${upcoming.length} rows in · ${droppedNonUs} non-US · ${droppedDuplicate} dup-of-reported`,
+        );
       }
 
       await chunkedBatchSet(this.firebase.firestore, "earnings_events", docs);
