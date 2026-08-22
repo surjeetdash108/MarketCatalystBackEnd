@@ -1,5 +1,52 @@
 # Deploying Market Catalyst Backend to Firebase / GCP (Cloud Run + Cloud Scheduler)
 
+> # ⛔ READ THIS FIRST — `git push` DOES NOT DEPLOY THE BACKEND
+>
+> There are **three** Cloud Run services. Only two of them matter, and **neither
+> is deployed by pushing to git.**
+>
+> | Service | Region | Deployed by | What it actually does |
+> |---|---|---|---|
+> | **`market-catalyst-backend`** | us-central1 | **manual `gcloud run deploy --source .`** | ✅ **THE WORKER.** Runs every cron/sync job. |
+> | **`market-catalyst-live`** | us-central1 | **manual `gcloud run deploy --source .`** | ✅ **THE READ API.** Serves `/api`, `/live`, `/market-data`. |
+> | `market-catalyst-be` | us-east4 | git push (Firebase App Hosting) | ⚠️ Near-dormant. Runs almost nothing. |
+>
+> **A backend change is NOT live until BOTH us-central1 services are deployed
+> with `gcloud`.** Pushing to `prod` only rebuilds `market-catalyst-be`, which
+> is not the service doing the work.
+>
+> ```bash
+> # from MarketCatalystBackEnd/ — BOTH are required for a code change
+> gcloud run deploy market-catalyst-backend --source . --region us-central1 --project market-catalyst-502415
+> gcloud run deploy market-catalyst-live    --source . --region us-central1 --project market-catalyst-502415
+> ```
+>
+> **How this bites you (it already has, 2026-08-21).** A fix to
+> `institutional-ownership.job` was committed, pushed, and the App Hosting
+> rollout went green — so it looked deployed. It was not: `market-catalyst-be`
+> does not run that job. `market-catalyst-backend` was still on the old image,
+> and the 03:00 ET cron would have run the OLD code and written nothing. The
+> giveaway was in the logs — real job output (`OptionsChainsJob`, cursor
+> advances) appears only under `market-catalyst-backend`, while
+> `market-catalyst-be` shows little beyond route registration.
+>
+> **Confirm what is actually running before believing a deploy:**
+> ```bash
+> gcloud run services describe market-catalyst-backend --region us-central1 \
+>   --project market-catalyst-502415 --format='value(status.latestReadyRevisionName)'
+> ```
+>
+> Two follow-on traps, both of which have wasted time here:
+> * **`market-catalyst-be` is not fully inert** — it has fired `AutoPurgeJob`.
+>   Both services carry `APP_ROLE=worker`, so if their images ever diverge, two
+>   different versions of a job can write the same Firestore collection.
+> * **Reads are cached after a job succeeds.** `/market-data/*` goes through
+>   `CachedCollectionsService` (5-min TTL) and `/live/*` has its own cache, both
+>   *inside the app* — so `cache-control: no-cache` and a CDN `x-cache: MISS`
+>   will still hand you stale data. A job can be correct while the API looks
+>   unchanged for several minutes. Wait out the TTL before concluding it failed.
+
+
 This backend both **ingests** (pulls from vendor APIs → writes Firestore) and
 **serves** the frontend: the Next.js app calls this service's REST/SSE surface
 (`/api`, `/market-data`, `/live`) — same-origin in production, proxied by
@@ -131,6 +178,28 @@ done
 
 ## 3. Deploy the service to Cloud Run
 
+> ✅ **For a routine CODE-ONLY roll, use the image-only form below — NOT the full
+> `--set-*` commands.** `--set-secrets` / `--set-env-vars` REPLACE the entire set,
+> so any secret or env the running service gained later (FMP_API_KEY on both
+> services; FRED_API_KEY + OPENROUTER_API_KEY + `EARNINGS_ESTIMATES_SOURCE=fmp`
+> on live) is silently dropped if the command below is even slightly out of date.
+> Deploying the image alone inherits all existing env/secrets/scaling and cannot
+> drift:
+> ```bash
+> # worker — builds from source, keeps existing config
+> gcloud run deploy market-catalyst-backend --source . \
+>   --region "$REGION" --project "$PROJECT_ID"
+> # live — reuse the image the worker deploy just built, keep existing config
+> IMAGE=$(gcloud run services describe market-catalyst-backend --region "$REGION" \
+>           --format='value(spec.template.spec.containers[0].image)')
+> gcloud run services update market-catalyst-live --image "$IMAGE" \
+>   --region "$REGION" --project "$PROJECT_ID"
+> ```
+> The full `--set-*` commands below are for a FIRST deploy or an intentional
+> config change only. If you use them, they MUST list every secret/env the
+> service currently has (verify with `gcloud run services describe … --format=
+> 'value(spec.template.spec.containers[0].env)'` first).
+
 **There are two services, built from one image**, selected by `APP_ROLE`:
 
 | | `market-catalyst-backend` (worker) | `market-catalyst-live` (live) |
@@ -165,8 +234,20 @@ gcloud run deploy market-catalyst-backend \
   --memory=512Mi \
   --timeout=900 \
   --env-vars-file="$ENV_FILE" \
-  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
+  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FMP_API_KEY=FMP_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
 ```
+
+> ⚠ **All FOUR secrets are required — `FMP_API_KEY` included.** `--set-secrets`
+> REPLACES the entire secret set, so omitting `FMP_API_KEY` (as an earlier
+> version of this command did) silently drops it on the next deploy and disables
+> every FMP-backed feature the worker runs: `EARNINGS_ESTIMATES_SOURCE`,
+> `ANALYST_SOURCE`, `NEWS_FMP_SOURCE`, `SECTORS_FALLBACK_SOURCE`,
+> `ECON_CALENDAR_SOURCE` (all `=fmp` in `env.production.yaml`) plus the sector
+> FMP-refinement in the company/mover/ipos sync jobs. `FmpService` self-disables
+> with no key, so there is NO error — coverage just quietly goes to null. Verify
+> after deploy: `gcloud run services describe market-catalyst-backend --region
+> "$REGION" --format='value(spec.template.spec.containers[0].env)' | tr ';' '\n'
+> | grep FMP_API_KEY` must print a `secretKeyRef`.
 
 > **`--min-instances=0` + default CPU throttling is intentional (2026-08-16).**
 > The worker only handles short scheduled jobs + admin now, so it scales to zero
