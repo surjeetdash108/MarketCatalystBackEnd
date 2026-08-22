@@ -12,7 +12,18 @@ import { planHistoryFloor } from "../vendors/polygon/polygon.service";
 import { addDays, isoDate } from "../common/date.util";
 
 const JOB_NAME = "stock-history";
-const BATCH_SIZE = 60;
+// Whole universe per run. At 60/day against ~586 names `ohlcv_bars` took ~10
+// DAYS to cycle, so most tickers' bars were days stale — and everything derived
+// from them was wrong, not just old: technical-indicators computes
+// week5ChangePct off this collection, and a sample showed 59% of values
+// disagreeing with the real bars including outright SIGN FLIPS (BOXL stored
+// +117.9% vs a real -18.6%, ACH -66.0% vs +26.2%, and blue chips like NIO/D/ACM
+// inverted too).
+//
+// Cheap because writes are INCREMENTAL from a per-ticker watermark: a daily run
+// appends ~1 bar per ticker (~586 writes/day ≈ $0.03/mo), not a full re-fetch.
+// Only a brand-new ticker pays the ~252-doc deep fill, once.
+const BATCH_SIZE = 600;
 
 /**
  * First-run backfill depth. Was 300 days, which capped the chart at 1Y and left
