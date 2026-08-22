@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { FmpService } from "../vendors/fmp/fmp.service";
 import { resolveSector } from "../common/sic-sector.util";
+import { classifyFromSic } from "../common/sic-tv.util";
 import {
   AdapterResult,
   capBucket,
@@ -35,12 +36,10 @@ export class PolygonMoverEnrichmentAdapter implements MoverEnrichmentAdapter {
     // sector names and broke the movers sector filter). Null when unmapped.
     const data: MoverEnrichment = {
       name: details.name ?? null,
-      sector: resolveSector(details.sic_code ?? null, {
-        ticker,
-        name: details.name,
-        description: details.description,
-        fmpSector: fmpProfile?.sector ?? null,
-      }),
+      // TradingView (RBICS) taxonomy, derived from the SIC code — the single
+      // classification path, so a ticker first seen here matches the one the
+      // profile job writes later.
+      sector: classifyFromSic(details.sic_code ?? null).sector,
       cap: capBucket(details.market_cap ?? null),
     };
     return {

@@ -10,6 +10,7 @@ import {
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { resolveSector } from "../common/sic-sector.util";
+import { classifyFromSic } from "../common/sic-tv.util";
 import { SnapshotCacheService } from "./snapshot-cache.service";
 import {
   forwardAnnualDividend,
@@ -935,15 +936,9 @@ export class OnDemandService implements OnModuleDestroy {
               // sector — deriving the sector from sic_code (null when unmappable)
               // matches the sync job so sectorRank grouping and the `sectors`
               // join stay correct.
-              sector: resolveSector(
+              sector: classifyFromSic(
                 details.sic_code as string | number | null | undefined,
-                {
-                  ticker: details.ticker as string | null | undefined,
-                  name: details.name as string | null | undefined,
-                  description: details.description as string | null | undefined,
-                  fmpSector: fmpProfile?.sector ?? null,
-                },
-              ),
+              ).sector,
               // Prefer FMP's clean GICS industry (e.g. "Consumer Electronics")
               // when FMP is wired; fall back to Polygon's coarse SIC description.
               industry: fmpProfile?.industry ?? details.sic_description ?? null,

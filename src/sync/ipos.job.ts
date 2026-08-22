@@ -7,6 +7,7 @@ import { SyncRegistry } from "../common/sync-registry.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { FmpService } from "../vendors/fmp/fmp.service";
 import { resolveSector } from "../common/sic-sector.util";
+import { classifyFromSic } from "../common/sic-tv.util";
 import { isoDate } from "../common/date.util";
 
 const JOB_NAME = "ipos";
@@ -125,15 +126,9 @@ export class IposJob implements OnModuleInit {
                 ? this.fmp.getCompanyProfile(e.symbol).catch(() => null)
                 : Promise.resolve(null),
             ]);
-            sector = resolveSector(
+            sector = classifyFromSic(
               details?.sic_code as string | number | undefined,
-              {
-                ticker: e.symbol,
-                name: details?.name,
-                description: details?.description,
-                fmpSector: fmpProfile?.sector ?? null,
-              },
-            );
+            ).sector;
           } catch {
             // Best-effort; leave null if the reference lookup fails.
           }

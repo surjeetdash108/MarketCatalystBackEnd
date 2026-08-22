@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { resolveSector } from "../common/sic-sector.util";
+import { classifyFromSic } from "../common/sic-tv.util";
 import { reconcileMarketCap } from "../common/validate.util";
 import {
   forwardAnnualDividend,
@@ -194,14 +195,12 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       // computed within an SIC code rather than a sector, and the field could
       // never be joined against the `sectors` collection. Derive the sector
       // from sic_code instead; null when unmappable, never a guess.
-      sector: resolveSector(details.sic_code, {
-        ticker: details.ticker,
-        name: details.name,
-        description: details.description,
-        fmpSector: fmpProfile?.sector ?? null,
-      }),
-      // Prefer FMP's clean GICS industry when wired; SIC description is fallback.
-      industry: fmpProfile?.industry ?? details.sic_description ?? null,
+      // Sector AND industry from one call so they always agree. The vendor's
+      // own labels are deliberately NOT used: FMP is GICS and sic_description is
+      // raw uppercase SIC ("FIRE, MARINE & CASUALTY INSURANCE"), neither of
+      // which is the TradingView vocabulary the app now standardises on.
+      sector: classifyFromSic(details.sic_code).sector,
+      industry: classifyFromSic(details.sic_code).industry,
       exchange: details.primary_exchange ?? null,
       week52Range: null,
       volume: null,
