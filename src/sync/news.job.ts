@@ -12,6 +12,7 @@ import {
   type PendingWrite,
 } from "../common/firestore-batch.util";
 import { scoreImportance } from "../common/news-importance.util";
+import { categoriseNews } from "../common/news-category.util";
 import {
   NotificationsService,
   type NotificationInput,
@@ -173,6 +174,10 @@ export class NewsJob implements OnModuleInit {
         vendor: a.vendor,
         url: a.url,
         category: a.category,
+        // Feed filter bucket (Earnings / Analyst Actions / M&A / …). Derived,
+        // because `category` above is the vendor's field and is null on every
+        // article from both Polygon and FMP.
+        tag: categoriseNews(a.headline, a.summary),
         sentiment: a.sentiment,
         sentimentReasoning: a.sentimentReasoning,
         keywords: a.keywords,
