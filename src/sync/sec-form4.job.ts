@@ -1,3 +1,4 @@
+import { getTickerToCik } from "../common/sec-cik-map.util";
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { chunkedBatchSet } from "../common/firestore-batch.util";
@@ -16,17 +17,6 @@ const FILINGS_PER_COMPANY = 3;
 // per-share price above the ceiling is discarded (null) rather than stored.
 const MAX_PLAUSIBLE_SHARE_PRICE = 1_000_000;
 
-async function fetchTickerToCik(userAgent: string) {
-  const res = await fetch("https://www.sec.gov/files/company_tickers.json", {
-    headers: { "User-Agent": userAgent },
-  });
-  const data = (await res.json()) as Record<string, { ticker: string; cik_str: string | number }>;
-  const map = new Map<string, string>();
-  for (const entry of Object.values(data)) {
-    map.set(entry.ticker.toUpperCase(), String(entry.cik_str));
-  }
-  return map;
-}
 
 @Injectable()
 export class SecForm4Job implements OnModuleInit {
@@ -58,7 +48,8 @@ export class SecForm4Job implements OnModuleInit {
         { length: BATCH_SIZE },
         (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
       );
-      const tickerToCik = await fetchTickerToCik(
+      const tickerToCik = await getTickerToCik(
+        this.firebase.firestore,
         "Market Catalyst Backend hello@inc108.com",
       );
       const docs = [];

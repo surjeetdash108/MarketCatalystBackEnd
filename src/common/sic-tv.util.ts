@@ -253,7 +253,12 @@ const EXACT_INDUSTRY: Record<number, string> = {
 const MAJOR_GROUP_INDUSTRY: Record<number, string> = {
   1: "Agricultural Commodities/Milling",
   2: "Agricultural Commodities/Milling",
+  // 7 (agricultural services) and 9 (fishing/hunting/trapping) were the two
+  // holes in SIC's agriculture division — AquaBounty (0900, salmon) fell
+  // through and kept an FMP GICS label instead of a TradingView one.
+  7: "Agricultural Commodities/Milling",
   8: "Forest Products",
+  9: "Agricultural Commodities/Milling",
   10: "Other Metals/Minerals",
   12: "Coal",
   13: "Oil & Gas Production",

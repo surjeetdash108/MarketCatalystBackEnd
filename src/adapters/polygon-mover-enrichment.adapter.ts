@@ -1,7 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { FmpService } from "../vendors/fmp/fmp.service";
-import { resolveSector } from "../common/sic-sector.util";
 import { classifyFromSic } from "../common/sic-tv.util";
 import {
   AdapterResult,

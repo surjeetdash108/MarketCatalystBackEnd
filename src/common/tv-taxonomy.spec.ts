@@ -153,3 +153,20 @@ describe("classifyFromSic", () => {
     });
   });
 });
+
+describe("SIC agriculture division coverage", () => {
+  it("maps the whole agriculture/forestry/fishing division (01-09)", () => {
+    // 7 and 9 were missing, so agricultural-services and fishing issuers were
+    // left unclassified and kept whatever vendor label arrived first.
+    for (const sic of ["0100", "0200", "0700", "0800", "0900"]) {
+      const k = classifyFromSic(sic);
+      expect(k.sector).not.toBeNull();
+      expect(k.industry).not.toBeNull();
+    }
+  });
+  it("classifies AquaBounty's SIC 0900 as a Consumer Non-Durables producer", () => {
+    const k = classifyFromSic("0900");
+    expect(k.industry).toBe("Agricultural Commodities/Milling");
+    expect(k.sector).toBe("Consumer Non-Durables");
+  });
+});

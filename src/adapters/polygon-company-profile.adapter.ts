@@ -1,5 +1,4 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { resolveSector } from "../common/sic-sector.util";
 import { classifyFromSic } from "../common/sic-tv.util";
 import { reconcileMarketCap } from "../common/validate.util";
 import {
@@ -35,6 +34,8 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
   ): Promise<AdapterResult<CanonicalCompany> | null> {
     const details = await this.polygon.getTickerDetails(ticker);
     if (!details) return null;
+    // One classification, used for sector AND industry so they cannot disagree.
+    const sicClass = classifyFromSic(details.sic_code);
     // Kicked off in parallel with the price/eps/peers/dividend fetches below so
     // it adds max(), not sum(), to latency. Null on any failure → SIC fallback.
     const fmpProfilePromise = this.fmp.enabled
@@ -199,8 +200,11 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       // own labels are deliberately NOT used: FMP is GICS and sic_description is
       // raw uppercase SIC ("FIRE, MARINE & CASUALTY INSURANCE"), neither of
       // which is the TradingView vocabulary the app now standardises on.
-      sector: classifyFromSic(details.sic_code).sector,
-      industry: classifyFromSic(details.sic_code).industry,
+      sector: sicClass.sector,
+      industry: sicClass.industry,
+      // Kept so a future taxonomy revision can reclassify from stored data.
+      sicCode: details.sic_code == null ? null : String(details.sic_code),
+      sicDescription: details.sic_description ?? null,
       exchange: details.primary_exchange ?? null,
       week52Range: null,
       volume: null,

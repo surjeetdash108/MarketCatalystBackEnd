@@ -9,7 +9,6 @@ import {
 } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
-import { resolveSector } from "../common/sic-sector.util";
 import { classifyFromSic } from "../common/sic-tv.util";
 import { SnapshotCacheService } from "./snapshot-cache.service";
 import {
@@ -912,6 +911,12 @@ export class OnDemandService implements OnModuleDestroy {
       }
 
       const now = new Date().toISOString();
+      // One SIC classification reused for sector AND industry below, so the two
+      // can never disagree. Safe when details is null — classifyFromSic returns
+      // nulls, and the whole profile block is omitted in that case anyway.
+      const sicClass = classifyFromSic(
+        details?.sic_code as string | number | null | undefined,
+      );
       // Nightly fundamentals-growth writes epsGrowthYoY / revenueGrowthYoY /
       // grossMargin to the company doc; this on-demand rebuild doesn't recompute
       // them, so carry them forward (else the returned doc — the stock-detail's
@@ -936,12 +941,17 @@ export class OnDemandService implements OnModuleDestroy {
               // sector — deriving the sector from sic_code (null when unmappable)
               // matches the sync job so sectorRank grouping and the `sectors`
               // join stay correct.
-              sector: classifyFromSic(
-                details.sic_code as string | number | null | undefined,
-              ).sector,
-              // Prefer FMP's clean GICS industry (e.g. "Consumer Electronics")
-              // when FMP is wired; fall back to Polygon's coarse SIC description.
-              industry: fmpProfile?.industry ?? details.sic_description ?? null,
+              // Sector AND industry from the SAME SIC classification. The
+              // industry used to come from FMP (GICS, e.g. "Consumer
+              // Electronics") or Polygon's raw sic_description ("ELECTRONIC
+              // COMPUTERS") — neither is the TradingView vocabulary the app
+              // standardises on, so a ticker first seen through search landed
+              // with a TradingView sector next to a GICS industry.
+              sector: sicClass.sector,
+              industry: sicClass.industry,
+              sicCode:
+                details.sic_code == null ? null : String(details.sic_code),
+              sicDescription: details.sic_description ?? null,
               // Correct a grossly-stale Polygon market_cap with price × shares
               // (see reconcileMarketCap); consistent values are left untouched.
               marketCap: reconcileMarketCap(

@@ -1,5 +1,7 @@
+import { getTickerToCik } from "../common/sec-cik-map.util";
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { readGuidance } from "../common/guidance.util";
 import { chunkedBatchSet } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { TICKER_UNIVERSE } from "../common/ticker-universe";
@@ -48,19 +50,6 @@ function sessionFromAcceptance(
   return "Intraday";
 }
 
-async function fetchTickerToCik(
-  userAgent: string,
-): Promise<Map<string, string>> {
-  const res = await fetch("https://www.sec.gov/files/company_tickers.json", {
-    headers: { "User-Agent": userAgent },
-  });
-  const data = (await res.json()) as Record<string, { ticker: string; cik_str: string | number }>;
-  const map = new Map<string, string>();
-  for (const entry of Object.values(data)) {
-    map.set(entry.ticker.toUpperCase(), String(entry.cik_str));
-  }
-  return map;
-}
 
 @Injectable()
 export class Edgar8KJob implements OnModuleInit {
@@ -146,7 +135,8 @@ export class Edgar8KJob implements OnModuleInit {
         { length: BATCH_SIZE },
         (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
       );
-      const tickerToCik = await fetchTickerToCik(
+      const tickerToCik = await getTickerToCik(
+        this.firebase.firestore,
         "Market Catalyst Backend hello@inc108.com",
       );
       const cutoff = isoDate(addDays(new Date(), -LOOKBACK_DAYS));
@@ -198,6 +188,23 @@ export class Edgar8KJob implements OnModuleInit {
                 announceDate,
                 session,
               );
+              // Company guidance lives in the 8-K's earnings press release
+              // (exhibit 99.x), not in any vendor feed. Best-effort: a fetch or
+              // parse failure must not lose the announcement itself, which is
+              // what the earnings hub depends on.
+              let guidance: ReturnType<typeof readGuidance> | null = null;
+              try {
+                const release = await this.secEdgar.getEarningsPressRelease(
+                  cik,
+                  f.accessionNumber,
+                );
+                if (release) guidance = readGuidance(release);
+              } catch (e) {
+                this.logger.warn(
+                  `guidance: no press release for ${ticker} ${f.accessionNumber}: ${(e as Error).message}`,
+                );
+              }
+
               annDocs.push({
                 id: `${ticker}_${announceDate}`,
                 data: {
@@ -205,6 +212,14 @@ export class Edgar8KJob implements OnModuleInit {
                   companyName: name ?? ticker,
                   announceDate,
                   session,
+                  // null direction is meaningful: the release discussed
+                  // guidance but never said which way it moved (~44% of
+                  // filings). The range is stored so direction can later be
+                  // derived by diffing consecutive quarters.
+                  guidanceDirection: guidance?.direction ?? null,
+                  guidanceRange: guidance?.range ?? null,
+                  guidanceSnippet: guidance?.snippet ?? null,
+                  guidanceMentioned: guidance?.mentioned ?? false,
                   reactionPct:
                     reactionPct == null
                       ? null

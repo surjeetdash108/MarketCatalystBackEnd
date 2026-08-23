@@ -1,5 +1,10 @@
 export interface CanonicalCompany {
   ticker: string;
+  /** Raw SEC SIC code the sector/industry were derived from, stored so the
+   *  taxonomy can be recomputed later without re-hitting a vendor. Optional:
+   *  adapters that have no SIC simply omit it. */
+  sicCode?: string | null;
+  sicDescription?: string | null;
   name: string | null;
   price: number | null;
   pctChange: number | null;

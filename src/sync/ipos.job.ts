@@ -6,7 +6,6 @@ import { IPOS_ADAPTER, type IposAdapter } from "../adapters/types";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { FmpService } from "../vendors/fmp/fmp.service";
-import { resolveSector } from "../common/sic-sector.util";
 import { classifyFromSic } from "../common/sic-tv.util";
 import { isoDate } from "../common/date.util";
 
