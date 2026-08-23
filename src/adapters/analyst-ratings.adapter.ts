@@ -72,7 +72,70 @@ const n = (v: number | null | undefined): number =>
   typeof v === "number" && Number.isFinite(v) ? v : 0;
 
 /** How many recent per-firm rating changes to keep per ticker. */
-const GRADES_LIMIT = 8;
+/**
+ * Grade retention — why this is a selection, not just a slice.
+ *
+ * This used to keep the 8 most recent rows per ticker. Measured on prod, 89% of
+ * all stored grade rows are "maintain" (3,132 of 3,529), so the 8 newest were
+ * almost always maintains and the rarer events were truncated away: the
+ * Analyst Actions > Initiations tab matched ZERO rows across 460 tickers,
+ * because not one initiation survived the cut.
+ *
+ * FMP's `grades` endpoint ignores its own limit param and returns the full
+ * history in one response, so looking deeper costs no extra API call — only a
+ * bigger slice of an array we already downloaded. We now scan deep, keep the
+ * rating CHANGES first, then backfill with recent maintains for context.
+ */
+const GRADES_SCAN = 200;
+/** Rating changes (anything not "maintain") retained per ticker. */
+const GRADES_EVENTS = 14;
+/** Hard cap on stored rows per ticker — keeps the doc small. */
+const GRADES_TOTAL = 20;
+
+/**
+ * FMP's `grades` feed never labels a coverage initiation: across 8,546 stored
+ * rows the only action values are maintain / upgrade / downgrade. The one
+ * structural signal it does carry is an EMPTY previousGrade with a real
+ * newGrade — a firm rating a stock it had no prior rating on. That is an
+ * initiation, so it is labelled as one here rather than shipping a blank
+ * action the UI cannot categorise.
+ *
+ * This currently matches a single row in the whole universe, so it does not
+ * make the Initiations tab useful on its own — the vendor simply does not
+ * supply the event. It is here so the classification is correct if FMP starts
+ * populating it, and so the row stops rendering with an empty action.
+ */
+export function normaliseGradeAction(
+  action: string | null,
+  previousGrade: string | null,
+  newGrade: string | null,
+): string | null {
+  const a = (action ?? "").trim();
+  const prev = (previousGrade ?? "").trim();
+  const next = (newGrade ?? "").trim();
+  if (prev === "" && next !== "" && (a === "" || /^init/i.test(a))) return "initiate";
+  return a === "" ? null : a;
+}
+
+/** A rating CHANGE rather than a reiteration. Anything that is not an explicit
+ *  "maintain" counts, so an action FMP adds later (resume, drop coverage) is
+ *  surfaced rather than silently discarded. */
+function isRatingEvent(action: string | null | undefined): boolean {
+  return !/^\s*maintain/i.test(action ?? "");
+}
+
+/**
+ * Newest-first rows in, at most GRADES_TOTAL out: every rating change up to
+ * GRADES_EVENTS, then the most recent maintains to fill the remainder.
+ */
+export function selectGrades<T extends { action: string | null; date: string }>(
+  rows: T[],
+): T[] {
+  const events = rows.filter((r) => isRatingEvent(r.action)).slice(0, GRADES_EVENTS);
+  const room = Math.max(0, GRADES_TOTAL - events.length);
+  const maintains = rows.filter((r) => !isRatingEvent(r.action)).slice(0, room);
+  return [...events, ...maintains].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+}
 
 /**
  * A per-firm price target is only joined to a grade when the firm posted it
@@ -170,7 +233,7 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
     const [pt, summary, grades, targets] = await Promise.all([
       this.fmp.getPriceTargetConsensus(ticker).catch(() => null),
       this.fmp.getPriceTargetSummary(ticker).catch(() => null),
-      this.fmp.getGrades(ticker, GRADES_LIMIT).catch(() => []),
+      this.fmp.getGrades(ticker, GRADES_SCAN).catch(() => []),
       this.fmp.getPriceTargets(ticker).catch(() => []),
     ]);
 
@@ -229,12 +292,12 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
       ptAvgLastMonth: summary?.lastMonthAvg ?? null,
       ptAvgLastQuarter: summary?.lastQuarterAvg ?? null,
       ptAvgLastYear: summary?.lastYearAvg ?? null,
-      recentGrades: grades.map((g) => ({
+      recentGrades: selectGrades(grades).map((g) => ({
         date: g.date,
         firm: g.gradingCompany,
         previousGrade: g.previousGrade,
         newGrade: g.newGrade,
-        action: g.action,
+        action: normaliseGradeAction(g.action, g.previousGrade, g.newGrade),
         priceTarget: targetFor(g.gradingCompany, g.date),
       })),
     };
