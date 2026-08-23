@@ -13,6 +13,7 @@ import {
 } from "../common/firestore-batch.util";
 import { scoreImportance } from "../common/news-importance.util";
 import { categoriseNews } from "../common/news-category.util";
+import { isFillerNews } from "../common/news-filler.util";
 import {
   NotificationsService,
   type NotificationInput,
@@ -178,6 +179,9 @@ export class NewsJob implements OnModuleInit {
         // because `category` above is the vendor's field and is null on every
         // article from both Polygon and FMP.
         tag: categoriseNews(a.headline, a.summary),
+        // Syndicated 13F/listicle noise. Flagged, not dropped: the UI hides it
+        // by default but the row stays auditable if a rule turns out wrong.
+        filler: isFillerNews(a.headline, a.summary, a.source),
         sentiment: a.sentiment,
         sentimentReasoning: a.sentimentReasoning,
         keywords: a.keywords,

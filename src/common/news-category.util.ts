@@ -12,6 +12,8 @@
  * and announcing a buyback" is an EARNINGS story, not a capital-returns one.
  */
 
+import { looksLikeDealButIsNot } from "./news-filler.util";
+
 export type NewsCategory =
   | "earnings" | "analyst" | "ma" | "legal" | "product" | "capital" | "other";
 
@@ -32,17 +34,10 @@ export const NEWS_CATEGORY_ORDER: NewsCategory[] = [
 ];
 
 /**
- * Headlines that must never reach the M&A rules.
- *
- * Measured on the live feed: a bare "to buy" pattern tagged 79 of 400 M&A
- * stories wrong — they were listicle clickbait ("2 Top Growth Stocks to Buy
- * Right Now", "The Smartest ETF to Buy With $750"). Separately, syndicated 13F
- * boilerplate ("$AAPL Shares Acquired by BSN CAPITAL PARTNERS Ltd") is a
- * holdings disclosure, not a deal. Both are excluded before any rule runs.
+ * Headlines that must never reach the M&A rules — 13F holdings boilerplate and
+ * listicle clickbait, where "acquired" and "to buy" are not transactions.
+ * Shared with news-filler.util so the patterns live in exactly one place.
  */
-const DEAL_LOOKALIKE =
-  /\bshares?\s+(acquired|sold|bought|purchased)\s+by\b|\b(stake|position|holdings?)\s+(raised|lowered|trimmed|boosted|cut)\s+by\b|\b\d+\s+(top|best|smartest|unstoppable)\b[^.]{0,40}\bto buy\b|\bstocks?\s+to\s+buy\b|\btime\s+to\s+buy\b/i;
-
 const RULES: Array<{ cat: NewsCategory; res: RegExp[]; headlineOnly?: boolean }> = [
   {
     cat: "earnings",
@@ -122,7 +117,7 @@ export function categoriseNews(
   const head = (headline ?? "").replace(/\s+/g, " ").trim();
   const text = `${headline ?? ""} ${summary ?? ""}`.replace(/\s+/g, " ").trim();
   if (!text) return "other";
-  const dealLookalike = DEAL_LOOKALIKE.test(text);
+  const dealLookalike = looksLikeDealButIsNot(text);
   for (const { cat, res, headlineOnly } of RULES) {
     if (cat === "ma" && dealLookalike) continue;
     const hay = headlineOnly ? head : text;
