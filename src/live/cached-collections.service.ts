@@ -46,7 +46,30 @@ const ALLOWED = new Set<string>([
   "macro_regime",
 ]);
 
-const TTL_MS = 5 * 60 * 1000; // 5 minutes — these collections change daily
+// Two-tier TTL. Almost every allow-listed collection is written ONCE PER DAY by
+// the sync jobs, so a blanket 5-minute cache re-read the entire collection every
+// 5 minutes per instance for zero freshness gain — and the big ones
+// (earnings_events ≈ 12k docs, dividends ≈ 6k, the *_history feeds) dominated the
+// Firestore read bill. Give daily-changing collections a long TTL; keep only the
+// genuinely intraday-updated collections on the short one. (Live prices come from
+// the snapshot/quotes path, not from these cached lists, so a longer list TTL
+// does NOT make quotes stale.)
+const FAST_TTL_MS = 5 * 60 * 1000; // 5 min — rewritten by the intraday sync
+const SLOW_TTL_MS = 60 * 60 * 1000; // 60 min — written once/day by sync jobs
+
+// The only collections the intraday (5-min) sync actually rewrites. Everything
+// else in ALLOWED changes at most daily and uses SLOW_TTL_MS.
+const FAST = new Set<string>([
+  "companies",
+  "market_indices",
+  "market_movers",
+  "market_breadth",
+  "market_sentiment",
+  "sectors",
+]);
+
+const ttlFor = (name: string): number =>
+  FAST.has(name) ? FAST_TTL_MS : SLOW_TTL_MS;
 
 @Injectable()
 export class CachedCollectionsService {
@@ -65,7 +88,7 @@ export class CachedCollectionsService {
     await Promise.all(
       names.map(async (name) => {
         const hit = this.cache.get(name);
-        if (hit && Date.now() - hit.at < TTL_MS) {
+        if (hit && Date.now() - hit.at < ttlFor(name)) {
           out[name] = hit.data;
           return;
         }
