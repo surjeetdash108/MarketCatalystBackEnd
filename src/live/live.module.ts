@@ -5,6 +5,8 @@ import { FmpModule } from "../vendors/fmp/fmp.module";
 import { FredModule } from "../vendors/fred/fred.module";
 import { OpenRouterModule } from "../vendors/openrouter/openrouter.module";
 import { AiAnalysisService } from "./ai-analysis.service";
+import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
+import { TickerPeriodAnalysisService } from "./ticker-period-analysis.service";
 import { LiveController } from "./live.controller";
 import { PolygonLiveService } from "./polygon-live.service";
 import { SnapshotCacheService } from "./snapshot-cache.service";
@@ -47,6 +49,8 @@ import { SearchedTickersService } from "./searched-tickers.service";
     OnDemandController,
   ],
   providers: [
+    TickerAiAnalysisService,
+    TickerPeriodAnalysisService,
     PolygonLiveService,
     SnapshotCacheService,
     MarketStatusService,
@@ -58,6 +62,8 @@ import { SearchedTickersService } from "./searched-tickers.service";
     AiAnalysisService,
   ],
   exports: [
+    TickerAiAnalysisService,
+    TickerPeriodAnalysisService,
     PolygonLiveService,
     SnapshotCacheService,
     MarketStatusService,

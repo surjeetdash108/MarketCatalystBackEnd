@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, Optional, OnModuleInit } from "@nestjs/comm
 import {
   NEWS_ADAPTER,
   NEWS_FMP_ADAPTER,
+  NEWS_TRADINGVIEW_ADAPTER,
   type CanonicalNewsArticle,
   type NewsAdapter,
 } from "../adapters/types";
@@ -13,6 +14,7 @@ import {
 } from "../common/firestore-batch.util";
 import { scoreImportance } from "../common/news-importance.util";
 import { categoriseNews } from "../common/news-category.util";
+import { TickerAiAnalysisService } from "../live/ticker-ai-analysis.service";
 import { isFillerNews } from "../common/news-filler.util";
 import {
   NotificationsService,
@@ -28,6 +30,8 @@ const JOB_NAME = "news";
 // stored shape and volume stay the same now that the FETCH is bulk.
 const ARTICLES_PER_TICKER = 8;
 const LOOKBACK_DAYS = 2;
+/** Tickers analysed per 10-minute cycle — see runTickerAnalysis for why. */
+const MAX_TICKERS_PER_CYCLE = Number(process.env.TICKER_AI_PER_CYCLE) || 8;
 
 
 @Injectable()
@@ -37,6 +41,9 @@ export class NewsJob implements OnModuleInit {
   constructor(
     @Inject(NEWS_ADAPTER) private readonly news: NewsAdapter,
     @Optional() @Inject(NEWS_FMP_ADAPTER) private readonly newsFmp: NewsAdapter | null,
+    @Optional() @Inject(NEWS_TRADINGVIEW_ADAPTER)
+    private readonly newsTradingView: NewsAdapter | null,
+    private readonly tickerAi: TickerAiAnalysisService,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly notifications: NotificationsService,
@@ -50,7 +57,7 @@ export class NewsJob implements OnModuleInit {
       // (was "*/30 9-16 * * 1-5") left the feed stale overnight, over weekends
       // and through holidays — but news breaks after the close, pre-market and
       // at weekends, which is exactly when the Live Feed looked dead.
-      cronExpression: "*/30 * * * *",
+      cronExpression: "*/10 * * * *",
       timeZone: "America/New_York",
     });
   }
@@ -174,7 +181,11 @@ export class NewsJob implements OnModuleInit {
         source: a.source,
         vendor: a.vendor,
         url: a.url,
+        // §2: keep BOTH. `sourceCategory` is the provider's own label
+        // (null on Polygon/FMP today, populated by feeds that supply one);
+        // `tag` is our normalised bucket. `category` stays for older readers.
         category: a.category,
+        sourceCategory: a.category,
         // Feed filter bucket (Earnings / Analyst Actions / M&A / …). Derived,
         // because `category` above is the vendor's field and is null on every
         // article from both Polygon and FMP.
@@ -190,6 +201,57 @@ export class NewsJob implements OnModuleInit {
         updatedAt: new Date().toISOString(),
       },
     });
+  }
+
+  /**
+   * Incremental ticker analysis for the tickers that received news (§6).
+   *
+   * Bounded by MAX_TICKERS_PER_CYCLE: this runs every 10 minutes, so analysing
+   * every affected ticker on every cycle would be both slow and expensive
+   * (§15). Tickers are ranked by how much news they just received, so the
+   * busiest names — the ones whose read actually moved — are refreshed first
+   * and the rest catch up on later cycles.
+   *
+   * Never throws: a model outage must not fail an ingestion cycle that already
+   * persisted its news successfully.
+   */
+  private async runTickerAnalysis(
+    byTicker: Map<string, CanonicalNewsArticle[]>,
+  ): Promise<{ attempted: number; succeeded: number; failed: number }> {
+    const ranked = [...byTicker.entries()]
+      .sort((a, b) => b[1].length - a[1].length)
+      .slice(0, MAX_TICKERS_PER_CYCLE);
+    let succeeded = 0, failed = 0;
+    for (const [ticker, items] of ranked) {
+      try {
+        const out = await this.tickerAi.analyseTicker(
+          ticker,
+          items.map((n) => ({
+            id: n.id,
+            headline: n.headline,
+            summary: n.summary,
+            source: n.source,
+            publishedAt: n.publishedAt,
+            // Derived at ingest; recomputed here rather than threaded through
+            // so the prompt sees the same bucket the feed shows.
+            tag: categoriseNews(n.headline, n.summary),
+          })),
+          {},
+        );
+        if (out) succeeded++; else failed++;
+      } catch (err) {
+        failed++;
+        this.logger.warn(
+          `ticker-ai failed for ${ticker}: ${(err as Error).message}`,
+        );
+      }
+    }
+    if (ranked.length) {
+      this.logger.log(
+        `ticker-ai: ${succeeded} updated, ${failed} failed of ${ranked.length} attempted`,
+      );
+    }
+    return { attempted: ranked.length, succeeded, failed };
   }
 
   async run() {
@@ -256,11 +318,35 @@ export class NewsJob implements OnModuleInit {
         }
       }
 
-      // Data-loss guard: if BOTH vendors come back empty, write nothing rather
+      let tradingViewCount = 0;
+      if (
+        this.newsTradingView &&
+        typeof this.newsTradingView.fetchMarketNews === "function"
+      ) {
+        try {
+          const tvRes = await this.newsTradingView.fetchMarketNews(
+            isoDate(from),
+            isoDate(to),
+          );
+          collected.push(...tvRes.data);
+          tradingViewCount = tvRes.data.length;
+          // Inert-when-unconfigured is normal, not a fault — log it once at
+          // debug volume so an unset feed does not look like an outage.
+          for (const w of tvRes.warnings) {
+            this.logger.log(`news (tradingview): ${w.code} — ${w.message}`);
+          }
+        } catch (err) {
+          this.logger.warn(
+            `Bulk news fetch (tradingview) failed: ${(err as Error).message}`,
+          );
+        }
+      }
+
+      // Data-loss guard: if EVERY vendor comes back empty, write nothing rather
       // than recording a "successful" run that refreshed no articles.
       if (collected.length === 0) {
         this.logger.warn(
-          "news: both bulk sources returned 0 articles — skipping write",
+          "news: every bulk source returned 0 articles — skipping write",
         );
         await this.meta.record(JOB_NAME, {
           ok: false,
@@ -314,6 +400,12 @@ export class NewsJob implements OnModuleInit {
           `${pub.skipped} matched no subscriber; ` +
           `newsCount refreshed for ${counted} ticker(s)`,
       );
+      // ── §4: AI analysis runs ONLY now, after the batch write above has
+      // resolved. A throw from chunkedBatchSet skips this entirely, so news
+      // that failed to persist is never analysed. A failure HERE leaves the
+      // news in place and is reported separately (§12).
+      const ai = await this.runTickerAnalysis(byTicker);
+
       await this.meta.record(JOB_NAME, {
         ok: true,
         count: docs.length,
@@ -326,8 +418,15 @@ export class NewsJob implements OnModuleInit {
       return {
         count: docs.length,
         tickersCovered: byTicker.size,
+        analysisAttempted: ai.attempted,
+        analysisSucceeded: ai.succeeded,
+        analysisFailed: ai.failed,
         polygonCount,
         fmpCount,
+        tradingViewCount,
+        // Tickers that received news this cycle. §4: the AI stage consumes
+        // this AFTER persistence has been confirmed above — never before.
+        affectedTickers: [...byTicker.keys()],
       };
     } catch (err) {
       await this.meta.record(JOB_NAME, {

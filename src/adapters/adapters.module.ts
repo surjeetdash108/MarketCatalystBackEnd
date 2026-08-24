@@ -14,6 +14,7 @@ import { PolygonCompanyProfileAdapter } from "./polygon-company-profile.adapter"
 import { PolygonMoverEnrichmentAdapter } from "./polygon-mover-enrichment.adapter";
 import { PolygonMoversAdapter } from "./polygon-movers.adapter";
 import { PolygonNewsAdapter } from "./polygon-news.adapter";
+import { TradingViewNewsAdapter } from "./tradingview-news.adapter";
 import { FmpNewsAdapter } from "./fmp-news.adapter";
 import {
   CompositeDividendsAdapter,
@@ -45,6 +46,7 @@ import {
   MOVER_ENRICHMENT_ADAPTER,
   NEWS_ADAPTER,
   NEWS_FMP_ADAPTER,
+  NEWS_TRADINGVIEW_ADAPTER,
   QUOTE_ADAPTER,
   SECTORS_ADAPTER,
   EARNINGS_ESTIMATES_ADAPTER,
@@ -160,6 +162,18 @@ function buildComposite(
             none: () => null,
           },
           CompositeMoverEnrichmentAdapter,
+        ),
+    },
+    {
+      // Third news provider (§1). Constructed always so the pipeline shape is
+      // fixed, but INERT until TRADINGVIEW_NEWS_URL is set — see the adapter
+      // for why it reads a licensed feed rather than scraping the site.
+      provide: NEWS_TRADINGVIEW_ADAPTER,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) =>
+        new TradingViewNewsAdapter(
+          String(config.get("TRADINGVIEW_NEWS_URL", "")).trim() || null,
+          String(config.get("TRADINGVIEW_NEWS_KEY", "")).trim() || null,
         ),
     },
     {

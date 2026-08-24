@@ -269,6 +269,11 @@ export const MOVER_ENRICHMENT_ADAPTER: unique symbol = Symbol(
   "MOVER_ENRICHMENT_ADAPTER",
 );
 export const NEWS_ADAPTER: unique symbol = Symbol("NEWS_ADAPTER");
+/** Optional TradingView news source, merged alongside Polygon and FMP.
+ *  Inert unless TRADINGVIEW_NEWS_URL points at a LICENSED feed. */
+export const NEWS_TRADINGVIEW_ADAPTER: unique symbol = Symbol(
+  "NEWS_TRADINGVIEW_ADAPTER",
+);
 /** Optional FMP news source, merged alongside NEWS_ADAPTER (Polygon). */
 export const NEWS_FMP_ADAPTER: unique symbol = Symbol("NEWS_FMP_ADAPTER");
 export const DIVIDENDS_ADAPTER: unique symbol = Symbol("DIVIDENDS_ADAPTER");
