@@ -26,8 +26,16 @@ import {
 
 /** Newly-inserted articles per ticker fed to one incremental run. */
 const MAX_NEWS_PER_RUN = 12;
-/** Model budget. Generous: this runs in a JOB, so no Hosting 60s ceiling. */
+/** Model budget for the BACKGROUND sweep, which runs in a job — no ceiling. */
 const TIMEOUT_MS = 60_000;
+/**
+ * Budget for an ON-DEMAND generation. Much tighter: that path is reached
+ * through the Firebase Hosting rewrite, which kills any request at 60s and
+ * returns a 503 the app never sees. This has to cover a cold start too.
+ */
+const ON_DEMAND_TIMEOUT_MS = 24_000;
+/** Newest articles pulled from storage when generating on demand. */
+const ON_DEMAND_NEWS = 10;
 
 const SENTIMENTS: Sentiment[] = ["positive", "negative", "neutral", "mixed"];
 
@@ -134,10 +142,70 @@ export class TickerAiAnalysisService {
    * caller records a failed analysis WITHOUT touching the stored news (§12:
    * "If news is saved but AI analysis fails, keep the news").
    */
+  /**
+   * Generate on first view, when the background sweep has not reached a ticker.
+   *
+   * The sweep covers a bounded number of tickers per cycle, so a thinly covered
+   * name can legitimately have news in storage and no analysis yet — which
+   * reads as broken to someone looking at that exact ticker. This closes the
+   * gap: a miss generates once from the ticker's stored news, persists, and
+   * every later view is a plain read.
+   *
+   * Deduped by an in-flight map so a double-click, or two users on the same
+   * ticker, share ONE model call rather than racing two.
+   */
+  async getOrGenerate(ticker: string): Promise<TickerAiAnalysisDoc | null> {
+    const existing = await this.getCurrent(ticker);
+    if (existing) return existing;
+    if (!this.openrouter.enabled) return null;
+
+    const inflight = TickerAiAnalysisService.inflight;
+    const running = inflight.get(ticker);
+    if (running) return running;
+
+    const task = (async () => {
+      try {
+        const snap = await this.firebase.firestore
+          .collection("news")
+          .where("ticker", "==", ticker)
+          .get();
+        const news = snap.docs
+          .map((d) => ({
+            id: d.id,
+            headline: String(d.data().headline ?? ""),
+            summary: (d.data().summary as string | null) ?? null,
+            source: String(d.data().source ?? ""),
+            publishedAt: String(d.data().publishedAt ?? ""),
+            tag: (d.data().tag as string | null) ?? null,
+            filler: d.data().filler === true,
+          }))
+          // Filler carries a ticker but no event; analysing it produces a read
+          // about syndication volume rather than about the company.
+          .filter((n) => !n.filler && n.headline)
+          .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
+          .slice(0, ON_DEMAND_NEWS);
+        if (!news.length) return null;
+        return await this.analyseTicker(ticker, news, {
+          timeoutMs: ON_DEMAND_TIMEOUT_MS,
+        });
+      } finally {
+        inflight.delete(ticker);
+      }
+    })();
+    inflight.set(ticker, task);
+    return task;
+  }
+
+  /** Shared across instances so concurrent requests coalesce. */
+  private static readonly inflight = new Map<
+    string,
+    Promise<TickerAiAnalysisDoc | null>
+  >();
+
   async analyseTicker(
     ticker: string,
     news: NewsInput[],
-    opts: { companyName?: string | null; context?: string } = {},
+    opts: { companyName?: string | null; context?: string; timeoutMs?: number } = {},
   ): Promise<TickerAiAnalysisDoc | null> {
     if (!this.openrouter.enabled) return null;
     if (!news.length) return null;
@@ -163,7 +231,7 @@ export class TickerAiAnalysisService {
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: user },
       ],
-      { timeoutMs: TIMEOUT_MS },
+      { timeoutMs: opts.timeoutMs ?? TIMEOUT_MS },
     );
     if (!reply) {
       this.logger.warn(`ticker-ai: no reply for ${ticker} (${mode})`);

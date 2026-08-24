@@ -92,7 +92,8 @@ private readonly ondemand: OnDemandService,
     if (!TICKER_RE.test(sym)) {
       throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
     }
-    const doc = await this.tickerAi.getCurrent(sym);
+    // Generates on a miss, then serves from storage thereafter.
+    const doc = await this.tickerAi.getOrGenerate(sym);
     sendWithEtag(req, res, doc ?? { ticker: sym, empty: true });
   }
 

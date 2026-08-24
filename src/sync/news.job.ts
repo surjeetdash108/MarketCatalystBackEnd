@@ -235,6 +235,14 @@ export class NewsJob implements OnModuleInit {
         if (!a.last && b.last) return -1;
         if (a.last && !b.last) return 1;
         if (a.last && b.last && a.last !== b.last) return a.last < b.last ? -1 : 1;
+        // Among NEVER-analysed tickers, do NOT rank by article count. AXTI had
+        // fresh non-filler news and still lost every cycle to names carrying 12
+        // articles — and there is always such a name, so a thin-coverage ticker
+        // never reached the front. Alphabetical is arbitrary but it DRAINS:
+        // each ticker analysed leaves the group, so the queue empties in a
+        // predictable order instead of sorting the same heavy names to the top
+        // forever.
+        if (!a.last && !b.last) return a.ticker.localeCompare(b.ticker);
         return b.items.length - a.items.length;
       })
       .slice(0, MAX_TICKERS_PER_CYCLE)
