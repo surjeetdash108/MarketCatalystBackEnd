@@ -65,7 +65,11 @@ export class EarningsJob implements OnModuleInit {
       // the entire pre-market, which is exactly when people look.
       // 17:00 catches the release itself, 19:00 and 21:00 catch vendors that
       // publish the matched actual/estimate pair an hour or two later.
-      cronExpression: "0 6,17,19,21 * * *",
+      // Twice a day is enough now: earnings-actuals.job owns intra-day
+      // actuals, so this only has to keep CALENDAR SHAPE current (new dates,
+      // estimate revisions), which moves slowly. Dropping the 17:00/19:00
+      // rebuilds saves ~$0.95/mo of pure rewrite.
+      cronExpression: "0 6,21 * * *",
       timeZone: "America/New_York",
     });
   }

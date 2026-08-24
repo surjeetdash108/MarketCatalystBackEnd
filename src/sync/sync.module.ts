@@ -16,6 +16,7 @@ import { MarketQuotesJob } from "./market-quotes.job";
 import { CompanyQuotesJob } from "./company-quotes.job";
 import { NewsJob } from "./news.job";
 import { TickerPeriodAnalysisJob } from "./ticker-period-analysis.job";
+import { EarningsActualsJob } from "./earnings-actuals.job";
 import { OptionsChainsJob } from "./options-chains.job";
 import { FearGreedJob } from "./fear-greed.job";
 import { RecapsJob } from "./recaps.job";
@@ -54,6 +55,7 @@ import { LiveModule } from "../live/live.module";
   ],
   controllers: [SyncController],
   providers: [
+    EarningsActualsJob,
     TickerPeriodAnalysisJob,
     MarketMoversJob,
     CompaniesJob,
