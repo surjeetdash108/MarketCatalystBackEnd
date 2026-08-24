@@ -65,7 +65,11 @@ export class Edgar8KJob implements OnModuleInit {
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
       collections: ["filings_wire", "earnings_announcements"],
-      cronExpression: "0 8 * * 1-5", // runs inside premarket orchestration
+      // 08:00 sweeps overnight filings; 17:30 and 20:00 catch the same-evening
+    // item-2.02 8-K that an after-close reporter files within ~30 minutes of
+    // its release. That filing is where the guidance and the session/reaction
+    // come from, so a morning-only sweep left them a day behind the print.
+    cronExpression: "0 8,17,20 * * 1-5", // runs inside premarket orchestration
       timeZone: "America/New_York",
     });
   }

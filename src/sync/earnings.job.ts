@@ -58,7 +58,14 @@ export class EarningsJob implements OnModuleInit {
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
       collections: ["earnings_events"],
-      cronExpression: "0 6 * * *",
+      // 06:00 rebuilds the forward calendar. The evening slots exist because
+      // most large caps report AFTER the close (NVDA, AAPL, MSFT are all AMC):
+      // with a morning-only schedule an after-close print sat with
+      // epsActual:null until 06:00 the NEXT day — through the whole evening and
+      // the entire pre-market, which is exactly when people look.
+      // 17:00 catches the release itself, 19:00 and 21:00 catch vendors that
+      // publish the matched actual/estimate pair an hour or two later.
+      cronExpression: "0 6,17,19,21 * * *",
       timeZone: "America/New_York",
     });
   }
