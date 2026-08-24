@@ -15,6 +15,7 @@ import type { Request, Response } from "express";
 import { createHash } from "crypto";
 import { OnDemandService, BARS_TFS } from "./ondemand.service";
 import { AiAnalysisService } from "./ai-analysis.service";
+import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
 import { TickerSearchService } from "./ticker-search.service";
 import { SearchedTickersService } from "./searched-tickers.service";
 import { OPTIONS_UNIVERSE } from "../common/options-universe";
@@ -58,7 +59,8 @@ function sendWithEtag(req: Request, res: Response, body: unknown): void {
 @Controller("live")
 export class OnDemandController {
   constructor(
-    private readonly ondemand: OnDemandService,
+        private readonly tickerAi: TickerAiAnalysisService,
+private readonly ondemand: OnDemandService,
     private readonly aiAnalysis: AiAnalysisService,
     private readonly search: TickerSearchService,
     private readonly searchedTickers: SearchedTickersService,
@@ -71,6 +73,29 @@ export class OnDemandController {
    * paid OpenRouter calls can't be triggered without a login. Cache-Control is
    * `private` precisely because the route is authenticated.
    */
+  /**
+   * The rolling per-ticker AI analysis maintained by the 10-minute pipeline
+   * (ticker_ai_analysis). A pure READ — it never triggers generation, so the
+   * Live Feed can surface it per row without incurring a model call. Returns
+   * null when a ticker has not been analysed yet, which the UI shows as
+   * "no analysis yet" rather than an error.
+   */
+  @Get("ticker-analysis")
+  @UseGuards(FirebaseAuthGuard)
+  @Header("Cache-Control", "private, max-age=120")
+  async tickerAnalysisRead(
+    @Query("ticker") ticker: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? "").toUpperCase().trim();
+    if (!TICKER_RE.test(sym)) {
+      throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+    }
+    const doc = await this.tickerAi.getCurrent(sym);
+    sendWithEtag(req, res, doc ?? { ticker: sym, empty: true });
+  }
+
   @Get("ai-analysis")
   @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "private, max-age=300")
