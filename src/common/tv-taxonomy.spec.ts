@@ -170,3 +170,20 @@ describe("SIC agriculture division coverage", () => {
     expect(k.sector).toBe("Consumer Non-Durables");
   });
 });
+
+describe("SIC 799x amusement codes", () => {
+  it("puts Disney's general amusement code in entertainment, not casinos", () => {
+    // DIS files under SIC 7990 and was landing in Casinos/Gaming.
+    const k = classifyFromSic("7990");
+    expect(k.industry).toBe("Movies/Entertainment");
+    expect(k.sector).toBe("Consumer Services");
+  });
+  it("keeps the genuinely gaming-specific codes in Casinos/Gaming", () => {
+    expect(classifyFromSic("7993").industry).toBe("Casinos/Gaming");
+  });
+  it("keeps telecoms in Communications", () => {
+    expect(classifyFromSic("4813").sector).toBe("Communications"); // AT&T
+    expect(classifyFromSic("4812").sector).toBe("Communications"); // T-Mobile
+    expect(classifyFromSic("4841").sector).toBe("Communications"); // Comcast/Charter
+  });
+});

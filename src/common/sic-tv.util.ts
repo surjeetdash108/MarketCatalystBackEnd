@@ -126,7 +126,12 @@ const EXACT_INDUSTRY: Record<number, string> = {
   5812: "Restaurants",
   5813: "Restaurants",
   7011: "Hotels/Resorts/Cruise lines",
-  7990: "Casinos/Gaming",
+  // 7990 is SEC's GENERAL "Amusement & Recreation Services" bucket, not a
+  // casino code — Disney files under it. Mapping it to Casinos/Gaming put DIS
+  // in Casinos/Gaming. The specific gaming codes (7011 hotels-casinos, 7993
+  // coin-operated devices) still map there; this one is the catch-all and
+  // belongs with entertainment.
+  7990: "Movies/Entertainment",
   7993: "Casinos/Gaming",
   // ── Consumer products ───────────────────────────────────────────────────
   2080: "Beverages: Non-Alcoholic",
