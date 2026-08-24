@@ -3,6 +3,7 @@ import { AdaptersModule } from "../adapters/adapters.module";
 import { PolygonModule } from "../vendors/polygon/polygon.module";
 import { FmpModule } from "../vendors/fmp/fmp.module";
 import { FredModule } from "../vendors/fred/fred.module";
+import { SecEdgarModule } from "../vendors/sec-edgar/sec-edgar.module";
 import { OpenRouterModule } from "../vendors/openrouter/openrouter.module";
 import { AiAnalysisService } from "./ai-analysis.service";
 import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
@@ -38,6 +39,7 @@ import { SearchedTickersService } from "./searched-tickers.service";
     AdaptersModule,
     FmpModule,
     FredModule,
+    SecEdgarModule,
     OpenRouterModule,
   ],
   controllers: [

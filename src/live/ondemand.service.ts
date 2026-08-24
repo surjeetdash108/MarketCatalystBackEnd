@@ -45,6 +45,7 @@ import {
   PolygonAggBar,
 } from "../vendors/polygon/polygon.service";
 import { FmpService } from "../vendors/fmp/fmp.service";
+import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { isoDate } from "../common/date.util";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -330,6 +331,9 @@ export class OnDemandService implements OnModuleDestroy {
     // FMP is the only vendor providing earnings-call transcripts; behaves as a
     // no-op (returns null) when FMP_API_KEY is unset, same as the other FMP paths.
     private readonly fmp: FmpService,
+    // Authoritative free SIC lookup, used ONLY as a fallback when Polygon omits
+    // sic_code (foreign private issuers / ADRs) so sector/industry still resolve.
+    private readonly secEdgar: SecEdgarService,
   ) {}
 
   onModuleDestroy() {
@@ -914,9 +918,25 @@ export class OnDemandService implements OnModuleDestroy {
       // One SIC classification reused for sector AND industry below, so the two
       // can never disagree. Safe when details is null — classifyFromSic returns
       // nulls, and the whole profile block is omitted in that case anyway.
-      const sicClass = classifyFromSic(
-        details?.sic_code as string | number | null | undefined,
-      );
+      //
+      // Polygon omits sic_code for many foreign private issuers / ADRs (e.g.
+      // GAUZ, a 20-F filer), which left sector/industry blank on the detail page.
+      // When it's missing, fall back to the SEC's authoritative SIC — free, and
+      // the SAME standard classifyFromSic consumes — so the classification still
+      // lands in the TradingView taxonomy (no second vocabulary). Fail-safe:
+      // getSicByTicker returns null on any error, preserving prior behaviour;
+      // only attempted when we actually have a details profile to attach it to.
+      const polygonSic = details?.sic_code as string | number | null | undefined;
+      const hasPolygonSic =
+        polygonSic != null &&
+        String(polygonSic).trim() !== "" &&
+        String(polygonSic).trim() !== "0";
+      const resolvedSic: string | number | null = hasPolygonSic
+        ? (polygonSic as string | number)
+        : details
+          ? await this.secEdgar.getSicByTicker(ticker)
+          : null;
+      const sicClass = classifyFromSic(resolvedSic);
       // Nightly fundamentals-growth writes epsGrowthYoY / revenueGrowthYoY /
       // grossMargin to the company doc; this on-demand rebuild doesn't recompute
       // them, so carry them forward (else the returned doc — the stock-detail's
@@ -949,8 +969,7 @@ export class OnDemandService implements OnModuleDestroy {
               // with a TradingView sector next to a GICS industry.
               sector: sicClass.sector,
               industry: sicClass.industry,
-              sicCode:
-                details.sic_code == null ? null : String(details.sic_code),
+              sicCode: resolvedSic == null ? null : String(resolvedSic),
               sicDescription: details.sic_description ?? null,
               // Correct a grossly-stale Polygon market_cap with price × shares
               // (see reconcileMarketCap); consistent values are left untouched.

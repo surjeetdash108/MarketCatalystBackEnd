@@ -65,6 +65,12 @@ export class SecEdgarService {
   private readonly logger = new Logger(SecEdgarService.name);
   private readonly userAgent: string;
   private lastRequestAt = 0;
+  // ticker -> CIK, from SEC's company_tickers.json. Cached in memory (the file
+  // is ~800KB and changes rarely) and refreshed daily; concurrent callers share
+  // one in-flight fetch so a burst of on-demand misses doesn't refetch it.
+  private tickerCikMap: Map<string, string> | null = null;
+  private tickerCikMapAt = 0;
+  private tickerCikMapInFlight: Promise<Map<string, string>> | null = null;
 
   constructor(private readonly config: ConfigService) {
     this.userAgent = this.config.get(
@@ -113,6 +119,61 @@ export class SecEdgarService {
       primaryDocDescription: r.primaryDocDescription?.[i],
     }));
     return { name: data.name, recentFilings };
+  }
+
+  /** ticker -> zero-padded-free CIK string, from SEC's company_tickers.json. */
+  private async getTickerCikMap(): Promise<Map<string, string>> {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    if (this.tickerCikMap && Date.now() - this.tickerCikMapAt < DAY_MS) {
+      return this.tickerCikMap;
+    }
+    if (this.tickerCikMapInFlight) return this.tickerCikMapInFlight;
+    this.tickerCikMapInFlight = (async () => {
+      const data = (await this.throttledFetch(
+        "https://www.sec.gov/files/company_tickers.json",
+      )) as Record<string, { ticker?: string; cik_str?: number | string }>;
+      const map = new Map<string, string>();
+      for (const row of Object.values(data)) {
+        if (row?.ticker && row.cik_str != null) {
+          map.set(String(row.ticker).toUpperCase(), String(row.cik_str));
+        }
+      }
+      this.tickerCikMap = map;
+      this.tickerCikMapAt = Date.now();
+      return map;
+    })();
+    try {
+      return await this.tickerCikMapInFlight;
+    } finally {
+      this.tickerCikMapInFlight = null;
+    }
+  }
+
+  /**
+   * SEC-registered SIC code for a ticker (authoritative, free), or null.
+   *
+   * Fallback for tickers Polygon returns WITHOUT a `sic_code` — typically
+   * foreign private issuers / ADRs (e.g. GAUZ, a 20-F filer). SEC SIC codes are
+   * the same standard `classifyFromSic` already consumes, so this fills
+   * sector/industry in the SAME TradingView taxonomy the app standardises on —
+   * no second vocabulary introduced. Fail-safe: any error resolves to null so
+   * the caller keeps whatever profile it already has.
+   */
+  async getSicByTicker(ticker: string): Promise<string | null> {
+    try {
+      const cik = (await this.getTickerCikMap()).get(ticker.toUpperCase());
+      if (!cik) return null;
+      const data = await this.throttledFetch(
+        `${SUBMISSIONS_BASE}/CIK${this.pad10(cik)}.json`,
+      );
+      const sic = data?.sic == null ? "" : String(data.sic).trim();
+      return sic && sic !== "0" ? sic : null;
+    } catch (err) {
+      this.logger.warn(
+        `getSicByTicker(${ticker}) failed: ${(err as Error).message}`,
+      );
+      return null;
+    }
   }
 
   /**
