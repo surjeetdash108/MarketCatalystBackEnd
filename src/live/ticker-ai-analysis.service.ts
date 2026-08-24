@@ -101,6 +101,27 @@ export class TickerAiAnalysisService {
     return this.firebase.firestore.collection(TICKER_AI_COLLECTION);
   }
 
+  /**
+   * lastUpdatedAt per ticker, for the tickers supplied. Absent from the map
+   * means never analysed. One getAll instead of N reads, because the caller
+   * runs this every 10 minutes over every ticker that received news.
+   */
+  async lastUpdatedMap(tickers: string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const CHUNK = 300;
+    for (let i = 0; i < tickers.length; i += CHUNK) {
+      const refs = tickers.slice(i, i + CHUNK).map((t) => this.col.doc(t));
+      if (!refs.length) continue;
+      const snaps = await this.firebase.firestore.getAll(...refs);
+      for (const s of snaps) {
+        if (!s.exists) continue;
+        const d = s.data() as TickerAiAnalysisDoc;
+        if (d?.lastUpdatedAt) out.set(s.id, d.lastUpdatedAt);
+      }
+    }
+    return out;
+  }
+
   async getCurrent(ticker: string): Promise<TickerAiAnalysisDoc | null> {
     const snap = await this.col.doc(ticker).get();
     return snap.exists ? (snap.data() as TickerAiAnalysisDoc) : null;

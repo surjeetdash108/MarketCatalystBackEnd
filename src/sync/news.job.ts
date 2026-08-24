@@ -218,9 +218,27 @@ export class NewsJob implements OnModuleInit {
   private async runTickerAnalysis(
     byTicker: Map<string, CanonicalNewsArticle[]>,
   ): Promise<{ attempted: number; succeeded: number; failed: number }> {
+    // STALENESS FIRST, not news volume.
+    //
+    // Ranking by article count alone starved the tail completely: the busiest
+    // 8 names won every cycle, so after hours of running, 8 tickers had been
+    // analysed (all at revision >1) and 369 with news had never been touched
+    // once. A quiet ticker would have waited forever.
+    //
+    // So: never-analysed tickers first, then the least recently updated, with
+    // article count only as a tiebreaker. Coverage now grows every cycle and
+    // then rotates for freshness, instead of re-reading the same few names.
+    const lastUpdated = await this.tickerAi.lastUpdatedMap([...byTicker.keys()]);
     const ranked = [...byTicker.entries()]
-      .sort((a, b) => b[1].length - a[1].length)
-      .slice(0, MAX_TICKERS_PER_CYCLE);
+      .map(([ticker, items]) => ({ ticker, items, last: lastUpdated.get(ticker) ?? null }))
+      .sort((a, b) => {
+        if (!a.last && b.last) return -1;
+        if (a.last && !b.last) return 1;
+        if (a.last && b.last && a.last !== b.last) return a.last < b.last ? -1 : 1;
+        return b.items.length - a.items.length;
+      })
+      .slice(0, MAX_TICKERS_PER_CYCLE)
+      .map((r) => [r.ticker, r.items] as const);
     let succeeded = 0, failed = 0;
     for (const [ticker, items] of ranked) {
       try {

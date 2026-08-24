@@ -67,3 +67,68 @@ describe("prompts", () => {
     expect(p).toMatch(/immaterial/i);
   });
 });
+
+/**
+ * The scheduling rule that decides which tickers get analysed each cycle.
+ * Pure comparator, extracted here because the bug it fixes was invisible in
+ * types and only showed up as 369 tickers never being analysed.
+ */
+function rank(
+  entries: Array<[string, { n: number }]>,
+  lastUpdated: Map<string, string>,
+  take: number,
+): string[] {
+  return entries
+    .map(([ticker, v]) => ({ ticker, v, last: lastUpdated.get(ticker) ?? null }))
+    .sort((a, b) => {
+      if (!a.last && b.last) return -1;
+      if (a.last && !b.last) return 1;
+      if (a.last && b.last && a.last !== b.last) return a.last < b.last ? -1 : 1;
+      return b.v.n - a.v.n;
+    })
+    .slice(0, take)
+    .map((r) => r.ticker);
+}
+
+describe("ticker analysis scheduling", () => {
+  const entries: Array<[string, { n: number }]> = [
+    ["NVDA", { n: 20 }],  // busiest, already analysed
+    ["PDD",  { n: 1 }],   // quiet, never analysed
+    ["AAPL", { n: 15 }],  // busy, analysed a while ago
+  ];
+
+  it("puts never-analysed tickers ahead of busy ones", () => {
+    const last = new Map([["NVDA", "2026-08-24T10:00:00Z"], ["AAPL", "2026-08-24T09:00:00Z"]]);
+    // The old rule took NVDA+AAPL by volume and PDD never ran.
+    expect(rank(entries, last, 1)).toEqual(["PDD"]);
+  });
+
+  it("then prefers the least recently updated", () => {
+    const last = new Map([
+      ["NVDA", "2026-08-24T10:00:00Z"],
+      ["AAPL", "2026-08-24T09:00:00Z"],
+      ["PDD",  "2026-08-24T11:00:00Z"],
+    ]);
+    expect(rank(entries, last, 2)).toEqual(["AAPL", "NVDA"]);
+  });
+
+  it("uses article count only to break ties", () => {
+    const same = "2026-08-24T10:00:00Z";
+    const last = new Map([["NVDA", same], ["AAPL", same], ["PDD", same]]);
+    expect(rank(entries, last, 2)).toEqual(["NVDA", "AAPL"]);
+  });
+
+  it("covers every ticker over successive cycles instead of starving the tail", () => {
+    const all: Array<[string, { n: number }]> =
+      Array.from({ length: 30 }, (_, i) => [`T${i}`, { n: i }]);
+    const last = new Map<string, string>();
+    let clock = 0;
+    for (let cycle = 0; cycle < 10; cycle++) {
+      for (const t of rank(all, last, 3)) {
+        last.set(t, new Date(Date.UTC(2026, 7, 24, 0, clock++)).toISOString());
+      }
+    }
+    // 10 cycles x 3 = 30 slots, and fairness means 30 DISTINCT tickers.
+    expect(last.size).toBe(30);
+  });
+});
