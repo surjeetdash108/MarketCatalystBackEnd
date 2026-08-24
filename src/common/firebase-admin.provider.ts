@@ -21,6 +21,7 @@ import { getStorage } from "firebase-admin/storage";
 export class FirebaseAdminService implements OnModuleInit {
   private readonly logger = new Logger(FirebaseAdminService.name);
   private app?: App;
+  private loggedDb = false;
 
   constructor(private readonly config: ConfigService) {}
 
@@ -118,7 +119,17 @@ export class FirebaseAdminService implements OnModuleInit {
           "Default Credentials found. See backend/.env.example.",
       );
     }
-    return getFirestore(this.app);
+    // Optional named Firestore database (regional-migration plumbing). Unset or
+    // "(default)" ⇒ the project's default database, i.e. no change. At cutover we
+    // set FIRESTORE_DATABASE_ID=mc-regional and redeploy. getFirestore caches per
+    // (app, databaseId), so calling this getter repeatedly is cheap.
+    const dbId = (this.config.get<string>("FIRESTORE_DATABASE_ID", "") ?? "").trim();
+    const useNamed = dbId !== "" && dbId !== "(default)";
+    if (!this.loggedDb) {
+      this.logger.log(`Firestore database: ${useNamed ? dbId : "(default)"}`);
+      this.loggedDb = true;
+    }
+    return useNamed ? getFirestore(this.app, dbId) : getFirestore(this.app);
   }
   /** Admin SDK Auth — used by AdminGuard to verify caller ID tokens. */
   get auth(): Auth {
