@@ -28,7 +28,14 @@ import {
  */
 
 /** Newly-inserted articles per ticker fed to one incremental run. */
-const MAX_NEWS_PER_RUN = 12;
+/**
+ * Kept small for Groq's TOKENS-PER-MINUTE ceiling (8,000 on the free tier).
+ * A 12-article prompt measured 4,683 tokens, so two analyses in the same
+ * minute tripped the limit and the second fell through to OpenRouter's
+ * exhausted daily quota. Eight articles roughly halves the prompt and lets
+ * several reads share a minute.
+ */
+const MAX_NEWS_PER_RUN = 8;
 /** Model budget for the BACKGROUND sweep, which runs in a job — no ceiling. */
 const TIMEOUT_MS = 60_000;
 /**

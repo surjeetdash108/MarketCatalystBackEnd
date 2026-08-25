@@ -53,7 +53,10 @@ function renderNews(news: NewsInput[]): string {
         `${i + 1}. [${n.publishedAt.slice(0, 10)}] ${n.headline}` +
         (n.tag ? ` (${n.tag})` : "") +
         ` — ${n.source}` +
-        (n.summary ? `\n   ${n.summary.slice(0, 400)}` : ""),
+        // 200 not 400: summary text is the bulk of the prompt, and the
+        // headline plus a short lede carries the signal. Halving this keeps
+        // reads inside Groq's per-minute token ceiling.
+        (n.summary ? `\n   ${n.summary.slice(0, 200)}` : ""),
     )
     .join("\n");
 }

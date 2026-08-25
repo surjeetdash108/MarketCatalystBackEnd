@@ -23,7 +23,34 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
  * their token budget thinking and can return an empty `content`, which is the
  * exact failure this pipeline treats as "no reply".
  */
-const DEFAULT_MODEL = "llama-3.3-70b-versatile";
+const DEFAULT_MODEL = "";
+const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
+
+/**
+ * Preference order used when no GROQ_MODEL is configured.
+ *
+ * Model availability differs per ACCOUNT — llama-3.3-70b-versatile returned
+ * "model_not_found" on this key even though it is a documented Groq model. So
+ * rather than hard-code a name that may 404, the service asks the API which
+ * models this key can actually use and picks the best match from the list
+ * below. Anything unmatched falls back to the first non-audio model offered,
+ * so a completely new line-up still works.
+ *
+ * Substring matching, most capable first. Instruct models are preferred over
+ * reasoning ones: reasoning models spend their budget thinking and can return
+ * an empty `content`, which this pipeline reads as "no reply".
+ */
+const MODEL_PREFERENCE = [
+  "llama-3.3-70b",
+  "llama-3.1-70b",
+  "gpt-oss-120b",
+  "qwen3-32b",
+  "kimi-k2",
+  "gpt-oss-20b",
+  "llama-3.1-8b",
+];
+/** Never select these for text analysis. */
+const MODEL_EXCLUDE = /whisper|tts|guard|vision|embed/i;
 
 interface GroqChatResponse {
   choices?: Array<{
@@ -56,7 +83,58 @@ export class GroqService {
   }
 
   get modelName(): string {
-    return this.model;
+    return this.resolved ?? this.model ?? "(auto)";
+  }
+
+  private resolved: string | null = null;
+  private resolving: Promise<string | null> | null = null;
+
+  /**
+   * The model to use, discovered once and cached for the process lifetime.
+   * A configured GROQ_MODEL wins outright — discovery is only for when the
+   * operator has not pinned one.
+   */
+  private async pickModel(): Promise<string | null> {
+    if (this.model) return this.model;
+    if (this.resolved) return this.resolved;
+    if (this.resolving) return this.resolving;
+    this.resolving = (async () => {
+      try {
+        const res = await fetchJson<{ data?: Array<{ id?: string }> }>(
+          GROQ_MODELS_URL,
+          {
+            headers: { Authorization: `Bearer ${this.apiKey}` },
+            retries: 0,
+            timeoutMs: 8_000,
+          },
+        );
+        const ids = (res?.data ?? [])
+          .map((m) => String(m.id ?? ""))
+          .filter((id) => id && !MODEL_EXCLUDE.test(id));
+        if (!ids.length) return null;
+        for (const want of MODEL_PREFERENCE) {
+          const hit = ids.find((id) => id.includes(want));
+          if (hit) {
+            this.resolved = hit;
+            this.logger.log(`Groq model resolved to ${hit}`);
+            return hit;
+          }
+        }
+        this.resolved = ids[0];
+        this.logger.log(
+          `Groq: no preferred model available, using ${ids[0]} (offered: ${ids.slice(0, 6).join(", ")})`,
+        );
+        return ids[0];
+      } catch (err) {
+        this.logger.warn(
+          `Groq model discovery failed: ${(err as Error).message}`,
+        );
+        return null;
+      } finally {
+        this.resolving = null;
+      }
+    })();
+    return this.resolving;
   }
 
   /** One completion. Returns the assistant text, or null on any failure. */
@@ -65,7 +143,11 @@ export class GroqService {
     opts: { model?: string; timeoutMs?: number } = {},
   ): Promise<string | null> {
     if (!this.apiKey) return null;
-    const model = opts.model?.trim() || this.model;
+    const model = opts.model?.trim() || (await this.pickModel());
+    if (!model) {
+      this.logger.warn("Groq: no usable model for this key");
+      return null;
+    }
     try {
       const res = await fetchJson<GroqChatResponse>(GROQ_URL, {
         method: "POST",
