@@ -58,8 +58,13 @@ const HISTORY_LIMIT: Record<Period, number> = {
   monthly: 12,
 };
 
-/** Cap the model input — a market digest needs a representative set, not every row. */
+/** Cap how many analyses we fetch — a market digest needs a representative set. */
 const MAX_ANALYSES = 200;
+/** Total size of the analysis text sent to the model. Groq's free tier rejects
+ *  oversized requests with 413 (a full month of rows blew past it), so the
+ *  prompt is trimmed to fit under a proven-safe budget. ~18KB ≈ a comfortable
+ *  margin below the ~27KB body that generated fine. */
+const PROMPT_CHAR_BUDGET = 18_000;
 /** Budget PER PROVIDER. The gateway tries at most two (Groq → OpenRouter), so
  *  keep this well under 30s to stay inside the 60s Hosting-rewrite limit even
  *  when the first provider times out and the fallback runs. */
@@ -67,7 +72,7 @@ const GEN_TIMEOUT_MS = 22_000;
 /** After a transient generation failure, don't retry this period for a while,
  *  so an outage doesn't make every viewer pay the full (failing) budget. */
 const FAILURE_COOLDOWN_MS = 3 * 60 * 1000;
-const SUMMARY_CHARS = 240;
+const SUMMARY_CHARS = 180;
 
 export type GlanceSentiment = "bullish" | "bearish" | "neutral" | "mixed";
 
@@ -243,6 +248,7 @@ export class MarketGlanceService {
 
     let digest = EMPTY_DIGEST;
     let model = "";
+    let sourceCount = analyses.length;
 
     if (analyses.length === 0) {
       // Legitimate empty period — cache it so we don't re-scan every view.
@@ -251,10 +257,12 @@ export class MarketGlanceService {
       this.failedAt.set(lock, Date.now());
       return null;
     } else {
-      const produced = await this.summarise(period, analyses);
+      const fed = this.selectForPrompt(analyses);
+      const produced = await this.summarise(period, fed);
       if (produced) {
         digest = produced;
         model = this.llm.primaryName;
+        sourceCount = fed.length;
       } else {
         this.failedAt.set(lock, Date.now());
         return null;
@@ -268,14 +276,36 @@ export class MarketGlanceService {
       periodStart: bounds.start,
       periodEnd: bounds.end,
       generatedAt: new Date().toISOString(),
-      sourceCount: analyses.length,
+      sourceCount,
       model,
     };
     await this.col(period).doc(bounds.key).set(out);
     this.failedAt.delete(lock);
     this.logger.log(
-      `${period} glance ${bounds.key} rebuilt from ${analyses.length} analyses (model=${model || "none"})`,
+      `${period} glance ${bounds.key} rebuilt from ${sourceCount}/${analyses.length} analyses (model=${model || "none"})`,
     );
+    return out;
+  }
+
+  /**
+   * Trim the fetched analyses to what actually goes in the prompt: one row per
+   * ticker (the newest, since the fetch is newest-first) so a busy ticker doesn't
+   * crowd out others, then take rows until PROMPT_CHAR_BUDGET is spent. Keeps the
+   * request under Groq's size limit (a full month otherwise 413s) while widening
+   * ticker coverage.
+   */
+  private selectForPrompt(analyses: TickerAiAnalysisDoc[]): TickerAiAnalysisDoc[] {
+    const seen = new Set<string>();
+    const out: TickerAiAnalysisDoc[] = [];
+    let budget = PROMPT_CHAR_BUDGET;
+    for (const a of analyses) {
+      if (seen.has(a.ticker)) continue;
+      const cost = this.compactLine(a).length + 1;
+      if (cost > budget) break;
+      seen.add(a.ticker);
+      budget -= cost;
+      out.push(a);
+    }
     return out;
   }
 
