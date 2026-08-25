@@ -159,6 +159,23 @@ export class TickerAiAnalysisService {
     return snap.empty ? null : (snap.docs[0].data() as TickerAiAnalysisDoc);
   }
 
+  /**
+   * Recent `announcement`-type analyses across ALL tickers, newest first — the
+   * feed behind the Live Feed's "Earnings Announcement" tab. Pure read (never
+   * generates); each row is one ticker's earnings-result analysis, produced by
+   * earnings-actuals.job when a result lands. Needs the composite index
+   * (analysisType ASC, lastUpdatedAt DESC) declared in firestore.indexes.json.
+   */
+  async recentAnnouncements(limit = 50): Promise<TickerAiAnalysisDoc[]> {
+    const n = Math.min(Math.max(Math.trunc(limit) || 50, 1), 200);
+    const snap = await this.col
+      .where("analysisType", "==", "announcement")
+      .orderBy("lastUpdatedAt", "desc")
+      .limit(n)
+      .get();
+    return snap.docs.map((d) => d.data() as TickerAiAnalysisDoc);
+  }
+
   /** True when the stored general read is still inside its freshness window. */
   static isFresh(doc: TickerAiAnalysisDoc | null): boolean {
     if (!doc?.lastUpdatedAt) return false;

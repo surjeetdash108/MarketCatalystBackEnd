@@ -97,6 +97,25 @@ private readonly ondemand: OnDemandService,
     sendWithEtag(req, res, doc ?? { ticker: sym, empty: true });
   }
 
+  /**
+   * Recent `announcement`-type ticker AI analyses across all names, newest
+   * first — feeds the Live Feed's "Earnings Announcement" tab (expandable list).
+   * Pure READ: never triggers model generation (that's earnings-actuals.job's
+   * job when a result lands).
+   */
+  @Get("ticker-announcements")
+  @UseGuards(FirebaseAuthGuard)
+  @Header("Cache-Control", "private, max-age=120")
+  async tickerAnnouncements(
+    @Query("limit") limit: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const n = Math.min(Math.max(parseInt(limit ?? "50", 10) || 50, 1), 200);
+    const rows = await this.tickerAi.recentAnnouncements(n);
+    sendWithEtag(req, res, rows);
+  }
+
   @Get("ai-analysis")
   @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "private, max-age=300")
