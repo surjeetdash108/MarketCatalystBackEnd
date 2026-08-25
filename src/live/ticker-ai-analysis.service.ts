@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
-import { OpenRouterService } from "../vendors/openrouter/openrouter.service";
+import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import {
   buildCreatePrompt,
   buildUpdatePrompt,
@@ -105,7 +105,7 @@ export class TickerAiAnalysisService {
 
   constructor(
     private readonly firebase: FirebaseAdminService,
-    private readonly openrouter: OpenRouterService,
+    private readonly llm: LlmGatewayService,
   ) {}
 
   private get col() {
@@ -185,7 +185,7 @@ export class TickerAiAnalysisService {
     if (TickerAiAnalysisService.isFresh(existing)) return existing;
     // Model unavailable: return the stale read rather than nothing. A slightly
     // old analysis is far more useful than an empty widget.
-    if (!this.openrouter.enabled) return existing;
+    if (!this.llm.enabled) return existing;
 
     const inflight = TickerAiAnalysisService.inflight;
     const running = inflight.get(ticker);
@@ -242,7 +242,7 @@ export class TickerAiAnalysisService {
     news: NewsInput[],
     companyName?: string | null,
   ): Promise<TickerAiAnalysisDoc | null> {
-    if (!this.openrouter.enabled) return null;
+    if (!this.llm.enabled) return null;
     const surprise =
       a.surprisePct == null ? "not computable" : `${a.surprisePct.toFixed(1)}%`;
     const context = [
@@ -279,7 +279,7 @@ export class TickerAiAnalysisService {
       announcement?: TickerAiAnalysisDoc["announcement"];
     } = {},
   ): Promise<TickerAiAnalysisDoc | null> {
-    if (!this.openrouter.enabled) return null;
+    if (!this.llm.enabled) return null;
     if (!news.length) return null;
 
     const recent = [...news]
@@ -298,7 +298,7 @@ export class TickerAiAnalysisService {
           ticker, opts.companyName ?? null, recent, opts.context,
         );
 
-    const reply = await this.openrouter.chat(
+    const reply = await this.llm.chat(
       [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: user },

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
-import { OpenRouterService } from "../vendors/openrouter/openrouter.service";
+import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { SYSTEM_PROMPT, type NewsInput } from "./ticker-ai-analysis.prompt";
 import { coerceBody, extractJson } from "./ticker-ai-analysis.service";
 import {
@@ -28,7 +28,7 @@ export class TickerPeriodAnalysisService {
 
   constructor(
     private readonly firebase: FirebaseAdminService,
-    private readonly openrouter: OpenRouterService,
+    private readonly llm: LlmGatewayService,
   ) {}
 
   private col(kind: "weekly" | "monthly") {
@@ -69,7 +69,7 @@ export class TickerPeriodAnalysisService {
       previousPeriod?: TickerPeriodAnalysisDoc | null;
     } = {},
   ): Promise<TickerPeriodAnalysisDoc | null> {
-    if (!this.openrouter.enabled) return null;
+    if (!this.llm.enabled) return null;
     // Nothing to analyse is not a failure — it just means a quiet period.
     if (!news.length && !(opts.weeklies?.length)) return null;
 
@@ -120,7 +120,7 @@ export class TickerPeriodAnalysisService {
         : ""),
     );
 
-    const reply = await this.openrouter.chat(
+    const reply = await this.llm.chat(
       [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: parts.join("\n") },

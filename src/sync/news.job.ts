@@ -30,8 +30,21 @@ const JOB_NAME = "news";
 // stored shape and volume stay the same now that the FETCH is bulk.
 const ARTICLES_PER_TICKER = 8;
 const LOOKBACK_DAYS = 2;
-/** Tickers analysed per 10-minute cycle — see runTickerAnalysis for why. */
-const MAX_TICKERS_PER_CYCLE = Number(process.env.TICKER_AI_PER_CYCLE) || 8;
+/**
+ * Tickers analysed per 10-minute cycle by the BACKGROUND sweep.
+ *
+ * DEFAULT 0 — the sweep is off, and analysis is generated ON DEMAND when a
+ * user first opens a ticker (see TickerAiAnalysisService.getOrGenerate).
+ *
+ * The sweep attempted 8 tickers x 144 cycles = 1,152 model calls a day. On
+ * OpenRouter's free tier (50/day) it exhausted the entire allowance within
+ * the first few cycles, after which every analysis — including the ones users
+ * were actually waiting on — failed with a 429. Generating on demand spends
+ * the budget only on tickers somebody is looking at.
+ *
+ * Set TICKER_AI_PER_CYCLE > 0 to re-enable pre-warming once quota allows.
+ */
+const MAX_TICKERS_PER_CYCLE = Number(process.env.TICKER_AI_PER_CYCLE ?? 0);
 
 
 @Injectable()
@@ -228,6 +241,9 @@ export class NewsJob implements OnModuleInit {
     // So: never-analysed tickers first, then the least recently updated, with
     // article count only as a tiebreaker. Coverage now grows every cycle and
     // then rotates for freshness, instead of re-reading the same few names.
+    if (MAX_TICKERS_PER_CYCLE <= 0) {
+      return { attempted: 0, succeeded: 0, failed: 0 };
+    }
     const lastUpdated = await this.tickerAi.lastUpdatedMap([...byTicker.keys()]);
     const ranked = [...byTicker.entries()]
       .map(([ticker, items]) => ({ ticker, items, last: lastUpdated.get(ticker) ?? null }))

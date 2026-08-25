@@ -8,6 +8,8 @@ import { OpenRouterModule } from "../vendors/openrouter/openrouter.module";
 import { AiAnalysisService } from "./ai-analysis.service";
 import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
 import { TickerPeriodAnalysisService } from "./ticker-period-analysis.service";
+import { GroqModule } from "../vendors/groq/groq.module";
+import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { LiveController } from "./live.controller";
 import { PolygonLiveService } from "./polygon-live.service";
 import { SnapshotCacheService } from "./snapshot-cache.service";
@@ -35,6 +37,7 @@ import { SearchedTickersService } from "./searched-tickers.service";
  */
 @Module({
   imports: [
+    GroqModule,
     PolygonModule,
     AdaptersModule,
     FmpModule,
@@ -51,6 +54,7 @@ import { SearchedTickersService } from "./searched-tickers.service";
     OnDemandController,
   ],
   providers: [
+    LlmGatewayService,
     TickerAiAnalysisService,
     TickerPeriodAnalysisService,
     PolygonLiveService,
@@ -64,6 +68,7 @@ import { SearchedTickersService } from "./searched-tickers.service";
     AiAnalysisService,
   ],
   exports: [
+    LlmGatewayService,
     TickerAiAnalysisService,
     TickerPeriodAnalysisService,
     PolygonLiveService,
