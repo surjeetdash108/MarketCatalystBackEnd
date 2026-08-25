@@ -132,3 +132,43 @@ describe("ticker analysis scheduling", () => {
     expect(last.size).toBe(30);
   });
 });
+
+import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
+import { analysisDocId, GENERAL_TTL_MS } from "./ticker-ai-analysis.types";
+
+describe("general analysis freshness (1-hour TTL)", () => {
+  const at = (ms: number) =>
+    ({ lastUpdatedAt: new Date(Date.now() - ms).toISOString() }) as never;
+
+  it("serves the stored read inside the window", () => {
+    expect(TickerAiAnalysisService.isFresh(at(5 * 60_000))).toBe(true);
+    expect(TickerAiAnalysisService.isFresh(at(59 * 60_000))).toBe(true);
+  });
+  it("regenerates once the window has passed", () => {
+    expect(TickerAiAnalysisService.isFresh(at(GENERAL_TTL_MS + 1000))).toBe(false);
+    expect(TickerAiAnalysisService.isFresh(at(3 * 60 * 60_000))).toBe(false);
+  });
+  it("treats a missing or malformed record as stale", () => {
+    expect(TickerAiAnalysisService.isFresh(null)).toBe(false);
+    expect(TickerAiAnalysisService.isFresh({ lastUpdatedAt: "nonsense" } as never)).toBe(false);
+  });
+});
+
+describe("append-only record ids", () => {
+  it("separates the two analysis types for one ticker", () => {
+    const t = "2026-08-26T20:15:30.123Z";
+    expect(analysisDocId("NVDA", "general", t)).not.toBe(
+      analysisDocId("NVDA", "announcement", t),
+    );
+  });
+  it("gives each generation its own id so history accumulates", () => {
+    const a = analysisDocId("NVDA", "general", "2026-08-26T20:15:30.000Z");
+    const b = analysisDocId("NVDA", "general", "2026-08-26T21:15:30.000Z");
+    expect(a).not.toBe(b);
+  });
+  it("produces ids that sort chronologically", () => {
+    const a = analysisDocId("NVDA", "general", "2026-08-26T09:00:00.000Z");
+    const b = analysisDocId("NVDA", "general", "2026-08-26T21:00:00.000Z");
+    expect([b, a].sort()).toEqual([a, b]);
+  });
+});

@@ -3,6 +3,7 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { etDate } from "../common/market-calendar.util";
+import { TickerAiAnalysisService } from "../live/ticker-ai-analysis.service";
 import { EARNINGS_ESTIMATES_ADAPTER } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 
@@ -37,6 +38,7 @@ export class EarningsActualsJob implements OnModuleInit {
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
+    private readonly tickerAi: TickerAiAnalysisService,
   ) {}
 
   onModuleInit() {
@@ -48,6 +50,88 @@ export class EarningsActualsJob implements OnModuleInit {
       cronExpression: "*/5 6-7,16-17 * * 1-5",
       timeZone: "America/New_York",
     });
+  }
+
+  /**
+   * One "announcement" analysis per ticker whose result just landed.
+   *
+   * Runs only for tickers in `filled` — those whose epsActual went from null
+   * to a value on THIS run — so a company is analysed once per report, not on
+   * every 5-minute pass through the window.
+   *
+   * Never throws: a model failure must not fail an actuals run that already
+   * stored the figures correctly.
+   */
+  private async announce(
+    filled: string[],
+    docs: FirebaseFirestore.QueryDocumentSnapshot[],
+    today: string,
+  ): Promise<void> {
+    const byTicker = new Map(
+      docs.map((d) => [String((d.data() as { ticker?: string }).ticker ?? "").toUpperCase(), d.data()]),
+    );
+    for (const ticker of filled) {
+      try {
+        const e = byTicker.get(ticker) as {
+          epsActual?: number | null; epsEstimate?: number | null;
+          revenueActual?: number | null; revenueEstimate?: number | null;
+          companyName?: string | null;
+        } | undefined;
+        if (!e) continue;
+        const act = e.epsActual ?? null;
+        const est = e.epsEstimate ?? null;
+        const surprisePct =
+          act != null && est != null && est !== 0
+            ? ((act - est) / Math.abs(est)) * 100
+            : null;
+        const verdict: "beat" | "miss" | "in-line" | "unknown" =
+          surprisePct == null ? "unknown"
+          : surprisePct > 1 ? "beat"
+          : surprisePct < -1 ? "miss"
+          : "in-line";
+
+        // Recent stories give the model context for WHY, but the figures
+        // above are the subject. Filler is excluded for the usual reason.
+        const newsSnap = await this.firebase.firestore
+          .collection("news").where("ticker", "==", ticker).get();
+        const news = newsSnap.docs
+          .map((d) => ({
+            id: d.id,
+            headline: String(d.data().headline ?? ""),
+            summary: (d.data().summary as string | null) ?? null,
+            source: String(d.data().source ?? ""),
+            publishedAt: String(d.data().publishedAt ?? ""),
+            tag: (d.data().tag as string | null) ?? null,
+            filler: d.data().filler === true,
+          }))
+          .filter((n) => !n.filler && n.headline)
+          .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
+          .slice(0, 8);
+
+        const out = await this.tickerAi.recordAnnouncement(
+          ticker,
+          {
+            reportDate: today,
+            epsActual: act, epsEstimate: est,
+            surprisePct: surprisePct == null ? null : Math.round(surprisePct * 10) / 10,
+            revenueActual: e.revenueActual ?? null,
+            revenueEstimate: e.revenueEstimate ?? null,
+            verdict,
+          },
+          news,
+          e.companyName ?? null,
+        );
+        this.logger.log(
+          `announcement ${ticker}: ${verdict}` +
+            (surprisePct != null ? ` ${surprisePct.toFixed(1)}%` : "") +
+            (out ? " — analysis stored" : " — analysis unavailable"),
+        );
+      } catch (err) {
+        this.logger.warn(
+          `announcement analysis failed for ${ticker}: ${(err as Error).message}`,
+        );
+      }
+    }
   }
 
   async run() {
@@ -103,6 +187,10 @@ export class EarningsActualsJob implements OnModuleInit {
         this.logger.log(
           `earnings-actuals ${today}: FIRST actuals in for ${filled.join(", ")}`,
         );
+        // The result is persisted at this point (batch.commit above), so the
+        // announcement analysis is generated from data already stored — same
+        // ordering rule as the news pipeline: never analyse before the save.
+        await this.announce(filled, snap.docs, today);
       }
       await this.meta.record(JOB_NAME, { ok: true, count: updated });
       return { date: today, reporters: snap.size, updated, filled };

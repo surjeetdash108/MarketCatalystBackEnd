@@ -9,7 +9,10 @@ import {
 } from "./ticker-ai-analysis.prompt";
 import {
   ANALYSIS_VERSION,
+  analysisDocId,
+  GENERAL_TTL_MS,
   TICKER_AI_COLLECTION,
+  type AnalysisType,
   type AnalysisBody,
   type Sentiment,
   type TickerAiAnalysisDoc,
@@ -115,24 +118,45 @@ export class TickerAiAnalysisService {
    * runs this every 10 minutes over every ticker that received news.
    */
   async lastUpdatedMap(tickers: string[]): Promise<Map<string, string>> {
+    // One scan of the general rows, reduced to the newest per ticker. Cheaper
+    // than N per-ticker queries, and the collection stays small because only
+    // generations land here, not every article.
     const out = new Map<string, string>();
-    const CHUNK = 300;
-    for (let i = 0; i < tickers.length; i += CHUNK) {
-      const refs = tickers.slice(i, i + CHUNK).map((t) => this.col.doc(t));
-      if (!refs.length) continue;
-      const snaps = await this.firebase.firestore.getAll(...refs);
-      for (const s of snaps) {
-        if (!s.exists) continue;
-        const d = s.data() as TickerAiAnalysisDoc;
-        if (d?.lastUpdatedAt) out.set(s.id, d.lastUpdatedAt);
-      }
+    const want = new Set(tickers);
+    const snap = await this.col.where("analysisType", "==", "general").get();
+    for (const d of snap.docs) {
+      const a = d.data() as TickerAiAnalysisDoc;
+      if (!a.ticker || !want.has(a.ticker) || !a.lastUpdatedAt) continue;
+      const prev = out.get(a.ticker);
+      if (!prev || a.lastUpdatedAt > prev) out.set(a.ticker, a.lastUpdatedAt);
     }
     return out;
   }
 
-  async getCurrent(ticker: string): Promise<TickerAiAnalysisDoc | null> {
-    const snap = await this.col.doc(ticker).get();
-    return snap.exists ? (snap.data() as TickerAiAnalysisDoc) : null;
+  /**
+   * Newest analysis of a given type for a ticker.
+   *
+   * The collection is append-only, so "current" is a query rather than a doc
+   * read: order by generation time and take one.
+   */
+  async getCurrent(
+    ticker: string,
+    analysisType: AnalysisType = "general",
+  ): Promise<TickerAiAnalysisDoc | null> {
+    const snap = await this.col
+      .where("ticker", "==", ticker)
+      .where("analysisType", "==", analysisType)
+      .orderBy("lastUpdatedAt", "desc")
+      .limit(1)
+      .get();
+    return snap.empty ? null : (snap.docs[0].data() as TickerAiAnalysisDoc);
+  }
+
+  /** True when the stored general read is still inside its freshness window. */
+  static isFresh(doc: TickerAiAnalysisDoc | null): boolean {
+    if (!doc?.lastUpdatedAt) return false;
+    const age = Date.now() - Date.parse(doc.lastUpdatedAt);
+    return Number.isFinite(age) && age < GENERAL_TTL_MS;
   }
 
   /**
@@ -155,9 +179,13 @@ export class TickerAiAnalysisService {
    * ticker, share ONE model call rather than racing two.
    */
   async getOrGenerate(ticker: string): Promise<TickerAiAnalysisDoc | null> {
-    const existing = await this.getCurrent(ticker);
-    if (existing) return existing;
-    if (!this.openrouter.enabled) return null;
+    const existing = await this.getCurrent(ticker, "general");
+    // Inside the TTL, serve the stored read — a second viewer within the hour
+    // costs nothing. Past it, fall through and APPEND a fresh record.
+    if (TickerAiAnalysisService.isFresh(existing)) return existing;
+    // Model unavailable: return the stale read rather than nothing. A slightly
+    // old analysis is far more useful than an empty widget.
+    if (!this.openrouter.enabled) return existing;
 
     const inflight = TickerAiAnalysisService.inflight;
     const running = inflight.get(ticker);
@@ -184,16 +212,54 @@ export class TickerAiAnalysisService {
           .filter((n) => !n.filler && n.headline)
           .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
           .slice(0, ON_DEMAND_NEWS);
-        if (!news.length) return null;
-        return await this.analyseTicker(ticker, news, {
+        if (!news.length) return existing;
+        const fresh = await this.analyseTicker(ticker, news, {
           timeoutMs: ON_DEMAND_TIMEOUT_MS,
+          analysisType: "general",
         });
+        // A failed regeneration must not blank a widget that had content.
+        return fresh ?? existing;
       } finally {
         inflight.delete(ticker);
       }
     })();
     inflight.set(ticker, task);
     return task;
+  }
+
+  /**
+   * One-off analysis of a reported earnings result (spec: the "announcement"
+   * flavour shown in the Live Feed's announcements section).
+   *
+   * Called by earnings-actuals.job the moment a figure first lands, so the
+   * interpretation is tied to the print rather than waiting for a publisher to
+   * write about it. Never expires and is never regenerated — it describes one
+   * event at one time.
+   */
+  async recordAnnouncement(
+    ticker: string,
+    a: NonNullable<TickerAiAnalysisDoc["announcement"]>,
+    news: NewsInput[],
+    companyName?: string | null,
+  ): Promise<TickerAiAnalysisDoc | null> {
+    if (!this.openrouter.enabled) return null;
+    const surprise =
+      a.surprisePct == null ? "not computable" : `${a.surprisePct.toFixed(1)}%`;
+    const context = [
+      `EARNINGS RESULT just reported on ${a.reportDate}:`,
+      `  EPS actual ${a.epsActual ?? "—"} vs estimate ${a.epsEstimate ?? "—"} (${a.verdict}, surprise ${surprise})`,
+      `  Revenue actual ${a.revenueActual ?? "—"} vs estimate ${a.revenueEstimate ?? "—"}`,
+      "Analyse THIS RESULT specifically: what the figures show, what they imply",
+      "for the business, and how they change the picture. Do not speculate about",
+      "the share price reaction — that is not in the data supplied.",
+    ].join("\n");
+    return this.analyseTicker(ticker, news, {
+      companyName,
+      context,
+      analysisType: "announcement",
+      announcement: a,
+      timeoutMs: TIMEOUT_MS,
+    });
   }
 
   /** Shared across instances so concurrent requests coalesce. */
@@ -205,7 +271,13 @@ export class TickerAiAnalysisService {
   async analyseTicker(
     ticker: string,
     news: NewsInput[],
-    opts: { companyName?: string | null; context?: string; timeoutMs?: number } = {},
+    opts: {
+      companyName?: string | null;
+      context?: string;
+      timeoutMs?: number;
+      analysisType?: AnalysisType;
+      announcement?: TickerAiAnalysisDoc["announcement"];
+    } = {},
   ): Promise<TickerAiAnalysisDoc | null> {
     if (!this.openrouter.enabled) return null;
     if (!news.length) return null;
@@ -254,6 +326,7 @@ export class TickerAiAnalysisService {
     const doc: TickerAiAnalysisDoc = {
       ...body,
       ticker,
+      analysisType: opts.analysisType ?? "general",
       companyName: opts.companyName ?? previous?.companyName ?? null,
       sourceNewsIds: ids,
       sourceNewsCount: ids.length,
@@ -262,8 +335,14 @@ export class TickerAiAnalysisService {
       analysisVersion: ANALYSIS_VERSION,
       revision: (previous?.revision ?? 0) + 1,
       lastMode: mode,
+      ...(opts.announcement ? { announcement: opts.announcement } : {}),
     };
-    await this.col.doc(ticker).set(doc, { merge: true });
+    // APPEND. Each generation is its own record, so the ticker's analysis
+    // history survives and the weekly/monthly roll-ups can read the analyses
+    // rather than re-reading raw news.
+    await this.col
+      .doc(analysisDocId(ticker, doc.analysisType, now))
+      .set(doc);
     return doc;
   }
 }

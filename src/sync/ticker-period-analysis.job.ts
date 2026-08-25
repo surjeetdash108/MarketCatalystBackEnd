@@ -58,6 +58,53 @@ export class TickerPeriodAnalysisJob implements OnModuleInit {
     });
   }
 
+  /**
+   * The ticker analyses generated during a window, grouped by ticker.
+   *
+   * Per the plan, weekly and monthly roll-ups are built from the ANALYSES in
+   * ticker_ai_analysis — general reads plus earnings announcements — not by
+   * re-reading raw news. Each analysis is already a distilled view of the news
+   * that produced it, so this both preserves continuity and keeps the prompt
+   * far smaller than a month of articles.
+   */
+  private async analysesByTicker(
+    start: string,
+    end: string,
+  ): Promise<Map<string, Array<Record<string, unknown>>>> {
+    const snap = await this.firebase.firestore
+      .collection("ticker_ai_analysis")
+      .where("lastUpdatedAt", ">=", `${start}T00:00:00.000Z`)
+      .where("lastUpdatedAt", "<=", `${end}T23:59:59.999Z`)
+      .get();
+    const out = new Map<string, Array<Record<string, unknown>>>();
+    for (const d of snap.docs) {
+      const a = d.data();
+      const t = String(a.ticker ?? "").toUpperCase();
+      if (!t) continue;
+      const list = out.get(t) ?? [];
+      list.push({ id: d.id, ...a });
+      out.set(t, list);
+    }
+    return out;
+  }
+
+  /** Renders analyses as the period prompt's source material. */
+  private asNewsInput(rows: Array<Record<string, unknown>>): NewsInput[] {
+    return rows
+      .map((r) => ({
+        id: String(r.id ?? ""),
+        headline:
+          r.analysisType === "announcement"
+            ? `EARNINGS ${String((r.announcement as { verdict?: string })?.verdict ?? "result").toUpperCase()}: ${String(r.summary ?? "")}`
+            : String(r.summary ?? ""),
+        summary: String(r.overallAssessment ?? ""),
+        source: r.analysisType === "announcement" ? "earnings announcement" : "rolling analysis",
+        publishedAt: String(r.lastUpdatedAt ?? ""),
+        tag: String(r.sentiment ?? ""),
+      }))
+      .filter((n) => n.headline.trim());
+  }
+
   /** Tickers with news in the window, newest-first, capped. */
   private async newsByTicker(
     start: string, end: string,
@@ -93,16 +140,18 @@ export class TickerPeriodAnalysisJob implements OnModuleInit {
     const today = etDate();
     const { start, end } = weekBounds(today);
     try {
-      const byTicker = await this.newsByTicker(start, end);
+      // Source: the analyses generated in this window, per the plan.
+      const byTicker = await this.analysesByTicker(start, end);
       const ranked = [...byTicker.entries()]
         .sort((a, b) => b[1].length - a[1].length)
         .slice(0, MAX_TICKERS);
       let ok = 0, failed = 0;
       for (const [ticker, news] of ranked) {
         try {
-          const out = await this.period.generate("weekly", ticker, { start, end }, news, {
-            current: await this.current.getCurrent(ticker),
-          });
+          const out = await this.period.generate(
+            "weekly", ticker, { start, end }, this.asNewsInput(news),
+            { current: await this.current.getCurrent(ticker) },
+          );
           if (out) ok++; else failed++;
         } catch (err) {
           failed++;
@@ -128,17 +177,21 @@ export class TickerPeriodAnalysisJob implements OnModuleInit {
     }
     const { start, end } = monthBounds(today);
     try {
-      const byTicker = await this.newsByTicker(start, end);
+      // Source: the analyses generated in this window, per the plan.
+      const byTicker = await this.analysesByTicker(start, end);
       const ranked = [...byTicker.entries()]
         .sort((a, b) => b[1].length - a[1].length)
         .slice(0, MAX_TICKERS);
       let ok = 0, failed = 0;
       for (const [ticker, news] of ranked) {
         try {
-          const out = await this.period.generate("monthly", ticker, { start, end }, news, {
-            current: await this.current.getCurrent(ticker),
-            weeklies: await this.period.weeklyBetween(ticker, start, end),
-          });
+          const out = await this.period.generate(
+            "monthly", ticker, { start, end }, this.asNewsInput(news),
+            {
+              current: await this.current.getCurrent(ticker),
+              weeklies: await this.period.weeklyBetween(ticker, start, end),
+            },
+          );
           if (out) ok++; else failed++;
         } catch (err) {
           failed++;
