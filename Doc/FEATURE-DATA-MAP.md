@@ -1,5 +1,36 @@
 # MarketCatalyst — Feature & Data Source Map
 
+> ## ⏱ State sync — 2026-08-21 · sector = TradingView taxonomy · FMP seams LIVE · market-wide news · LLM AI features
+>
+> _Newest and authoritative where it differs from the per-feature rows below.
+> Verified against a full code re-survey. Runtime/deploy topology is in
+> `Doc/02_Architecture_Document_Tracker.md` (2026-08-21) and not restated here._
+>
+> - **Sector / industry (every feature that shows a sector)** are derived from the
+>   SEC **SIC code → TradingView / RBICS taxonomy** (`classifyFromSic`,
+>   `src/common/sic-tv.util.ts` + `tv-taxonomy.ts`), used by the company-profile
+>   adapter, mover-enrichment, ipos job, and on-demand `getCompany`. NOT from
+>   Polygon `sic_description` or FMP GICS. SIC falls back to SEC-EDGAR when Polygon
+>   omits it. The old `sic-sector.util.ts` GICS scheme is dead code.
+> - **FMP-backed features are LIVE** (`Doc/FMP-INTEGRATION.md`): earnings
+>   estimates/actuals + %surp + forward `*YYYY` rows, analyst ratings + price
+>   targets, merged news (badged by `vendor`), economic-calendar releases,
+>   institutional (13F) ownership, earnings-call transcripts. FMP is fallback-only
+>   for sector-PERFORMANCE aggregates.
+> - **News feed** = market-wide head-fetch (Polygon + FMP + dormant TradingView),
+>   deduped by URL, 8 newest per tracked ticker; `news.job` runs `*/10`.
+> - **AI features** (ticker analysis, weekly/monthly roll-ups, earnings-actuals
+>   context) are generated on-demand via the **LLM gateway** (Groq → OpenRouter),
+>   cached in `ticker_ai_analysis` / `ticker_weekly_ai_analysis` /
+>   `ticker_monthly_ai_analysis`.
+> - **Recent UI feature deltas:** Movers renders the full list (no pagination; 5
+>   tabs incl. Weekly Gainers/Losers). Earnings has a brand-highlighted
+>   Day/Week/Month segmented control + a transcript **"Read aloud"** TTS
+>   (`app/iq/speech.ts` + `earnings.tsx`). Stock-detail header fits
+>   symbol/price/change on one line. Left rail auto-collapses on `/menu/stock`.
+>   `Options` is a hidden-but-live route; nav "Search" == the `stock` screen.
+
+
 > ## ⏱ State sync — 2026-08-16 · FMP NEWS MERGE · STOCK-DETAIL WIRING · ON-DEMAND COMPLETENESS · FULL-US EARNINGS (deployed to prod)
 >
 > _Newest and authoritative where it differs from the blocks and per-feature

@@ -1,5 +1,41 @@
 # MarketCatalyst — Market Intelligence Terminal
 
+> ## ⏱ State sync — 2026-08-21 · deploy topology · REST read-API · TradingView sector taxonomy · market-wide news · LLM gateway
+>
+> _Newest and authoritative on architecture where it differs from the blocks
+> below. Full detail: `Doc/02_Architecture_Document_Tracker.md` (2026-08-21) and
+> the top of `deploy/DEPLOY.md`._
+>
+> - **Deploy (`git push` does NOT deploy the backend).** One image, `APP_ROLE`
+>   picks the role. The two working services are BOTH manual `gcloud run deploy
+>   --source .` in us-central1: **`market-catalyst-backend`** (worker — all crons,
+>   scale-to-zero) and **`market-catalyst-live`** (public read API). The Firebase
+>   **App Hosting** service `market-catalyst-be` (us-east4) that `git push` builds
+>   is near-dormant (no scheduler targets it). Premarket runs as the Cloud Run Job
+>   `premarket-job`. UI = `firebase deploy --only hosting` (static export).
+> - **Frontend = REST client.** The Next.js static-export UI calls the
+>   `market-catalyst-live` REST/SSE API same-origin via Hosting rewrites
+>   (`/api·/live·/market-data·/plans`); it no longer reads Firestore directly.
+>   Serving is cached: `CachedCollectionsService` (2-tier TTL) for `/market-data/*`,
+>   `SnapshotCacheService` (~10 s) for quotes, `TapeService` for the tape, and
+>   on-demand cache-aside (`OnDemandService`, in-mem 5 min + Firestore-doc TTLs)
+>   for `/live/*`.
+> - **Vendors.** Polygon/Massive (price/OHLCV/snapshot/corp-actions/news-of-record,
+>   primary of every composite), FMP (supplementary — estimates, analyst, merged
+>   news, econ calendar, 13F, transcripts, sector-perf fallback; `Doc/FMP-INTEGRATION.md`),
+>   FRED (macro), SEC-EDGAR (filings + SIC), and an LLM gateway (**Groq → OpenRouter**)
+>   for on-demand ticker AI analysis. Finnhub is provisioned but **not wired**.
+> - **Sector/industry** = SIC → **TradingView/RBICS** taxonomy (`classifyFromSic`);
+>   the old GICS/SPDR `resolveSector`/`CRYPTO_TICKERS` scheme is dead code.
+> - **News** is a market-wide head-fetch (`news.job`, `*/10`) merging Polygon +
+>   FMP (+ dormant TradingView), deduped by URL, 8 newest per tracked ticker — the
+>   per-ticker cursor sweep is gone.
+> - **Recent UI:** movers has no pagination (5 tabs incl. weekly); earnings has a
+>   brand-highlighted Day/Week/Month segmented control + transcript "Read aloud"
+>   TTS; stock-detail header fits symbol/price/change on one line; the left rail
+>   auto-collapses on the stock page.
+
+
 > ## ⏱ State sync — 2026-08-16 · SCALE-TO-ZERO worker + premarket Cloud Run Job
 >
 > _Newest and authoritative on the sync/deployment topology where it differs from

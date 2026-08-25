@@ -4,14 +4,24 @@ info:
   version: 1.0.0
   description: |
     Canonical read API for every screen in MarketCatalyst. This documents the **data
-    contract** the frontend consumes — today implemented as direct Firestore
-    reads (via `useCollection()` in `app/iq/hooks/useCollection.ts`) rather than
-    a deployed REST gateway, so every path below maps 1:1 to a Firestore
-    collection written by a NestJS sync job in `backend/src/sync/`. The shapes
-    are copied verbatim from the actual job code (not from the earlier planning
-    doc `Doc/05_API_Vendor_Tracker.md`, which has drifted from what is really
-    implemented — e.g. `analyst_actions` was planned as a per-event
-    upgrade/downgrade feed but is actually a consensus-vote snapshot today).
+    contract** the frontend consumes.
+
+    **⏱ Corrected 2026-08-21:** the frontend is now a **REST/SSE client of a
+    deployed NestJS gateway**, NOT a direct Firestore reader. The UI (Next.js
+    static export) calls the `market-catalyst-live` Cloud Run service
+    (`APP_ROLE=live`, us-central1) same-origin via Firebase Hosting rewrites
+    (`/api·/market-data·/live·/plans → market-catalyst-live`); it does not import
+    `firebase/firestore` at all (the old `useCollection()` direct-read design is
+    gone). Each `/market-data/*` path serves a Firestore collection written by a
+    NestJS sync job in `src/sync/`, fanned out per-instance through
+    `CachedCollectionsService` (two-tier TTL: 5 min for intraday collections,
+    60 min for daily ones). Each `/live/*` path is on-demand / cache-aside
+    (Polygon + FMP + SEC-EDGAR, with in-memory + Firestore-doc TTLs) or an SSE
+    stream. The shapes below are copied from the actual job/endpoint code (not
+    from the older planning doc `Doc/05_API_Vendor_Tracker.md`) — e.g.
+    `analyst_actions` is a consensus-vote + per-firm-grades snapshot, and a
+    company's `sector`/`industry` come from the SIC → TradingView taxonomy
+    (`classifyFromSic`), never from a vendor's own sector label.
 
     **Status legend** (see `x-status` on every path):
     - `live` — job exists, writes real data, screen(s) already read it.

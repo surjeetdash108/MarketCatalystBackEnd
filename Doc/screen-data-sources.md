@@ -1,5 +1,63 @@
 # MarketCatalyst Screen Data Sources
 
+> ## ⏱ State sync — 2026-08-21 · REST read-API (not Firestore) · shared hooks · recent UI features · sector via TradingView taxonomy
+>
+> _Newest and authoritative where it differs from the per-screen tables below.
+> Verified against a full frontend + backend re-survey._
+>
+> **Data-access model.** Screens no longer read Firestore directly. Every screen
+> goes through `app/iq/backend.ts` (`apiGet/apiPost/...`, same-origin → Firebase
+> Hosting rewrites → `market-catalyst-live`). Shared read hooks:
+> `useApiList(path)` / `useApiResource(path)` (GET a `/market-data/*` collection
+> or a `/live/*` on-demand doc); `useLiveQuotes(tickers)` — one shared 30 s
+> `/live/snapshot` union poll chunked at 250, so every surface shows identical
+> prices (`live-quotes-context.tsx`); `useLiveTick` (per-ticker `/live/stream`
+> SSE) and `useTapeStream` (`/live/tape/stream`) for pushes; `useBackendBars`
+> (`/live/bars`). The client Firebase SDK is used only for Auth/Analytics.
+>
+> **Per-screen endpoints (current).** Bulk collections via `/market-data/*`;
+> on-demand per-ticker via `/live/*`:
+> · **Dashboard** — companies, sectors, movers, earnings, earnings-announcements,
+>   analyst-actions, insider-transactions, news, recaps, market-sentiment(+history),
+>   `/live/news`, tape, live quotes.
+> · **Live Feed (commentary)** — news, companies, filings-wire, macro-regime,
+>   `/api/watchlist`, `/api/portfolio`, live quotes.
+> · **Earnings Hub** — earnings, earnings-announcements, companies, analyst-actions,
+>   `/live/earnings-transcript` (Read-aloud TTS panel).
+> · **Movers** — movers, companies, analyst-actions, news, `/live/news`, live quotes.
+> · **Heatmap** — sectors, companies, live quotes. · **Analyst Actions** —
+>   analyst-actions, companies. · **Macro & VIX** — macro-events, companies,
+>   `/live/market-status`, `/live/dividend-history`, tape.
+> · **Screener / Themes** — companies. · **IPOs** — ipos, ipo-pipeline, companies.
+> · **Ownership (insider)** — insider-transactions, institutional-ownership,
+>   fund-holdings.
+> · **Stock Detail (`/menu/stock`, nav label "Search")** — companies, sectors,
+>   earnings, analyst-actions, insider-transactions; `/live/company`,
+>   `/live/financials`, `/live/dividend-history`, `/live/splits`,
+>   `/live/ai-analysis`, `/live/news`, `/live/bars`, `/live/stream`+`/live/quotes`;
+>   `/api/stock-notes` (POST/DELETE).
+> · **Daily/Weekly Recaps** (one `recap.tsx`, `mode`) — recaps, earnings,
+>   earnings-announcements, analyst-actions, macro-events, companies, sectors, news.
+> · **Portfolio** — companies + `/api/portfolio*`, live quotes. · **Watchlist** —
+>   companies + `/api/watchlists*`, live quotes. · **Options** — companies (hidden
+>   route, not in nav; static grid). · **Settings/Manage-plan/Requests** —
+>   `/api/settings`, plan UI, `/api/feature-requests`.
+>
+> **Recent UI features.** Movers: **no pagination** (renders the full filtered
+> list; 5 tabs — Top Gainers/Losers, Unusual Volume, Weekly Gainers/Losers).
+> Earnings: Day/Week/Month + session + "At a glance" **segmented controls with a
+> brand-highlighted selected state** (`.ecal-segbtn.on`), and a transcript **"Read
+> aloud"** TTS (`app/iq/speech.ts` neural-voice picker + `earnings.tsx`; NOT in
+> `shell.tsx`). Stock-detail header: symbol/price/change on **one line** (reduced
+> fonts). Left rail **auto-collapses on `/menu/stock`** (search routes there) and
+> restores the manual preference elsewhere.
+>
+> **Sector/industry** on every screen come from the SIC → **TradingView/RBICS**
+> taxonomy (`classifyFromSic`), not from any vendor's own sector label. See
+> `Doc/02_Architecture_Document_Tracker.md` (2026-08-21 block) for the full
+> serving/cache/deploy topology.
+
+
 > ## ⏱ State sync — 2026-08-16 · FMP NEWS MERGE · STOCK-DETAIL WIRING · ON-DEMAND COMPLETENESS · FULL-US EARNINGS (deployed to prod)
 >
 > _Newest and authoritative where it differs from the blocks and per-screen

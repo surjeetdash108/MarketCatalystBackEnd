@@ -1,4 +1,89 @@
 
+> ## ⏱ State sync — 2026-08-21 · DEPLOY TOPOLOGY corrected · TradingView sector taxonomy · market-wide news · REST read-API · LLM gateway · full job/cache map
+>
+> _Newest and authoritative where it differs below. Verified against a full code
+> re-survey (src/sync, src/adapters, src/vendors, src/live, src/market-data)._
+>
+> **① Deploy topology — `git push` does NOT deploy the backend.** There are THREE
+> Cloud Run services; only two do the work, and neither is git-deployed:
+> · **`market-catalyst-backend`** (us-central1, `APP_ROLE=worker`, scale-to-zero) —
+>   THE worker: every cron/sync job + admin/ops/purge/retention/flags. Deployed by
+>   **manual `gcloud run deploy --source .`**. All ~18 Cloud Scheduler jobs POST to
+>   this service's URL.
+> · **`market-catalyst-live`** (us-central1, `APP_ROLE=live`, `--allow-unauthenticated`,
+>   `--timeout=3600`) — THE read API: `/api`, `/live`, `/market-data`, `/plans`.
+>   Also manual `gcloud run deploy`. Firebase Hosting rewrites the public site's
+>   `/api·/live·/market-data·/plans` to it.
+> · **`market-catalyst-be`** (us-east4, Firebase **App Hosting**, `APP_ROLE=worker`) —
+>   what `git push origin prod` rebuilds. **Near-dormant**: no scheduler targets it,
+>   min-instances=0, so its crons never fire. Pushing looks green but changes nothing
+>   live. A backend code change needs BOTH us-central1 `gcloud` deploys. Full detail
+>   at the top of `deploy/DEPLOY.md`. UI is a separate `firebase deploy --only hosting`.
+> · One Docker image, role chosen at boot by `APP_ROLE` (`app.module.ts`); premarket
+>   runs as the separate Cloud Run **Job** `premarket-job` (see 2026-08-16 block).
+>   `--set-secrets` REPLACES the whole set → must list all four keys
+>   (POLYGON/FMP/FINNHUB/FRED) or FMP silently disables.
+>
+> **② The frontend is a REST client, not a Firestore reader.** The UI (Next.js
+> static export) calls the `market-catalyst-live` REST/SSE API same-origin via
+> Hosting rewrites; it no longer reads Firestore directly. (Any doc text — incl.
+> `Doc/openapi.yaml`'s header — describing "direct Firestore reads via
+> useCollection()" is stale.) Serving layers: `CachedCollectionsService` (per-
+> instance, two-tier TTL — 5 min for the 6 intraday collections companies/
+> market_indices/market_movers/market_breadth/market_sentiment/sectors, 60 min for
+> daily ones; stale-on-error) backs `/live/collections` + `/market-data/*` (except
+> `/market-data/news`, which keeps its own 2-min cache, and `.../positions`, a
+> direct read). `SnapshotCacheService` (one Polygon universal-snapshot per ~10 s,
+> idle-evict 5 min) backs `/live/snapshot`, `/live/quotes`, on-demand quotes.
+> `TapeService` (single shared SSE broadcast) backs `/live/tape/stream`.
+> `OnDemandService` hot caches: in-mem 5 min + Firestore-doc TTLs (company 15 min,
+> transcript 24 h, daily-series 20 h, news 15 min) with per-process request
+> coalescing. Every GET also sets CDN `s-maxage` + ETag/304.
+>
+> **③ Sector/industry classification = SIC → TradingView/RBICS taxonomy.** The
+> single classifier is **`classifyFromSic(sicCode)`** (`src/common/sic-tv.util.ts`
+> + `src/common/tv-taxonomy.ts`): exact-4-digit then 2-digit-major-group SIC
+> lookup → one of the 20 `TV_SECTORS` + a validated industry (sector derived from
+> industry so they can't drift). SIC comes from Polygon, with a **SEC-EDGAR
+> `getSicByTicker` fallback** when Polygon omits it (ADRs/foreign issuers). Used by
+> ALL four callers: company-profile adapter, mover-enrichment adapter, ipos job,
+> and `live/ondemand.getCompany`. **DEAD CODE:** the older GICS/SPDR scheme in
+> `src/common/sic-sector.util.ts` (`sectorFromSic`, `resolveSector`,
+> `normalizeFmpSector`, `CRYPTO_TICKERS`, `looksCrypto`) has zero production call
+> sites — superseded, safe to delete. FMP `getCompanyProfile()` is still fetched
+> in those paths but its GICS sector is deliberately NOT used.
+>
+> **④ News is a market-wide head-fetch, not a per-ticker cursor.** `news.job`
+> (cron `*/10 * * * *`) calls `fetchMarketNews(from,to)` on the Polygon primary,
+> then FMP, then a (dormant, licence-gated) TradingView adapter; merges, groups by
+> tracked ticker, dedupes by URL (Polygon wins), keeps `ARTICLES_PER_TICKER=8`
+> newest. The old `BATCH_SIZE` per-ticker sweep is removed. Optional per-ticker AI
+> analysis is `TICKER_AI_PER_CYCLE`-gated (default 0/off; AI is on-demand instead).
+> A data-loss guard writes nothing + records `ok:false` if every vendor returns 0.
+>
+> **⑤ Vendors & FMP seams.** Wired: **Polygon/Massive** (`api.massive.com`, single
+> source of truth for price/OHLCV/snapshot/corporate-actions/news-of-record, primary
+> of every composite), **FMP** (supplementary — see `Doc/FMP-INTEGRATION.md`),
+> **FRED** (macro series), **SEC-EDGAR** (filings + SIC + 13F/Form4/8-K/S-1), and an
+> **LLM gateway** (`llm-gateway.service.ts`: Groq primary → OpenRouter fallback) for
+> on-demand ticker AI analysis + weekly/monthly roll-ups. **Finnhub is NOT wired**
+> (a `FINNHUB_API_KEY` secret is still provisioned but no code uses it — it lacks a
+> news redistribution licence). FMP seams LIVE in prod (`deploy/env.production.yaml`):
+> `EARNINGS_ESTIMATES_SOURCE`, `ANALYST_SOURCE`, `NEWS_FMP_SOURCE`,
+> `ECON_CALENDAR_SOURCE` all `=fmp`; `SECTORS_FALLBACK_SOURCE=fmp` (fallback only);
+> institutional-ownership + transcripts always on when keyed.
+>
+> **⑥ New/changed sync jobs since 2026-08-16** (all register via `SyncRegistry`;
+> premarket orchestrates the daily run in dependency phases): `company-quotes`
+> (`*/5 4-20 *1-5`, intraday price onto `companies`), `earnings-actuals` (backfills
+> reported EPS/rev), `corporate-actions` (splits/dividends, invalidates stock-history
+> range), `ticker-period-analysis` (weekly/monthly AI roll-ups from
+> `ticker_ai_analysis`), `institutional-ownership` (FMP 13F), `edgar-ipo-pipeline`
+> (S-1/424B), `macro-regime` (FRED). Adapter tuning lives in env
+> (`FINANCIALS_BATCH_SIZE=150`, `POLYGON_PAGE_DELAY_MS=0`). See §Scheduler in
+> `Doc/05_API_Vendor_Tracker.md` for the full per-job cron/collection/vendor table.
+
+
 > ## ⏱ State sync — 2026-08-16 · SCALE-TO-ZERO worker + premarket Cloud Run JOB, shared compute, self-heal, single-owner fields
 >
 > _Newest and authoritative where it differs below. Supersedes the "One premarket
