@@ -16,6 +16,7 @@ import { createHash } from "crypto";
 import { OnDemandService, BARS_TFS } from "./ondemand.service";
 import { AiAnalysisService } from "./ai-analysis.service";
 import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
+import { WhatMattersNowService } from "./what-matters-now.service";
 import { MarketScanService } from "./market-scan.service";
 import { MarketGlanceService } from "./market-glance.service";
 import { TickerSearchService } from "./ticker-search.service";
@@ -62,6 +63,7 @@ function sendWithEtag(req: Request, res: Response, body: unknown): void {
 export class OnDemandController {
   constructor(
         private readonly tickerAi: TickerAiAnalysisService,
+    private readonly wmn: WhatMattersNowService,
 private readonly ondemand: OnDemandService,
     private readonly aiAnalysis: AiAnalysisService,
     private readonly search: TickerSearchService,
@@ -84,6 +86,19 @@ private readonly ondemand: OnDemandService,
    * null when a ticker has not been analysed yet, which the UI shows as
    * "no analysis yet" rather than an error.
    */
+  /**
+   * Market-wide "What Matters Now" digest. Cached for an hour: the first
+   * viewer triggers generation, everyone after reads the stored record, and
+   * concurrent callers share one model call.
+   */
+  @Get("what-matters-now")
+  @UseGuards(FirebaseAuthGuard)
+  @Header("Cache-Control", "private, max-age=300")
+  async whatMattersNow(@Req() req: Request, @Res() res: Response) {
+    const doc = await this.wmn.getOrGenerate();
+    sendWithEtag(req, res, doc ?? { empty: true });
+  }
+
   @Get("ticker-analysis")
   @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "private, max-age=120")

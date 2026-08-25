@@ -88,21 +88,82 @@ export class TickerPeriodAnalysisJob implements OnModuleInit {
     return out;
   }
 
-  /** Renders analyses as the period prompt's source material. */
+  /**
+   * Renders stored analyses as period-prompt source material.
+   *
+   * TYPE-AGNOSTIC BY RULE. analysesByTicker() does not filter on
+   * analysisType, and this renderer does not enumerate the types it knows
+   * about — it labels each row from whatever `analysisType` it carries. So
+   * when a new kind of analysis is added to ticker_ai_analysis (13F filings,
+   * insider activity, anything later), it is automatically picked up by the
+   * weekly and monthly roll-ups with no change here.
+   *
+   * Do not reintroduce a per-type branch. If a type needs special rendering,
+   * add a label to TYPE_LABEL rather than an if.
+   */
   private asNewsInput(rows: Array<Record<string, unknown>>): NewsInput[] {
+    const TYPE_LABEL: Record<string, string> = {
+      general: "rolling analysis",
+      announcement: "earnings announcement",
+    };
     return rows
-      .map((r) => ({
-        id: String(r.id ?? ""),
-        headline:
-          r.analysisType === "announcement"
-            ? `EARNINGS ${String((r.announcement as { verdict?: string })?.verdict ?? "result").toUpperCase()}: ${String(r.summary ?? "")}`
-            : String(r.summary ?? ""),
-        summary: String(r.overallAssessment ?? ""),
-        source: r.analysisType === "announcement" ? "earnings announcement" : "rolling analysis",
-        publishedAt: String(r.lastUpdatedAt ?? ""),
-        tag: String(r.sentiment ?? ""),
-      }))
+      .map((r) => {
+        const type = String(r.analysisType ?? "general");
+        // Verdict is surfaced when a row happens to carry one; absence is
+        // normal for types that have no verdict concept.
+        const verdict = (r.announcement as { verdict?: string } | undefined)?.verdict;
+        const prefix = verdict ? `${verdict.toUpperCase()}: ` : "";
+        return {
+          id: String(r.id ?? ""),
+          headline: `${prefix}${String(r.summary ?? "")}`,
+          summary: String(r.overallAssessment ?? ""),
+          // Unknown types fall back to their raw name rather than being
+          // mislabelled as a rolling analysis.
+          source: TYPE_LABEL[type] ?? type,
+          publishedAt: String(r.lastUpdatedAt ?? ""),
+          tag: String(r.sentiment ?? ""),
+        };
+      })
       .filter((n) => n.headline.trim());
+  }
+
+  /**
+   * The period's MAJOR news, as distinct from its analyses.
+   *
+   * Analyses are distilled and lose the specific headline that caused them, so
+   * a roll-up built only from analyses cannot say "the FDA approval on the
+   * 14th". Major means: not syndication filler, and carrying a real category —
+   * "other" is the general market commentary bucket and would swamp the prompt.
+   */
+  private async majorNews(
+    ticker: string,
+    start: string,
+    end: string,
+    limit = 12,
+  ): Promise<NewsInput[]> {
+    const snap = await this.firebase.firestore
+      .collection("news")
+      .where("ticker", "==", ticker)
+      .get();
+    return snap.docs
+      .map((d): Record<string, unknown> => ({ ...d.data(), id: d.id }))
+      .filter((a) => {
+        const p = String(a.publishedAt ?? "");
+        if (p < start || p > `${end}T23:59:59.999Z`) return false;
+        if (a.filler === true) return false;
+        const tag = String(a.tag ?? "other");
+        return tag !== "other";
+      })
+      .sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)))
+      .slice(0, limit)
+      .map((a) => ({
+        id: String(a.id),
+        headline: String(a.headline ?? ""),
+        summary: (a.summary as string | null) ?? null,
+        source: String(a.source ?? ""),
+        publishedAt: String(a.publishedAt ?? ""),
+        tag: String(a.tag ?? ""),
+      }));
   }
 
   /** Tickers with news in the window, newest-first, capped. */
@@ -149,7 +210,10 @@ export class TickerPeriodAnalysisJob implements OnModuleInit {
       for (const [ticker, news] of ranked) {
         try {
           const out = await this.period.generate(
-            "weekly", ticker, { start, end }, this.asNewsInput(news),
+            "weekly", ticker, { start, end },
+            // Analyses AND the week's major headlines — the analyses give
+            // continuity, the headlines give the specifics they distilled away.
+            [...this.asNewsInput(news), ...(await this.majorNews(ticker, start, end))],
             { current: await this.current.getCurrent(ticker) },
           );
           if (out) ok++; else failed++;
@@ -186,7 +250,8 @@ export class TickerPeriodAnalysisJob implements OnModuleInit {
       for (const [ticker, news] of ranked) {
         try {
           const out = await this.period.generate(
-            "monthly", ticker, { start, end }, this.asNewsInput(news),
+            "monthly", ticker, { start, end },
+            [...this.asNewsInput(news), ...(await this.majorNews(ticker, start, end, 20))],
             {
               current: await this.current.getCurrent(ticker),
               weeklies: await this.period.weeklyBetween(ticker, start, end),

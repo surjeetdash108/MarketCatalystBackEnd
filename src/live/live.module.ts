@@ -8,6 +8,7 @@ import { OpenRouterModule } from "../vendors/openrouter/openrouter.module";
 import { AiAnalysisService } from "./ai-analysis.service";
 import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
 import { TickerPeriodAnalysisService } from "./ticker-period-analysis.service";
+import { WhatMattersNowService } from "./what-matters-now.service";
 import { GroqModule } from "../vendors/groq/groq.module";
 import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { LiveController } from "./live.controller";
@@ -56,6 +57,7 @@ import { SearchedTickersService } from "./searched-tickers.service";
     OnDemandController,
   ],
   providers: [
+    WhatMattersNowService,
     LlmGatewayService,
     TickerAiAnalysisService,
     TickerPeriodAnalysisService,
@@ -72,6 +74,7 @@ import { SearchedTickersService } from "./searched-tickers.service";
     AiAnalysisService,
   ],
   exports: [
+    WhatMattersNowService,
     LlmGatewayService,
     TickerAiAnalysisService,
     TickerPeriodAnalysisService,
