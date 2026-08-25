@@ -27,25 +27,23 @@ const POSTS = "blogs";
 const SLUGS = "slugs";
 
 /** The four zones the console understands. */
-export type Zone = "lead" | "stock" | "edu" | "news";
+export type Zone = "edu" | "recap" | "research";
 
-/** The four canonical blog types (see BlogType in the website data layer). */
-type BlogType = "featured" | "stock" | "educational" | "market";
+/** The three canonical blog types (see BlogType in the website data layer). */
+type BlogType = "educational" | "recap" | "research";
 
 /** zone → canonical type (what gets stored). */
 const ZONE_TO_TYPE: Record<Zone, BlogType> = {
-  lead: "featured",
-  stock: "stock",
   edu: "educational",
-  news: "market",
+  recap: "recap",
+  research: "research",
 };
 
 /** canonical type → zone (what the GET view reports). */
 const TYPE_TO_ZONE: Record<BlogType, Zone> = {
-  featured: "lead",
-  stock: "stock",
   educational: "edu",
-  market: "news",
+  recap: "recap",
+  research: "research",
 };
 
 /** The shape the console's editor consumes. */
@@ -276,8 +274,8 @@ export class BlogsAdminService {
   }
 
   private toView(id: string, data: FirebaseFirestore.DocumentData): BlogAdminView {
-    const type = (data.type as BlogType) ?? "featured";
-    const zone = TYPE_TO_ZONE[type] ?? "lead";
+    const type = (data.type as BlogType) ?? "educational";
+    const zone = TYPE_TO_ZONE[type] ?? "edu";
     const categories: string[] = Array.isArray(data.categories)
       ? data.categories
       : [];
