@@ -23,6 +23,7 @@ import { WhoamiController } from "./whoami.controller";
 import { OnDemandController } from "./ondemand.controller";
 import { OnDemandService } from "./ondemand.service";
 import { MarketScanService } from "./market-scan.service";
+import { MarketGlanceService } from "./market-glance.service";
 import { TickerSearchService } from "./ticker-search.service";
 import { SearchedTickersService } from "./searched-tickers.service";
 
@@ -65,6 +66,7 @@ import { SearchedTickersService } from "./searched-tickers.service";
     CachedCollectionsService,
     OnDemandService,
     MarketScanService,
+    MarketGlanceService,
     TickerSearchService,
     SearchedTickersService,
     AiAnalysisService,
@@ -80,6 +82,7 @@ import { SearchedTickersService } from "./searched-tickers.service";
     CachedCollectionsService,
     OnDemandService,
     MarketScanService,
+    MarketGlanceService,
     TickerSearchService,
     SearchedTickersService,
     AiAnalysisService,

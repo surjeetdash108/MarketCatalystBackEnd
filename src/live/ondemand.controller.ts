@@ -17,6 +17,7 @@ import { OnDemandService, BARS_TFS } from "./ondemand.service";
 import { AiAnalysisService } from "./ai-analysis.service";
 import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
 import { MarketScanService } from "./market-scan.service";
+import { MarketGlanceService } from "./market-glance.service";
 import { TickerSearchService } from "./ticker-search.service";
 import { SearchedTickersService } from "./searched-tickers.service";
 import { OPTIONS_UNIVERSE } from "../common/options-universe";
@@ -66,6 +67,7 @@ private readonly ondemand: OnDemandService,
     private readonly search: TickerSearchService,
     private readonly searchedTickers: SearchedTickersService,
     private readonly marketScan: MarketScanService,
+    private readonly marketGlance: MarketGlanceService,
   ) {}
 
   /**
@@ -138,6 +140,26 @@ private readonly ondemand: OnDemandService,
   @Header("Cache-Control", "public, max-age=300")
   async scanMostActive(@Req() req: Request, @Res() res: Response) {
     sendWithEtag(req, res, await this.marketScan.getMostActive());
+  }
+
+  /**
+   * "Week at a glance" — the market-wide weekly digests as an expandable
+   * history (newest first). The current week is generated on demand (12h
+   * cutoff) SYNCHRONOUSLY inside the request, bounded under the 60s
+   * Hosting-rewrite limit; the first viewer of a stale week waits for it and
+   * everyone after reads this cached copy. See MarketGlanceService.
+   */
+  @Get("glance/weekly")
+  @Header("Cache-Control", "public, max-age=60")
+  async glanceWeekly(@Req() req: Request, @Res() res: Response) {
+    sendWithEtag(req, res, await this.marketGlance.getWeekly());
+  }
+
+  /** "Month at a glance" — same, over calendar months (24h cutoff). */
+  @Get("glance/monthly")
+  @Header("Cache-Control", "public, max-age=60")
+  async glanceMonthly(@Req() req: Request, @Res() res: Response) {
+    sendWithEtag(req, res, await this.marketGlance.getMonthly());
   }
 
   @Get("ai-analysis")
