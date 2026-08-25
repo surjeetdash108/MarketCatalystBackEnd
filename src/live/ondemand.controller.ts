@@ -16,6 +16,7 @@ import { createHash } from "crypto";
 import { OnDemandService, BARS_TFS } from "./ondemand.service";
 import { AiAnalysisService } from "./ai-analysis.service";
 import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
+import { MarketScanService } from "./market-scan.service";
 import { TickerSearchService } from "./ticker-search.service";
 import { SearchedTickersService } from "./searched-tickers.service";
 import { OPTIONS_UNIVERSE } from "../common/options-universe";
@@ -64,6 +65,7 @@ private readonly ondemand: OnDemandService,
     private readonly aiAnalysis: AiAnalysisService,
     private readonly search: TickerSearchService,
     private readonly searchedTickers: SearchedTickersService,
+    private readonly marketScan: MarketScanService,
   ) {}
 
   /**
@@ -114,6 +116,28 @@ private readonly ondemand: OnDemandService,
     const n = Math.min(Math.max(parseInt(limit ?? "50", 10) || 50, 1), 200);
     const rows = await this.tickerAi.recentAnnouncements(n);
     sendWithEtag(req, res, rows);
+  }
+
+  /**
+   * SCANX — Biggest % gainers/losers, sector-categorised. On-demand generated
+   * from the companies universe and cached; a request past the 2h cutoff
+   * recomputes, otherwise the stored scan is served. Derived from public market
+   * data, so no auth gate.
+   */
+  @Get("scan/biggest-pct")
+  @Header("Cache-Control", "public, max-age=300")
+  async scanBiggestPct(@Req() req: Request, @Res() res: Response) {
+    sendWithEtag(req, res, await this.marketScan.getBiggestPct());
+  }
+
+  /**
+   * SCANX — Most active stocks (top volume + top relative volume),
+   * sector-categorised. Same on-demand + cache pattern; 1h cutoff.
+   */
+  @Get("scan/most-active")
+  @Header("Cache-Control", "public, max-age=300")
+  async scanMostActive(@Req() req: Request, @Res() res: Response) {
+    sendWithEtag(req, res, await this.marketScan.getMostActive());
   }
 
   @Get("ai-analysis")
