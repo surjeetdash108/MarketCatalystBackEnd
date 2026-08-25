@@ -4,6 +4,8 @@ import { PolygonModule } from "../vendors/polygon/polygon.module";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { FmpModule } from "../vendors/fmp/fmp.module";
 import { FmpService } from "../vendors/fmp/fmp.service";
+import { SecEdgarModule } from "../vendors/sec-edgar/sec-edgar.module";
+import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { FmpEarningsEstimatesAdapter } from "./earnings-estimates.adapter";
 import { FmpAnalystRatingsAdapter } from "./analyst-ratings.adapter";
 import { CompositeCompanyProfileAdapter } from "./composite-company-profile.adapter";
@@ -110,7 +112,7 @@ function buildComposite(
 }
 
 @Module({
-  imports: [PolygonModule, FmpModule],
+  imports: [PolygonModule, FmpModule, SecEdgarModule],
   providers: [
     PolygonCompanyProfileAdapter,
     PolygonMoversAdapter,
@@ -118,15 +120,16 @@ function buildComposite(
     PolygonNewsAdapter,
     {
       provide: COMPANY_PROFILE_ADAPTER,
-      inject: [ConfigService, PolygonService, FmpService],
-      useFactory: (config, polygon, fmp: FmpService) =>
+      inject: [ConfigService, PolygonService, FmpService, SecEdgarService],
+      useFactory: (config, polygon, fmp: FmpService, secEdgar: SecEdgarService) =>
         buildComposite(
           config,
           "COMPANY_PROFILE",
           POLYGON_ONLY_SOURCES,
           { primary: "polygon", fallback: "none" },
           {
-            polygon: () => new PolygonCompanyProfileAdapter(polygon, fmp),
+            polygon: () =>
+              new PolygonCompanyProfileAdapter(polygon, fmp, secEdgar),
             none: () => null,
           },
           CompositeCompanyProfileAdapter,

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { classifyFromSic } from "../common/sic-tv.util";
+import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { reconcileMarketCap } from "../common/validate.util";
 import {
   forwardAnnualDividend,
@@ -27,6 +28,10 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
     // cleaner than Polygon's free-text SIC). Best-effort and self-disabling when
     // no key is set — the sector then falls back to the SIC mapping.
     private readonly fmp: FmpService,
+    // Authoritative free SIC lookup, used ONLY as a fallback when Polygon omits
+    // sic_code (foreign private issuers / ADRs). Mirrors the on-demand path so a
+    // bulk sync classifies them the same way instead of re-nulling the sector.
+    private readonly secEdgar: SecEdgarService,
   ) {}
 
   async fetchCompany(
@@ -35,7 +40,19 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
     const details = await this.polygon.getTickerDetails(ticker);
     if (!details) return null;
     // One classification, used for sector AND industry so they cannot disagree.
-    const sicClass = classifyFromSic(details.sic_code);
+    // Polygon omits sic_code for many foreign filers / ADRs; when it does, fall
+    // back to the SEC's authoritative SIC (same standard classifyFromSic uses)
+    // so the bulk companies.job persists the sector instead of overwriting it
+    // with null. Fail-safe: getSicByTicker returns null on any error.
+    const polySic = details.sic_code;
+    const hasPolySic =
+      polySic != null &&
+      String(polySic).trim() !== "" &&
+      String(polySic).trim() !== "0";
+    const resolvedSic = hasPolySic
+      ? polySic
+      : await this.secEdgar.getSicByTicker(ticker);
+    const sicClass = classifyFromSic(resolvedSic);
     // Kicked off in parallel with the price/eps/peers/dividend fetches below so
     // it adds max(), not sum(), to latency. Null on any failure → SIC fallback.
     const fmpProfilePromise = this.fmp.enabled
@@ -203,7 +220,9 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       sector: sicClass.sector,
       industry: sicClass.industry,
       // Kept so a future taxonomy revision can reclassify from stored data.
-      sicCode: details.sic_code == null ? null : String(details.sic_code),
+      // Uses the resolved SIC (Polygon, or the SEC fallback above) so a
+      // SEC-derived sector and its sicCode stay consistent.
+      sicCode: resolvedSic == null ? null : String(resolvedSic),
       sicDescription: details.sic_description ?? null,
       exchange: details.primary_exchange ?? null,
       week52Range: null,

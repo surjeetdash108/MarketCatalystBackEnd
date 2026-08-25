@@ -193,9 +193,12 @@ private readonly ondemand: OnDemandService,
     const img = await this.ondemand.getLogo(sym);
     if (!img) {
       // No Polygon branding for this ticker → let the client fall back to its
-      // letter tile. Short cache so a newly-covered ticker recovers quickly.
+      // letter tile. 204 (No Content), not 404: the client's <img> onError still
+      // fires, but the browser doesn't log a "Failed to load resource" console
+      // error for a logo-less ticker (a normal, expected case). Short cache so a
+      // newly-covered ticker recovers quickly.
       res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=3600");
-      res.status(404).end();
+      res.status(204).end();
       return;
     }
     res.setHeader("Content-Type", img.contentType);
