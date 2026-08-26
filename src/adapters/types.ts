@@ -38,6 +38,10 @@ export interface MoverEnrichment {
   name: string | null;
   sector: string | null;
   cap: CapBucket | null;
+  /** Raw USD market cap from the same ticker-details fetch the `cap` tier is
+   *  bucketed from — surfaced so the Movers table can show the real number,
+   *  not just the tier. Null when the vendor has no market cap for the ticker. */
+  marketCap: number | null;
 }
 
 export interface CanonicalNewsArticle {

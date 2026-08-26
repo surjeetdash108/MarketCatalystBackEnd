@@ -40,6 +40,8 @@ export class PolygonMoverEnrichmentAdapter implements MoverEnrichmentAdapter {
       // profile job writes later.
       sector: classifyFromSic(details.sic_code ?? null).sector,
       cap: capBucket(details.market_cap ?? null),
+      // Same value the tier is bucketed from — kept raw for the table column.
+      marketCap: details.market_cap ?? null,
     };
     return {
       data,
