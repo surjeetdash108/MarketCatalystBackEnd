@@ -234,7 +234,7 @@ gcloud run deploy market-catalyst-backend \
   --memory=512Mi \
   --timeout=900 \
   --env-vars-file="$ENV_FILE" \
-  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FMP_API_KEY=FMP_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
+  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FMP_API_KEY=FMP_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest,OPENROUTER_API_KEY=OPENROUTER_API_KEY:latest,GROQ_API_KEY=GROQ_API_KEY:latest"
 ```
 
 > ⚠ **All FOUR secrets are required — `FMP_API_KEY` included.** `--set-secrets`
@@ -268,10 +268,50 @@ gcloud run deploy market-catalyst-backend \
 
 ### 3b. Deploy the public live service (ticker tape)
 
-Same image, different role and *very* different Cloud Run settings:
+Same image, different role. **Use the image-only update — it is the routine
+path and it cannot drift:**
 
 ```bash
 # Reuse the image the deploy above built, so both services run identical code.
+IMAGE=$(gcloud run services describe market-catalyst-backend --region "$REGION" \
+          --format='value(spec.template.spec.containers[0].image)')
+
+gcloud run services update market-catalyst-live \
+  --image "$IMAGE" \
+  --region "$REGION" --project "$PROJECT_ID"
+```
+
+`services update --image` swaps the code and inherits every existing env var,
+secret and scaling setting. Nothing to keep in sync, nothing to forget.
+
+> ⚠ **DO NOT use the full `--set-*` recipe below for a routine deploy.**
+> `--set-env-vars` and `--set-secrets` REPLACE the entire set — anything absent
+> from the command is deleted from the service. On 2026-08-26 this section
+> listed 7 env vars and 1 secret while the service was actually running **12 env
+> vars and 5 secrets**, so following it verbatim would have silently dropped:
+>
+> - `FIRESTORE_DATABASE_ID=mc-regional` — live would fall back to the empty
+>   `(default)` database and every read would return nothing
+> - `OPENROUTER_MODEL`, `OPENROUTER_FALLBACK_MODEL`, `OPENROUTER_API_KEY` — all
+>   AI features silently disabled
+> - `FMP_API_KEY`, `FRED_API_KEY`, `GROQ_API_KEY` — earnings estimates, macro
+>   and AI vendors all unauthenticated
+> - `EARNINGS_ESTIMATES_SOURCE`, `SEC_EDGAR_USER_AGENT`
+>
+> A doc listing env vars will always rot behind the service. **Before using the
+> full recipe, regenerate it from the running service** rather than trusting
+> what is written here:
+>
+> ```bash
+> gcloud run services describe market-catalyst-live --region "$REGION" \
+>   --format='value(spec.template.spec.containers[0].env)'
+> ```
+
+<details>
+<summary><b>Full recipe — FIRST deploy or an intentional config change only</b>
+(verified against the running service 2026-08-26)</summary>
+
+```bash
 IMAGE=$(gcloud run services describe market-catalyst-backend --region "$REGION" \
           --format='value(spec.template.spec.containers[0].image)')
 
@@ -284,9 +324,11 @@ gcloud run deploy market-catalyst-live \
   --concurrency=200 \
   --memory=1Gi \
   --timeout=3600 \
-  --set-env-vars="APP_ROLE=live,NODE_ENV=production,FIREBASE_PROJECT_ID=market-catalyst-502415,POLYGON_API_BASE_URL=https://api.massive.com,CORS_ORIGINS=https://marketcatalyst.web.app,POLYGON_PAGE_DELAY_MS=0,ADMIN_GUARD_TRUST_IAM=false" \
-  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest"
+  --set-env-vars="APP_ROLE=live,NODE_ENV=production,FIREBASE_PROJECT_ID=market-catalyst-502415,FIRESTORE_DATABASE_ID=mc-regional,POLYGON_API_BASE_URL=https://api.massive.com,CORS_ORIGINS=https://marketcatalyst.web.app,POLYGON_PAGE_DELAY_MS=0,ADMIN_GUARD_TRUST_IAM=false,EARNINGS_ESTIMATES_SOURCE=fmp,OPENROUTER_MODEL=openrouter/free,OPENROUTER_FALLBACK_MODEL=google/gemma-4-31b-it:free,SEC_EDGAR_USER_AGENT=Market Catalyst Backend hello@inc108.com" \
+  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FMP_API_KEY=FMP_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest,OPENROUTER_API_KEY=OPENROUTER_API_KEY:latest,GROQ_API_KEY=GROQ_API_KEY:latest"
 ```
+
+</details>
 
 > ⚠ **`ADMIN_GUARD_TRUST_IAM=false` is REQUIRED here — omitting it is a data
 > leak.** Admin read-models are mounted on the live role (commit b73851a), and
