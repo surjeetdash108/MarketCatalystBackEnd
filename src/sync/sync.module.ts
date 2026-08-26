@@ -1,4 +1,6 @@
-import { Module } from "@nestjs/common";
+import { Logger, Module, type OnApplicationBootstrap } from "@nestjs/common";
+import { manifestDrift } from "../common/job-manifest";
+import { SyncRegistry } from "../common/sync-registry.service";
 import { AdaptersModule } from "../adapters/adapters.module";
 import { FredModule } from "../vendors/fred/fred.module";
 import { FmpModule } from "../vendors/fmp/fmp.module";
@@ -92,4 +94,33 @@ import { LiveModule } from "../live/live.module";
     PremarketJob,
   ],
 })
-export class SyncModule {}
+/**
+ * Fails loudly when the job registry and common/job-manifest.ts drift apart.
+ *
+ * The manifest is what the admin Monitor renders and the only place a job's
+ * real trigger is written down. A job registered without a manifest entry would
+ * silently join the four that nothing runs — which is exactly how those four
+ * got there. Logged rather than thrown: an inventory mismatch must not stop the
+ * worker from booting and running the other 37 jobs.
+ */
+export class SyncModule implements OnApplicationBootstrap {
+  private readonly logger = new Logger(SyncModule.name);
+
+  constructor(private readonly registry: SyncRegistry) {}
+
+  onApplicationBootstrap(): void {
+    const { missingFromManifest, missingFromRegistry } = manifestDrift(
+      this.registry.names(),
+    );
+    if (missingFromManifest.length) {
+      this.logger.error(
+        `job-manifest drift — registered but NOT declared in job-manifest.ts (nothing may trigger these): ${missingFromManifest.join(", ")}`,
+      );
+    }
+    if (missingFromRegistry.length) {
+      this.logger.warn(
+        `job-manifest drift — declared in job-manifest.ts but not registered: ${missingFromRegistry.join(", ")}`,
+      );
+    }
+  }
+}

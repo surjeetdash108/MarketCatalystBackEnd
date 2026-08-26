@@ -16,6 +16,7 @@ import type { Response } from "express";
 import { AllSourcesFailedError } from "../adapters/adapter-error";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
+import { jobManifest } from "../common/job-manifest";
 
 function errorBody(
   statusCode: number,
@@ -83,6 +84,7 @@ export class SyncController {
     }
     return registered.map((job) => {
       const m = metaByJob.get(job.name);
+      const manifest = jobManifest(job.name);
       return {
         name: job.name,
         isRunning: job.isRunning,
@@ -106,7 +108,19 @@ export class SyncController {
         collections: job.collections,
         cronExpression: job.cronExpression,
         timeZone: job.timeZone,
-        nextRunAt: nextRunAt(job.cronExpression, job.timeZone),
+        // How this job is ACTUALLY triggered, and the schedule that does it —
+        // see common/job-manifest.ts.
+        trigger: manifest?.trigger ?? "none",
+        schedules: manifest?.schedules ?? [],
+        triggerNote: manifest?.note ?? null,
+        // Only a job something actually fires gets a next-run time. Deriving it
+        // from `cronExpression` alone was fiction: the registry never schedules
+        // anything, so jobs with no trigger were still advertising a next run
+        // that would never arrive.
+        nextRunAt:
+          manifest && manifest.trigger !== "none"
+            ? nextRunAt(job.cronExpression, job.timeZone)
+            : null,
         metaError,
       };
     });
