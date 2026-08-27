@@ -46,6 +46,23 @@ const TYPE_TO_ZONE: Record<BlogType, Zone> = {
   research: "research",
 };
 
+/** Source-document kinds the post page can draw. */
+export type SourceKind = "pdf" | "docx";
+
+/**
+ * Accepted upload types, keyed by the MIME the browser puts in the data URI.
+ * An allowlist rather than a sniff: this decides what gets written into
+ * Storage, so it should only ever admit the two the reader can render.
+ */
+const SOURCE_KINDS: Record<string, { id: SourceKind; ext: string; mime: string }> = {
+  "application/pdf": { id: "pdf", ext: "pdf", mime: "application/pdf" },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
+    id: "docx",
+    ext: "docx",
+    mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  },
+};
+
 /** The shape the console's editor consumes. */
 export interface BlogAdminView {
   id: string;
@@ -59,11 +76,20 @@ export interface BlogAdminView {
   html: string;
   status: "Published" | "Draft";
   date: string;
-  /** Storage URL of the source PDF, when the post was published from one. */
+  /**
+   * The source document the post was published from, when there was one.
+   *
+   * The `pdf*` names predate Word support and now mean "the source document"
+   * of whichever kind `sourceKind` names — kept as-is so the posts already in
+   * Firestore keep resolving without a migration.
+   */
   pdfUrl: string | null;
   pdfName: string | null;
+  /** PDF only. Word pagination depends on the renderer, so it is not known here. */
   pdfPages: number | null;
   pdfAspect: number | null;
+  /** Absent on posts written before Word support, which were all PDFs. */
+  sourceKind: SourceKind | null;
 }
 
 /** Request body for POST/PATCH — every field optional at the wire, validated below. */
@@ -77,8 +103,8 @@ export interface BlogAdminBody {
   read?: string;
   html?: string;
   status?: string;
-  /** Raw source PDF as a data URI — hoisted to Storage on write, never stored
-   *  in Firestore (a research PDF is far past the 1 MB document cap). */
+  /** Raw source document (PDF or Word) as a data URI — hoisted to Storage on
+   *  write, never stored in Firestore (either is far past the 1 MB cap). */
   pdfDataUri?: string;
   pdfName?: string;
   /** Page count and page shape, read from the file at import. The post page
@@ -145,32 +171,41 @@ export class BlogsAdminService {
    *
    * Same tokenised-URL pattern as externalizeImages below.
    */
-  private async storePdf(
+  private async storeSourceDoc(
     dataUri: string,
     blogId: string,
-  ): Promise<string | null> {
-    const m = /^data:application\/pdf;base64,([A-Za-z0-9+/=]+)$/.exec(dataUri.trim());
+  ): Promise<{ url: string; kind: SourceKind } | null> {
+    const m = /^data:([a-z0-9.+/-]+);base64,([A-Za-z0-9+/=]+)$/i.exec(dataUri.trim());
     if (!m) return null;
-    const buf = Buffer.from(m[1], "base64");
+    const kind = SOURCE_KINDS[m[1].toLowerCase()];
+    // An unrecognised type is dropped rather than stored: the post page only
+    // knows how to draw these two, and a file it cannot render would leave the
+    // article blank with no indication why.
+    if (!kind) return null;
+
+    const buf = Buffer.from(m[2], "base64");
     const token = randomUUID();
-    const path = `blog-pdfs/${blogId}/${randomUUID()}.pdf`;
+    const path = `blog-docs/${blogId}/${randomUUID()}.${kind.ext}`;
     try {
       await this.firebase.bucket.file(path).save(buf, {
-        contentType: "application/pdf",
+        contentType: kind.mime,
         metadata: {
           // inline so a browser renders it rather than forcing a download —
-          // the post page embeds this URL directly.
+          // the post page reads this URL directly.
           contentDisposition: "inline",
           metadata: { firebaseStorageDownloadTokens: token },
         },
         resumable: false,
       });
     } catch (err) {
-      throw new Error(`pdf_upload_failed: ${path}: ${(err as Error).message}`);
+      throw new Error(`source_upload_failed: ${path}: ${(err as Error).message}`);
     }
-    return `https://firebasestorage.googleapis.com/v0/b/market-catalyst-502415.firebasestorage.app/o/${encodeURIComponent(
-      path,
-    )}?alt=media&token=${token}`;
+    return {
+      url: `https://firebasestorage.googleapis.com/v0/b/market-catalyst-502415.firebasestorage.app/o/${encodeURIComponent(
+        path,
+      )}?alt=media&token=${token}`,
+      kind: kind.id,
+    };
   }
 
   /**
@@ -350,6 +385,15 @@ export class BlogsAdminService {
       pdfName: typeof data.pdfName === "string" ? data.pdfName : null,
       pdfPages: typeof data.pdfPages === "number" ? data.pdfPages : null,
       pdfAspect: typeof data.pdfAspect === "number" ? data.pdfAspect : null,
+      // Every post written before Word support was a PDF, so an absent kind on
+      // a post that HAS a source document means pdf; absent with no document
+      // means there is nothing to draw.
+      sourceKind:
+        data.sourceKind === "docx" || data.sourceKind === "pdf"
+          ? data.sourceKind
+          : typeof data.pdfUrl === "string"
+            ? "pdf"
+            : null,
     };
   }
 
@@ -375,9 +419,10 @@ export class BlogsAdminService {
       ref.id,
     );
 
-    const pdfUrl = typeof body.pdfDataUri === "string" && body.pdfDataUri
-      ? await this.storePdf(body.pdfDataUri, ref.id)
+    const source = typeof body.pdfDataUri === "string" && body.pdfDataUri
+      ? await this.storeSourceDoc(body.pdfDataUri, ref.id)
       : null;
+    const pdfUrl = source?.url ?? null;
 
     await ref.set({
       title,
@@ -410,6 +455,7 @@ export class BlogsAdminService {
       pdfName: pdfUrl && typeof body.pdfName === "string" ? body.pdfName : null,
       pdfPages: pdfUrl && Number.isFinite(Number(body.pdfPages)) ? Number(body.pdfPages) : null,
       pdfAspect: pdfUrl && Number.isFinite(Number(body.pdfAspect)) ? Number(body.pdfAspect) : null,
+      sourceKind: source?.kind ?? null,
     });
 
     // Claim the slug index doc so the website's admin uniqueness check agrees.
@@ -453,10 +499,13 @@ export class BlogsAdminService {
       update.kicker = kick;
     }
     if (typeof body.pdfDataUri === "string" && body.pdfDataUri) {
-      const url = await this.storePdf(body.pdfDataUri, id);
-      if (url) {
-        update.pdfUrl = url;
+      const source = await this.storeSourceDoc(body.pdfDataUri, id);
+      if (source) {
+        update.pdfUrl = source.url;
+        update.sourceKind = source.kind;
         update.pdfName = typeof body.pdfName === "string" ? body.pdfName : null;
+        // Word has no page count until something renders it, so these stay
+        // null there rather than carrying a stale PDF's numbers forward.
         update.pdfPages = Number.isFinite(Number(body.pdfPages)) ? Number(body.pdfPages) : null;
         update.pdfAspect = Number.isFinite(Number(body.pdfAspect)) ? Number(body.pdfAspect) : null;
       }
@@ -484,10 +533,15 @@ export class BlogsAdminService {
     const slug = snap.data()?.slug as string | undefined;
 
     await ref.delete();
-    // Remove any externalized blog images for this post (best-effort).
-    await this.firebase.bucket
-      .deleteFiles({ prefix: `blog-images/${id}/` })
-      .catch(() => undefined);
+    // Remove this post's uploaded files (best-effort). The source document was
+    // previously left behind on delete — a leak worth closing now that a Word
+    // upload can be tens of megabytes. `blog-pdfs/` is the pre-rename location
+    // and is still swept so older posts clean up too.
+    await Promise.all(
+      [`blog-images/${id}/`, `blog-docs/${id}/`, `blog-pdfs/${id}/`].map((prefix) =>
+        this.firebase.bucket.deleteFiles({ prefix }).catch(() => undefined),
+      ),
+    );
     // Release the slug index doc so the slug can be reused.
     if (slug) {
       await this.firebase.firestore
