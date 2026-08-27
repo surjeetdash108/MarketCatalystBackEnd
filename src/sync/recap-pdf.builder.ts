@@ -74,6 +74,12 @@ export type RecapFacts = {
 /** Everything the model is allowed to contribute. Prose only — never figures. */
 export type RecapNarrative = {
   headline: string;
+  /**
+   * Four one-line takeaways. Printed at the top of the document AND stored as
+   * the post's excerpt, so the same four lines appear beside the PDF on the
+   * article page and on the board card — one summary, written once.
+   */
+  summary4: string[];
   summary: string[];
   /** ticker → why it moved, or an explicit "no confirmed catalyst". */
   moverNotes: Record<string, string>;
@@ -214,6 +220,7 @@ export function buildRecapPdf(facts: RecapFacts, narrative: RecapNarrative): Pro
   });
 
   renderHeader(doc, facts, narrative);
+  renderKeyPoints(doc, narrative);
   renderSummary(doc, narrative);
   renderDashboard(doc, facts);
   renderIndices(doc, facts);
@@ -244,6 +251,37 @@ function renderHeader(doc: Doc, facts: RecapFacts, narrative: RecapNarrative): v
   const y = doc.y + 8;
   doc.moveTo(MARGIN, y).lineTo(MARGIN + CONTENT_WIDTH, y).lineWidth(1.4).strokeColor(BLUE).stroke();
   doc.y = y + 14;
+}
+
+/**
+ * The four-line summary, boxed at the top — the part a reader takes in before
+ * deciding whether to read the rest. The same four lines are stored as the
+ * post's excerpt, so the page and the board card show exactly this.
+ */
+function renderKeyPoints(doc: Doc, narrative: RecapNarrative): void {
+  const lines = narrative.summary4.filter((l) => l.trim()).slice(0, 4);
+  if (!lines.length) return;
+
+  doc.font("Helvetica").fontSize(9.2);
+  const textW = CONTENT_WIDTH - 40;
+  // Measured before drawing so the panel is exactly as tall as its contents —
+  // a fixed height would clip a long line or leave a gap under a short one.
+  const heights = lines.map((l) => doc.heightOfString(l, { width: textW - 12, lineGap: 1.6 }));
+  const boxH = heights.reduce((a, b) => a + b + 6, 0) + 22;
+
+  ensure(doc, boxH + 10);
+  const y = doc.y;
+  doc.rect(MARGIN, y, CONTENT_WIDTH, boxH).fill(BAND);
+  doc.rect(MARGIN, y, 3, boxH).fill(BLUE);
+
+  let ly = y + 12;
+  lines.forEach((line, i) => {
+    doc.fillColor(BLUE).font("Helvetica-Bold").fontSize(9.2).text("•", MARGIN + 18, ly);
+    doc.fillColor(INK).font("Helvetica").fontSize(9.2)
+      .text(line, MARGIN + 30, ly, { width: textW - 12, lineGap: 1.6 });
+    ly += heights[i] + 6;
+  });
+  doc.y = y + boxH + 12;
 }
 
 function renderSummary(doc: Doc, narrative: RecapNarrative): void {

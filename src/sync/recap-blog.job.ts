@@ -80,7 +80,9 @@ export class RecapBlogJob implements OnModuleInit {
       await this.blogs.create({
         zone: "recap",
         title: narrative.headline,
-        dek: "",
+        // The four-line summary doubles as the post's excerpt, so the article
+        // page and the board card show the same lines printed in the document.
+        dek: narrative.summary4.join(" "),
         kick: "MarketCatalyst",
         author: "Desk",
         read: "",
@@ -161,9 +163,13 @@ export class RecapBlogJob implements OnModuleInit {
       "if you do not know why something moved, say so plainly. " +
       "No hype, no advice, no predictions presented as fact. " +
       "Reply with JSON only, no code fence, matching exactly: " +
-      '{"headline":string,"summary":[string,string],"moverNotes":{TICKER:string},' +
+      '{"headline":string,"summary4":[string,string,string,string],' +
+      '"summary":[string,string],"moverNotes":{TICKER:string},' +
       '"stories":[{"title":string,"body":string}],"takeaway":string,"tags":[string]}. ' +
       "headline: under 90 characters, states the session's dominant theme. " +
+      "summary4: EXACTLY four lines, each one sentence under 120 characters, " +
+      "each a distinct takeaway from the session — this is the summary shown " +
+      "beside the document, so it must stand alone. " +
       "summary: two paragraphs, 60-90 words each. " +
       "moverNotes: one entry per ticker given, 2-3 sentences; if no catalyst is " +
       "supplied, write that no confirmed catalyst was identified. " +
@@ -231,8 +237,14 @@ export class RecapBlogJob implements OnModuleInit {
           .slice(0, 5)
       : [];
 
+    const summary4 = strArr(parsed.summary4).slice(0, 4);
+
     return {
       headline,
+      // Falls back to lines built from the figures: this is the post's excerpt
+      // as well as a panel in the document, so an empty one would leave the
+      // article page and the board card with nothing to show.
+      summary4: summary4.length ? summary4 : this.factualKeyPoints(facts),
       summary: summary.length ? summary.slice(0, 3) : [this.factualSummary(facts)],
       moverNotes: notes,
       stories,
@@ -250,6 +262,38 @@ export class RecapBlogJob implements OnModuleInit {
     if (pct == null) return `Market recap — ${facts.date}`;
     const dir = pct > 0 ? "higher" : pct < 0 ? "lower" : "flat";
     return `Stocks close ${dir}: S&P 500 ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+  }
+
+  /** Four lines straight from the data, for when the model gives none. */
+  private factualKeyPoints(facts: RecapFacts): string[] {
+    const lines: string[] = [];
+    const pick = (re: RegExp) => facts.indices.find((i) => re.test(i.label) && i.pctChange != null);
+    const move = (i: RecapFacts["indices"][number] | undefined, label: string) =>
+      i ? `${label} closed ${i.pctChange! >= 0 ? "up" : "down"} ${Math.abs(i.pctChange!).toFixed(2)}%.` : null;
+
+    const equities = [
+      move(pick(/s&p/i), "The S&P 500"),
+      move(pick(/nasdaq/i), "The Nasdaq"),
+      move(pick(/dow/i), "The Dow"),
+    ].filter((x): x is string => !!x);
+    lines.push(...equities.slice(0, 2));
+
+    const b = facts.internals;
+    if (b?.advancers != null && b?.decliners != null) {
+      lines.push(`Breadth finished ${b.advancers} advancing to ${b.decliners} declining.`);
+    }
+    const leader = facts.sectorLeaders[0];
+    const laggard = facts.sectorLaggards[0];
+    if (leader?.pctChange != null && laggard?.pctChange != null) {
+      lines.push(
+        `${leader.sector} led sectors at ${leader.pctChange >= 0 ? "+" : ""}${leader.pctChange.toFixed(2)}%, ` +
+          `${laggard.sector} lagged at ${laggard.pctChange >= 0 ? "+" : ""}${laggard.pctChange.toFixed(2)}%.`,
+      );
+    }
+    if (facts.sentiment?.value != null) {
+      lines.push(`Market temperature reads ${facts.sentiment.value}/100 (${facts.sentiment.label ?? "—"}).`);
+    }
+    return lines.slice(0, 4);
   }
 
   private factualSummary(facts: RecapFacts): string {
