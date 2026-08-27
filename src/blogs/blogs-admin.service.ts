@@ -62,6 +62,8 @@ export interface BlogAdminView {
   /** Storage URL of the source PDF, when the post was published from one. */
   pdfUrl: string | null;
   pdfName: string | null;
+  pdfPages: number | null;
+  pdfAspect: number | null;
 }
 
 /** Request body for POST/PATCH — every field optional at the wire, validated below. */
@@ -79,6 +81,11 @@ export interface BlogAdminBody {
    *  in Firestore (a research PDF is far past the 1 MB document cap). */
   pdfDataUri?: string;
   pdfName?: string;
+  /** Page count and page shape, read from the file at import. The post page
+   *  sizes its embed to the WHOLE document from these, so the reader scrolls
+   *  the page instead of a small scrolling box. */
+  pdfPages?: unknown;
+  pdfAspect?: unknown;
 }
 
 const MONTHS = [
@@ -341,6 +348,8 @@ export class BlogsAdminService {
       date: this.formatDate(data.publishedAt),
       pdfUrl: typeof data.pdfUrl === "string" ? data.pdfUrl : null,
       pdfName: typeof data.pdfName === "string" ? data.pdfName : null,
+      pdfPages: typeof data.pdfPages === "number" ? data.pdfPages : null,
+      pdfAspect: typeof data.pdfAspect === "number" ? data.pdfAspect : null,
     };
   }
 
@@ -399,6 +408,8 @@ export class BlogsAdminService {
       // Source PDF, when the article was published from one.
       pdfUrl,
       pdfName: pdfUrl && typeof body.pdfName === "string" ? body.pdfName : null,
+      pdfPages: pdfUrl && Number.isFinite(Number(body.pdfPages)) ? Number(body.pdfPages) : null,
+      pdfAspect: pdfUrl && Number.isFinite(Number(body.pdfAspect)) ? Number(body.pdfAspect) : null,
     });
 
     // Claim the slug index doc so the website's admin uniqueness check agrees.
@@ -446,6 +457,8 @@ export class BlogsAdminService {
       if (url) {
         update.pdfUrl = url;
         update.pdfName = typeof body.pdfName === "string" ? body.pdfName : null;
+        update.pdfPages = Number.isFinite(Number(body.pdfPages)) ? Number(body.pdfPages) : null;
+        update.pdfAspect = Number.isFinite(Number(body.pdfAspect)) ? Number(body.pdfAspect) : null;
       }
     }
     if (body.author !== undefined) update.author = String(body.author ?? "");
