@@ -36,10 +36,6 @@ interface SseEvent {
 const HEARTBEAT_MS = 20_000;
 
 @Controller("live")
-// Market data is the product. These read surfaces answered anonymous
-// callers, returning full datasets — the policy lived only in a Firestore
-// rules file that nothing enforces, because no client talks to Firestore.
-@UseGuards(FirebaseAuthGuard)
 export class TapeController {
   constructor(private readonly tape: TapeService) {}
 
@@ -52,6 +48,10 @@ export class TapeController {
    *   event: heartbeat  every 20s, so a silent market is distinguishable from
    *                     a dead connection
    */
+  // Deliberately unauthenticated: EventSource cannot set request headers, so
+  // an SSE stream can never carry a bearer token. Guarding it did not secure
+  // anything — it just made the stream fail and the client fall back to
+  // polling /live/tape, which is guarded and does carry a token.
   @Sse("tape/stream")
   stream(): Observable<SseEvent> {
     // Ref counting is tied to the CLIENT's subscription, not to this handler
@@ -93,6 +93,8 @@ export class TapeController {
    * upstream call — TapeService.currentFrame() refuses to refetch inside a
    * refresh window.
    */
+  // Guarded: fetched through the API client, which attaches the token.
+  @UseGuards(FirebaseAuthGuard)
   @Get("tape")
   @Header(
     "Cache-Control",
