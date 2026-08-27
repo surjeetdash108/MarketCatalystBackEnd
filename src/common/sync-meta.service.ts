@@ -7,6 +7,17 @@ export interface SyncResult {
   ok: boolean;
   count?: number;
   error?: string;
+  /**
+   * Firestore documents READ by this run.
+   *
+   * Reads are the largest line on the bill and nothing attributes them: a
+   * 30-day measurement found ~75M reads of which only ~28% could be traced to
+   * a specific job, by hand, from bar limits times universe size. Firestore's
+   * own metrics carry no collection or caller label, so without this the
+   * question "which job costs the money" has no answer and optimisation is
+   * guesswork. Jobs that read in bulk should report it.
+   */
+  docsRead?: number;
 }
 
 @Injectable()
@@ -42,6 +53,7 @@ export class SyncMetaService {
       lastSyncedAt: now,
       lastStatus: result.ok ? "ok" : "error",
       lastCount: result.count ?? null,
+      lastDocsRead: result.docsRead ?? null,
       ...(result.ok
         ? { lastSuccessAt: now, lastSuccessCount: result.count ?? null }
         : { lastFailedAt: now, lastError: result.error ?? null }),
