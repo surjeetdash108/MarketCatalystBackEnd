@@ -59,6 +59,9 @@ export interface BlogAdminView {
   html: string;
   status: "Published" | "Draft";
   date: string;
+  /** Storage URL of the source PDF, when the post was published from one. */
+  pdfUrl: string | null;
+  pdfName: string | null;
 }
 
 /** Request body for POST/PATCH — every field optional at the wire, validated below. */
@@ -72,6 +75,10 @@ export interface BlogAdminBody {
   read?: string;
   html?: string;
   status?: string;
+  /** Raw source PDF as a data URI — hoisted to Storage on write, never stored
+   *  in Firestore (a research PDF is far past the 1 MB document cap). */
+  pdfDataUri?: string;
+  pdfName?: string;
 }
 
 const MONTHS = [
@@ -116,6 +123,47 @@ export class BlogsAdminService {
   private htmlToMarkdown(html: string): string {
     if (!html) return "";
     return this.turndown.turndown(html);
+  }
+
+  /**
+   * Stores the source PDF in Storage and returns its download URL.
+   *
+   * A research PDF is the DESIGNED artifact — its tables, KPI cards and layout
+   * exist only in the file. The console's importer reads the text with pdf.js
+   * and groups it by Y position, which emits one <p> per visual line: a table
+   * row collapses into a paragraph and a wrapped cell into the next one, so the
+   * structure cannot survive. Keeping the original alongside the extracted text
+   * is what lets the reader see the document as published while the text stays
+   * available for search engines and previews.
+   *
+   * Same tokenised-URL pattern as externalizeImages below.
+   */
+  private async storePdf(
+    dataUri: string,
+    blogId: string,
+  ): Promise<string | null> {
+    const m = /^data:application\/pdf;base64,([A-Za-z0-9+/=]+)$/.exec(dataUri.trim());
+    if (!m) return null;
+    const buf = Buffer.from(m[1], "base64");
+    const token = randomUUID();
+    const path = `blog-pdfs/${blogId}/${randomUUID()}.pdf`;
+    try {
+      await this.firebase.bucket.file(path).save(buf, {
+        contentType: "application/pdf",
+        metadata: {
+          // inline so a browser renders it rather than forcing a download —
+          // the post page embeds this URL directly.
+          contentDisposition: "inline",
+          metadata: { firebaseStorageDownloadTokens: token },
+        },
+        resumable: false,
+      });
+    } catch (err) {
+      throw new Error(`pdf_upload_failed: ${path}: ${(err as Error).message}`);
+    }
+    return `https://firebasestorage.googleapis.com/v0/b/market-catalyst-502415.firebasestorage.app/o/${encodeURIComponent(
+      path,
+    )}?alt=media&token=${token}`;
   }
 
   /**
@@ -291,6 +339,8 @@ export class BlogsAdminService {
       html: this.markdownToHtml(data.content ?? ""),
       status: data.status === "published" ? "Published" : "Draft",
       date: this.formatDate(data.publishedAt),
+      pdfUrl: typeof data.pdfUrl === "string" ? data.pdfUrl : null,
+      pdfName: typeof data.pdfName === "string" ? data.pdfName : null,
     };
   }
 
@@ -315,6 +365,10 @@ export class BlogsAdminService {
       this.htmlToMarkdown(typeof body.html === "string" ? body.html : ""),
       ref.id,
     );
+
+    const pdfUrl = typeof body.pdfDataUri === "string" && body.pdfDataUri
+      ? await this.storePdf(body.pdfDataUri, ref.id)
+      : null;
 
     await ref.set({
       title,
@@ -342,6 +396,9 @@ export class BlogsAdminService {
       author: typeof body.author === "string" ? body.author : "",
       kicker: kick,
       read: typeof body.read === "string" ? body.read : "",
+      // Source PDF, when the article was published from one.
+      pdfUrl,
+      pdfName: pdfUrl && typeof body.pdfName === "string" ? body.pdfName : null,
     });
 
     // Claim the slug index doc so the website's admin uniqueness check agrees.
@@ -383,6 +440,13 @@ export class BlogsAdminService {
       const kick = String(body.kick ?? "");
       update.categories = kick ? [kick] : [];
       update.kicker = kick;
+    }
+    if (typeof body.pdfDataUri === "string" && body.pdfDataUri) {
+      const url = await this.storePdf(body.pdfDataUri, id);
+      if (url) {
+        update.pdfUrl = url;
+        update.pdfName = typeof body.pdfName === "string" ? body.pdfName : null;
+      }
     }
     if (body.author !== undefined) update.author = String(body.author ?? "");
     if (body.read !== undefined) update.read = String(body.read ?? "");
