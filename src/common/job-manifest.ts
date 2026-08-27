@@ -69,6 +69,7 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "news", trigger: "scheduler", schedules: ["*/10 * * * *"], note: "every 10 minutes, all week — news does not keep market hours" },
   { name: "options-chains", trigger: "scheduler", schedules: ["0 19 * * 1-5"] },
   { name: "recaps", trigger: "scheduler", schedules: ["45 18 * * 1-5"] },
+  { name: "recap-blog", trigger: "scheduler", schedules: ["0 19 * * 1-5"], note: "reads the recaps snapshot, so it trails it by 15m; publishes a Draft blog post" },
   { name: "sectors", trigger: "scheduler", schedules: ["0 18 * * 1-5"] },
   { name: "ticker-universe", trigger: "scheduler", schedules: ["0 8 * * 1-5"] },
   { name: "premarket", trigger: "scheduler", schedules: ["0 8 * * 1-5"], note: "Cloud Run JOB premarket-job, not an HTTP POST — it orchestrates the phases below" },

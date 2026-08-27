@@ -6,6 +6,11 @@ import { FredModule } from "../vendors/fred/fred.module";
 import { FmpModule } from "../vendors/fmp/fmp.module";
 import { PolygonModule } from "../vendors/polygon/polygon.module";
 import { SecEdgarModule } from "../vendors/sec-edgar/sec-edgar.module";
+import { GroqModule } from "../vendors/groq/groq.module";
+import { OpenRouterModule } from "../vendors/openrouter/openrouter.module";
+import { LlmGatewayService } from "../vendors/llm-gateway.service";
+import { BlogsModule } from "../blogs/blogs.module";
+import { RecapBlogJob } from "./recap-blog.job";
 import { AnalystActionsJob } from "./analyst-actions.job";
 import { CompaniesJob } from "./companies.job";
 import { DividendsJob } from "./dividends.job";
@@ -47,6 +52,10 @@ import { LiveModule } from "../live/live.module";
 @Module({
   imports: [
     PolygonModule,
+    // The daily recap job writes a blog post and asks an LLM for its prose.
+    BlogsModule,
+    GroqModule,
+    OpenRouterModule,
     FredModule,
     FmpModule,
     SecEdgarModule,
@@ -57,6 +66,8 @@ import { LiveModule } from "../live/live.module";
   ],
   controllers: [SyncController],
   providers: [
+    LlmGatewayService,
+    RecapBlogJob,
     EarningsActualsJob,
     TickerPeriodAnalysisJob,
     MarketMoversJob,
