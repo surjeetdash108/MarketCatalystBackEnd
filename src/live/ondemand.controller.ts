@@ -142,6 +142,7 @@ private readonly ondemand: OnDemandService,
    * data, so no auth gate.
    */
   @Get("scan/biggest-pct")
+  @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "public, max-age=300")
   async scanBiggestPct(@Req() req: Request, @Res() res: Response) {
     sendWithEtag(req, res, await this.marketScan.getBiggestPct());
@@ -152,6 +153,7 @@ private readonly ondemand: OnDemandService,
    * sector-categorised. Same on-demand + cache pattern; 1h cutoff.
    */
   @Get("scan/most-active")
+  @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "public, max-age=300")
   async scanMostActive(@Req() req: Request, @Res() res: Response) {
     sendWithEtag(req, res, await this.marketScan.getMostActive());
@@ -165,6 +167,7 @@ private readonly ondemand: OnDemandService,
    * everyone after reads this cached copy. See MarketGlanceService.
    */
   @Get("glance/weekly")
+  @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "public, max-age=60")
   async glanceWeekly(@Req() req: Request, @Res() res: Response) {
     sendWithEtag(req, res, await this.marketGlance.getWeekly());
@@ -172,6 +175,7 @@ private readonly ondemand: OnDemandService,
 
   /** "Month at a glance" — same, over calendar months (24h cutoff). */
   @Get("glance/monthly")
+  @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "public, max-age=60")
   async glanceMonthly(@Req() req: Request, @Res() res: Response) {
     sendWithEtag(req, res, await this.marketGlance.getMonthly());
@@ -194,6 +198,7 @@ private readonly ondemand: OnDemandService,
   }
 
   @Get("bars")
+  @UseGuards(FirebaseAuthGuard)
   @Header(
     "Cache-Control",
     "public, max-age=60, s-maxage=60, stale-while-revalidate=120",
@@ -216,6 +221,7 @@ private readonly ondemand: OnDemandService,
   }
 
   @Get("company")
+  @UseGuards(FirebaseAuthGuard)
   @Header(
     "Cache-Control",
     "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
@@ -234,6 +240,7 @@ private readonly ondemand: OnDemandService,
   }
 
   @Get("quotes")
+  @UseGuards(FirebaseAuthGuard)
   // Matches /live/snapshot exactly. Both now serve the SAME shared-cache entries,
   // so a longer TTL here would re-introduce the very drift this unification
   // removes: an edge could hand out a 60s-old quote beside a 5s-old heatmap tile
@@ -262,6 +269,9 @@ private readonly ondemand: OnDemandService,
   }
 
   /** Company logo bytes proxied from Polygon branding (key stays server-side). */
+  // Deliberately unauthenticated: this is loaded as an <img src>, and an
+  // image request cannot carry an Authorization header. It proxies the
+  // vendor so the API key stays server-side; it returns an image, not data.
   @Get("logo")
   async logo(
     @Query("ticker") ticker: string | undefined,
@@ -290,6 +300,7 @@ private readonly ondemand: OnDemandService,
   }
 
   @Get("dividend-history")
+  @UseGuards(FirebaseAuthGuard)
   @Header(
     "Cache-Control",
     "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
@@ -308,6 +319,7 @@ private readonly ondemand: OnDemandService,
   }
 
   @Get("splits")
+  @UseGuards(FirebaseAuthGuard)
   @Header(
     "Cache-Control",
     "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
@@ -326,6 +338,7 @@ private readonly ondemand: OnDemandService,
   }
 
   @Get("financials")
+  @UseGuards(FirebaseAuthGuard)
   @Header(
     "Cache-Control",
     "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
@@ -344,6 +357,7 @@ private readonly ondemand: OnDemandService,
   }
 
   @Get("news")
+  @UseGuards(FirebaseAuthGuard)
   @Header(
     "Cache-Control",
     "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
@@ -361,6 +375,7 @@ private readonly ondemand: OnDemandService,
   }
 
   @Get("earnings-transcript")
+  @UseGuards(FirebaseAuthGuard)
   @Header(
     "Cache-Control",
     "public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400",
@@ -379,6 +394,7 @@ private readonly ondemand: OnDemandService,
   }
 
   @Get("options-chain")
+  @UseGuards(FirebaseAuthGuard)
   @Header(
     "Cache-Control",
     "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
@@ -402,6 +418,7 @@ private readonly ondemand: OnDemandService,
   }
 
   @Get("search")
+  @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "public, max-age=3600, s-maxage=3600")
   async find(
     @Query("q") q: string | undefined,
@@ -416,6 +433,7 @@ private readonly ondemand: OnDemandService,
   }
 
   @Post("searched-ticker")
+  @UseGuards(FirebaseAuthGuard)
   async recordSearchedTicker(@Body("ticker") ticker: string | undefined) {
     const sym = (ticker ?? "").toUpperCase().trim();
     if (!TICKER_RE.test(sym))
@@ -425,6 +443,7 @@ private readonly ondemand: OnDemandService,
   }
 
   @Get("most-searched-tickers")
+  @UseGuards(FirebaseAuthGuard)
   @Header(
     "Cache-Control",
     "public, max-age=60, s-maxage=60, stale-while-revalidate=120",
@@ -441,6 +460,7 @@ private readonly ondemand: OnDemandService,
 
   /** Cache/coalescing observability, like /live/stats for the snapshot path. */
   @Get("ondemand-stats")
+  @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "no-store")
   stats() {
     return { ...this.ondemand.stats, search: this.search.stats };
