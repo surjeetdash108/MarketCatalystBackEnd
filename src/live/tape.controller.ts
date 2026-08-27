@@ -1,7 +1,8 @@
-import { Controller, Get, Header, Req, Res, Sse } from "@nestjs/common";
+import { Controller, Get, Header, Req, Res, Sse, UseGuards } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { Observable, interval, map, merge } from "rxjs";
 import { TapeService, type TapeFrame } from "./tape.service";
+import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
 /**
  * Header ticker tape, streamed from our origin.
@@ -35,6 +36,10 @@ interface SseEvent {
 const HEARTBEAT_MS = 20_000;
 
 @Controller("live")
+// Market data is the product. These read surfaces answered anonymous
+// callers, returning full datasets — the policy lived only in a Firestore
+// rules file that nothing enforces, because no client talks to Firestore.
+@UseGuards(FirebaseAuthGuard)
 export class TapeController {
   constructor(private readonly tape: TapeService) {}
 

@@ -1,6 +1,7 @@
-import { Controller, Get, Header } from "@nestjs/common";
+import { Controller, Get, Header, UseGuards } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { MarketDataService } from "./market-data.service";
+import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
 // A bounded, sorted view of `news` — NOT routed through CachedCollectionsService's
 // allow-list, since that does a full unfiltered collection().get() per entry;
@@ -31,6 +32,10 @@ const NEWS_STALE_MS = 15 * 60_000;
  * cache-aside fill against the same `news` collection, scoped to one ticker.
  */
 @Controller("market-data")
+// Market data is the product. These read surfaces answered anonymous
+// callers, returning full datasets — the policy lived only in a Firestore
+// rules file that nothing enforces, because no client talks to Firestore.
+@UseGuards(FirebaseAuthGuard)
 export class NewsController {
   private cache: { data: Record<string, unknown>[]; at: number } | null = null;
 

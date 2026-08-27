@@ -20,7 +20,6 @@ import { TapeController } from "./tape.controller";
 import { TapeService } from "./tape.service";
 import { CachedCollectionsController } from "./cached-collections.controller";
 import { CachedCollectionsService } from "./cached-collections.service";
-import { WhoamiController } from "./whoami.controller";
 import { OnDemandController } from "./ondemand.controller";
 import { OnDemandService } from "./ondemand.service";
 import { MarketScanService } from "./market-scan.service";
@@ -53,7 +52,6 @@ import { SearchedTickersService } from "./searched-tickers.service";
     SnapshotController,
     TapeController,
     CachedCollectionsController,
-    WhoamiController,
     OnDemandController,
   ],
   providers: [

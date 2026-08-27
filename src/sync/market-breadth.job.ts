@@ -129,6 +129,13 @@ export class MarketBreadthJob implements OnModuleInit {
             advancers: a.adv,
             decliners: a.dec,
             unchanged: a.unch,
+            // How much of the universe actually had a bar for this session.
+            // Daily bars arrive late and incompletely, so a day's breadth is
+            // provisional until most of the universe has reported — consumers
+            // must be able to tell a settled day from one still filling in
+            // rather than publishing 4-vs-14 as though it were final.
+            covered: a.adv + a.dec + a.unch,
+            universe: TICKER_UNIVERSE.length,
             netAdvancers: a.adv - a.dec,
             upVolume: a.upVol,
             downVolume: a.downVol,

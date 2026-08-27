@@ -1,6 +1,7 @@
-import { Controller, Get, Header } from "@nestjs/common";
+import { Controller, Get, Header, UseGuards } from "@nestjs/common";
 import { CachedCollectionsService } from "../live/cached-collections.service";
 import { MarketDataService } from "./market-data.service";
+import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
 /**
  * GET /market-data/analyst-actions — backs the Analyst Actions screen's live
@@ -8,6 +9,10 @@ import { MarketDataService } from "./market-data.service";
  * `analyst-actions` sync job on demand when stale/empty per decision #3a.
  */
 @Controller("market-data")
+// Market data is the product. These read surfaces answered anonymous
+// callers, returning full datasets — the policy lived only in a Firestore
+// rules file that nothing enforces, because no client talks to Firestore.
+@UseGuards(FirebaseAuthGuard)
 export class AnalystActionsController {
   constructor(
     private readonly marketData: MarketDataService,

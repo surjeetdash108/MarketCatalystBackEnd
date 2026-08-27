@@ -28,6 +28,9 @@ const JOB_NAME = "recap-blog";
 const CRON = "0 19 * * 1-5";
 /** Per provider. Generous because this runs in a job, not behind the 60s Hosting rewrite. */
 const LLM_TIMEOUT_MS = 90_000;
+/** Matches recaps.job — a session's breadth is provisional until this much of
+ *  the universe has reported. */
+const BREADTH_MIN_COVERAGE = 0.5;
 
 @Injectable()
 export class RecapBlogJob implements OnModuleInit {
@@ -114,6 +117,30 @@ export class RecapBlogJob implements OnModuleInit {
     if (!doc) return null;
     const d = doc.data();
 
+    /**
+     * Breadth is re-read live rather than taken from the frozen snapshot, and
+     * only used once enough of the universe has a bar for the session. Daily
+     * bars arrive late: a snapshot written at 18:45 ET can hold a handful of
+     * tickers, and one published "4 advancing, 14 declining" for a session that
+     * finished 91 to 89. Below the threshold the recap omits breadth rather
+     * than stating something that will be revised.
+     */
+    const breadthDoc = await db
+      .collection("market_breadth")
+      .doc(String(d.date ?? doc.id))
+      .get()
+      .catch(() => null);
+    const b = breadthDoc?.exists ? breadthDoc.data() : null;
+    const covered = typeof b?.covered === "number" ? b.covered : null;
+    const universe = typeof b?.universe === "number" ? b.universe : null;
+    const settled =
+      covered != null && universe ? covered / universe >= BREADTH_MIN_COVERAGE : false;
+    if (b && !settled) {
+      this.logger.warn(
+        `breadth for ${d.date} omitted — coverage ${covered ?? "unknown"}/${universe ?? "?"}`,
+      );
+    }
+
     const sentimentDoc = await db
       .collection("market_sentiment")
       .doc("fear_greed")
@@ -128,7 +155,9 @@ export class RecapBlogJob implements OnModuleInit {
       topLosers: Array.isArray(d.topLosers) ? d.topLosers : [],
       sectorLeaders: Array.isArray(d.sectorLeaders) ? d.sectorLeaders : [],
       sectorLaggards: Array.isArray(d.sectorLaggards) ? d.sectorLaggards : [],
-      internals: d.internals ?? null,
+      // Live value when settled; otherwise nothing — never the snapshot's
+      // possibly-partial copy.
+      internals: settled ? (b as RecapFacts["internals"]) : null,
       sentiment: s ? { value: s.value ?? null, label: s.label ?? null } : null,
     };
   }
@@ -160,6 +189,9 @@ export class RecapBlogJob implements OnModuleInit {
       "You are the market editor for MarketCatalyst, writing the end-of-day recap. " +
       "You are given the session's real figures. Write ONLY prose about them. " +
       "Never state a price, level, percentage or date that is not in the data given — " +
+      "and for any series marked isProxy, describe DIRECTION ONLY, never the level: " +
+      "it tracks a proxy instrument, so its number is not the index it is named after " +
+      "(write \"volatility eased\", never \"the VIX fell below 18\"). " +
       "if you do not know why something moved, say so plainly. " +
       "No hype, no advice, no predictions presented as fact. " +
       "Reply with JSON only, no code fence, matching exactly: " +

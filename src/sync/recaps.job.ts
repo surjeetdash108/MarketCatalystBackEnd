@@ -23,6 +23,13 @@ import { isoDate } from "../common/date.util";
 
 const JOB_NAME = "recaps";
 const TOP_N = 6;
+/**
+ * Fraction of the ticker universe that must have a bar for a session before its
+ * breadth is reported. Set from observed behaviour: a settled session covers
+ * ~75% of the universe, while a session still filling in sits in single digits.
+ * Anything between is provisional and moves, so it is not published.
+ */
+const BREADTH_MIN_COVERAGE = 0.5;
 
 
 @Injectable()
@@ -127,9 +134,31 @@ export class RecapsJob implements OnModuleInit {
       const breadthId = breadthSnap.docs
         .map((d) => d.id)
         .sort((a, b) => b.localeCompare(a))[0];
-      const internals = breadth
+      /**
+       * Breadth is only reported once enough of the universe has a bar for the
+       * session. Daily bars land late and incompletely: a session observed at
+       * 18:45 ET routinely has a handful of tickers in, and a recap built from
+       * that published "4 advancing, 14 declining — decidedly negative" for a
+       * day that finished 91 to 89. Below the threshold internals are omitted
+       * entirely, so the recap says nothing about breadth rather than saying
+       * something wrong; a later run fills it in once the data settles.
+       */
+      const covered = this.num(breadth?.covered);
+      const universe = this.num(breadth?.universe);
+      const coverage = covered != null && universe ? covered / universe : null;
+      const breadthSettled = coverage != null && coverage >= BREADTH_MIN_COVERAGE;
+      if (breadth && !breadthSettled) {
+        this.logger.warn(
+          `breadth ${breadthId} omitted — coverage ${covered ?? "unknown"}/${universe ?? "?"} ` +
+            `below ${Math.round(BREADTH_MIN_COVERAGE * 100)}%`,
+        );
+      }
+
+      const internals = breadth && breadthSettled
         ? {
             date: breadthId,
+            covered,
+            universe,
             advancers: this.num(breadth.advancers),
             decliners: this.num(breadth.decliners),
             netAdvancers: this.num(breadth.netAdvancers),
