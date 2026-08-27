@@ -54,6 +54,17 @@ export type SourceKind = "pdf" | "docx";
  * An allowlist rather than a sniff: this decides what gets written into
  * Storage, so it should only ever admit the two the reader can render.
  */
+/**
+ * Largest source document accepted, matching the console's own check.
+ *
+ * Enforced here as well because the console's limit is a courtesy to the admin,
+ * not a control: this is the side that decodes the base64 and holds the whole
+ * buffer in memory before writing it to Storage. Express caps the JSON body at
+ * 32 MB, and base64 inflates a file by 4/3 — 20 MB arrives as ~26.7 MB — so a
+ * larger file would be refused by the body parser with a much blunter error.
+ */
+const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
+
 const SOURCE_KINDS: Record<string, { id: SourceKind; ext: string; mime: string }> = {
   "application/pdf": { id: "pdf", ext: "pdf", mime: "application/pdf" },
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
@@ -184,6 +195,12 @@ export class BlogsAdminService {
     if (!kind) return null;
 
     const buf = Buffer.from(m[2], "base64");
+    if (buf.byteLength > MAX_SOURCE_BYTES) {
+      throw new Error(
+        `source_too_large: ${(buf.byteLength / 1024 / 1024).toFixed(1)} MB exceeds the ` +
+          `${MAX_SOURCE_BYTES / 1024 / 1024} MB limit`,
+      );
+    }
     const token = randomUUID();
     const path = `blog-docs/${blogId}/${randomUUID()}.${kind.ext}`;
     try {
