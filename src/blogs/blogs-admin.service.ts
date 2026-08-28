@@ -50,6 +50,42 @@ const TYPE_TO_ZONE: Record<BlogType, Zone> = {
 export type SourceKind = "pdf" | "docx";
 
 /**
+ * How a post's body is authored, and therefore how the reader's page renders it.
+ *
+ * SEPARATE from `type`, which is the board zone (educational | recap | research)
+ * and decides WHERE a post appears, not what it is. The two were nearly
+ * conflated; keeping them apart means the existing posts need no migration.
+ *
+ *  "pdf" / "doc" — a source document is the article; the page draws the file.
+ *  "html"        — authored markup, rendered with its own saved CSS.
+ *  "text"        — prose/markdown, rendered with the site's own styling.
+ */
+export type BlogFormat = "html" | "text" | "pdf" | "doc";
+
+const BLOG_FORMATS = new Set<BlogFormat>(["html", "text", "pdf", "doc"]);
+
+/**
+ * Pulls <style> blocks out of authored HTML into their own field.
+ *
+ * The body is sanitised before storage and `style` is not an allowed tag, so
+ * CSS left inline would simply be deleted and the post would render unstyled.
+ * Extracting it first keeps the design, and keeps it somewhere the reader's
+ * page can scope before applying — see the Website's scopeCss.
+ */
+export function extractCss(html: string): { html: string; css: string[] } {
+  const css: string[] = [];
+  const stripped = html.replace(
+    /<style\b[^>]*>([\s\S]*?)<\/style>/gi,
+    (_m, body: string) => {
+      const t = String(body).trim();
+      if (t) css.push(t);
+      return "";
+    },
+  );
+  return { html: stripped, css };
+}
+
+/**
  * Accepted upload types, keyed by the MIME the browser puts in the data URI.
  * An allowlist rather than a sniff: this decides what gets written into
  * Storage, so it should only ever admit the two the reader can render.
@@ -101,6 +137,12 @@ export interface BlogAdminView {
   pdfAspect: number | null;
   /** Absent on posts written before Word support, which were all PDFs. */
   sourceKind: SourceKind | null;
+  /** How the body is authored — see BlogFormat. */
+  format: BlogFormat;
+  /** Stylesheets for an html post, already split out of the body. */
+  css: string[];
+  /** Hero image shown above the article. */
+  heroImageUrl: string | null;
 }
 
 /** Request body for POST/PATCH — every field optional at the wire, validated below. */
@@ -123,6 +165,9 @@ export interface BlogAdminBody {
    *  the page instead of a small scrolling box. */
   pdfPages?: unknown;
   pdfAspect?: unknown;
+  format?: unknown;
+  css?: unknown;
+  heroImageUrl?: unknown;
 }
 
 const MONTHS = [
@@ -149,6 +194,40 @@ export class BlogsAdminService {
   });
 
   constructor(private readonly firebase: FirebaseAdminService) {}
+
+  /**
+   * Format, body and stylesheets, resolved together.
+   *
+   * They are interdependent: only an html post keeps CSS, and only an html post
+   * needs it split out of the body. Deciding them in one place stops create and
+   * update drifting apart on a rule that has to hold for both.
+   */
+  private resolveFormat(body: BlogAdminBody, html: string): {
+    format: BlogFormat;
+    html: string;
+    css: string[];
+  } {
+    /* A document names its own format, from the media type in the data URI —
+       "pdf" for everything with a file attached would label a Word import as a
+       PDF, and the console would then open it in the wrong editor. */
+    const fromDoc =
+      typeof body.pdfDataUri === "string" && body.pdfDataUri
+        ? SOURCE_KINDS[body.pdfDataUri.slice(5, body.pdfDataUri.indexOf(";"))]?.id === "docx"
+          ? "doc"
+          : "pdf"
+        : null;
+    const format: BlogFormat = BLOG_FORMATS.has(body.format as BlogFormat)
+      ? (body.format as BlogFormat)
+      : (fromDoc ?? "text");
+    if (format !== "html") return { format, html, css: [] };
+
+    // Stylesheets sent by the client, plus any still embedded in the body.
+    const sent = Array.isArray(body.css)
+      ? (body.css as unknown[]).filter((c): c is string => typeof c === "string" && !!c.trim())
+      : [];
+    const pulled = extractCss(html);
+    return { format, html: pulled.html, css: [...sent, ...pulled.css] };
+  }
 
   private get col() {
     return this.firebase.firestore.collection(POSTS);
@@ -381,6 +460,16 @@ export class BlogsAdminService {
   }
 
   private toView(id: string, data: FirebaseFirestore.DocumentData): BlogAdminView {
+    // An html post already stores HTML; every other format stores Markdown.
+    // Running the Markdown parser over authored markup does not leave it alone
+    // — a block indented four spaces becomes a code block, and text between
+    // tags gets wrapped in paragraphs — so the console would load back a
+    // mangled copy of the document and re-save it.
+    const storedFormat = BLOG_FORMATS.has(data.format as BlogFormat)
+      ? (data.format as BlogFormat)
+      : typeof data.pdfUrl === "string"
+        ? data.sourceKind === "docx" ? "doc" : "pdf"
+        : "text";
     const type = (data.type as BlogType) ?? "educational";
     const zone = TYPE_TO_ZONE[type] ?? "edu";
     const categories: string[] = Array.isArray(data.categories)
@@ -395,7 +484,10 @@ export class BlogsAdminService {
       dek: data.excerpt ?? "",
       author: data.author ?? "",
       read: data.read ?? "",
-      html: this.markdownToHtml(data.content ?? ""),
+      html:
+        storedFormat === "html"
+          ? (data.content ?? "")
+          : this.markdownToHtml(data.content ?? ""),
       status: data.status === "published" ? "Published" : "Draft",
       date: this.formatDate(data.publishedAt),
       pdfUrl: typeof data.pdfUrl === "string" ? data.pdfUrl : null,
@@ -411,6 +503,14 @@ export class BlogsAdminService {
           : typeof data.pdfUrl === "string"
             ? "pdf"
             : null,
+      // Posts written before formats existed carry none. A stored source
+      // document tells us what they are; anything else is prose, which is what
+      // `content` has always held.
+      format: storedFormat,
+      css: Array.isArray(data.css)
+        ? (data.css as unknown[]).filter((c): c is string => typeof c === "string")
+        : [],
+      heroImageUrl: typeof data.coverImageUrl === "string" ? data.coverImageUrl : null,
     };
   }
 
@@ -429,10 +529,14 @@ export class BlogsAdminService {
     const ref = this.col.doc();
     const slug = await this.generateUniqueSlug(title);
 
-    // Convert to Markdown, then hoist any embedded base64 images out to Storage
-    // so the stored `content` never contains a data URI (Firestore 1 MB cap).
+    // An html post stores its markup AS WRITTEN. Running it through turndown —
+    // which is right for every other format, because `content` is Markdown —
+    // would flatten exactly the structure the author chose the format for.
+    // Either way, embedded base64 images are hoisted to Storage so the stored
+    // content never carries a data URI (Firestore's 1 MB cap).
+    const resolved = this.resolveFormat(body, typeof body.html === "string" ? body.html : "");
     const content = await this.externalizeImages(
-      this.htmlToMarkdown(typeof body.html === "string" ? body.html : ""),
+      resolved.format === "html" ? resolved.html : this.htmlToMarkdown(resolved.html),
       ref.id,
     );
 
@@ -453,7 +557,12 @@ export class BlogsAdminService {
       editorId: "console-admin",
       categories: kick ? [kick] : [],
       tags: [],
-      coverImageUrl: null,
+      coverImageUrl:
+        typeof body.heroImageUrl === "string" && body.heroImageUrl.trim()
+          ? body.heroImageUrl.trim()
+          : null,
+      format: resolved.format,
+      css: resolved.css,
       seo: {
         metaTitle: null,
         metaDescription: null,
@@ -504,11 +613,24 @@ export class BlogsAdminService {
     if (zone !== undefined) update.type = ZONE_TO_TYPE[zone];
     if (rank !== undefined) update.rank = rank;
     if (body.dek !== undefined) update.excerpt = String(body.dek ?? "");
-    if (body.html !== undefined) {
-      update.content = await this.externalizeImages(
-        this.htmlToMarkdown(String(body.html ?? "")),
-        id,
-      );
+    if (body.html !== undefined || body.format !== undefined || body.css !== undefined) {
+      // Same rule as create: html keeps its markup, everything else becomes
+      // Markdown. Resolved together because the format decides both.
+      const r = this.resolveFormat(body, String(body.html ?? ""));
+      update.format = r.format;
+      update.css = r.css;
+      if (body.html !== undefined) {
+        update.content = await this.externalizeImages(
+          r.format === "html" ? r.html : this.htmlToMarkdown(r.html),
+          id,
+        );
+      }
+    }
+    if (body.heroImageUrl !== undefined) {
+      update.coverImageUrl =
+        typeof body.heroImageUrl === "string" && body.heroImageUrl.trim()
+          ? body.heroImageUrl.trim()
+          : null;
     }
     if (body.kick !== undefined) {
       const kick = String(body.kick ?? "");
