@@ -56,7 +56,20 @@ const MAX_BATCH = 150;
  * leaves weekdays with only the day's own reporters to top up.
  */
 const WEEKDAY_LOOKBACK_DAYS = 4;
-const WEEKEND_LOOKBACK_DAYS = 100; // a full reporting quarter
+const WEEKEND_LOOKBACK_DAYS = 100; // superseded on weekends by the quarter window
+/**
+ * A report filed this many days either side of a calendar earnings date is
+ * taken to BE that report. After-close reporters file the next morning, and
+ * vendors and the SEC occasionally disagree by a day.
+ */
+const MATCH_WINDOW_DAYS = 3;
+/**
+ * For a company that has not reported yet, "we already have its guidance"
+ * means a filing within roughly the last quarter — the guidance it issued at
+ * its previous report, which is the forward view for the one coming.
+ */
+const PRIOR_FILING_DAYS = 120;
+
 /**
  * How far FORWARD the weekend sweep also looks.
  *
@@ -92,6 +105,20 @@ function sessionFromAcceptance(
   return "Intraday";
 }
 
+
+/**
+ * [start of this calendar quarter, end of the next one] as ISO dates.
+ * Anchored on quarter boundaries so the weekend sweep aims at a fixed target
+ * rather than a window that slides a day every run.
+ */
+function twoQuarterWindow(now: Date): [string, string] {
+  const y = now.getUTCFullYear();
+  const q = Math.floor(now.getUTCMonth() / 3);
+  const start = new Date(Date.UTC(y, q * 3, 1));
+  // First day of the quarter after next, minus one day.
+  const end = new Date(Date.UTC(y, q * 3 + 6, 1) - 86_400_000);
+  return [isoDate(start), isoDate(end)];
+}
 
 @Injectable()
 export class Edgar8KJob implements OnModuleInit {
@@ -191,39 +218,70 @@ export class Edgar8KJob implements OnModuleInit {
    * two queries below.
    */
   private async reportersNeedingGuidance(): Promise<string[]> {
-    // Saturday/Sunday reach back over the whole quarter; weekdays only the
-    // last few sessions.
-    const dow = new Date().getUTCDay();
+    const now = new Date();
+    const dow = now.getUTCDay();
     const weekend = dow === 0 || dow === 6;
-    const lookback = weekend ? WEEKEND_LOOKBACK_DAYS : WEEKDAY_LOOKBACK_DAYS;
-    const since = isoDate(addDays(new Date(), -lookback));
-    // Weekends also reach into the NEXT quarter's calendar, so upcoming
-    // reporters carry the guidance from their previous report rather than a
-    // dash. Weekdays stop at today — a company that has not reported yet has
-    // nothing new to find.
-    const until = isoDate(
-      addDays(new Date(), weekend ? WEEKEND_LOOKAHEAD_DAYS : 0),
-    );
+
+    // Weekends cover THIS calendar quarter and the NEXT one, anchored on the
+    // quarter boundaries rather than a rolling window, so the target is stable
+    // all week instead of sliding a day at a time. Weekdays stay tight: the
+    // day's own reporters, nothing more.
+    const [since, until] = weekend
+      ? twoQuarterWindow(now)
+      : [isoDate(addDays(now, -WEEKDAY_LOOKBACK_DAYS)), isoDate(now)];
+
     try {
       const db = this.firebase.firestore;
+      // Announcements are read from a quarter BEFORE the window: an upcoming
+      // reporter's guidance was filed at its previous report, which sits
+      // outside the window it appears in.
+      const annSince = isoDate(addDays(new Date(since), -PRIOR_FILING_DAYS));
       const [events, have] = await Promise.all([
         db.collection("earnings_events")
           .where("date", ">=", since).where("date", "<=", until).get(),
         db.collection("earnings_announcements")
-          .where("announceDate", ">=", since).where("announceDate", "<=", until).get(),
+          .where("announceDate", ">=", annSince).where("announceDate", "<=", until).get(),
       ]);
-      // Matched at ticker level rather than ticker+date: an after-close
-      // reporter files its 8-K the next morning, so the filing date and the
-      // calendar date differ by a day for a good share of them.
-      const covered = new Set<string>();
+
+      const annByTicker = new Map<string, string[]>();
       for (const d of have.docs) {
-        const t = d.data().ticker as string | undefined;
-        if (t) covered.add(t);
+        const x = d.data();
+        const t = x.ticker as string | undefined;
+        const a = x.announceDate as string | undefined;
+        if (!t || !a) continue;
+        (annByTicker.get(t) ?? annByTicker.set(t, []).get(t)!).push(a);
       }
+
+      const today = isoDate(now);
+      const days = (a: string, b: string) =>
+        Math.abs(
+          (new Date(a + "T00:00:00Z").getTime() - new Date(b + "T00:00:00Z").getTime()) / 86_400_000,
+        );
+
       const missing = new Set<string>();
       for (const d of events.docs) {
-        const t = d.data().ticker as string | undefined;
-        if (t && !covered.has(t)) missing.add(t);
+        const x = d.data();
+        const t = x.ticker as string | undefined;
+        const date = x.date as string | undefined;
+        if (!t || !date) continue;
+        const filed = annByTicker.get(t) ?? [];
+
+        // Two different questions, depending on whether the report has happened.
+        //
+        // Already reported: do we have the filing FOR THAT REPORT? Asking only
+        // "does this ticker have any filing" was wrong — a company with a July
+        // 8-K would have counted as covered when it reported again in October,
+        // and its new guidance would never have been fetched.
+        //
+        // Not reported yet: nothing exists for it, so the question is whether
+        // we hold its PREVIOUS filing — that is the guidance to show for the
+        // quarter it is about to report on.
+        const covered =
+          date <= today
+            ? filed.some((a) => days(a, date) <= MATCH_WINDOW_DAYS)
+            : filed.some((a) => a <= today && days(today, a) <= PRIOR_FILING_DAYS);
+
+        if (!covered) missing.add(t);
       }
       // Sorted so successive runs walk the same order and converge, rather
       // than re-drawing an arbitrary slice of the same set each time.
