@@ -28,6 +28,9 @@ import { addDays, isoDate } from "../common/date.util";
 
 const JOB_NAME = "edgar-8k";
 const BATCH_SIZE = 20;
+/** How far back to look for companies that just reported. Covers a weekend and
+ *  the day-after filings of after-close reporters. */
+const REPORTER_LOOKBACK_DAYS = 4;
 const FILINGS_PER_COMPANY = 8;
 const LOOKBACK_DAYS = 120;
 
@@ -132,13 +135,70 @@ export class Edgar8KJob implements OnModuleInit {
     }
   }
 
+  /**
+   * Tickers with an earnings date in the last few sessions, from the calendar
+   * the app already syncs. These are the only companies that can have an
+   * earnings 8-K to read, so they are checked every run rather than waiting
+   * for the round-robin to come around.
+   */
+  private async recentReporters(): Promise<string[]> {
+    const since = isoDate(addDays(new Date(), -REPORTER_LOOKBACK_DAYS));
+    const today = isoDate(new Date());
+    try {
+      const snap = await this.firebase.firestore
+        .collection("earnings_events")
+        .where("date", ">=", since)
+        .where("date", "<=", today)
+        .get();
+      const inUniverse = new Set(TICKER_UNIVERSE);
+      const seen = new Set<string>();
+      for (const d of snap.docs) {
+        const t = d.data().ticker as string | undefined;
+        // Only names this job can resolve a CIK for; the calendar is far wider
+        // than the universe it syncs filings for.
+        if (t && inUniverse.has(t)) seen.add(t);
+      }
+      return [...seen];
+    } catch (err) {
+      // A failure here must not stop the wire from syncing — fall back to the
+      // round-robin alone.
+      this.logger.warn(`edgar-8k: could not read recent reporters: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
   async run() {
     try {
       const cursor = await this.meta.getCursor(JOB_NAME);
-      const batch = Array.from(
+
+      /**
+       * Companies that JUST REPORTED come first; the round-robin fills the rest.
+       *
+       * The cursor alone walks 20 tickers a run, twice a weekday — 40 of a
+       * 241-ticker universe per day, so any one company's filings were read
+       * about once every six trading days. That is fine for the filings wire,
+       * which is a rolling feed, but it is useless for guidance: guidance is
+       * only published in the earnings 8-K, and by the time the cursor reached
+       * a company its results were a week old and nobody was looking at that
+       * day any more. Measured: the newest earnings announcement on file was
+       * two days behind the calendar during earnings season.
+       *
+       * Reporters are also the cheaper set to check — a company that did not
+       * report has no earnings 8-K to find.
+       */
+      const recent = await this.recentReporters();
+      const roundRobin = Array.from(
         { length: BATCH_SIZE },
         (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
       );
+      // Reporters first, then the round-robin, de-duplicated so a company that
+      // is in both is not fetched twice in one run.
+      const batch = [...new Set([...recent, ...roundRobin])];
+      if (recent.length) {
+        this.logger.log(
+          `edgar-8k: ${recent.length} recent reporter(s) prioritised + ${roundRobin.length} from the cursor`,
+        );
+      }
       const tickerToCik = await getTickerToCik(
         this.firebase.firestore,
         "Market Catalyst Backend hello@inc108.com",
