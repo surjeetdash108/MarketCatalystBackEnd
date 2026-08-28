@@ -27,7 +27,22 @@ import { addDays, isoDate } from "../common/date.util";
  */
 
 const JOB_NAME = "edgar-8k";
-const BATCH_SIZE = 20;
+/**
+ * Round-robin slice per run, on top of the prioritised reporters.
+ *
+ * Sized from measurement, not guessed: a 20-ticker run takes 12-19s (two SEC
+ * requests per ticker at the vendor's 150ms floor, ~0.75s each), against Cloud
+ * Run's 900s request timeout — this job runs inline, so that timeout is the
+ * real ceiling, not the scheduler's deadline. 60 puts a run near 45s and walks
+ * the 241-ticker universe in about two days instead of six.
+ */
+const BATCH_SIZE = 60;
+/**
+ * Hard cap on the whole batch. During peak earnings season the prioritised
+ * reporters alone can be large, and reporters + round-robin must not drift
+ * toward the request timeout. 150 tickers is roughly two minutes.
+ */
+const MAX_BATCH = 150;
 /** How far back to look for companies that just reported. Covers a weekend and
  *  the day-after filings of after-close reporters. */
 const REPORTER_LOOKBACK_DAYS = 4;
@@ -193,7 +208,9 @@ export class Edgar8KJob implements OnModuleInit {
       );
       // Reporters first, then the round-robin, de-duplicated so a company that
       // is in both is not fetched twice in one run.
-      const batch = [...new Set([...recent, ...roundRobin])];
+      // Reporters keep their priority when the cap bites — they are the ones
+      // guidance depends on; the wire catches up on the next run.
+      const batch = [...new Set([...recent, ...roundRobin])].slice(0, MAX_BATCH);
       if (recent.length) {
         this.logger.log(
           `edgar-8k: ${recent.length} recent reporter(s) prioritised + ${roundRobin.length} from the cursor`,
