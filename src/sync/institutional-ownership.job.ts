@@ -58,6 +58,46 @@ const periodKey = (p: { year: number; quarter: number }) =>
  * reporting quarter is resolved ONCE per run (against a large-cap reference)
  * and reused for every ticker in the batch — one FMP call per ticker.
  */
+/**
+ * 13-F is a QUARTERLY report, but the filings ARRIVE daily.
+ *
+ * Every institution files separately, any time up to 45 days after quarter end
+ * (SEC rule), so a per-ticker rollup grows all through that window — a few
+ * hundred filers early, thousands by the deadline. Two consequences:
+ *
+ *  - The data is worth refreshing DAILY inside the window and almost never
+ *    outside it, which is what shouldRunToday below decides.
+ *  - An announcement must not fire on first sight of a new quarter. That is a
+ *    partial rollup, and reading it would state a filer count and a direction
+ *    that are still being written — the same mistake as publishing a market
+ *    breadth figure before the session's bars have landed.
+ */
+const FILING_LAG_DAYS = 45;
+
+/** Last day of the given reporting quarter. */
+function quarterEnd(year: number, quarter: number): Date {
+  return new Date(Date.UTC(year, quarter * 3, 1) - 86_400_000);
+}
+
+/** The SEC deadline for that quarter's filings. */
+function filingDeadline(year: number, quarter: number): Date {
+  return new Date(quarterEnd(year, quarter).getTime() + FILING_LAG_DAYS * 86_400_000);
+}
+
+/**
+ * True while filings for the most recently ended quarter are still arriving —
+ * quarter end through a fortnight past the deadline, to catch stragglers.
+ */
+function inFilingWindow(now: Date): boolean {
+  const y = now.getUTCFullYear();
+  const q = Math.floor(now.getUTCMonth() / 3); // 0-based; the quarter just ended
+  const prevQ = q === 0 ? 4 : q;
+  const prevY = q === 0 ? y - 1 : y;
+  const end = quarterEnd(prevY, prevQ);
+  const close = new Date(filingDeadline(prevY, prevQ).getTime() + 15 * 86_400_000);
+  return now >= end && now <= close;
+}
+
 @Injectable()
 export class InstitutionalOwnershipJob implements OnModuleInit {
   private readonly logger = new Logger(InstitutionalOwnershipJob.name);
@@ -92,8 +132,21 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
   private async announce13F(
     advanced: Array<{ id: string; data: Record<string, unknown> }>,
   ): Promise<void> {
+    const now = new Date();
     for (const { id: ticker, data } of advanced) {
       try {
+        // Wait for the filing deadline. Before it the rollup is still filling
+        // in, and an analysis written now would describe a fraction of the
+        // filings as though it were the quarter.
+        const y = data.year as number;
+        const q = data.quarter as number;
+        if (now < filingDeadline(y, q)) {
+          this.logger.log(
+            `13F ${ticker} ${y}Q${q}: filings still arriving (deadline ` +
+              `${filingDeadline(y, q).toISOString().slice(0, 10)}) — not announced yet`,
+          );
+          continue;
+        }
         const n = (k: string): number | null =>
           typeof data[k] === "number" ? (data[k] as number) : null;
         const change = n("numberOf13FsharesChange");
@@ -143,9 +196,17 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
           news,
           null,
         );
+        // Marked only on success: a model outage leaves the period pending so
+        // the next run retries it, rather than silently skipping the quarter.
+        if (out) {
+          await this.firebase.firestore
+            .collection("institutional_ownership")
+            .doc(ticker)
+            .set({ announcedPeriod: `${data.year}Q${data.quarter}` }, { merge: true });
+        }
         this.logger.log(
           `13F announcement ${ticker} ${data.year}Q${data.quarter}: ${verdict}` +
-            (out ? " — analysis stored" : " — analysis unavailable"),
+            (out ? " — analysis stored" : " — analysis unavailable, will retry"),
         );
       } catch (err) {
         this.logger.warn(
@@ -157,6 +218,20 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
 
   async run() {
     try {
+      // 13-F filings arrive daily inside the 45-day window after quarter end
+      // and essentially never outside it. Running daily year-round would be
+      // waste; running weekly through the window would show filer counts up to
+      // a week stale while they are actually moving. So: daily in the window,
+      // Saturday otherwise. The check is free — no vendor call is made on a
+      // skipped day.
+      const today = new Date();
+      if (!inFilingWindow(today) && today.getUTCDay() !== 6) {
+        this.logger.log(
+          "institutional-ownership: outside the 13-F filing window and not Saturday — skipping",
+        );
+        await this.meta.record(JOB_NAME, { ok: true, count: 0 });
+        return { skipped: "outside-filing-window" };
+      }
       if (!this.fmp.enabled) {
         await this.meta.record(JOB_NAME, {
           ok: true,
@@ -220,7 +295,12 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
       // announcement should fire once when the quarter advances — not on every
       // pass over the same filing, which is what comparing against the fresh
       // write would have done.
-      const priorPeriod = new Map<string, string>();
+      // What each ticker has ALREADY been announced for. The quarter advances
+      // in our data during the filing window, weeks before the deadline the
+      // announcement waits for — so "did the period change on this run" cannot
+      // be the trigger. It would have moved, and passed, before the data was
+      // settled enough to read. This records the period announced instead.
+      const announcedPeriod = new Map<string, string>();
       {
         const existing = await Promise.all(
           batch.map((t) =>
@@ -229,8 +309,14 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
         );
         for (const snap of existing) {
           const d = snap.data();
-          if (d?.year != null && d?.quarter != null) {
-            priorPeriod.set(snap.id, `${d.year}Q${d.quarter}`);
+          if (!d) continue;
+          if (typeof d.announcedPeriod === "string") {
+            announcedPeriod.set(snap.id, d.announcedPeriod);
+          } else if (d.year != null && d.quarter != null) {
+            // Pre-existing docs carry no marker. Treat the period they are
+            // already on as announced, so enabling this does not fire a burst
+            // of readings for quarters that closed long ago.
+            announcedPeriod.set(snap.id, `${d.year}Q${d.quarter}`);
           }
         }
       }
@@ -317,16 +403,15 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
         docs,
       );
 
-      // Announce only the tickers whose reporting period actually moved.
-      const advanced = docs.filter((d) => {
+      // Announce a period once it is SETTLED (past its filing deadline) and has
+      // not been announced yet. A ticker seen for the first time is skipped by
+      // the map above rather than firing on a backfill.
+      const pending = docs.filter((d) => {
         const data = d.data as { year?: number; quarter?: number };
         if (data.year == null || data.quarter == null) return false;
-        const prior = priorPeriod.get(d.id);
-        // A ticker seen for the FIRST time is not announced: its "change" is an
-        // artefact of the backfill, not a filing event.
-        return prior != null && prior !== `${data.year}Q${data.quarter}`;
+        return announcedPeriod.get(d.id) !== `${data.year}Q${data.quarter}`;
       });
-      if (advanced.length) await this.announce13F(advanced);
+      if (pending.length) await this.announce13F(pending);
       await this.meta.setCursor(
         JOB_NAME,
         (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length,

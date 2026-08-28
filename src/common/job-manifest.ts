@@ -74,7 +74,7 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "ticker-universe", trigger: "scheduler", schedules: ["0 8 * * 1-5"] },
   { name: "sec-form4", trigger: "scheduler", schedules: ["0 8 * * 6"], note: "moved off the weekday premarket path — insider filings tolerate a weekend cadence" },
   { name: "sec-13f", trigger: "scheduler", schedules: ["0 9 * * 6"], note: "13-F is a QUARTERLY filing; a weekday fetch re-read unchanged data ahead of the market-hours jobs" },
-  { name: "institutional-ownership", trigger: "scheduler", schedules: ["0 10 * * 6"], note: "rollup of sec-13f, so it runs an hour after it" },
+  { name: "institutional-ownership", trigger: "scheduler", schedules: ["0 10 * * *"], note: "fires daily but only WORKS inside the 13-F filing window (quarter end to deadline+15) or on Saturdays — filings arrive daily across that window and essentially never outside it. A skipped day makes no vendor call" },
   { name: "edgar-ipo-pipeline", trigger: "scheduler", schedules: ["0 11 * * 6"], note: "S-1/424B registrations move over weeks — a weekday fetch bought nothing" },
   { name: "companies-financials-backfill", trigger: "scheduler", schedules: ["0 12 * * 6"], note: "a cursor backfill with no deadline of its own" },
   { name: "premarket", trigger: "scheduler", schedules: ["0 8 * * 1-5"], note: "Cloud Run JOB premarket-job, not an HTTP POST — it orchestrates the phases below" },
