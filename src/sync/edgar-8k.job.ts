@@ -43,9 +43,20 @@ const BATCH_SIZE = 60;
  * toward the request timeout. 150 tickers is roughly two minutes.
  */
 const MAX_BATCH = 150;
-/** How far back to look for companies that just reported. Covers a weekend and
- *  the day-after filings of after-close reporters. */
-const REPORTER_LOOKBACK_DAYS = 4;
+/**
+ * How far back to look for reporters still missing guidance.
+ *
+ * Weekdays stay tight — the point of a weekday run is the companies that
+ * reported today, and the market-hours jobs are competing for the same worker.
+ *
+ * Weekends sweep the whole quarter instead. Guidance is IMMUTABLE once the 8-K
+ * is filed, so a past reporter never needs re-reading: the weekend pass fills
+ * the quarter once and the "already have an announcement" check then costs two
+ * queries a run. Nothing else contends for the worker on a Saturday, and it
+ * leaves weekdays with only the day's own reporters to top up.
+ */
+const WEEKDAY_LOOKBACK_DAYS = 4;
+const WEEKEND_LOOKBACK_DAYS = 100; // a full reporting quarter
 const FILINGS_PER_COMPANY = 8;
 const LOOKBACK_DAYS = 120;
 
@@ -167,7 +178,12 @@ export class Edgar8KJob implements OnModuleInit {
    * two queries below.
    */
   private async reportersNeedingGuidance(): Promise<string[]> {
-    const since = isoDate(addDays(new Date(), -REPORTER_LOOKBACK_DAYS));
+    // Saturday/Sunday reach back over the whole quarter; weekdays only the
+    // last few sessions.
+    const dow = new Date().getUTCDay();
+    const weekend = dow === 0 || dow === 6;
+    const lookback = weekend ? WEEKEND_LOOKBACK_DAYS : WEEKDAY_LOOKBACK_DAYS;
+    const since = isoDate(addDays(new Date(), -lookback));
     const today = isoDate(new Date());
     try {
       const db = this.firebase.firestore;
