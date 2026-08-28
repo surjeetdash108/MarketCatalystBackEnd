@@ -40,8 +40,13 @@ export type Sentiment = "positive" | "negative" | "neutral" | "mixed";
  *                  (beat/miss/in-line). Surfaced in the Live Feed's
  *                  announcements section. Never expires: it describes a
  *                  specific event at a specific time.
+ * "13fAnnouncement" — the same idea for a 13-F institutional filing: produced
+ *                  once when a ticker's reporting quarter advances, so the
+ *                  change in institutional positioning is read and kept
+ *                  alongside the earnings reads. Quarterly by nature, so there
+ *                  is at most one per ticker per quarter.
  */
-export type AnalysisType = "general" | "announcement";
+export type AnalysisType = "general" | "announcement" | "13fAnnouncement";
 
 /**
  * How long a general analysis stays fresh. A second viewer inside this window
@@ -92,6 +97,24 @@ export interface TickerAiAnalysisDoc extends AnalysisBody {
     revenueActual: number | null;
     revenueEstimate: number | null;
     verdict: "beat" | "miss" | "in-line" | "unknown";
+  };
+  /** 13fAnnouncement rows only: the filed position the read was built from, so
+   *  the feed can show the numbers beside the interpretation — same contract as
+   *  `announcement` above. */
+  f13?: {
+    /** Reporting period the filings cover, e.g. 2026 Q2. */
+    year: number;
+    quarter: number;
+    investorsHolding: number | null;
+    investorsHoldingChange: number | null;
+    numberOf13Fshares: number | null;
+    numberOf13FsharesChange: number | null;
+    /** Share of the float held by 13-F filers. */
+    ownershipPercent: number | null;
+    totalInvested: number | null;
+    putCallRatio: number | null;
+    /** Direction of the share-count change — the headline read. */
+    verdict: "accumulating" | "distributing" | "flat" | "unknown";
   };
   /** "created" on the first pass, "updated" once continuity kicks in. */
   lastMode: "created" | "updated";

@@ -169,7 +169,10 @@ export class TickerAiAnalysisService {
   async recentAnnouncements(limit = 50): Promise<TickerAiAnalysisDoc[]> {
     const n = Math.min(Math.max(Math.trunc(limit) || 50, 1), 200);
     const snap = await this.col
-      .where("analysisType", "==", "announcement")
+      // Both event kinds share the announcements feed: an earnings print and a
+      // 13-F filing are each a dated event with a stored interpretation, and a
+      // reader wants them in one timeline. `in` keeps the same composite index.
+      .where("analysisType", "in", ["announcement", "13fAnnouncement"])
       .orderBy("lastUpdatedAt", "desc")
       .limit(n)
       .get();
@@ -286,6 +289,51 @@ export class TickerAiAnalysisService {
     });
   }
 
+  /**
+   * One "13fAnnouncement" read, produced when a ticker's 13-F reporting quarter
+   * advances.
+   *
+   * The parallel of recordAnnouncement, for the other quarterly event this app
+   * tracks. Institutions file ~45 days after quarter end, so this fires a few
+   * times a year per ticker rather than continuously — there is no risk of it
+   * regenerating on a schedule, and like an earnings read it never expires
+   * because it describes one filing period.
+   *
+   * The share-count change is the subject; the model is given it and asked to
+   * read it, never to guess at it.
+   */
+  async record13FAnnouncement(
+    ticker: string,
+    f: NonNullable<TickerAiAnalysisDoc["f13"]>,
+    news: NewsInput[],
+    companyName?: string | null,
+  ): Promise<TickerAiAnalysisDoc | null> {
+    if (!this.llm.enabled) return null;
+    const pct = (n: number | null) => (n == null ? "—" : `${n.toFixed(2)}%`);
+    const num = (n: number | null) => (n == null ? "—" : n.toLocaleString("en-US"));
+    const context = [
+      `13-F INSTITUTIONAL FILINGS for ${f.year} Q${f.quarter} (filed ~45 days after quarter end):`,
+      `  Filers holding: ${num(f.investorsHolding)} (change ${num(f.investorsHoldingChange)})`,
+      `  Shares held by filers: ${num(f.numberOf13Fshares)} (change ${num(f.numberOf13FsharesChange)})`,
+      `  Share of float held: ${pct(f.ownershipPercent)}`,
+      `  Total invested: ${num(f.totalInvested)}`,
+      `  Put/call ratio: ${f.putCallRatio ?? "—"}`,
+      `  Direction: ${f.verdict}`,
+      "Analyse THIS FILING PERIOD specifically: what the change in filer count",
+      "and share count says about institutional positioning, and what it does",
+      "not say. These filings are a snapshot up to 45 days old and exclude",
+      "short positions — say so rather than presenting them as current holdings.",
+      "Do not speculate about the share price reaction; it is not in the data.",
+    ].join("\n");
+    return this.analyseTicker(ticker, news, {
+      companyName,
+      context,
+      analysisType: "13fAnnouncement",
+      f13: f,
+      timeoutMs: TIMEOUT_MS,
+    });
+  }
+
   /** Shared across instances so concurrent requests coalesce. */
   private static readonly inflight = new Map<
     string,
@@ -301,6 +349,7 @@ export class TickerAiAnalysisService {
       timeoutMs?: number;
       analysisType?: AnalysisType;
       announcement?: TickerAiAnalysisDoc["announcement"];
+      f13?: TickerAiAnalysisDoc["f13"];
     } = {},
   ): Promise<TickerAiAnalysisDoc | null> {
     if (!this.llm.enabled) return null;
@@ -351,6 +400,9 @@ export class TickerAiAnalysisService {
       ...body,
       ticker,
       analysisType: opts.analysisType ?? "general",
+      // Only set on a 13fAnnouncement row; undefined is stripped before the
+      // write, the same way `announcement` is.
+      ...(opts.f13 ? { f13: opts.f13 } : {}),
       companyName: opts.companyName ?? previous?.companyName ?? null,
       sourceNewsIds: ids,
       sourceNewsCount: ids.length,

@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { chunkedBatchSet } from "../common/firestore-batch.util";
+import { TickerAiAnalysisService } from "../live/ticker-ai-analysis.service";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { TICKER_UNIVERSE } from "../common/ticker-universe";
 import { FmpService } from "../vendors/fmp/fmp.service";
@@ -66,6 +67,7 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
     private readonly fmp: FmpService,
+    private readonly tickerAi: TickerAiAnalysisService,
   ) {}
 
   onModuleInit() {
@@ -78,6 +80,79 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
 
   async scheduled() {
     await this.registry.get(JOB_NAME)();
+  }
+
+  /**
+   * One "13fAnnouncement" analysis per ticker whose reporting quarter advanced.
+   *
+   * The 13-F counterpart of earnings-actuals' announce(): the figures are the
+   * subject and recent stories are only context. Never throws — a model failure
+   * must not fail an ownership run that already stored the filings correctly.
+   */
+  private async announce13F(
+    advanced: Array<{ id: string; data: Record<string, unknown> }>,
+  ): Promise<void> {
+    for (const { id: ticker, data } of advanced) {
+      try {
+        const n = (k: string): number | null =>
+          typeof data[k] === "number" ? (data[k] as number) : null;
+        const change = n("numberOf13FsharesChange");
+        const held = n("numberOf13Fshares");
+        // A share-count move under a quarter of a percent of the position is
+        // noise in filings this coarse, so it reads as flat rather than as a
+        // direction nobody could act on.
+        const verdict: "accumulating" | "distributing" | "flat" | "unknown" =
+          change == null || held == null || held === 0
+            ? "unknown"
+            : Math.abs(change) / held < 0.0025
+              ? "flat"
+              : change > 0
+                ? "accumulating"
+                : "distributing";
+
+        const newsSnap = await this.firebase.firestore
+          .collection("news").where("ticker", "==", ticker).get();
+        const news = newsSnap.docs
+          .map((d) => ({
+            id: d.id,
+            headline: String(d.data().headline ?? ""),
+            summary: (d.data().summary as string | null) ?? null,
+            source: String(d.data().source ?? ""),
+            publishedAt: String(d.data().publishedAt ?? ""),
+            tag: (d.data().tag as string | null) ?? null,
+            filler: d.data().filler === true,
+          }))
+          .filter((x) => !x.filler && x.headline)
+          .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
+          .slice(0, 8);
+
+        const out = await this.tickerAi.record13FAnnouncement(
+          ticker,
+          {
+            year: data.year as number,
+            quarter: data.quarter as number,
+            investorsHolding: n("investorsHolding"),
+            investorsHoldingChange: n("investorsHoldingChange"),
+            numberOf13Fshares: held,
+            numberOf13FsharesChange: change,
+            ownershipPercent: n("ownershipPercent"),
+            totalInvested: n("totalInvested"),
+            putCallRatio: n("putCallRatio"),
+            verdict,
+          },
+          news,
+          null,
+        );
+        this.logger.log(
+          `13F announcement ${ticker} ${data.year}Q${data.quarter}: ${verdict}` +
+            (out ? " — analysis stored" : " — analysis unavailable"),
+        );
+      } catch (err) {
+        this.logger.warn(
+          `13F announcement failed for ${ticker}: ${(err as Error).message}`,
+        );
+      }
+    }
   }
 
   async run() {
@@ -140,6 +215,25 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
       }
 
       const wanted = quartersBack(period, HISTORY_QUARTERS);
+
+      // The period each ticker was ALREADY on, read before the write. A 13-F
+      // announcement should fire once when the quarter advances — not on every
+      // pass over the same filing, which is what comparing against the fresh
+      // write would have done.
+      const priorPeriod = new Map<string, string>();
+      {
+        const existing = await Promise.all(
+          batch.map((t) =>
+            this.firebase.firestore.collection("institutional_ownership").doc(t).get(),
+          ),
+        );
+        for (const snap of existing) {
+          const d = snap.data();
+          if (d?.year != null && d?.quarter != null) {
+            priorPeriod.set(snap.id, `${d.year}Q${d.quarter}`);
+          }
+        }
+      }
 
       const docs = [];
       for (const ticker of batch) {
@@ -222,6 +316,17 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
         "institutional_ownership",
         docs,
       );
+
+      // Announce only the tickers whose reporting period actually moved.
+      const advanced = docs.filter((d) => {
+        const data = d.data as { year?: number; quarter?: number };
+        if (data.year == null || data.quarter == null) return false;
+        const prior = priorPeriod.get(d.id);
+        // A ticker seen for the FIRST time is not announced: its "change" is an
+        // artefact of the backfill, not a filing event.
+        return prior != null && prior !== `${data.year}Q${data.quarter}`;
+      });
+      if (advanced.length) await this.announce13F(advanced);
       await this.meta.setCursor(
         JOB_NAME,
         (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length,
