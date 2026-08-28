@@ -58,7 +58,7 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "company-quotes", trigger: "scheduler", schedules: ["*/15 4-20 * * 1-5"], note: "whole-universe price refresh, pre-market through after-hours" },
   { name: "earnings-actuals", trigger: "scheduler", schedules: ["*/5 6-7,16-17 * * 1-5"], note: "tight cadence around the BMO and AMC reporting windows" },
   { name: "earnings", trigger: "scheduler", schedules: ["0 21 * * 1-5"] },
-  { name: "edgar-8k", trigger: "scheduler", schedules: ["30 17,20 * * 1-5"] },
+  { name: "edgar-8k", trigger: "scheduler", schedules: ["0 17-22 * * 1-5"], note: "hourly after the close: each run takes up to MAX_BATCH reporters still missing guidance, so a 616-reporter session converges within the evening" },
   { name: "fear-greed", trigger: "scheduler", schedules: ["*/15 9-16 * * 1-5", "15 18 * * 1-5"], note: "reads market-breadth output, so it trails it by 15m post-close" },
   { name: "intraday-bars", trigger: "scheduler", schedules: ["25 16 * * 1-5"] },
   { name: "macro-events", trigger: "scheduler", schedules: ["10 18 * * 1-5"] },

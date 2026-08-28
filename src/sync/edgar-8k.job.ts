@@ -151,32 +151,50 @@ export class Edgar8KJob implements OnModuleInit {
   }
 
   /**
-   * Tickers with an earnings date in the last few sessions, from the calendar
-   * the app already syncs. These are the only companies that can have an
-   * earnings 8-K to read, so they are checked every run rather than waiting
-   * for the round-robin to come around.
+   * Companies that reported recently and do NOT yet have an announcement on
+   * file — i.e. the ones whose guidance is still missing.
+   *
+   * NOT limited to TICKER_UNIVERSE. The universe is the watchlist the filings
+   * WIRE follows (241 names); the earnings calendar is far wider — a busy
+   * session has 616 reporters and a peak week 1,752. Guidance is wanted for
+   * whoever is on the calendar that day, not only for watched names.
+   *
+   * Nor can they all be fetched at once: at ~0.75s a ticker, a peak window
+   * would take ~1,050s against Cloud Run's 900s request timeout, which binds
+   * because this job runs inline. So each run takes the ones still missing, up
+   * to the cap, and subsequent runs chip away at the remainder until the window
+   * is covered — after which this returns nothing and the run costs only the
+   * two queries below.
    */
-  private async recentReporters(): Promise<string[]> {
+  private async reportersNeedingGuidance(): Promise<string[]> {
     const since = isoDate(addDays(new Date(), -REPORTER_LOOKBACK_DAYS));
     const today = isoDate(new Date());
     try {
-      const snap = await this.firebase.firestore
-        .collection("earnings_events")
-        .where("date", ">=", since)
-        .where("date", "<=", today)
-        .get();
-      const inUniverse = new Set(TICKER_UNIVERSE);
-      const seen = new Set<string>();
-      for (const d of snap.docs) {
+      const db = this.firebase.firestore;
+      const [events, have] = await Promise.all([
+        db.collection("earnings_events")
+          .where("date", ">=", since).where("date", "<=", today).get(),
+        db.collection("earnings_announcements")
+          .where("announceDate", ">=", since).where("announceDate", "<=", today).get(),
+      ]);
+      // Matched at ticker level rather than ticker+date: an after-close
+      // reporter files its 8-K the next morning, so the filing date and the
+      // calendar date differ by a day for a good share of them.
+      const covered = new Set<string>();
+      for (const d of have.docs) {
         const t = d.data().ticker as string | undefined;
-        // Only names this job can resolve a CIK for; the calendar is far wider
-        // than the universe it syncs filings for.
-        if (t && inUniverse.has(t)) seen.add(t);
+        if (t) covered.add(t);
       }
-      return [...seen];
+      const missing = new Set<string>();
+      for (const d of events.docs) {
+        const t = d.data().ticker as string | undefined;
+        if (t && !covered.has(t)) missing.add(t);
+      }
+      // Sorted so successive runs walk the same order and converge, rather
+      // than re-drawing an arbitrary slice of the same set each time.
+      return [...missing].sort();
     } catch (err) {
-      // A failure here must not stop the wire from syncing — fall back to the
-      // round-robin alone.
+      // Never let this stop the filings wire — fall back to the round-robin.
       this.logger.warn(`edgar-8k: could not read recent reporters: ${(err as Error).message}`);
       return [];
     }
@@ -201,7 +219,7 @@ export class Edgar8KJob implements OnModuleInit {
        * Reporters are also the cheaper set to check — a company that did not
        * report has no earnings 8-K to find.
        */
-      const recent = await this.recentReporters();
+      const recent = await this.reportersNeedingGuidance();
       const roundRobin = Array.from(
         { length: BATCH_SIZE },
         (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
@@ -213,7 +231,8 @@ export class Edgar8KJob implements OnModuleInit {
       const batch = [...new Set([...recent, ...roundRobin])].slice(0, MAX_BATCH);
       if (recent.length) {
         this.logger.log(
-          `edgar-8k: ${recent.length} recent reporter(s) prioritised + ${roundRobin.length} from the cursor`,
+          `edgar-8k: ${recent.length} reporter(s) still missing guidance, ` +
+            `${Math.min(recent.length, MAX_BATCH)} taken this run + ${roundRobin.length} from the cursor`,
         );
       }
       const tickerToCik = await getTickerToCik(
