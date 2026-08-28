@@ -53,9 +53,13 @@ const MARKET_WIDE: string[] = [
   "edgar-ipo-pipeline", // SEC S-1/424B registrations; no Firestore deps
   "news",
   "analyst-actions",
-  "sec-form4",
-  "sec-13f",
-  "institutional-ownership", // FMP ticker-indexed 13F ownership rollup
+  // sec-form4, sec-13f and institutional-ownership are NOT here on purpose.
+  // 13-F is a QUARTERLY filing and institutional-ownership is a rollup of it,
+  // so running them every weekday morning re-read data that changes four times
+  // a year, ahead of the market-hours jobs. They have their own Saturday
+  // scheduler entries instead (sync-*-weekend), staggered so the rollup runs
+  // after the filings it depends on. Premarket itself is weekday-only, so a
+  // weekend phase in here would never have fired.
   "dividends",
   "options-chains", // its own small OPTIONS_UNIVERSE
 ];

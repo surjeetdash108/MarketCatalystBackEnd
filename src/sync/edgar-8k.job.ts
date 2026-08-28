@@ -57,6 +57,19 @@ const MAX_BATCH = 150;
  */
 const WEEKDAY_LOOKBACK_DAYS = 4;
 const WEEKEND_LOOKBACK_DAYS = 100; // a full reporting quarter
+/**
+ * How far FORWARD the weekend sweep also looks.
+ *
+ * A company on next month's calendar already has guidance — the guidance it
+ * issued at its LAST report, which is precisely the forward view for the
+ * quarter it is about to report on. Fetching it in advance means the Earnings
+ * Hub can show guidance for an upcoming date instead of a column of dashes
+ * until the company files.
+ *
+ * Reachable because the filing search looks back LOOKBACK_DAYS (120) — more
+ * than a quarter — so an upcoming reporter's previous 8-K is still in range.
+ */
+const WEEKEND_LOOKAHEAD_DAYS = 100;
 const FILINGS_PER_COMPANY = 8;
 const LOOKBACK_DAYS = 120;
 
@@ -184,14 +197,20 @@ export class Edgar8KJob implements OnModuleInit {
     const weekend = dow === 0 || dow === 6;
     const lookback = weekend ? WEEKEND_LOOKBACK_DAYS : WEEKDAY_LOOKBACK_DAYS;
     const since = isoDate(addDays(new Date(), -lookback));
-    const today = isoDate(new Date());
+    // Weekends also reach into the NEXT quarter's calendar, so upcoming
+    // reporters carry the guidance from their previous report rather than a
+    // dash. Weekdays stop at today — a company that has not reported yet has
+    // nothing new to find.
+    const until = isoDate(
+      addDays(new Date(), weekend ? WEEKEND_LOOKAHEAD_DAYS : 0),
+    );
     try {
       const db = this.firebase.firestore;
       const [events, have] = await Promise.all([
         db.collection("earnings_events")
-          .where("date", ">=", since).where("date", "<=", today).get(),
+          .where("date", ">=", since).where("date", "<=", until).get(),
         db.collection("earnings_announcements")
-          .where("announceDate", ">=", since).where("announceDate", "<=", today).get(),
+          .where("announceDate", ">=", since).where("announceDate", "<=", until).get(),
       ]);
       // Matched at ticker level rather than ticker+date: an after-close
       // reporter files its 8-K the next morning, so the filing date and the

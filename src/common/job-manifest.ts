@@ -72,6 +72,9 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "recap-blog", trigger: "scheduler", schedules: ["0 19 * * 1-5"], note: "reads the recaps snapshot, so it trails it by 15m; publishes a Draft blog post" },
   { name: "sectors", trigger: "scheduler", schedules: ["0 18 * * 1-5"] },
   { name: "ticker-universe", trigger: "scheduler", schedules: ["0 8 * * 1-5"] },
+  { name: "sec-form4", trigger: "scheduler", schedules: ["0 8 * * 6"], note: "moved off the weekday premarket path — insider filings tolerate a weekend cadence" },
+  { name: "sec-13f", trigger: "scheduler", schedules: ["0 9 * * 6"], note: "13-F is a QUARTERLY filing; a weekday fetch re-read unchanged data ahead of the market-hours jobs" },
+  { name: "institutional-ownership", trigger: "scheduler", schedules: ["0 10 * * 6"], note: "rollup of sec-13f, so it runs an hour after it" },
   { name: "premarket", trigger: "scheduler", schedules: ["0 8 * * 1-5"], note: "Cloud Run JOB premarket-job, not an HTTP POST — it orchestrates the phases below" },
 ];
 
