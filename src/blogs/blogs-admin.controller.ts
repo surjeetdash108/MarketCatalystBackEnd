@@ -11,6 +11,7 @@ import {
 import { AdminGuard } from "../common/admin.guard";
 import { BlogsAdminService } from "./blogs-admin.service";
 import type { BlogAdminBody } from "./blogs-admin.service";
+import { MediaAdminService } from "./media-admin.service";
 
 /**
  * Admin CRUD for the public `blogs` collection, behind AdminGuard (verified
@@ -22,7 +23,10 @@ import type { BlogAdminBody } from "./blogs-admin.service";
 @UseGuards(AdminGuard)
 @Controller("api/admin")
 export class BlogsAdminController {
-  constructor(private readonly blogs: BlogsAdminService) {}
+  constructor(
+    private readonly blogs: BlogsAdminService,
+    private readonly media: MediaAdminService,
+  ) {}
 
   @Get("blogs")
   async list() {
@@ -42,5 +46,24 @@ export class BlogsAdminController {
   @Delete("blogs/:id")
   async remove(@Param("id") id: string) {
     return this.blogs.remove(id);
+  }
+
+  /* ── image library ──────────────────────────────────────────────────────
+     Writes the same `media` collection the Website's admin uses, so one
+     gallery serves both consoles. */
+
+  @Get("media")
+  async listMedia() {
+    return { media: await this.media.list() };
+  }
+
+  @Post("media")
+  async uploadMedia(@Body() body: { dataUri?: string; filename?: string }) {
+    return this.media.upload(String(body?.dataUri ?? ""), String(body?.filename ?? "upload"));
+  }
+
+  @Delete("media/:id")
+  async removeMedia(@Param("id") id: string) {
+    return this.media.remove(id);
   }
 }

@@ -26,6 +26,21 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
 const POSTS = "blogs";
 const SLUGS = "slugs";
 
+/**
+ * The blog's shared look, in one document.
+ *
+ * Every authored post is written against the same stylesheet, so keeping a copy
+ * on each post meant N copies of one design: a change had to be re-uploaded to
+ * every post, and two posts could silently disagree about what the site looks
+ * like. One document, last upload wins.
+ *
+ * It also holds the external stylesheets and scripts the design references.
+ * Those are RECORDED here, not trusted — the reader's page decides what it is
+ * willing to load, and the site's CSP has the final say.
+ */
+const THEME = "blog_theme";
+const THEME_DOC = "current";
+
 /** The four zones the console understands. */
 export type Zone = "edu" | "recap" | "research";
 
@@ -64,25 +79,68 @@ export type BlogFormat = "html" | "text" | "pdf" | "doc";
 
 const BLOG_FORMATS = new Set<BlogFormat>(["html", "text", "pdf", "doc"]);
 
+/** The shared design, lifted out of an authored document. */
+export interface BlogTheme {
+  /** Every <style> block, in document order. */
+  css: string[];
+  /** Stylesheet URLs the document linked to. */
+  links: string[];
+  /** Script URLs the document loaded. */
+  scripts: string[];
+  /** Inline <script> bodies. Recorded, never executed — see the reader's page. */
+  inlineScripts: string[];
+}
+
 /**
- * Pulls <style> blocks out of authored HTML into their own field.
+ * Splits an authored document into the part that belongs to THIS post and the
+ * part that belongs to every post.
  *
- * The body is sanitised before storage and `style` is not an allowed tag, so
- * CSS left inline would simply be deleted and the post would render unstyled.
- * Extracting it first keeps the design, and keeps it somewhere the reader's
- * page can scope before applying — see the Website's scopeCss.
+ * The admin writes one complete page, but only its <body> is about this
+ * article. The <style>, the fonts and the framework it loads are the site's
+ * blog design, and every later post is written against the same one — so they
+ * are lifted out here and stored once (see THEME), not copied onto each post.
+ *
+ * The body is also reduced to its own contents: keeping <html>/<head> would
+ * publish the document title and meta tags as loose text on the page, because
+ * the sanitizer drops the tags and keeps what is inside them.
  */
-export function extractCss(html: string): { html: string; css: string[] } {
-  const css: string[] = [];
-  const stripped = html.replace(
-    /<style\b[^>]*>([\s\S]*?)<\/style>/gi,
-    (_m, body: string) => {
+export function extractTheme(input: string): { html: string; theme: BlogTheme } {
+  const theme: BlogTheme = { css: [], links: [], scripts: [], inlineScripts: [] };
+  let html = input;
+
+  html = html.replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gi, (_m, body: string) => {
+    const t = String(body).trim();
+    if (t) theme.css.push(t);
+    return "";
+  });
+
+  html = html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (_m, attrs: string, body: string) => {
+    const src = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(String(attrs));
+    if (src) theme.scripts.push(src[1]);
+    else {
       const t = String(body).trim();
-      if (t) css.push(t);
-      return "";
-    },
-  );
-  return { html: stripped, css };
+      if (t) theme.inlineScripts.push(t);
+    }
+    return "";
+  });
+
+  html = html.replace(/<link\b([^>]*)>/gi, (_m, attrs: string) => {
+    const a = String(attrs);
+    // preconnect/dns-prefetch point at a host, not a stylesheet — recording
+    // them would put bare origins in the list the reader's page reads.
+    if (/rel\s*=\s*["']?stylesheet/i.test(a)) {
+      const href = /\bhref\s*=\s*["']([^"']+)["']/i.exec(a);
+      if (href) theme.links.push(href[1]);
+    }
+    return "";
+  });
+
+  // Only the body is this post. A document with no <body> is already a fragment.
+  const body = /<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(html);
+  if (body) html = body[1];
+  else html = html.replace(/<\/?(?:html|head)\b[^>]*>/gi, "");
+
+  return { html: html.trim(), theme };
 }
 
 /**
@@ -139,8 +197,6 @@ export interface BlogAdminView {
   sourceKind: SourceKind | null;
   /** How the body is authored — see BlogFormat. */
   format: BlogFormat;
-  /** Stylesheets for an html post, already split out of the body. */
-  css: string[];
   /** Hero image shown above the article. */
   heroImageUrl: string | null;
 }
@@ -166,7 +222,6 @@ export interface BlogAdminBody {
   pdfPages?: unknown;
   pdfAspect?: unknown;
   format?: unknown;
-  css?: unknown;
   heroImageUrl?: unknown;
 }
 
@@ -205,7 +260,7 @@ export class BlogsAdminService {
   private resolveFormat(body: BlogAdminBody, html: string): {
     format: BlogFormat;
     html: string;
-    css: string[];
+    theme: BlogTheme | null;
   } {
     /* A document names its own format, from the media type in the data URI —
        "pdf" for everything with a file attached would label a Word import as a
@@ -219,14 +274,34 @@ export class BlogsAdminService {
     const format: BlogFormat = BLOG_FORMATS.has(body.format as BlogFormat)
       ? (body.format as BlogFormat)
       : (fromDoc ?? "text");
-    if (format !== "html") return { format, html, css: [] };
+    if (format !== "html") return { format, html, theme: null };
 
-    // Stylesheets sent by the client, plus any still embedded in the body.
-    const sent = Array.isArray(body.css)
-      ? (body.css as unknown[]).filter((c): c is string => typeof c === "string" && !!c.trim())
-      : [];
-    const pulled = extractCss(html);
-    return { format, html: pulled.html, css: [...sent, ...pulled.css] };
+    const pulled = extractTheme(html);
+    // A document that carried no design at all leaves the stored theme alone —
+    // pasting a bare fragment must not wipe the site's blog styling.
+    const carries =
+      pulled.theme.css.length ||
+      pulled.theme.links.length ||
+      pulled.theme.scripts.length ||
+      pulled.theme.inlineScripts.length;
+    return { format, html: pulled.html, theme: carries ? pulled.theme : null };
+  }
+
+  /**
+   * Stores the shared blog design. Last upload wins, by intent: there is one
+   * blog look, and the most recent document defines it.
+   */
+  private async saveTheme(theme: BlogTheme): Promise<void> {
+    try {
+      await this.firebase.firestore
+        .collection(THEME)
+        .doc(THEME_DOC)
+        .set({ ...theme, updatedAt: FieldValue.serverTimestamp() }, { merge: false });
+    } catch (err) {
+      // The post is the thing being published; a theme write failing should not
+      // lose it. Logged loudly because every later post inherits this.
+      this.logger.error(`blog theme write failed: ${(err as Error).message}`);
+    }
   }
 
   private get col() {
@@ -414,6 +489,32 @@ export class BlogsAdminService {
     return `${at("month")} ${at("day")} · ${at("hour")}:${at("minute")} ET`;
   }
 
+  /**
+   * A written post must arrive complete: headline, summary, hero image.
+   *
+   * All three are load-bearing on the reader's side — the summary is the
+   * standfirst under the headline and the card excerpt on the board, and the
+   * hero is both the article image and the board thumbnail. A post missing any
+   * of them publishes a visibly broken card, so it is refused here rather than
+   * discovered later.
+   *
+   * Documents are exempt: a PDF or Word post is its own cover and its own
+   * opening line.
+   */
+  private requireAuthoredFields(body: BlogAdminBody): void {
+    const format = body.format;
+    if (format !== "html" && format !== "text") return;
+
+    const missing: string[] = [];
+    if (!String(body.title ?? "").trim()) missing.push("title");
+    if (!String(body.dek ?? "").trim()) missing.push("summary");
+    const hero = typeof body.heroImageUrl === "string" ? body.heroImageUrl.trim() : "";
+    if (!hero) missing.push("hero image");
+    if (missing.length) {
+      throw new BadRequestException(`missing required field(s): ${missing.join(", ")}`);
+    }
+  }
+
   private slugify(input: string): string {
     return String(input)
       .normalize("NFKD")
@@ -546,9 +647,6 @@ export class BlogsAdminService {
       // document tells us what they are; anything else is prose, which is what
       // `content` has always held.
       format: storedFormat,
-      css: Array.isArray(data.css)
-        ? (data.css as unknown[]).filter((c): c is string => typeof c === "string")
-        : [],
       heroImageUrl: typeof data.coverImageUrl === "string" ? data.coverImageUrl : null,
     };
   }
@@ -565,6 +663,8 @@ export class BlogsAdminService {
     const published = String(body.status ?? "").toLowerCase() === "published";
     const now = FieldValue.serverTimestamp();
 
+    this.requireAuthoredFields(body);
+
     const ref = this.col.doc();
     const slug = await this.generateUniqueSlug(title);
 
@@ -574,6 +674,7 @@ export class BlogsAdminService {
     // Either way, embedded base64 images are hoisted to Storage so the stored
     // content never carries a data URI (Firestore's 1 MB cap).
     const resolved = this.resolveFormat(body, typeof body.html === "string" ? body.html : "");
+    if (resolved.theme) await this.saveTheme(resolved.theme);
     const content = await this.externalizeImages(
       resolved.format === "html" ? resolved.html : this.htmlToMarkdown(resolved.html),
       ref.id,
@@ -598,7 +699,6 @@ export class BlogsAdminService {
       tags: [],
       coverImageUrl: await this.resolveHero(body.heroImageUrl, ref.id),
       format: resolved.format,
-      css: resolved.css,
       seo: {
         metaTitle: null,
         metaDescription: null,
@@ -649,12 +749,12 @@ export class BlogsAdminService {
     if (zone !== undefined) update.type = ZONE_TO_TYPE[zone];
     if (rank !== undefined) update.rank = rank;
     if (body.dek !== undefined) update.excerpt = String(body.dek ?? "");
-    if (body.html !== undefined || body.format !== undefined || body.css !== undefined) {
+    if (body.html !== undefined || body.format !== undefined) {
       // Same rule as create: html keeps its markup, everything else becomes
       // Markdown. Resolved together because the format decides both.
       const r = this.resolveFormat(body, String(body.html ?? ""));
       update.format = r.format;
-      update.css = r.css;
+      if (r.theme) await this.saveTheme(r.theme);
       if (body.html !== undefined) {
         update.content = await this.externalizeImages(
           r.format === "html" ? r.html : this.htmlToMarkdown(r.html),

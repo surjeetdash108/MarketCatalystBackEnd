@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { BlogsAdminController } from "./blogs-admin.controller";
 import { BlogsAdminService } from "./blogs-admin.service";
+import { MediaAdminService } from "./media-admin.service";
 
 /**
  * Admin blog CRUD over the public `blogs` collection. FirebaseAdminService and
@@ -8,10 +9,10 @@ import { BlogsAdminService } from "./blogs-admin.service";
  */
 @Module({
   controllers: [BlogsAdminController],
-  providers: [BlogsAdminService],
+  providers: [BlogsAdminService, MediaAdminService],
   // Exported for the daily recap job, which publishes through the same service
   // the console does rather than writing `blogs` and Storage by hand — slug
   // allocation, ranking and the source-document upload all live in one place.
-  exports: [BlogsAdminService],
+  exports: [BlogsAdminService, MediaAdminService],
 })
 export class BlogsModule {}
