@@ -4,10 +4,17 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { BlogsAdminService } from "../blogs/blogs-admin.service";
-import { buildRecapPdf, type RecapFacts, type RecapNarrative } from "./recap-pdf.builder";
+import { type RecapFacts, type RecapNarrative } from "./recap-pdf.builder";
+import { buildRecapHtml, type RecapPeriod } from "./recap-html.builder";
+import { ensureRecapHero } from "./recap-hero";
 
 /**
- * Publishes the daily recap to the blog as a PDF.
+ * Publishes the daily recap to the blog as an HTML article.
+ *
+ * It used to publish a PDF. A page is better here for the same reasons a
+ * newspaper is not a fax: it reflows on a phone, search engines can read it,
+ * the charts stay sharp at any size, and a change to the blog's shared design
+ * restyles every past recap without regenerating a single file.
  *
  * Runs after `recaps` has frozen the day's snapshot at 18:45 ET, and reads that
  * snapshot rather than the live collections — the recap for a session must not
@@ -68,41 +75,49 @@ export class RecapBlogJob implements OnModuleInit {
         return { published: false, reason: "no-snapshot" };
       }
 
-      // daily_recap_YYYY-MM-DD.pdf — the date is also what the duplicate check
-      // keys on, so the name is load-bearing, not just cosmetic.
-      const name = `daily_recap_${facts.date}.pdf`;
+      // The date is what the duplicate check keys on, so this is load-bearing
+      // rather than cosmetic. Kept in the pdfName field the collection already
+      // has, so one run per session stays enforced across the format change.
+      const period: RecapPeriod = "daily";
+      const name = `${period}_recap_${facts.date}`;
       if (await this.alreadyPublished(name)) {
         this.logger.log(`recap for ${facts.date} already published — skipping`);
         await this.meta.record(JOB_NAME, { ok: true, count: 0 });
         return { published: false, reason: "already-published" };
       }
 
-      const narrative = await this.writeNarrative(facts);
-      const pdf = await buildRecapPdf(facts, narrative);
+      const narrative = await this.writeNarrative(facts, period);
+      const body = buildRecapHtml(facts, narrative, period);
+      // Our own brand mark: a system-written post has no photograph, and an
+      // empty hero shows as "Image not available" on the article and a blank
+      // thumbnail on the board.
+      const hero = await ensureRecapHero(this.firebase);
 
       await this.blogs.create({
         zone: "recap",
         title: narrative.headline,
-        // The four-line summary doubles as the post's excerpt, so the article
-        // page and the board card show the same lines printed in the document.
+        // The four-line summary doubles as the post's excerpt, so the article's
+        // standfirst and the board card show the same lines.
         dek: narrative.summary4.join(" "),
         kick: "MarketCatalyst",
         author: "Desk",
         read: "",
-        html: this.textFallback(facts, narrative),
+        format: "html",
+        html: body,
+        heroImageUrl: hero,
         // Draft: a person decides whether model-written commentary goes public.
         status: "Draft",
-        pdfDataUri: `data:application/pdf;base64,${pdf.buffer.toString("base64")}`,
+        // Not a document any more, but the name still keys the duplicate check.
         pdfName: name,
-        pdfPages: pdf.pages,
-        pdfAspect: pdf.aspect,
       });
 
       await this.meta.record(JOB_NAME, { ok: true, count: 1 });
       this.logger.log(
-        `recap blog draft for ${facts.date}: ${pdf.pages} pages, ${(pdf.buffer.length / 1024).toFixed(0)} KB`,
+        `recap blog draft for ${facts.date}: ${(body.length / 1024).toFixed(0)} KB of HTML, ` +
+          `${facts.indices.length} indices, ${facts.sectorLeaders.length + facts.sectorLaggards.length} sectors` +
+          `${hero ? "" : " (no hero image)"}`,
       );
-      return { published: true, date: facts.date, pages: pdf.pages };
+      return { published: true, date: facts.date, bytes: body.length };
     } catch (err) {
       await this.meta.record(JOB_NAME, { ok: false, error: (err as Error).message });
       throw err;
@@ -183,11 +198,15 @@ export class RecapBlogJob implements OnModuleInit {
    * plain factual sentence rather than failing the run — a recap with dull
    * copy is publishable; a recap with invented numbers is not.
    */
-  private async writeNarrative(facts: RecapFacts): Promise<RecapNarrative> {
+  private async writeNarrative(facts: RecapFacts, period: RecapPeriod = "daily"): Promise<RecapNarrative> {
     const movers = [...facts.topGainers.slice(0, 3), ...facts.topLosers.slice(0, 3)];
+    /* What this recap covers, in the words the copy should use. A weekly recap
+       that says "today" is wrong about its own subject. */
+    const covers = period === "weekly" ? "the week" : period === "monthly" ? "the month" : "the session";
+    const nextUnit = period === "weekly" ? "week" : period === "monthly" ? "month" : "session";
     const system =
-      "You are the market editor for MarketCatalyst, writing the end-of-day recap. " +
-      "You are given the session's real figures. Write ONLY prose about them. " +
+      `You are the market editor for MarketCatalyst, writing the ${period} recap. ` +
+      `You are given the real figures for ${covers}. Write ONLY prose about them. ` +
       "Never state a price, level, percentage or date that is not in the data given — " +
       "and for any series marked isProxy, describe DIRECTION ONLY, never the level: " +
       "it tracks a proxy instrument, so its number is not the index it is named after " +
@@ -207,7 +226,20 @@ export class RecapBlogJob implements OnModuleInit {
       "supplied, write that no confirmed catalyst was identified. " +
       "stories: 3-5 themes visible IN THE DATA (breadth, sector rotation, volatility, " +
       "macro assets) — not outside news you cannot verify. " +
-      "takeaway: 2-3 sentences on what to watch next session. tags: 6-8 short labels.";
+      `takeaway: 2-3 sentences on what to watch next ${nextUnit}. tags: 6-8 short labels. ` +
+      // The page draws charts from the same figures: a scaled bar per index, a
+      // scaled bar per sector, and an advancers/decliners bar. Prose that names
+      // the shape a reader is looking at is worth more than prose that repeats
+      // the number printed beside it.
+      "The article shows three charts built from these same figures: index " +
+      "returns as scaled bars, sector returns as scaled bars, and advancers " +
+      "against decliners as one proportion bar. Write so the prose EXPLAINS " +
+      "those shapes rather than restating them — which end of the sector board " +
+      "carried the move, whether the index result was broad or concentrated, " +
+      "whether breadth agreed with the index. Do not describe a chart that is " +
+      "not listed here, and do not give a number a shape it does not have. " +
+      `Frame everything as ${covers}: say "${covers}" rather than "today" when ` +
+      "the two differ, and compare against the span the figures actually cover.";
 
     const payload = {
       date: facts.date,
