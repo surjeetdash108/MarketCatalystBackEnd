@@ -386,11 +386,32 @@ export class BlogsAdminService {
     return out;
   }
 
+  /**
+   * "Aug 29 · 16:05 ET".
+   *
+   * The stored value has always carried the time — publishedAt is a server
+   * timestamp — but this dropped it, so the console could not tell two posts
+   * published on the same day apart, which is the ordinary case for a recap
+   * plus a research note.
+   *
+   * Rendered in New York rather than the server's zone: Cloud Run runs in UTC,
+   * so a 16:05 close read back as 20:05 and a late-evening post appeared to be
+   * on the following day.
+   */
   private formatDate(ts: Timestamp | null | undefined): string {
     if (!ts) return "";
     const d = typeof ts.toDate === "function" ? ts.toDate() : new Date(ts as unknown as string);
     if (Number.isNaN(d.getTime())) return "";
-    return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+    const et = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(d);
+    const at = (t: string) => et.find((p) => p.type === t)?.value ?? "";
+    return `${at("month")} ${at("day")} · ${at("hour")}:${at("minute")} ET`;
   }
 
   private slugify(input: string): string {
