@@ -313,6 +313,24 @@ export class BlogsAdminService {
    * public download URL — leaving `content` as just text + URLs, safely under
    * 1 MB, with no ceiling on image size.
    */
+  /**
+   * A hero image arrives either as a URL someone pasted or as a file the admin
+   * picked, which reaches us as a data URI. The second cannot be stored as-is:
+   * a real image base64-encoded is far past Firestore's 1 MB document cap, and
+   * the post would fail to write.
+   *
+   * externalizeImages already uploads data URIs and hands back their Storage
+   * URL, and leaves anything else untouched — so a pasted URL passes straight
+   * through and a picked file is hoisted, by one code path.
+   */
+  private async resolveHero(value: unknown, blogId: string): Promise<string | null> {
+    if (typeof value !== "string" || !value.trim()) return null;
+    const resolved = await this.externalizeImages(value.trim(), blogId);
+    // A data URI the uploader did not recognise (an unsupported image type)
+    // comes back unchanged — storing it would blow the document cap.
+    return resolved.startsWith("data:") ? null : resolved;
+  }
+
   private async externalizeImages(
     content: string,
     blogId: string,
@@ -557,10 +575,7 @@ export class BlogsAdminService {
       editorId: "console-admin",
       categories: kick ? [kick] : [],
       tags: [],
-      coverImageUrl:
-        typeof body.heroImageUrl === "string" && body.heroImageUrl.trim()
-          ? body.heroImageUrl.trim()
-          : null,
+      coverImageUrl: await this.resolveHero(body.heroImageUrl, ref.id),
       format: resolved.format,
       css: resolved.css,
       seo: {
@@ -627,10 +642,7 @@ export class BlogsAdminService {
       }
     }
     if (body.heroImageUrl !== undefined) {
-      update.coverImageUrl =
-        typeof body.heroImageUrl === "string" && body.heroImageUrl.trim()
-          ? body.heroImageUrl.trim()
-          : null;
+      update.coverImageUrl = await this.resolveHero(body.heroImageUrl, id);
     }
     if (body.kick !== undefined) {
       const kick = String(body.kick ?? "");
