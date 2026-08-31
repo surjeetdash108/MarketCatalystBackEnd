@@ -96,12 +96,84 @@ export class MacroEventsJob implements OnModuleInit {
             isoDate(addDays(now, ECON_LOOKAHEAD_DAYS)),
           );
           const keep = new Set<string>();
+          // ONE RELEASE, TWO ROWS. FMP publishes the Beige Book twice on the
+          // same day — as "Beige Book" and as "Fed Beige Book", both with no
+          // figures. The doc id is slug-derived, so the two never collide and a
+          // single release reaches the calendar as two entries.
+          //
+          // Only ISSUER words are ignored here: words naming WHO publishes a
+          // number, never WHAT it measures.
+          //
+          // DO NOT widen this into "one name contains the other". Measured
+          // against a real calendar, that rule merges "Core CPI YoY" into "CPI
+          // YoY", "Retail Sales Ex Autos MoM" into "Retail Sales MoM" and "U-6
+          // Unemployment Rate" into "Unemployment Rate" — different releases
+          // carrying different numbers. The words that distinguish them (core,
+          // ex, u-6, mom, yoy) have exactly the same shape as the word that
+          // marks a duplicate (fed), so structure alone cannot tell the two
+          // cases apart. A list of measurement-free words can, which is why the
+          // rule is a vocabulary and not a pattern.
+          const QUALIFIER = new Set([
+            "fed",
+            "federal",
+            "reserve",
+            "us",
+            "usa",
+            "national",
+            "the",
+            "of",
+          ]);
+          const canonical = (name: string) =>
+            name
+              .toLowerCase()
+              .replace(/\bu\.?\s?s\.?\b/g, "us")
+              .replace(/\([^)]*\)/g, " ")
+              .replace(/[^a-z0-9]+/g, " ")
+              .trim()
+              .split(" ")
+              .filter((t) => t && !QUALIFIER.has(t))
+              .join(" ");
+          // Most non-null figures wins; the longer (more specific) name breaks
+          // a tie. Neither depends on the order the vendor returned rows in.
+          const richness = (e: {
+            event: string;
+            actual?: unknown;
+            estimate?: unknown;
+            previous?: unknown;
+          }) =>
+            [e.actual, e.estimate, e.previous].filter((v) => v != null).length *
+              100 +
+            e.event.length;
+          const bestByKey = new Map<string, (typeof events)[number]>();
+          const collapsed: string[] = [];
           for (const e of events) {
             if (!e.event || !e.date) continue;
             const country = (e.country ?? "").toUpperCase();
             if (country !== "US" && country !== "USD") continue;
             const impact = (e.impact ?? "").toLowerCase();
             if (impact !== "high" && impact !== "medium") continue; // drop low-impact noise
+            const key = `${e.date.slice(0, 10)}|${canonical(e.event)}`;
+            const seen = bestByKey.get(key);
+            if (!seen) {
+              bestByKey.set(key, e);
+              continue;
+            }
+            const [win, lost] =
+              richness(e) > richness(seen) ? [e, seen] : [seen, e];
+            bestByKey.set(key, win);
+            collapsed.push(
+              `${e.date.slice(0, 10)} "${lost.event}" -> "${win.event}"`,
+            );
+          }
+          // Surfaced rather than silent: a new duplicate shape shows up in the
+          // job log instead of only on the calendar, where a reader finds it.
+          if (collapsed.length > 0) {
+            this.logger.warn(
+              `macro-events: collapsed ${collapsed.length} duplicate release(s) — ${collapsed.join("; ")}`,
+            );
+          }
+          for (const e of bestByKey.values()) {
+            const impact = (e.impact ?? "").toLowerCase();
             const day = e.date.slice(0, 10);
             const slug = e.event
               .toLowerCase()
