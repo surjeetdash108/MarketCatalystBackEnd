@@ -247,12 +247,32 @@ export class SnapshotCacheService implements OnModuleDestroy {
     const num = (v: unknown) => (typeof v === "number" ? v : null);
     // `session.price` is the vendor's own resolved last price; fall back to the
     // last minute bar and then the previous close for a pre-open request.
-    const price = num(s.price) ?? num(min.close) ?? num(s.previous_close);
+    const vendorPrice = num(s.price);
+    const prev = num(s.previous_close);
+    const price = vendorPrice ?? num(min.close) ?? prev;
+    // The change has to describe the price we are actually returning.
+    //
+    // The vendor computes change/change_percent against ITS OWN last price. If
+    // that price is missing and we fall back to the minute bar or the previous
+    // close, keeping the vendor's percentage pairs a number with a price it was
+    // never derived from — and the row contradicts itself. AEHL rendered $6.34
+    // at +93.14% when, against the same previous close of 3.54, $6.34 is
+    // +79.1%; +93.14% belonged to a $6.84 print we were not showing.
+    //
+    // So the percentage is the vendor's only when the price is too. Otherwise
+    // it is recomputed from the price we chose, which may lag but can never be
+    // arithmetically wrong about the number printed beside it.
+    const paired = vendorPrice != null;
+    const canDerive = price != null && prev != null && prev !== 0;
     return {
       ticker: t.ticker,
       price,
-      change: num(s.change),
-      changePct: num(s.change_percent),
+      change: paired ? num(s.change) : canDerive ? price - prev : null,
+      changePct: paired
+        ? num(s.change_percent)
+        : canDerive
+          ? ((price - prev) / prev) * 100
+          : null,
       previousClose: num(s.previous_close),
       open: num(s.open),
       dayHigh: num(s.high),
