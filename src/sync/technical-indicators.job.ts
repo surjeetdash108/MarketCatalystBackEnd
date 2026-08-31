@@ -439,6 +439,16 @@ export function computeIndicators(
   const sma50 = sma(closes, 50);
   const sma200 = sma(closes, 200);
   const week5ChangePct = changeOverSessions(closes, 5);
+  // The close the 5-day move is measured FROM, stored alongside the move itself.
+  //
+  // week5ChangePct ends at the last stored bar, which can be days old — DAIC
+  // read +1258% from a close two sessions back, beside a live price that had
+  // since fallen ~37%. Publishing the base lets the reader measure the same
+  // window to the price it is actually showing, so the figure describes the
+  // number next to it. Null whenever the move is null, so the two travel
+  // together and a caller cannot mix a fresh base with a stale move.
+  const week5BaseClose =
+    week5ChangePct == null ? null : (closes[closes.length - 1 - 5] ?? null);
   const latestClose = closes[closes.length - 1];
 
   // 52-week range from the real rolling year of highs/lows.
@@ -500,6 +510,8 @@ export function computeIndicators(
     aboveSma200: sma200 == null ? null : latestClose >= sma200,
     week5ChangePct:
       week5ChangePct == null ? null : Math.round(week5ChangePct * 100) / 100,
+    week5BaseClose:
+      week5BaseClose == null ? null : Math.round(week5BaseClose * 10000) / 10000,
 
     /** Rolling RSI(14) line for the RSI pane. */
     rsi14Series: rsiHistory.map((v) => Math.round(v * 10) / 10),
