@@ -11,6 +11,9 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import * as Sentry from "@sentry/node";
+import { randomUUID } from "crypto";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { acquireLock, releaseLock } from "../common/job-lock.util";
 import { CronJob } from "cron";
 import type { Response } from "express";
 import { AllSourcesFailedError } from "../adapters/adapter-error";
@@ -49,7 +52,22 @@ function nextRunAt(cronExpression: string, timeZone: string): string | null {
 
 import { AdminGuard } from "../common/admin.guard";
 
+/**
+ * Lease lifetime for an HTTP-triggered job run.
+ *
+ * The premarket Cloud Run Job already takes this lease in job-entry.ts, but the
+ * HTTP path did not — and that is how the ~25 SCHEDULER-driven jobs actually
+ * run. A scheduler retry, a double-fire, or a manual run overlapping a
+ * scheduled one were three separate processes with nothing between them but a
+ * per-process in-memory flag.
+ *
+ * Set well above the slowest job's runtime; a lease that expires mid-run would
+ * let a second process in. Override with JOB_LOCK_TTL_MS.
+ */
+const HTTP_JOB_LOCK_TTL_MS = Number(process.env.JOB_LOCK_TTL_MS ?? 30 * 60_000);
+
 @Controller("sync")
+
 export class SyncController {
   private readonly logger = new Logger(SyncController.name);
 
@@ -67,6 +85,8 @@ export class SyncController {
   constructor(
     private readonly registry: SyncRegistry,
     private readonly meta: SyncMetaService,
+    // Supplies the Firestore handle the job lease is written to.
+    private readonly firebase: FirebaseAdminService,
   ) {}
 
   @Get("jobs")
@@ -184,10 +204,24 @@ export class SyncController {
           runningSince: state.runningSince,
         };
       }
+      // Cross-process mutual exclusion. acquireLock FAILS OPEN: if Firestore is
+      // unreachable it returns true and the run proceeds, because a lock
+      // outage must not silently stop the whole sync schedule.
+      const ownerId = randomUUID();
+      const got = await acquireLock(this.firebase.firestore, job, {
+        ttlMs: HTTP_JOB_LOCK_TTL_MS,
+        ownerId,
+      });
+      if (!got) {
+        res.status(HttpStatus.ACCEPTED);
+        return { job, status: "already-running", lockedByAnotherProcess: true };
+      }
       // Fire-and-forget: the caller (Cloud Scheduler) gets a fast 202 and the
       // orchestration continues in the background. Errors are logged + reported
       // to Sentry, never surfaced to the caller (there is no one waiting).
-      void runner().then(
+      void runner().finally(() =>
+        releaseLock(this.firebase.firestore, job, ownerId),
+      ).then(
         () => this.logger.log(`detached job "${job}" completed`),
         (err: unknown) => {
           Sentry.captureException(err);
@@ -200,6 +234,15 @@ export class SyncController {
       return { job, status: "started", detached: true };
     }
 
+    const ownerId = randomUUID();
+    const got = await acquireLock(this.firebase.firestore, job, {
+      ttlMs: HTTP_JOB_LOCK_TTL_MS,
+      ownerId,
+    });
+    if (!got) {
+      res.status(HttpStatus.ACCEPTED);
+      return { job, status: "already-running", lockedByAnotherProcess: true };
+    }
     try {
       return await runner();
     } catch (err) {

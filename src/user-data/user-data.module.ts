@@ -8,6 +8,7 @@ import { ProfileController } from "./profile.controller";
 import { SettingsController } from "./settings.controller";
 import { StockNotesController } from "./stock-notes.controller";
 import { WatchlistController } from "./watchlist.controller";
+import { PlansModule } from "../plans/plans.module";
 import { WhoamiUserController } from "./whoami-user.controller";
 
 /**
@@ -16,7 +17,8 @@ import { WhoamiUserController } from "./whoami-user.controller";
  */
 @Module({
   // LiveModule exports AiAnalysisService, which the aggregate routes use.
-  imports: [LiveModule],
+  // PlansModule supplies SubscriptionsService for the free-tier watchlist cap.
+  imports: [LiveModule, PlansModule],
   controllers: [
     AiUserController,
     WhoamiUserController,
