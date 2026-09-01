@@ -19,6 +19,7 @@ import { IposJob } from "./ipos.job";
 import { MacroEventsJob } from "./macro-events.job";
 import { MarketIndicesJob } from "./market-indices.job";
 import { MarketMoversJob } from "./market-movers.job";
+import { VolumeLeadersJob } from "./volume-leaders.job";
 import { MarketQuotesJob } from "./market-quotes.job";
 import { CompanyQuotesJob } from "./company-quotes.job";
 import { NewsJob } from "./news.job";
@@ -71,6 +72,7 @@ import { LiveModule } from "../live/live.module";
     EarningsActualsJob,
     TickerPeriodAnalysisJob,
     MarketMoversJob,
+    VolumeLeadersJob,
     CompaniesJob,
     CompaniesFinancialsBackfillJob,
     EarningsJob,
