@@ -615,23 +615,64 @@ export class OnDemandService implements OnModuleDestroy {
       const from = new Date();
       from.setUTCFullYear(from.getUTCFullYear() - 2);
       const iso = (d: Date) => d.toISOString().slice(0, 10);
-      const raw = await this.polygon.getAggsRange(ticker, iso(from), iso(to));
-      if (raw.length === 0) return {};
+      const col = this.firebase.firestore.collection("ohlcv_bars");
 
-      const bars: IndicatorBar[] = raw.map((b) => ({
-        barDate: new Date(b.t).toISOString().slice(0, 10),
-        open: b.o,
-        high: b.h,
-        low: b.l,
-        close: b.c,
-        volume: b.v,
-        vwap: b.vw ?? null,
-      }));
+      // USE WHAT IS ALREADY STORED. history-backfill wrote daily bars for the
+      // whole listed market by session, so for most tickers the ~2 years this
+      // used to fetch are already on disk. Re-fetching them is the single
+      // heaviest part of an on-demand miss — hundreds of vendor rows and
+      // hundreds of writes — spent to reproduce data we have.
+      //
+      // Only recent, deep-enough history qualifies: too few bars and the long
+      // windows (sma200, the rolling 52-week range) would be computed over a
+      // short series, and a stale edge would rank the ticker on old prices.
+      // Either way it falls through to the vendor, so this can only make the
+      // path cheaper, never wrong.
+      const STORED_MIN_BARS = 200;
+      const STORED_MAX_STALE_DAYS = 6;
+      let bars: IndicatorBar[] = [];
+      try {
+        const storedSnap = await col
+          .where("ticker", "==", ticker)
+          .orderBy("barDate", "desc")
+          .limit(500)
+          .get();
+        const stored = storedSnap.docs
+          .map((d) => d.data() as IndicatorBar)
+          .reverse();
+        const newest = stored.length
+          ? String(stored[stored.length - 1].barDate ?? "")
+          : "";
+        const ageDays = newest
+          ? Math.floor(
+              (Date.now() - new Date(`${newest}T00:00:00Z`).getTime()) / 86_400_000,
+            )
+          : Infinity;
+        if (stored.length >= STORED_MIN_BARS && ageDays <= STORED_MAX_STALE_DAYS) {
+          bars = stored;
+        }
+      } catch {
+        // A read failure just means we fetch, as before.
+      }
+
+      if (bars.length === 0) {
+        const raw = await this.polygon.getAggsRange(ticker, iso(from), iso(to));
+        if (raw.length === 0) return {};
+
+        bars = raw.map((b) => ({
+          barDate: new Date(b.t).toISOString().slice(0, 10),
+          open: b.o,
+          high: b.h,
+          low: b.l,
+          close: b.c,
+          volume: b.v,
+          vwap: b.vw ?? null,
+        }));
 
       // Persist to ohlcv_bars (same doc shape stock-history.job writes) so the
       // RS / tech-rating crons can rank this ticker next run. Chunked to stay
-      // under Firestore's 500-write batch ceiling.
-      const col = this.firebase.firestore.collection("ohlcv_bars");
+      // under Firestore's 500-write batch ceiling. Only for bars we FETCHED —
+      // rewriting what we just read back would be pure cost.
       for (let i = 0; i < bars.length; i += 450) {
         const batch = this.firebase.firestore.batch();
         for (const b of bars.slice(i, i + 450)) {
@@ -653,6 +694,7 @@ export class OnDemandService implements OnModuleDestroy {
           );
         }
         await batch.commit();
+      }
       }
 
       // SPY closes for beta — the benchmark the cron uses, always synced.

@@ -83,17 +83,41 @@ export class HistoryBackfillJob implements OnModuleInit {
         if (dow === 0 || dow === 6) continue; // weekends carry no session
         dates.push(d);
       }
-      dates.reverse(); // oldest first, so a crash leaves a contiguous prefix
+      // NEWEST FIRST. The first attempt wrote oldest-first so an interruption
+      // would leave a contiguous prefix — right about contiguity, wrong about
+      // which end matters. It timed out at 109 of 300 sessions and left tickers
+      // holding Sep-Nov 2025 with no recent edge, which every trailing-window
+      // indicator and every staleness check reads first. WBS ended up with 600
+      // stored bars and still fell through to a vendor fetch for being 14 days
+      // stale. Truncating now costs the OLD end, which those windows tolerate.
 
       const db = this.firebase.firestore;
       const col = db.collection("ohlcv_bars");
       let sessions = 0;
       let barsWritten = 0;
       let rejected = 0;
+      let skipped = 0;
+      // Set HISTORY_BACKFILL_FORCE=true to rewrite sessions already stored.
+      const force = process.env.HISTORY_BACKFILL_FORCE === "true";
       /** Newest session seen per ticker, to set stock-history's watermark. */
       const newestByTicker = new Map<string, string>();
 
       for (const date of dates) {
+        // RESUMABLE. A session already written is skipped, so a re-run after a
+        // timeout continues rather than re-paying for finished work. SPY trades
+        // every session, so its bar is a reliable probe for "this session is
+        // done", and a doc-id lookup needs no index.
+        if (!force) {
+          const probe = await db
+            .collection("ohlcv_bars")
+            .doc(`SPY_${date}`)
+            .get()
+            .catch(() => null);
+          if (probe?.exists && probe.data()?.source === "polygon-grouped") {
+            skipped++;
+            continue;
+          }
+        }
         const bars = await this.polygon.getGroupedDaily(date).catch((err) => {
           this.logger.warn(`grouped-daily ${date} failed: ${err.message}`);
           return [];
@@ -148,7 +172,11 @@ export class HistoryBackfillJob implements OnModuleInit {
             // basis, and blending two bases is worse than either one.
             merge: false,
           });
-          newestByTicker.set(ticker, date);
+          // Sessions run NEWEST-first, so the first time a ticker appears is
+          // its newest session. Overwriting on each later (older) session would
+          // walk every watermark backwards and make stock-history re-fetch a
+          // deep window per ticker — the exact cost this job exists to avoid.
+          if (!newestByTicker.has(ticker)) newestByTicker.set(ticker, date);
         }
 
         for (let i = 0; i < writes.length; i += WRITE_CHUNK) {
@@ -157,15 +185,18 @@ export class HistoryBackfillJob implements OnModuleInit {
         barsWritten += writes.length;
         if (sessions % 25 === 0) {
           this.logger.log(
-            `history-backfill: ${sessions}/${dates.length} sessions, ${barsWritten.toLocaleString()} bars`,
+            `history-backfill: ${sessions} written, ${skipped} already present, of ${dates.length} sessions; ${barsWritten.toLocaleString()} bars`,
           );
         }
       }
 
+      // Watermarks are written even on a partial run: they record what IS
+      // stored, and a later run only moves them forward.
       // Tell stock-history how far each ticker is already synced, so its next
       // run appends the newest session instead of re-fetching a deep window
       // per ticker — which is the very cost this job exists to avoid.
-      const earliest = dates[0];
+      // dates run newest-first now, so the oldest is the last element.
+      const earliest = dates[dates.length - 1];
       let watermarks = 0;
       const entries = [...newestByTicker.entries()];
       for (let i = 0; i < entries.length; i += WRITE_CHUNK) {
@@ -188,13 +219,14 @@ export class HistoryBackfillJob implements OnModuleInit {
       }
 
       this.logger.log(
-        `history-backfill: done — ${sessions} sessions, ${barsWritten.toLocaleString()} bars, ` +
+        `history-backfill: done — ${sessions} sessions written, ${skipped} skipped, ${barsWritten.toLocaleString()} bars, ` +
           `${newestByTicker.size.toLocaleString()} tickers, ${watermarks.toLocaleString()} watermarks` +
           (rejected > 0 ? `, ${rejected} implausible bars dropped` : ""),
       );
       await this.meta.record(JOB_NAME, { ok: true, count: barsWritten });
       return {
         sessions,
+        skipped,
         bars: barsWritten,
         tickers: newestByTicker.size,
         rejected,
