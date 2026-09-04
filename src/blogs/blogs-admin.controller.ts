@@ -33,6 +33,19 @@ export class BlogsAdminController {
     return { blogs: await this.blogs.list() };
   }
 
+  /**
+   * The shared blog design on its own.
+   *
+   * Declared BEFORE any parameterised `blogs/:x` route so "theme" is not
+   * swallowed as an id. Every html row already carries this, so the console
+   * needs it separately only for the editor's Design row — which otherwise can
+   * describe a freshly loaded file and nothing else.
+   */
+  @Get("blogs/theme")
+  async theme() {
+    return this.blogs.theme();
+  }
+
   @Post("blogs")
   async create(@Body() body: BlogAdminBody) {
     return this.blogs.create(body ?? {});

@@ -144,6 +144,58 @@ export function extractTheme(input: string): { html: string; theme: BlogTheme } 
 }
 
 /**
+ * Puts an html post back together: the body it stores, wrapped in the design it
+ * publishes with.
+ *
+ * The inverse of extractTheme, and the reason it exists: a saved post keeps
+ * ONLY its <body>, because the design belongs to every post and is stored once.
+ * Read back as-is, the console's source box showed a bare fragment of the file
+ * that was uploaded — the <style>, the fonts and the scripts simply gone — so
+ * the editor disagreed with both the file and the preview it had just shown.
+ *
+ * Not a byte-for-byte copy of the uploaded file: <title> and <meta> are not
+ * stored (extractTheme drops them so they cannot publish as loose text), and
+ * whitespace between the head elements is regenerated. It IS the whole
+ * publishable document — everything that decides how the article renders.
+ *
+ * Stable across a re-save: feeding this back through extractTheme yields the
+ * same body and the same theme, so opening a post and saving it unchanged
+ * writes it unchanged.
+ *
+ * A post whose design was never captured stays a bare fragment rather than
+ * gaining an empty shell — that is what the editor sent, and what it expects
+ * to get back.
+ */
+export function composeDocument(body: string, theme: BlogTheme): string {
+  const head = [
+    ...theme.links.map((href) => `<link rel="stylesheet" href="${href}">`),
+    ...theme.css.map((css) => `<style>
+${css}
+</style>`),
+    ...theme.scripts.map((src) => `<script src="${src}"></script>`),
+  ];
+  /* Recorded, never executed by the reader — but the admin authored them, so
+     they belong in the document the editor shows and re-saves. At the END OF
+     THE BODY, not in the head: an inline script in an authored page is there to
+     act on the markup above it, and hoisting it into the head would show the
+     admin a document that reads as if it ran before its own content existed. */
+  const tail = theme.inlineScripts.map((js) => `<script>
+${js}
+</script>`);
+  if (!head.length && !tail.length) return body;
+  return `<!doctype html>
+<html>
+<head>
+${head.join("\n")}
+</head>
+<body>
+${body}
+${tail.join("\n")}
+</body>
+</html>`;
+}
+
+/**
  * Accepted upload types, keyed by the MIME the browser puts in the data URI.
  * An allowlist rather than a sniff: this decides what gets written into
  * Storage, so it should only ever admit the two the reader can render.
@@ -158,6 +210,16 @@ export function extractTheme(input: string): { html: string; theme: BlogTheme } 
  * larger file would be refused by the body parser with a much blunter error.
  */
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Ceiling for the verbatim document kept on an html post.
+ *
+ * Firestore caps a document at 1 MB TOTAL, and this field sits alongside the
+ * body, the excerpt and the rest. Refused here with a message naming the size,
+ * rather than letting the write fail with Firestore's own opaque error after
+ * the images have already been uploaded.
+ */
+const MAX_DOC_HTML_BYTES = 700 * 1024;
 
 const SOURCE_KINDS: Record<string, { id: SourceKind; ext: string; mime: string }> = {
   "application/pdf": { id: "pdf", ext: "pdf", mime: "application/pdf" },
@@ -178,6 +240,12 @@ export interface BlogAdminView {
   dek: string;
   author: string;
   read: string;
+  /**
+   * The body to edit. For an html post this is the WHOLE document — the stored
+   * body recomposed with the shared design (see composeDocument) — so the
+   * source box shows what was uploaded rather than a fragment of it. Every
+   * other format returns HTML converted from the stored Markdown.
+   */
   html: string;
   status: "Published" | "Draft";
   date: string;
@@ -199,7 +267,39 @@ export interface BlogAdminView {
   format: BlogFormat;
   /** Hero image shown above the article. */
   heroImageUrl: string | null;
+  /**
+   * The shared blog design, resolved from THEME and returned with every html
+   * post.
+   *
+   * `html` stores only the post's <body> — extractTheme lifts the <style>, the
+   * stylesheet links and the scripts out on write, so a post read back had no
+   * design at all and the console previewed a saved article as unstyled markup.
+   * The theme was write-only: saveTheme() wrote it and nothing ever read it.
+   *
+   * Empty for every other format. Prose publishes with the site's own styling,
+   * so handing a text post the blog stylesheet would preview it with a design
+   * it will never publish with.
+   */
+  css: string[];
+  links: string[];
+  scripts: string[];
 }
+
+/**
+ * The article exactly as its author wrote it, when the post has one.
+ *
+ * WHY this exists alongside the theme: extractTheme lifts every design into ONE
+ * shared document, last upload wins. That is right for a house style, but it
+ * means two posts CANNOT have two designs — uploading a second file silently
+ * redefines the first post's look — and the head of the file (title, meta,
+ * element order) was never stored at all. A post could therefore never be
+ * reproduced as uploaded.
+ *
+ * So an html post now keeps its own document, verbatim, and that is what the
+ * editor loads and the reader should draw. The only edit is that embedded
+ * base64 images are hoisted to Storage (Firestore's 1 MB cap makes storing them
+ * inline impossible) — every byte of markup, CSS and structure is untouched.
+ */
 
 /** Request body for POST/PATCH — every field optional at the wire, validated below. */
 export interface BlogAdminBody {
@@ -302,6 +402,65 @@ export class BlogsAdminService {
       // lose it. Logged loudly because every later post inherits this.
       this.logger.error(`blog theme write failed: ${(err as Error).message}`);
     }
+  }
+
+  /**
+   * Reads the shared design back. The counterpart to saveTheme — without it the
+   * theme document is write-only and no reader can reproduce what an html post
+   * publishes with.
+   *
+   * Read ONCE per list() and passed into every row, not per document: it is one
+   * document shared by every post, so a per-row read would be N identical
+   * Firestore reads for one value.
+   */
+  private async loadTheme(): Promise<BlogTheme> {
+    const empty: BlogTheme = { css: [], links: [], scripts: [], inlineScripts: [] };
+    try {
+      const snap = await this.firebase.firestore
+        .collection(THEME)
+        .doc(THEME_DOC)
+        .get();
+      if (!snap.exists) return empty;
+      const d = snap.data() ?? {};
+      const arr = (v: unknown): string[] =>
+        Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+      return {
+        css: arr(d.css),
+        links: arr(d.links),
+        scripts: arr(d.scripts),
+        inlineScripts: arr(d.inlineScripts),
+      };
+    } catch (err) {
+      // A missing design must not blank the board: the list is the thing being
+      // read, and every row is still valid without it.
+      this.logger.error(`blog theme read failed: ${(err as Error).message}`);
+      return empty;
+    }
+  }
+
+  /** The shared design on its own, for the editor's Design row. */
+  async theme(): Promise<BlogTheme> {
+    return this.loadTheme();
+  }
+
+  /**
+   * The verbatim document to store for an html post.
+   *
+   * Only base64 images are rewritten — they cannot live in Firestore — and the
+   * rewrite happens on the WHOLE document so an image referenced from the head
+   * or from inline CSS is hoisted too, not just those in the body.
+   */
+  private async prepareDocument(raw: string, blogId: string): Promise<string> {
+    const doc = await this.externalizeImages(raw, blogId);
+    const bytes = Buffer.byteLength(doc, "utf8");
+    if (bytes > MAX_DOC_HTML_BYTES) {
+      throw new BadRequestException(
+        `document_too_large: the article is ${(bytes / 1024).toFixed(0)} KB, over the ` +
+          `${MAX_DOC_HTML_BYTES / 1024} KB limit for a single post. Move large inline ` +
+          `data (fonts, base64 media) to a URL.`,
+      );
+    }
+    return doc;
   }
 
   private get col() {
@@ -586,12 +745,14 @@ export class BlogsAdminService {
 
   /** ALL blogs (any status), newest first, mapped to the console editor shape. */
   async list(): Promise<BlogAdminView[]> {
-    const snap = await this.col.get();
+    // One read for the whole list — the design is a single shared document, so
+    // resolving it per row would be N identical reads for one value.
+    const [snap, theme] = await Promise.all([this.col.get(), this.loadTheme()]);
     const rows = snap.docs.map((doc) => {
       const data = doc.data();
       const createdMs =
         data.createdAt instanceof Timestamp ? data.createdAt.toMillis() : 0;
-      return { view: this.toView(doc.id, data), sortKey: createdMs };
+      return { view: this.toView(doc.id, data, theme), sortKey: createdMs };
     });
     // Sort in memory (not via orderBy, which would silently drop docs missing
     // the field) — newest created first.
@@ -599,7 +760,32 @@ export class BlogsAdminService {
     return rows.map((r) => r.view);
   }
 
-  private toView(id: string, data: FirebaseFirestore.DocumentData): BlogAdminView {
+  /**
+   * Which stylesheet an html post publishes with.
+   *
+   * A post stores its own (see create()); one written before that field existed
+   * has only the shared theme, and a post whose document carried no <style> at
+   * all has neither, which is also the shared theme's case — an authored
+   * fragment is written against the house design.
+   */
+  private designFor(
+    data: FirebaseFirestore.DocumentData,
+    theme: BlogTheme,
+  ): { css: string[]; links: string[]; scripts: string[] } {
+    const arr = (v: unknown): string[] =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()) : [];
+    const own = arr(data.css);
+    if (own.length) {
+      return { css: own, links: arr(data.themeLinks), scripts: arr(data.themeScripts) };
+    }
+    return { css: theme.css, links: theme.links, scripts: theme.scripts };
+  }
+
+  private toView(
+    id: string,
+    data: FirebaseFirestore.DocumentData,
+    theme: BlogTheme,
+  ): BlogAdminView {
     // An html post already stores HTML; every other format stores Markdown.
     // Running the Markdown parser over authored markup does not leave it alone
     // — a block indented four spaces becomes a code block, and text between
@@ -615,6 +801,12 @@ export class BlogsAdminService {
     const categories: string[] = Array.isArray(data.categories)
       ? data.categories
       : [];
+    // Resolved once: it decides both what the editor's Design row shows and,
+    // for a post with no stored document, what composeDocument rebuilds with.
+    const design =
+      storedFormat === "html"
+        ? this.designFor(data, theme)
+        : { css: [], links: [], scripts: [] };
     return {
       id,
       zone,
@@ -624,9 +816,21 @@ export class BlogsAdminService {
       dek: data.excerpt ?? "",
       author: data.author ?? "",
       read: data.read ?? "",
+      // An html post is handed back as the whole document — body plus the
+      // design it publishes with — because that is what the editor's source
+      // box sent and what its preview renders verbatim. See composeDocument.
       html:
         storedFormat === "html"
-          ? (data.content ?? "")
+          ? // The post's own document when it has one. composeDocument is the
+            // fallback for posts written before documents were kept per post:
+            // they exist only as a body plus the shared theme, so that is the
+            // closest reproduction available for them.
+            typeof data.documentHtml === "string" && data.documentHtml
+            ? data.documentHtml
+            // Rebuilt with the post's OWN design, not the newest upload's —
+            // recomposing against the shared theme is why opening an older post
+            // showed a different article than the one that was published.
+            : composeDocument(data.content ?? "", { ...design, inlineScripts: [] })
           : this.markdownToHtml(data.content ?? ""),
       status: data.status === "published" ? "Published" : "Draft",
       date: this.formatDate(data.publishedAt),
@@ -648,6 +852,12 @@ export class BlogsAdminService {
       // `content` has always held.
       format: storedFormat,
       heroImageUrl: typeof data.coverImageUrl === "string" ? data.coverImageUrl : null,
+      /* The post's OWN design when it has one, and only then the shared theme.
+         The shared theme is last-upload-wins, so preferring it here showed the
+         console an article drawn with a different post's stylesheet — exactly
+         what the reader saw. It stays as the fallback for posts written before
+         the design was kept per post; those have nothing else. */
+      ...design,
     };
   }
 
@@ -673,12 +883,29 @@ export class BlogsAdminService {
     // would flatten exactly the structure the author chose the format for.
     // Either way, embedded base64 images are hoisted to Storage so the stored
     // content never carries a data URI (Firestore's 1 MB cap).
-    const resolved = this.resolveFormat(body, typeof body.html === "string" ? body.html : "");
+    const rawHtml = typeof body.html === "string" ? body.html : "";
+    const resolved = this.resolveFormat(body, rawHtml);
+    // Still written: the shared theme is what the site styles its own blog
+    // furniture with, and older posts have nothing else. It is no longer what
+    // reproduces THIS post — documentHtml is.
     if (resolved.theme) await this.saveTheme(resolved.theme);
-    const content = await this.externalizeImages(
-      resolved.format === "html" ? resolved.html : this.htmlToMarkdown(resolved.html),
-      ref.id,
-    );
+    /* The article as authored, kept whole so the post can be reproduced exactly
+       — head, element order and its own CSS included. See BlogAdminView.html.
+
+       The body is then split OUT OF the prepared document rather than uploaded
+       separately: both contain the same images, so hoisting each on its own
+       would upload every image twice and leave the two copies pointing at
+       different URLs. */
+    const documentHtml =
+      resolved.format === "html" ? await this.prepareDocument(rawHtml, ref.id) : null;
+    /* The post's OWN design, split off the same prepared document as its body.
+       This is what the reader draws — not the shared theme, which the next
+       upload overwrites. See the `css` field below. */
+    const own = documentHtml !== null ? extractTheme(documentHtml) : null;
+    const content =
+      own !== null
+        ? own.html
+        : await this.externalizeImages(this.htmlToMarkdown(resolved.html), ref.id);
 
     const source = typeof body.pdfDataUri === "string" && body.pdfDataUri
       ? await this.storeSourceDoc(body.pdfDataUri, ref.id)
@@ -699,6 +926,21 @@ export class BlogsAdminService {
       tags: [],
       coverImageUrl: await this.resolveHero(body.heroImageUrl, ref.id),
       format: resolved.format,
+      documentHtml,
+      /* The stylesheet THIS post publishes with, kept on the post.
+
+         It used to live only in the one shared THEME document, which every
+         later upload overwrote — so a post published in March was redrawn with
+         April's stylesheet, and any rule whose selectors did not match its
+         markup simply stopped applying. That is a published article changing
+         shape on its own, which is the one thing a blog must not do.
+
+         The shared theme is still written (below, and still the fallback for
+         posts that predate this field), but it is no longer what decides how a
+         given article looks. */
+      css: own ? own.theme.css : [],
+      themeLinks: own ? own.theme.links : [],
+      themeScripts: own ? own.theme.scripts : [],
       seo: {
         metaTitle: null,
         metaDescription: null,
@@ -752,14 +994,28 @@ export class BlogsAdminService {
     if (body.html !== undefined || body.format !== undefined) {
       // Same rule as create: html keeps its markup, everything else becomes
       // Markdown. Resolved together because the format decides both.
-      const r = this.resolveFormat(body, String(body.html ?? ""));
+      const rawHtml = String(body.html ?? "");
+      const r = this.resolveFormat(body, rawHtml);
       update.format = r.format;
       if (r.theme) await this.saveTheme(r.theme);
       if (body.html !== undefined) {
-        update.content = await this.externalizeImages(
-          r.format === "html" ? r.html : this.htmlToMarkdown(r.html),
-          id,
-        );
+        // Kept in step with the body: a post edited into another format must
+        // not keep a stale document, or it would reproduce as the old article.
+        // Same single-upload rule as create — the body comes out of the
+        // prepared document, not from a second pass over the same images.
+        const doc = r.format === "html" ? await this.prepareDocument(rawHtml, id) : null;
+        update.documentHtml = doc;
+        const own = doc !== null ? extractTheme(doc) : null;
+        update.content =
+          own !== null
+            ? own.html
+            : await this.externalizeImages(this.htmlToMarkdown(r.html), id);
+        // Kept in step with the body for the same reason it is: a post edited
+        // out of html format must not keep the stylesheet of the article it
+        // used to be. See the field docs in create().
+        update.css = own ? own.theme.css : [];
+        update.themeLinks = own ? own.theme.links : [];
+        update.themeScripts = own ? own.theme.scripts : [];
       }
     }
     if (body.heroImageUrl !== undefined) {
