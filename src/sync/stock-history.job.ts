@@ -25,6 +25,36 @@ const JOB_NAME = "stock-history";
 // Only a brand-new ticker pays the ~252-doc deep fill, once.
 const BATCH_SIZE = 600;
 
+/** A price/volume the vendor could plausibly have meant. */
+const finiteNonNegative = (v: unknown): boolean =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0;
+
+/**
+ * True when a daily bar is internally coherent and not from the future.
+ *
+ * Deliberately permissive: it rejects only what CANNOT be real, so a genuine
+ * outlier (a micro-cap that really did move 900%) still stores. A zero price is
+ * allowed through as non-negative but the high/low ordering check catches the
+ * degenerate rows that matter.
+ */
+function isSaneBar(
+  bar: { open?: unknown; high?: unknown; low?: unknown; close?: unknown; volume?: unknown },
+  barDate: string,
+  today: string,
+): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(barDate)) return false;
+  if (barDate > today) return false; // a session that has not happened
+  const { open, high, low, close, volume } = bar;
+  if (![open, high, low, close].every(finiteNonNegative)) return false;
+  if (volume != null && !finiteNonNegative(volume)) return false;
+  // High must bound the session; low must floor it.
+  const h = high as number, l = low as number;
+  const o = open as number, c = close as number;
+  if (h < l) return false;
+  if (o > h || c > h || o < l || c < l) return false;
+  return true;
+}
+
 /**
  * First-run backfill depth. Was 300 days, which capped the chart at 1Y and left
  * the 5Y timeframe rendering a synthetic series — recorded in the delivery plan
@@ -91,6 +121,7 @@ export class StockHistoryJob implements OnModuleInit {
       // would stay null for every ticker.
       const batch = rotating.includes("SPY") ? rotating : ["SPY", ...rotating];
       const today = isoDate(new Date());
+      let rejectedBars = 0;
       const floor = planHistoryFloor();
       let barsWritten = 0;
       let tickersUpdated = 0;
@@ -185,6 +216,19 @@ export class StockHistoryJob implements OnModuleInit {
             let lastDate = watermark;
             for (const bar of bars) {
               const barDate = bar.date;
+              // Reject a bar that cannot be true before it is stored.
+              //
+              // Nothing validated vendor numbers on the way in, so a NaN, an
+              // Infinity, a negative price or a future-dated session would be
+              // written verbatim and then silently poison every window
+              // indicator built on it — 52-week range, SMA/EMA, MACD, beta,
+              // pivots — for as long as it stayed inside the window. Dropping
+              // the bar costs one session; storing it corrupts a year of
+              // derived values.
+              if (!isSaneBar(bar, barDate, today)) {
+                rejectedBars++;
+                continue;
+              }
               writes.push({
                 ref: col.doc(`${ticker}_${barDate}`),
                 data: {
@@ -227,6 +271,11 @@ export class StockHistoryJob implements OnModuleInit {
         JOB_NAME,
         (cursor + BATCH_SIZE) % universe.length,
       );
+      if (rejectedBars > 0) {
+        this.logger.warn(
+          `stock-history: rejected ${rejectedBars} implausible bar(s) — see isSaneBar`,
+        );
+      }
       await this.meta.record(JOB_NAME, { ok: true, count: barsWritten });
       return { barsWritten, tickersUpdated };
     } catch (err) {

@@ -77,6 +77,7 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "institutional-ownership", trigger: "scheduler", schedules: ["0 10 * * *"], note: "fires daily but only WORKS inside the 13-F filing window (quarter end to deadline+15) or on Saturdays — filings arrive daily across that window and essentially never outside it. A skipped day makes no vendor call" },
   { name: "edgar-ipo-pipeline", trigger: "scheduler", schedules: ["0 11 * * 6"], note: "S-1/424B registrations move over weeks — a weekday fetch bought nothing" },
   { name: "companies-financials-backfill", trigger: "scheduler", schedules: ["0 12 * * 6"], note: "a cursor backfill with no deadline of its own" },
+  { name: "volume-leaders", trigger: "scheduler", schedules: ["20 18 * * 1-5"], note: "ranks the whole US market by relative volume from ONE grouped-daily call; runs after market-movers at 18:00" },
   { name: "premarket", trigger: "scheduler", schedules: ["0 8 * * 1-5"], note: "Cloud Run JOB premarket-job, not an HTTP POST — it orchestrates the phases below" },
 ];
 
@@ -111,6 +112,7 @@ const NOT_TRIGGERED: JobManifestEntry[] = [
   { name: "monthly-news-cleanup", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },
   { name: "ticker-weekly-ai", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },
   { name: "ticker-monthly-ai", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },
+  { name: "history-backfill", trigger: "none", schedules: [], note: "one-off. Cloud Run JOB history-backfill-job (SYNC_JOB=history-backfill), run by hand after the close — a 30-45 min run cannot go over HTTP, and its grouped-daily calls return a PARTIAL bar during market hours" },
 ];
 
 const bySchedulerName = new Map(SCHEDULER.map((e) => [e.name, e]));

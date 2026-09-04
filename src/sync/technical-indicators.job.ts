@@ -14,6 +14,11 @@ const JOB_NAME = "technical-indicators";
 // history happens to be loaded". 200-DMA needs 200; the binding constraint is
 // the 52-week window, so this is 252 plus a margin for holidays/halts.
 const BARS_TO_READ = 300;
+/** Per-ticker cache of the bar series this job computes from. */
+const SERIES_COLLECTION = "indicator_series";
+/** Newest bars pulled to top the cache up. One per session, so this covers a
+ *  long weekend plus margin; anything larger means a gap and a full re-read. */
+const DELTA_FETCH = 5;
 const MIN_BARS = 40;
 const RVOL_WINDOW = 20;
 const TRADING_DAYS_YEAR = 252;
@@ -631,14 +636,98 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
     return m;
   }
 
+  /**
+   * The last BARS_TO_READ sessions for a ticker, as ONE document read.
+   *
+   * WHY THIS EXISTS
+   * This job used to query 300 bar documents per ticker, every run. Firestore
+   * bills per DOCUMENT read, so that was 923 x 300 = 276,900 reads a day — 96%
+   * of the project's entire Firestore cost, spent re-reading a series that
+   * grows by one bar a day.
+   *
+   * The series is cached on a single document and topped up with only the bars
+   * that arrived since: 1 read for the cache plus 1 for the delta, instead of
+   * 300. A 300-bar window of six numbers is ~14 KB, comfortably inside the 1 MiB
+   * document limit.
+   *
+   * The indicator MATH IS UNCHANGED — computeIndicators receives exactly the
+   * same ascending array it always did. Only the source of the array moved.
+   *
+   * SELF-HEALING: a missing, malformed or stale-beyond-repair cache falls back
+   * to the original full query and rewrites the cache, so a bad document costs
+   * one expensive run rather than wrong numbers.
+   */
+  private async loadSeries(ticker: string): Promise<IndicatorBar[]> {
+    const db = this.firebase.firestore;
+    const ref = db.collection(SERIES_COLLECTION).doc(ticker);
+    const fullRead = async (): Promise<IndicatorBar[]> => {
+      const snap = await db
+        .collection("ohlcv_bars")
+        .where("ticker", "==", ticker)
+        .orderBy("barDate", "desc")
+        .limit(BARS_TO_READ)
+        .get();
+      return snap.docs.map((d) => d.data()).reverse() as IndicatorBar[];
+    };
+
+    let cached: IndicatorBar[] = [];
+    let lastDate = "";
+    try {
+      const doc = await ref.get();
+      const d = doc.data();
+      if (d && Array.isArray(d.bars)) {
+        cached = d.bars as IndicatorBar[];
+        lastDate = String(d.lastDate ?? "");
+      }
+    } catch {
+      // A cache read failure must not stop the job — fall through to the query.
+    }
+
+    let bars: IndicatorBar[];
+    if (cached.length >= MIN_BARS && lastDate) {
+      // The newest few bars, using the SAME (ticker asc, barDate desc) index the
+      // full read already uses. An inequality on barDate with an ascending sort
+      // would need a second composite index that does not exist — in production
+      // that is a FAILED_PRECONDITION on every ticker, not a slow path.
+      const recent = await db
+        .collection("ohlcv_bars")
+        .where("ticker", "==", ticker)
+        .orderBy("barDate", "desc")
+        .limit(DELTA_FETCH)
+        .get();
+      const fetched = (
+        recent.docs.map((d) => d.data()) as IndicatorBar[]
+      ).reverse();
+      const oldestFetched = fetched.length
+        ? String(fetched[0].barDate ?? "")
+        : "";
+      // The fetched slice must OVERLAP the cache, otherwise sessions between the
+      // two are missing and the indicators would read a hole as real history.
+      if (fetched.length > 0 && oldestFetched <= lastDate) {
+        const fresh = fetched.filter(
+          (b) => String(b.barDate ?? "") > lastDate,
+        );
+        bars = [...cached, ...fresh];
+      } else {
+        bars = await fullRead();
+      }
+    } else {
+      bars = await fullRead();
+    }
+
+    bars = bars.slice(-BARS_TO_READ);
+    const newest = bars.length ? String(bars[bars.length - 1].barDate ?? "") : "";
+    if (bars.length > 0 && newest !== lastDate) {
+      // Best-effort: the numbers this run returns do not depend on the write.
+      await ref
+        .set({ bars, lastDate: newest, updatedAt: new Date().toISOString() })
+        .catch(() => undefined);
+    }
+    return bars;
+  }
+
   private async computeFor(ticker: string, mktByDate: Map<string, number>) {
-    const snap = await this.firebase.firestore
-      .collection("ohlcv_bars")
-      .where("ticker", "==", ticker)
-      .orderBy("barDate", "desc")
-      .limit(BARS_TO_READ)
-      .get();
-    const bars = snap.docs.map((d) => d.data()).reverse() as IndicatorBar[];
+    const bars = await this.loadSeries(ticker);
     // OFFICIAL 16:00 close for the classic-pivot basis only. The pivot basis is
     // the last completed daily session; fetch the official close for the last 1–2
     // bar dates (the possible basis dates) and pass only non-null results — any
