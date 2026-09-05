@@ -135,12 +135,65 @@ export function extractTheme(input: string): { html: string; theme: BlogTheme } 
     return "";
   });
 
+  /* The document's TITLE is not article text. The sanitizer downstream drops
+     tags and keeps what is inside them, so a surviving <title> published as a
+     loose line reading "15 Years, 2,258%: … | MarketCatalyst" above the
+     article — the headline, a second time, with the site name stapled on. */
+  html = html.replace(/<title\b[^>]*>[\s\S]*?<\/title>/gi, "");
+
   // Only the body is this post. A document with no <body> is already a fragment.
   const body = /<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(html);
   if (body) html = body[1];
-  else html = html.replace(/<\/?(?:html|head)\b[^>]*>/gi, "");
+  else {
+    /* An UNCLOSED <body> used to fall through to the strip below, which only
+       knew about html/head — so the opening tag stayed, and everything the
+       browser would have treated as head content published as text. Take
+       everything after the opening tag instead, which is what a browser does. */
+    const open = /<body\b[^>]*>/i.exec(html);
+    if (open) html = html.slice(open.index + open[0].length);
+    html = html.replace(/<\/?(?:html|head|body)\b[^>]*>/gi, "");
+  }
 
-  return { html: html.trim(), theme };
+  return { html: stripSiteChrome(html).trim(), theme };
+}
+
+/**
+ * Removes the SITE's own furniture from an uploaded article body.
+ *
+ * These documents are authored as complete standalone pages, so they carry a
+ * masthead and a "← Back to blogs" link of their own. Published into the site,
+ * which draws both already, the reader got two mastheads stacked and two back
+ * links — and the document's are dead ends: they are written `href="#"`,
+ * because in the source file there was nowhere else for them to point.
+ *
+ * It also leaked into the blog INDEX: the board derives a card blurb by
+ * stripping tags off the body, so the highlight card opened with
+ * "MarketCatalyst Home Back to blogs MARKETCATALYST …" before reaching the
+ * article's first sentence.
+ *
+ * Deliberately narrow. A <header> is removed only when it OPENS the document
+ * and looks like site navigation (a nav, or a logo) — an article that opens
+ * with its own <header> holding the headline is left alone.
+ */
+export function stripSiteChrome(html: string): string {
+  let out = html;
+
+  // The back link, by what it SAYS rather than by its class: the same control
+  // has been authored as .back-btn, .back and with no class at all.
+  out = out.replace(
+    /<a\b[^>]*>(?:(?!<\/a>)[\s\S])*?back\s*to\s*blogs?(?:(?!<\/a>)[\s\S])*?<\/a>/gi,
+    "",
+  );
+
+  // A leading site masthead. Anchored to the start (only leading whitespace or
+  // comments before it) so a <header> inside the article body is untouched.
+  out = out.replace(
+    /^(\s*(?:<!--[\s\S]*?-->\s*)*)<header\b[^>]*>([\s\S]*?)<\/header>/i,
+    (match, lead: string, inner: string) =>
+      /<nav\b|class\s*=\s*["'][^"']*\blogo\b/i.test(inner) ? lead : match,
+  );
+
+  return out;
 }
 
 /**
