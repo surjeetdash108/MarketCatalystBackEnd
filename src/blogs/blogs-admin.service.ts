@@ -702,13 +702,15 @@ export class BlogsAdminService {
   }
 
   /**
-   * A written post must arrive complete: headline, summary, hero image.
+   * A written post must arrive with a headline and a summary.
    *
-   * All three are load-bearing on the reader's side — the summary is the
-   * standfirst under the headline and the card excerpt on the board, and the
-   * hero is both the article image and the board thumbnail. A post missing any
-   * of them publishes a visibly broken card, so it is refused here rather than
+   * Both are load-bearing on the reader's side — the summary is the standfirst
+   * under the headline and the card excerpt on the board — so a post missing
+   * either publishes a visibly broken card and is refused here rather than
    * discovered later.
+   *
+   * The hero image is optional: a post without one renders a text-only card on
+   * the board and a heroless article, both of which are supported layouts.
    *
    * Documents are exempt: a PDF or Word post is its own cover and its own
    * opening line.
@@ -720,8 +722,6 @@ export class BlogsAdminService {
     const missing: string[] = [];
     if (!String(body.title ?? "").trim()) missing.push("title");
     if (!String(body.dek ?? "").trim()) missing.push("summary");
-    const hero = typeof body.heroImageUrl === "string" ? body.heroImageUrl.trim() : "";
-    if (!hero) missing.push("hero image");
     if (missing.length) {
       throw new BadRequestException(`missing required field(s): ${missing.join(", ")}`);
     }

@@ -265,6 +265,10 @@ export class OnDemandService implements OnModuleDestroy {
     string,
     { data: Record<string, unknown> | null; at: number }
   >();
+  private readonly memOwnership13DG = new Map<
+    string,
+    { data: Record<string, unknown> | null; at: number }
+  >();
   /**
    * Coalescing: concurrent misses for the same key share one vendor promise.
    *
@@ -1833,6 +1837,166 @@ export class OnDemandService implements OnModuleDestroy {
       return snap.docs.map((d) => d.id);
     } catch (err) {
       this.logger.warn(`hotTickers query failed: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
+  // ── Beneficial ownership (SEC EDGAR Schedules 13D/G) ──────────────────────
+
+  /**
+   * Per-ticker beneficial ownership straight from SEC EDGAR, cache-aside on
+   * `ownership_13dg/{ticker}`.
+   *
+   * This answers a DIFFERENT question from the FMP institutional-ownership
+   * rollup the 13F table is built on. That one is aggregate and anonymous —
+   * "1,847 filers hold 62% of the shares". This one is per-institution and
+   * exact: WHO owns more than 5%, how many shares, what percent of the class,
+   * and how much of that they can vote versus merely dispose of. Named holders
+   * with their own stake sizes is the thing the aggregate cannot tell you.
+   *
+   * Also returns the issuer's CUSIP, read off the same cover pages. That is
+   * what makes the tracked-fund section below exact: 13F positions are filed
+   * under CUSIP, never under a ticker, so matching them on issuer NAME (the
+   * only option without a CUSIP) both misses funds and produces false hits —
+   * "GOLD" matching both Gold Fields and Goldman Sachs.
+   *
+   * A 13D/G cover-page fetch is one HTTP call per filing against a rate-limited
+   * SEC endpoint, so the result is cached for a day. These are event-driven
+   * filings; a new one lands when a stake crosses a threshold, not on a clock.
+   */
+  async getOwnership13DG(
+    ticker: string,
+  ): Promise<Record<string, unknown> | null> {
+    const mem = this.memOwnership13DG.get(ticker);
+    if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
+
+    const ref = this.firebase.firestore
+      .collection("ownership_13dg")
+      .doc(ticker);
+    const snap = await ref.get();
+    if (snap.exists) {
+      const data = snap.data() as Record<string, unknown>;
+      const created =
+        typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
+      if (Number.isFinite(created) && Date.now() - created < DAILY_TTL_MS) {
+        this.memOwnership13DG.set(ticker, { data, at: Date.now() });
+        return data;
+      }
+    }
+
+    const key = `ownership13dg_${ticker}`;
+    const existing = this.inflight.get(key) as
+      | Promise<Record<string, unknown> | null>
+      | undefined;
+    if (existing) return existing;
+
+    const p = (async () => {
+      const cik = await this.secEdgar.getCikByTicker(ticker);
+      if (!cik) {
+        // SEC does not list the symbol (ETF, foreign issuer with no US
+        // registration). Cache the negative so every drawer open does not
+        // re-download the 800KB ticker map path.
+        const now = new Date().toISOString();
+        const doc = {
+          ticker,
+          cik: null,
+          cusip: null,
+          securitiesClass: null,
+          holders: [],
+          trackedFunds: [],
+          legacyFilings: [],
+          totalFilings: 0,
+          source: "sec-edgar-ondemand",
+          createdAt: now,
+          updatedAt: now,
+        };
+        await ref.set(doc);
+        this.memOwnership13DG.set(ticker, { data: doc, at: Date.now() });
+        return doc;
+      }
+
+      const own = await this.secEdgar.getSchedule13Ownership(cik);
+      const trackedFunds = own.cusip
+        ? await this.trackedFundsHolding(own.cusip)
+        : [];
+
+      const now = new Date().toISOString();
+      const doc: Record<string, unknown> = {
+        ticker,
+        cik,
+        cusip: own.cusip,
+        securitiesClass: own.securitiesClass,
+        holders: own.holders,
+        trackedFunds,
+        legacyFilings: own.legacyFilings.slice(0, 12),
+        totalFilings: own.totalFilings,
+        source: "sec-edgar-ondemand",
+        createdAt: now,
+        updatedAt: now,
+      };
+      await ref.set(doc);
+      this.memOwnership13DG.set(ticker, { data: doc, at: Date.now() });
+      return doc;
+    })().finally(() => this.inflight.delete(key));
+
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  /**
+   * Which of the 13F funds we track hold this CUSIP, with the position as
+   * filed. Sec13FJob keys each position doc BY CUSIP under the fund's latest
+   * filing, so this is one direct document read per tracked fund — no query, no
+   * collection-group index, and no name matching.
+   */
+  private async trackedFundsHolding(cusip: string): Promise<
+    Array<{
+      fundName: string;
+      filingDate: string | null;
+      shares: number | null;
+      value: number | null;
+      pctOfPortfolio: number | null;
+    }>
+  > {
+    try {
+      const funds = await this.firebase.firestore
+        .collection("fund_holdings")
+        .get();
+      const rows = await Promise.all(
+        funds.docs.map(async (f) => {
+          const fund = f.data() as Record<string, unknown>;
+          const accession = fund.latestAccessionNumber;
+          if (typeof accession !== "string" || !accession) return null;
+          const pos = await f.ref
+            .collection("filings")
+            .doc(accession)
+            .collection("positions")
+            .doc(cusip)
+            .get();
+          if (!pos.exists) return null;
+          const d = pos.data() as Record<string, unknown>;
+          return {
+            fundName: String(fund.fundName ?? f.id),
+            filingDate:
+              typeof fund.latestFilingDate === "string"
+                ? fund.latestFilingDate
+                : null,
+            shares: typeof d.shares === "number" ? d.shares : null,
+            value: typeof d.value === "number" ? d.value : null,
+            pctOfPortfolio:
+              typeof d.pctOfPortfolio === "number" ? d.pctOfPortfolio : null,
+          };
+        }),
+      );
+      return rows
+        .filter((r): r is NonNullable<typeof r> => r !== null)
+        .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+    } catch (err) {
+      // The 13D/G holders are the point of the drawer; a Firestore hiccup on
+      // the supplementary fund list must not fail the whole response.
+      this.logger.warn(
+        `trackedFundsHolding(${cusip}) failed: ${(err as Error).message}`,
+      );
       return [];
     }
   }

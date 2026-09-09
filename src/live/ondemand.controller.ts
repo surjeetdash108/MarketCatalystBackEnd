@@ -19,6 +19,7 @@ import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
 import { WhatMattersNowService } from "./what-matters-now.service";
 import { MarketScanService } from "./market-scan.service";
 import { MarketGlanceService } from "./market-glance.service";
+import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { TickerSearchService } from "./ticker-search.service";
 import { SearchedTickersService } from "./searched-tickers.service";
 import { OPTIONS_UNIVERSE } from "../common/options-universe";
@@ -35,6 +36,8 @@ import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
  *   GET /live/news?ticker=AAPL                  → per-ticker cache-aside via news
  *   GET /live/earnings-transcript?ticker=AAPL   → latest FMP call transcript, cache-aside via earnings_transcripts
  *   GET /live/options-chain?ticker=AAPL         → cache-aside via options_chains (curated 8-ticker universe)
+ *   GET /live/ownership-13dg?ticker=AAPL        → SEC EDGAR 13D/G >5% holders, cache-aside via ownership_13dg
+ *   GET /live/filing?cik=..&accession=..        → one SEC filing document, sanitized for in-app rendering
  *   GET /live/search?q=apple                    → in-memory universe search (no Firestore)
  *   POST /live/searched-ticker {ticker}          → record a resolved ticker search/selection
  *   GET /live/most-searched-tickers?limit=10     → top searched tickers, by selection count
@@ -70,6 +73,7 @@ private readonly ondemand: OnDemandService,
     private readonly searchedTickers: SearchedTickersService,
     private readonly marketScan: MarketScanService,
     private readonly marketGlance: MarketGlanceService,
+    private readonly secEdgar: SecEdgarService,
   ) {}
 
   /**
@@ -354,6 +358,65 @@ private readonly ondemand: OnDemandService,
     const doc = await this.ondemand.getFinancials(sym);
     if (!doc) throw new NotFoundException(`No data for ${sym}`);
     sendWithEtag(req, res, doc);
+  }
+
+  /**
+   * Named >5% beneficial owners from SEC EDGAR Schedules 13D/G, plus the
+   * issuer's CUSIP and the tracked 13F funds holding it. Distinct from the
+   * FMP institutional rollup, which is an anonymous aggregate.
+   *
+   * A cache miss walks up to two dozen filing cover pages against a
+   * rate-limited SEC endpoint, so the day-long server cache does the real work
+   * and the browser keeps its own copy for five minutes.
+   */
+  @Get("ownership-13dg")
+  @UseGuards(FirebaseAuthGuard)
+  @Header(
+    "Cache-Control",
+    "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
+  )
+  async ownership13dg(
+    @Query("ticker") ticker: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? "").toUpperCase().trim();
+    if (!TICKER_RE.test(sym))
+      throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+    const doc = await this.ondemand.getOwnership13DG(sym);
+    if (!doc) throw new NotFoundException(`No data for ${sym}`);
+    sendWithEtag(req, res, doc);
+  }
+
+  /**
+   * One SEC filing rendered as a document instead of EDGAR's raw submission
+   * text. See SecEdgarService.getFilingDocument for why the full-index URL
+   * cannot be linked directly.
+   *
+   * Not cached in Firestore: a prospectus runs to megabytes, well past the 1MB
+   * document limit. It does not need to be — a filing at a given accession
+   * number is immutable, so `immutable` lets the CDN and the browser hold it
+   * for a day and repeat views cost nothing.
+   */
+  @Get("filing")
+  @UseGuards(FirebaseAuthGuard)
+  @Header("Cache-Control", "public, max-age=86400, s-maxage=86400, immutable")
+  async filing(
+    @Query("cik") cik: string | undefined,
+    @Query("accession") accession: string | undefined,
+  ) {
+    const bareCik = (cik ?? "").replace(/\D/g, "");
+    const acc = (accession ?? "").trim();
+    if (!bareCik || bareCik.length > 10)
+      throw new BadRequestException("cik must be 1-10 digits");
+    if (!/^\d{10}-\d{2}-\d{6}$/.test(acc))
+      throw new BadRequestException(
+        "accession must look like 0001477932-26-005410",
+      );
+    const doc = await this.secEdgar.getFilingDocument(bareCik, acc);
+    if (!doc)
+      throw new NotFoundException(`No readable document in filing ${acc}`);
+    return doc;
   }
 
   @Get("news")

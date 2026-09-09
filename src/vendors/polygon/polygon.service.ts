@@ -492,13 +492,43 @@ export class PolygonService {
       const sessionPrice = marketOpen
         ? finiteOrNull(s.price ?? s.close ?? s.previous_close)
         : finiteOrNull(s.close ?? s.price ?? s.previous_close);
+
+      /* Price and change have to describe the SAME trade.
+       *
+       * `s.change` / `s.change_percent` are the vendor's, and they are measured
+       * from `s.price` — the last trade, extended hours included. The block
+       * above deliberately does NOT always show `s.price`: outside regular
+       * hours it prefers `s.close`, the official regular-session close, because
+       * that is the number consumer finance sites print.
+       *
+       * Passing the vendor's percentage straight through alongside a
+       * substituted price paired a figure with a base it was not measured from.
+       * On the SIRI weekend case that is the ~5% gap the note above describes,
+       * and it surfaces as a row whose price and percentage cannot both be
+       * right — the Movers board showing one site's price beside another's
+       * percentage.
+       *
+       * So: keep the vendor's numbers when the vendor's price is what we show,
+       * and re-derive them from the close when the close is what we show. The
+       * pair is then internally consistent either way. previousClose is the
+       * base in both cases, so nothing else about the semantics changes. */
+      const prevClose = finiteOrNull(s.previous_close);
+      const usingVendorPrice = sessionPrice != null && sessionPrice === finiteOrNull(s.price);
+      const derived =
+        !usingVendorPrice && sessionPrice != null && prevClose != null && prevClose > 0
+          ? {
+              change: sessionPrice - prevClose,
+              changePercent: ((sessionPrice - prevClose) / prevClose) * 100,
+            }
+          : null;
+
       return {
         ticker: r.ticker,
         name: r.name ?? null,
         marketStatus: r.market_status ?? null,
         price: sessionPrice,
-        change: finiteOrNull(s.change),
-        changePercent: finiteOrNull(s.change_percent),
+        change: derived ? derived.change : finiteOrNull(s.change),
+        changePercent: derived ? derived.changePercent : finiteOrNull(s.change_percent),
         earlyTradingChangePercent: finiteOrNull(s.early_trading_change_percent),
         lateTradingChangePercent: finiteOrNull(s.late_trading_change_percent),
         open: finiteOrNull(s.open),
