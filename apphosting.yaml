@@ -23,7 +23,7 @@ runConfig:
   minInstances: 1
   maxInstances: 1
   concurrency: 80
-  cpu: 1
+  cpuMiB: 1000
   memoryMiB: 512
 
 env:
@@ -33,8 +33,7 @@ env:
   # does locally, while the running service still gets NODE_ENV=production.
   - variable: NODE_ENV
     value: "production"
-    availability:
-      - RUNTIME
+    availability: ["RUNTIME"]
 
   # ─── Service role (src/app.module.ts) ────────────────────────────────────────
   # This backend is the WORKER: runs the @Cron/Scheduler-triggered sync jobs and
@@ -171,16 +170,9 @@ env:
     secret: POLYGON_API_KEY
   - variable: FMP_API_KEY
     secret: FMP_API_KEY
-  - variable: FINNHUB_API_KEY
-    value: ""
-  - variable: FRED_API_KEY
-    value: ""
   - variable: BENZINGA_API_KEY
     secret: BENZINGA_API_KEY
 
-  # AI (OpenRouter) — the LLM gateway for AI analysis.
-  - variable: OPENROUTER_API_KEY
-    value: ""
   # Free slugs get retired without notice (deepseek-chat-v3:free began 404ing
   # with "unavailable for free"). Pick a replacement from the entries priced at
   # 0 in https://openrouter.ai/api/v1/models, and prefer an instruct ("-it")
