@@ -173,6 +173,12 @@ env:
     secret: POLYGON_API_KEY
   - variable: FMP_API_KEY
     secret: FMP_API_KEY
+  - variable: FINNHUB_API_KEY
+    secret: FINNHUB_API_KEY
+  - variable: FRED_API_KEY
+    secret: FRED_API_KEY
+  - variable: OPENROUTER_API_KEY
+    secret: OPENROUTER_API_KEY
   # - variable: BENZINGA_API_KEY
   #   secret: BENZINGA_API_KEY
 
