@@ -161,33 +161,21 @@ env:
   - variable: ADMIN_GUARD_TRUST_IAM
     value: "false"
 
-  # ─── Secrets (Google Secret Manager) ─────────────────────────────────────────
-  # These are the four the worker uses (per deploy/DEPLOY.md --set-secrets). Each
-  # MUST already exist in Secret Manager for market-catalyst-502415 and be
-  # granted to the backend, or the rollout fails. Create + grant every one first:
-  #   firebase apphosting:secrets:set POLYGON_API_KEY  --project market-catalyst-502415
-  #   firebase apphosting:secrets:grantaccess POLYGON_API_KEY --backend <BACKEND_ID> --project market-catalyst-502415
-  # (repeat for FMP_API_KEY, FINNHUB_API_KEY, FRED_API_KEY)
+  # ─── Vendor API Keys (App Hosting Environment Variables) ────────────────────
   - variable: POLYGON_API_KEY
-    secret: POLYGON_API_KEY
+    value: "pj6sus4TOjtkKFpoLT4gNWmMdLa5DTp2"
   - variable: FMP_API_KEY
-    secret: FMP_API_KEY
+    value: "WsPU89cHY4crdHGDMvGESEH0RSFuqtjW"
   - variable: FINNHUB_API_KEY
-    secret: FINNHUB_API_KEY
+    value: ""
   - variable: FRED_API_KEY
-    secret: FRED_API_KEY
+    value: ""
+  - variable: BENZINGA_API_KEY
+    value: "bz.AB2SSLRZKYOZBGLQASZXDETYGQJZLV2Q"
 
-  # AI (OpenRouter) — the LLM gateway for AI analysis. The KEY is a secret; the
-  # MODEL is a plain, overridable env var (default a free model). Create + grant
-  # the secret first, same steps as above:
-  #   firebase apphosting:secrets:set OPENROUTER_API_KEY --project market-catalyst-502415
-  #   firebase apphosting:secrets:grantaccess OPENROUTER_API_KEY --backend <BACKEND_ID> --project market-catalyst-502415
-  # Unset key ⇒ OpenRouterService.enabled is false and AI endpoints return an
-  # ai-disabled result (no crash). NOTE: the AI endpoint runs on the LIVE service
-  # too — add OPENROUTER_API_KEY/OPENROUTER_MODEL to its `gcloud run deploy
-  # --set-secrets/--set-env-vars` as well (see deploy/DEPLOY.md).
+  # AI (OpenRouter) — the LLM gateway for AI analysis.
   - variable: OPENROUTER_API_KEY
-    secret: OPENROUTER_API_KEY
+    value: ""
   # Free slugs get retired without notice (deepseek-chat-v3:free began 404ing
   # with "unavailable for free"). Pick a replacement from the entries priced at
   # 0 in https://openrouter.ai/api/v1/models, and prefer an instruct ("-it")
@@ -204,13 +192,3 @@ env:
   - variable: OPENROUTER_FALLBACK_MODEL
     value: "google/gemma-4-31b-it:free"
 
-  # Optional vendors (code warns and no-ops if unset — see the vendor services'
-  # onModuleInit). Uncomment once the secret exists for this project.
-  - variable: BENZINGA_API_KEY
-    value: "bz.AB2SSLRZKYOZBGLQASZXDETYGQJZLV2Q"
-  # - variable: TRADIER_ACCESS_TOKEN
-  #   secret: TRADIER_ACCESS_TOKEN
-  # - variable: UNUSUAL_WHALES_API_KEY
-  #   secret: UNUSUAL_WHALES_API_KEY
-  # - variable: SENTRY_DSN
-  #   secret: SENTRY_DSN
