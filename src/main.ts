@@ -78,11 +78,11 @@ async function bootstrap() {
   app.use(urlencoded({ limit: "32mb", extended: true }));
   app.enableCors(corsOptions());
   app.enableShutdownHooks();
-  const port = Number(process.env.PORT ?? 4400);
-  await app.listen(port, "0.0.0.0");
+  const port = process.env.PORT ?? 4400;
+  await app.listen(port);
   const role = (process.env.APP_ROLE ?? "worker").trim().toLowerCase();
   logger.log(
-    `market-catalyst-backend listening on 0.0.0.0:${port} (APP_ROLE=${role})`,
+    `market-catalyst-backend listening on port ${port} (APP_ROLE=${role})`,
   );
 }
 bootstrap().catch((err) => {

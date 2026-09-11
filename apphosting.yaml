@@ -35,6 +35,9 @@ env:
     value: "production"
     availability: ["RUNTIME"]
 
+  - variable: PORT
+    value: "8080"
+
   # ─── Service role (src/app.module.ts) ────────────────────────────────────────
   # This backend is the WORKER: runs the @Cron/Scheduler-triggered sync jobs and
   # mounts the admin controllers + ops monitor at /. Do NOT set APP_ROLE=live
