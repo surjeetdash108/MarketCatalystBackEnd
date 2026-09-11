@@ -170,8 +170,8 @@ env:
     secret: POLYGON_API_KEY
   - variable: FMP_API_KEY
     secret: FMP_API_KEY
-  - variable: BENZINGA_API_KEY
-    secret: BENZINGA_API_KEY
+  # - variable: BENZINGA_API_KEY
+  #   secret: BENZINGA_API_KEY
 
   # Free slugs get retired without notice (deepseek-chat-v3:free began 404ing
   # with "unavailable for free"). Pick a replacement from the entries priced at
