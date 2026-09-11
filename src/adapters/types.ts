@@ -280,6 +280,8 @@ export const NEWS_TRADINGVIEW_ADAPTER: unique symbol = Symbol(
 );
 /** Optional FMP news source, merged alongside NEWS_ADAPTER (Polygon). */
 export const NEWS_FMP_ADAPTER: unique symbol = Symbol("NEWS_FMP_ADAPTER");
+/** Optional Benzinga news source, providing real-time news and WIIM (Why Is It Moving). */
+export const NEWS_BENZINGA_ADAPTER: unique symbol = Symbol("NEWS_BENZINGA_ADAPTER");
 export const DIVIDENDS_ADAPTER: unique symbol = Symbol("DIVIDENDS_ADAPTER");
 export const IPOS_ADAPTER: unique symbol = Symbol("IPOS_ADAPTER");
 export const SECTORS_ADAPTER: unique symbol = Symbol("SECTORS_ADAPTER");

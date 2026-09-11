@@ -26,6 +26,7 @@ import { MarketScanService } from "./market-scan.service";
 import { MarketGlanceService } from "./market-glance.service";
 import { TickerSearchService } from "./ticker-search.service";
 import { SearchedTickersService } from "./searched-tickers.service";
+import { MoverCatalystService } from "./mover-catalyst.service";
 
 /**
  * Live (delayed) price streaming for the Search screen and the header tape.
@@ -70,6 +71,7 @@ import { SearchedTickersService } from "./searched-tickers.service";
     TickerSearchService,
     SearchedTickersService,
     AiAnalysisService,
+    MoverCatalystService,
   ],
   exports: [
     WhatMattersNowService,
@@ -87,6 +89,7 @@ import { SearchedTickersService } from "./searched-tickers.service";
     TickerSearchService,
     SearchedTickersService,
     AiAnalysisService,
+    MoverCatalystService,
   ],
 })
 export class LiveModule {}

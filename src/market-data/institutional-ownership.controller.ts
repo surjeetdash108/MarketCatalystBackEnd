@@ -20,7 +20,7 @@ export class InstitutionalOwnershipController {
   constructor(
     private readonly marketData: MarketDataService,
     private readonly cached: CachedCollectionsService,
-  ) {}
+  ) { }
 
   @Get("institutional-ownership")
   @Header(

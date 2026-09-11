@@ -6,6 +6,9 @@ import { FmpModule } from "../vendors/fmp/fmp.module";
 import { FmpService } from "../vendors/fmp/fmp.service";
 import { SecEdgarModule } from "../vendors/sec-edgar/sec-edgar.module";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
+import { BenzingaModule } from "../vendors/benzinga/benzinga.module";
+import { BenzingaService } from "../vendors/benzinga/benzinga.service";
+import { BenzingaNewsAdapter } from "./benzinga-news.adapter";
 import { FmpEarningsEstimatesAdapter } from "./earnings-estimates.adapter";
 import { FmpAnalystRatingsAdapter } from "./analyst-ratings.adapter";
 import { CompositeCompanyProfileAdapter } from "./composite-company-profile.adapter";
@@ -48,6 +51,7 @@ import {
   MOVER_ENRICHMENT_ADAPTER,
   NEWS_ADAPTER,
   NEWS_FMP_ADAPTER,
+  NEWS_BENZINGA_ADAPTER,
   NEWS_TRADINGVIEW_ADAPTER,
   QUOTE_ADAPTER,
   SECTORS_ADAPTER,
@@ -112,12 +116,13 @@ function buildComposite(
 }
 
 @Module({
-  imports: [PolygonModule, FmpModule, SecEdgarModule],
+  imports: [PolygonModule, FmpModule, SecEdgarModule, BenzingaModule],
   providers: [
     PolygonCompanyProfileAdapter,
     PolygonMoversAdapter,
     PolygonMoverEnrichmentAdapter,
     PolygonNewsAdapter,
+    BenzingaNewsAdapter,
     {
       provide: COMPANY_PROFILE_ADAPTER,
       inject: [ConfigService, PolygonService, FmpService, SecEdgarService],
@@ -194,6 +199,11 @@ function buildComposite(
         const source = parseSource(config, "NEWS_FMP_SOURCE", ["fmp", "none"], "none");
         return source === "fmp" ? new FmpNewsAdapter(fmp) : null;
       },
+    },
+    {
+      provide: NEWS_BENZINGA_ADAPTER,
+      inject: [BenzingaService],
+      useFactory: (benzinga: BenzingaService) => new BenzingaNewsAdapter(benzinga),
     },
     {
       provide: DIVIDENDS_ADAPTER,
@@ -347,6 +357,7 @@ function buildComposite(
     MOVER_ENRICHMENT_ADAPTER,
     NEWS_ADAPTER,
     NEWS_FMP_ADAPTER,
+    NEWS_BENZINGA_ADAPTER,
     DIVIDENDS_ADAPTER,
     IPOS_ADAPTER,
     SECTORS_ADAPTER,

@@ -44,6 +44,7 @@ const ALLOWED = new Set<string>([
   "earnings_announcements",
   "ipo_pipeline",
   "macro_regime",
+  "mover_catalysts",
 ]);
 
 // Two-tier TTL. Almost every allow-listed collection is written ONCE PER DAY by

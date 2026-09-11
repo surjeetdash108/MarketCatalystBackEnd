@@ -19,6 +19,7 @@ import { MarketSentimentController } from "./market-sentiment.controller";
 import { NewsController } from "./news.controller";
 import { RecapsController } from "./recaps.controller";
 import { SectorsController } from "./sectors.controller";
+import { MoverCatalystsController } from "./mover-catalysts.controller";
 
 /**
  * Screen-facing read module for market-wide (non-user-owned) data — Movers,
@@ -57,6 +58,7 @@ import { SectorsController } from "./sectors.controller";
     MarketSentimentController,
     NewsController,
     RecapsController,
+    MoverCatalystsController,
   ],
   providers: [MarketDataService],
 })
