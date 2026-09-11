@@ -23,7 +23,7 @@ runConfig:
   minInstances: 1
   maxInstances: 1
   concurrency: 80
-  cpuMiB: 1000
+  cpu: 1
   memoryMiB: 512
 
 env:
@@ -161,17 +161,22 @@ env:
   - variable: ADMIN_GUARD_TRUST_IAM
     value: "false"
 
-  # ─── Vendor API Keys (App Hosting Environment Variables) ────────────────────
+  # ─── Secrets (Google Secret Manager) ─────────────────────────────────────────
+  # CRITICAL SECURITY WARNING: Do NOT put plain-text API keys as `value: "..."` in this file!
+  # This file is checked into version control. You must use Google Secret Manager.
+  # Run these commands to set them up:
+  #   firebase apphosting:secrets:set POLYGON_API_KEY --project market-catalyst-502415
+  #   firebase apphosting:secrets:grantaccess POLYGON_API_KEY --backend <BACKEND_ID> --project market-catalyst-502415
   - variable: POLYGON_API_KEY
-    value: "pj6sus4TOjtkKFpoLT4gNWmMdLa5DTp2"
+    secret: POLYGON_API_KEY
   - variable: FMP_API_KEY
-    value: "WsPU89cHY4crdHGDMvGESEH0RSFuqtjW"
+    secret: FMP_API_KEY
   - variable: FINNHUB_API_KEY
     value: ""
   - variable: FRED_API_KEY
     value: ""
   - variable: BENZINGA_API_KEY
-    value: "bz.AB2SSLRZKYOZBGLQASZXDETYGQJZLV2Q"
+    secret: BENZINGA_API_KEY
 
   # AI (OpenRouter) — the LLM gateway for AI analysis.
   - variable: OPENROUTER_API_KEY
