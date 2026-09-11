@@ -207,7 +207,7 @@ env:
   # Optional vendors (code warns and no-ops if unset — see the vendor services'
   # onModuleInit). Uncomment once the secret exists for this project.
   - variable: BENZINGA_API_KEY
-    secret: BENZINGA_API_KEY
+    value: "bz.AB2SSLRZKYOZBGLQASZXDETYGQJZLV2Q"
   # - variable: TRADIER_ACCESS_TOKEN
   #   secret: TRADIER_ACCESS_TOKEN
   # - variable: UNUSUAL_WHALES_API_KEY
