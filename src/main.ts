@@ -1,3 +1,4 @@
+// Build 2026-09-11: force recompile — cached dist/ carried stale hero-image validation.
 import { Logger } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import * as Sentry from "@sentry/node";
