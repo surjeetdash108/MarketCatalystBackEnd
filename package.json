@@ -21,6 +21,7 @@
     "seed:test-user": "ts-node --transpile-only scripts/seed-test-user.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",
@@ -37,7 +38,8 @@
     "rxjs": "^7.8.1",
     "turndown": "^7.2.4",
     "typescript": "^5.7.3",
-    "ws": "^8.21.1"
+    "ws": "^8.21.1",
+    "zod": "^4.6.2"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
