@@ -53,7 +53,7 @@ export class RecapBlogJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ["blogs"],
+      collections: ["posts"],
       cronExpression: CRON,
       timeZone: "America/New_York",
     });
@@ -185,7 +185,7 @@ export class RecapBlogJob implements OnModuleInit {
    */
   private async alreadyPublished(pdfName: string): Promise<boolean> {
     const snap = await this.firebase.firestore
-      .collection("blogs")
+      .collection("posts")
       .where("pdfName", "==", pdfName)
       .limit(1)
       .get();
