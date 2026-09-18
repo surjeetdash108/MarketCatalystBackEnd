@@ -11,7 +11,7 @@ import { randomUUID } from "crypto";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 
 /**
- * Admin CRUD over the SAME Firestore `blogs` collection the public website
+ * Admin CRUD over the SAME Firestore `posts` collection the public website
  * renders from (../MarketCatalystWebsite/lib/blog/posts.ts is the owner of the
  * canonical doc shape). Every write here produces a doc that
  * getPublishedPosts()/BlogBoard read unchanged.
@@ -23,7 +23,7 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
  * `content` field is Markdown.
  */
 
-const POSTS = "blogs";
+const POSTS = "posts";
 const SLUGS = "slugs";
 
 /**

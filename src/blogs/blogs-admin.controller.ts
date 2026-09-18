@@ -14,7 +14,7 @@ import type { BlogAdminBody } from "./blogs-admin.service";
 import { MediaAdminService } from "./media-admin.service";
 
 /**
- * Admin CRUD for the public `blogs` collection, behind AdminGuard (verified
+ * Admin CRUD for the public `posts` collection, behind AdminGuard (verified
  * Firebase admin token, or Cloud-Run-IAM-vetted request — see AdminGuard).
  * Mirrors ApiHealthController's `@Controller("api/admin")` shape. The console's
  * blog board drives these; every write lands in the same collection the public
@@ -28,35 +28,35 @@ export class BlogsAdminController {
     private readonly media: MediaAdminService,
   ) {}
 
-  @Get("blogs")
+  @Get("posts")
   async list() {
-    return { blogs: await this.blogs.list() };
+    return { posts: await this.blogs.list() };
   }
 
   /**
    * The shared blog design on its own.
    *
-   * Declared BEFORE any parameterised `blogs/:x` route so "theme" is not
+   * Declared BEFORE any parameterised `posts/:x` route so "theme" is not
    * swallowed as an id. Every html row already carries this, so the console
    * needs it separately only for the editor's Design row — which otherwise can
    * describe a freshly loaded file and nothing else.
    */
-  @Get("blogs/theme")
+  @Get("posts/theme")
   async theme() {
     return this.blogs.theme();
   }
 
-  @Post("blogs")
+  @Post("posts")
   async create(@Body() body: BlogAdminBody) {
     return this.blogs.create(body ?? {});
   }
 
-  @Patch("blogs/:id")
+  @Patch("posts/:id")
   async update(@Param("id") id: string, @Body() body: BlogAdminBody) {
     return this.blogs.update(id, body ?? {});
   }
 
-  @Delete("blogs/:id")
+  @Delete("posts/:id")
   async remove(@Param("id") id: string) {
     return this.blogs.remove(id);
   }
