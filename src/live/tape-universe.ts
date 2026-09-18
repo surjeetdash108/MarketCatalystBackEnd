@@ -139,6 +139,19 @@ export const TAPE_INDICES: TapeSymbol[] = [
     note: "Bitcoin BTC/USD, Coinbase (FRED)",
     fredSeries: "CBBTCUSD",
   },
+  {
+    id: "ETH",
+    kind: "index",
+    label: "Ethereum",
+    // Same reasoning as BTC above: no direct ETH/USD pair on this Polygon plan,
+    // and the spot-ether ETFs price in fund shares rather than the coin. FRED
+    // carries Coinbase's ETH/USD alongside its BTC/USD series, at the same
+    // daily granularity.
+    proxyTicker: null,
+    isProxy: false,
+    note: "Ethereum ETH/USD, Coinbase (FRED)",
+    fredSeries: "CBETHUSD",
+  },
 ];
 
 /** The rate tile. Sourced separately — see the docblock above. */
