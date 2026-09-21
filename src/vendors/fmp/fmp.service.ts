@@ -200,6 +200,16 @@ export interface FmpInstitutionalOwnershipRow {
   putCallRatio: number | null;
 }
 
+/** One row of `/stable/quote` — only the fields callers read. */
+export interface FmpQuote {
+  symbol: string;
+  price: number;
+  changePercentage: number;
+  previousClose: number | null;
+  /** Unix seconds of the last print. */
+  timestamp: number;
+}
+
 @Injectable()
 export class FmpService {
   private readonly logger = new Logger(FmpService.name);
@@ -395,6 +405,34 @@ export class FmpService {
       strongSell: num(o.strongSell),
       consensus: o.consensus != null ? String(o.consensus) : null,
     };
+  }
+
+  /**
+   * Latest quote for one symbol (`/stable/quote`). Covers indices (^GSPC,
+   * ^VIX) and commodity futures (GCUSD, BZUSD) as well as equities. One symbol
+   * per call: `/stable/batch-quote` is not on the current plan. Returns null on
+   * a plan-restricted symbol, an empty answer or any error — never throws.
+   */
+  async getQuote(symbol: string): Promise<FmpQuote | null> {
+    if (!this.enabled) return null;
+    try {
+      const [r] = (await this.get(`quote?symbol=${encodeURIComponent(symbol)}`)) as any[];
+      const price = Number(r?.price);
+      const pct = Number(r?.changePercentage);
+      const ts = Number(r?.timestamp);
+      if (!Number.isFinite(price) || !Number.isFinite(pct) || !Number.isFinite(ts)) return null;
+      const prev = Number(r?.previousClose);
+      return {
+        symbol: String(r.symbol ?? symbol),
+        price,
+        changePercentage: pct,
+        previousClose: Number.isFinite(prev) ? prev : null,
+        timestamp: ts,
+      };
+    } catch (err) {
+      this.logger.warn(`FMP quote ${symbol} failed: ${(err as Error)?.message ?? err}`);
+      return null;
+    }
   }
 
   /** Sector performance snapshot (`/stable/sector-performance-snapshot`). */

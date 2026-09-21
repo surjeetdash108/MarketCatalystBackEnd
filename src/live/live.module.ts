@@ -18,6 +18,8 @@ import { SnapshotController } from "./snapshot.controller";
 import { MarketStatusService } from "./market-status.service";
 import { TapeController } from "./tape.controller";
 import { TapeService } from "./tape.service";
+import { LandingTapeController } from "./landing-tape.controller";
+import { LandingTapeService } from "./landing-tape.service";
 import { CachedCollectionsController } from "./cached-collections.controller";
 import { CachedCollectionsService } from "./cached-collections.service";
 import { OnDemandController } from "./ondemand.controller";
@@ -52,6 +54,7 @@ import { MoverCatalystService } from "./mover-catalyst.service";
     LiveController,
     SnapshotController,
     TapeController,
+    LandingTapeController,
     CachedCollectionsController,
     OnDemandController,
   ],
@@ -64,6 +67,7 @@ import { MoverCatalystService } from "./mover-catalyst.service";
     SnapshotCacheService,
     MarketStatusService,
     TapeService,
+    LandingTapeService,
     CachedCollectionsService,
     OnDemandService,
     MarketScanService,
