@@ -3,6 +3,7 @@ import { PolygonService } from "../vendors/polygon/polygon.service";
 import { FredService } from "../vendors/fred/fred.service";
 import { FmpService, type FmpQuote } from "../vendors/fmp/fmp.service";
 import { etDate } from "../common/market-calendar.util";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { TapeService, type TapeFrame, type TapeItem } from "./tape.service";
 import { TAPE_INDICES } from "./tape-universe";
 
@@ -32,6 +33,15 @@ import { TAPE_INDICES } from "./tape-universe";
  * FRED's official close (VIXCLS) and Brent to FRED's daily Brent spot
  * (DCOILBRENTEU) — both labelled with their date.
  *
+ * LAST KNOWN VALUES
+ * Every real figure a cell gets is remembered — in memory and in one Firestore
+ * document (landing_tape/last_good), so it survives restarts and scale-to-zero.
+ * When the primary source fails, the cell serves whichever is more recent: the
+ * fallback source or the remembered value. A remembered close replays as that
+ * close ("Sep 17 close"); a remembered live print replays as basis "saved"
+ * ("last recorded Sep 21") so it is never passed off as live. A cell is only
+ * ever empty if it has never had a real value.
+ *
  * FMP BUDGET
  * The FMP key is shared with the worker's batch jobs and the plan has a hard
  * request limit (it answers 429 "Limit Reach" once spent). So each quote is
@@ -58,9 +68,14 @@ export interface LandingCell {
   value: number;
   pctChange: number;
   prevClose: number | null;
-  /** "live" = current session (vendor-delayed); "close" = a completed session. */
-  basis: "live" | "close";
-  /** ET date (YYYY-MM-DD) of the close when basis is "close"; null when live. */
+  /**
+   * "live"  = current session (vendor-delayed);
+   * "close" = a completed session (see `date`);
+   * "saved" = the last value we recorded while every source is failing (`date`
+   *           is the ET date it was recorded).
+   */
+  basis: "live" | "close" | "saved";
+  /** ET date (YYYY-MM-DD) for "close" and "saved"; null when live. */
   date: string | null;
 }
 
@@ -99,6 +114,15 @@ const LOOKBACK_DAYS = 14;
 
 const DELAY_MINUTES = 15;
 
+/** Where the last known value of each cell is kept between restarts. */
+const SAVED_COLLECTION = "landing_tape";
+const SAVED_DOC = "last_good";
+/** At most one Firestore write per this window, and only when a value changed. */
+const PERSIST_EVERY_MS = 10 * 60_000;
+
+type CellId = LandingCell["id"];
+type Saved = LandingCell & { savedAt: string };
+
 type Close = { date: string; c: number };
 type Pair = { last: Close; prev: Close };
 
@@ -115,6 +139,12 @@ export class LandingTapeService {
   /** Last FMP answer per symbol; `quote` null means the read failed at `at`. */
   private fmpQuotes = new Map<string, { at: number; quote: FmpQuote | null }>();
 
+  /** Last real value per cell (see LAST KNOWN VALUES above). */
+  private saved = new Map<CellId, Saved>();
+  private savedLoad: Promise<void> | null = null;
+  private savedDirty = false;
+  private lastPersist = 0;
+
   private readonly multiplier = new Map(
     TAPE_INDICES.map((s) => [s.id, s.multiplier ?? 1]),
   );
@@ -124,6 +154,7 @@ export class LandingTapeService {
     private readonly polygon: PolygonService,
     private readonly fredApi: FredService,
     private readonly fmp: FmpService,
+    private readonly firebase: FirebaseAdminService,
   ) {}
 
   /** Never throws — a failed build serves the last good body, or an empty one. */
@@ -167,14 +198,16 @@ export class LandingTapeService {
     const phase = frame.marketPhase;
 
     const stocks = frame.items.filter((i) => i.kind === "stock");
+    await this.loadSaved();
 
     const [spx, gold, vix, brent, quotes] = await Promise.all([
-      this.fmpCell("SPX", "^GSPC").then((c) => c ?? this.equityCell("SPX", by.get("SPX"), phase)),
-      this.fmpCell("GOLD", "GCUSD").then((c) => c ?? this.equityCell("GOLD", by.get("GOLD"), phase)),
-      this.fmpCell("VIX", "^VIX").then((c) => c ?? this.fredCell("VIX", "VIXCLS")),
-      this.fmpCell("BRENT", "BZUSD").then((c) => c ?? this.fredCell("BRENT", "DCOILBRENTEU")),
+      this.resolve("SPX", this.fmpCell("SPX", "^GSPC"), () => this.equityCell("SPX", by.get("SPX"), phase)),
+      this.resolve("GOLD", this.fmpCell("GOLD", "GCUSD"), () => this.equityCell("GOLD", by.get("GOLD"), phase)),
+      this.resolve("VIX", this.fmpCell("VIX", "^VIX"), () => this.fredCell("VIX", "VIXCLS")),
+      this.resolve("BRENT", this.fmpCell("BRENT", "BZUSD"), () => this.fredCell("BRENT", "DCOILBRENTEU")),
       Promise.all(stocks.map((s) => this.quote(s, phase))),
     ]);
+    this.persistSaved();
 
     return {
       asOf: frame.asOf,
@@ -184,6 +217,79 @@ export class LandingTapeService {
       cells: [spx, gold, vix, brent].filter((c): c is LandingCell => c !== null),
       quotes: quotes.filter((q): q is LandingQuote => q !== null),
     };
+  }
+
+  /* ── Source selection + last known values ──────────────────────────── */
+
+  /**
+   * Primary source first; if it fails, the more recent of the fallback source
+   * and the remembered value (a tie goes to the fallback, which is fresh).
+   */
+  private async resolve(
+    id: CellId,
+    primary: Promise<LandingCell | null>,
+    fallback: () => Promise<LandingCell | null>,
+  ): Promise<LandingCell | null> {
+    const p = await primary;
+    if (p) return this.remember(p);
+
+    const f = await fallback();
+    const s = this.saved.get(id);
+    const replay = s ? this.replay(s) : null;
+    if (f && replay) return replay.date! > asOfDate(f) ? replay : this.remember(f);
+    if (f) return this.remember(f);
+    return replay;
+  }
+
+  private remember(c: LandingCell): LandingCell {
+    const prev = this.saved.get(c.id);
+    if (!prev || prev.value !== c.value || prev.pctChange !== c.pctChange || prev.basis !== c.basis) {
+      this.saved.set(c.id, { ...c, savedAt: new Date().toISOString() });
+      this.savedDirty = true;
+    }
+    return c;
+  }
+
+  /** A remembered value as served: its own close, or dated "saved". */
+  private replay(s: Saved): LandingCell {
+    const { savedAt, ...cell } = s;
+    if (cell.basis === "close" && cell.date) return cell;
+    return { ...cell, basis: "saved", date: etDate(new Date(savedAt)) };
+  }
+
+  /** Reads the remembered values once per instance. A failure just starts empty. */
+  private loadSaved(): Promise<void> {
+    this.savedLoad ??= (async () => {
+      try {
+        const snap = await this.firebase.firestore.collection(SAVED_COLLECTION).doc(SAVED_DOC).get();
+        const cells = (snap.data()?.cells ?? {}) as Record<string, Saved>;
+        for (const [id, c] of Object.entries(cells)) {
+          if (c && Number.isFinite(c.value) && !this.saved.has(id as CellId)) this.saved.set(id as CellId, c);
+        }
+      } catch (err) {
+        this.logger.warn(`loading saved landing values failed: ${(err as Error)?.message ?? err}`);
+      }
+    })();
+    return this.savedLoad;
+  }
+
+  /** Fire-and-forget write of the remembered values; throttled, only on change. */
+  private persistSaved(): void {
+    if (!this.savedDirty || Date.now() - this.lastPersist < PERSIST_EVERY_MS) return;
+    this.savedDirty = false;
+    this.lastPersist = Date.now();
+    const cells = Object.fromEntries(this.saved);
+    void this.firebase.firestore
+      .collection(SAVED_COLLECTION)
+      .doc(SAVED_DOC)
+      // merge: several instances (and a developer's local backend, which uses
+      // the same database) share this document; each only knows the cells it
+      // has seen, so a plain set() would erase the others'.
+      .set({ cells, updatedAt: new Date().toISOString() }, { merge: true })
+      .catch((err: unknown) => {
+        this.savedDirty = true;
+        this.logger.warn(`saving landing values failed: ${(err as Error)?.message ?? err}`);
+      });
   }
 
   /* ── FMP (primary source for the four hero figures) ─────────────────── */
@@ -331,4 +437,9 @@ export class LandingTapeService {
 
 function pct(now: number, prev: number): number {
   return prev ? Math.round(((now - prev) / prev) * 10_000) / 100 : 0;
+}
+
+/** The ET date a cell's figure describes: its close date, or today if live. */
+function asOfDate(c: LandingCell): string {
+  return c.basis !== "live" && c.date ? c.date : etDate();
 }
