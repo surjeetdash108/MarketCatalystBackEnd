@@ -28,8 +28,15 @@ import { TAPE_INDICES } from "./tape-universe";
  *   Brent    BZUSD   Brent crude futures. WTI (CLUSD) is a premium FMP symbol
  *                    and the free WTI sources (FRED, Alpha Vantage/EIA) are
  *                    days behind, so the hero shows Brent, labelled as Brent.
- * If FMP fails, S&P and gold fall back to the Polygon tape below and VIX to
- * FRED's official close; crude has no fallback and the cell is omitted.
+ * If FMP fails, S&P and gold fall back to the Polygon tape below, VIX to
+ * FRED's official close (VIXCLS) and Brent to FRED's daily Brent spot
+ * (DCOILBRENTEU) — both labelled with their date.
+ *
+ * FMP BUDGET
+ * The FMP key is shared with the worker's batch jobs and the plan has a hard
+ * request limit (it answers 429 "Limit Reach" once spent). So each quote is
+ * reused for FMP_TTL_MS, and after a failure the symbol is not retried for
+ * FMP_BACKOFF_MS — at most ~4 calls per 15 minutes, far fewer on a bad day.
  *
  * WHY IT DOES NOT CALL A VENDOR PER REQUEST
  * The assembled body is cached (30s, 5 min when the market is closed), so the
@@ -80,6 +87,11 @@ const TTL_MS = 30_000;
 const CLOSED_TTL_MS = 5 * 60_000;
 /** FRED series are daily; an hour is far finer than their update cadence. */
 const FRED_TTL_MS = 60 * 60_000;
+/** How long one FMP quote is reused. The hero is a snapshot, not a ticker. */
+const FMP_TTL_MS = 15 * 60_000;
+/** After a failed FMP read (429 when the plan's limit is spent), leave the
+ *  symbol alone this long and serve the fallback instead. */
+const FMP_BACKOFF_MS = 30 * 60_000;
 /** An FMP quote older than this is a completed session, not a live print. */
 const LIVE_WINDOW_MS = 30 * 60_000;
 /** Daily-bar lookback — wide enough to span a long weekend plus a holiday. */
@@ -100,6 +112,8 @@ export class LandingTapeService {
   /** Last two completed daily closes per ticker, valid for one ET date. */
   private closes = new Map<string, { day: string; pair: Pair }>();
   private fred = new Map<string, { at: number; pair: Pair }>();
+  /** Last FMP answer per symbol; `quote` null means the read failed at `at`. */
+  private fmpQuotes = new Map<string, { at: number; quote: FmpQuote | null }>();
 
   private readonly multiplier = new Map(
     TAPE_INDICES.map((s) => [s.id, s.multiplier ?? 1]),
@@ -158,7 +172,7 @@ export class LandingTapeService {
       this.fmpCell("SPX", "^GSPC").then((c) => c ?? this.equityCell("SPX", by.get("SPX"), phase)),
       this.fmpCell("GOLD", "GCUSD").then((c) => c ?? this.equityCell("GOLD", by.get("GOLD"), phase)),
       this.fmpCell("VIX", "^VIX").then((c) => c ?? this.fredCell("VIX", "VIXCLS")),
-      this.fmpCell("BRENT", "BZUSD"),
+      this.fmpCell("BRENT", "BZUSD").then((c) => c ?? this.fredCell("BRENT", "DCOILBRENTEU")),
       Promise.all(stocks.map((s) => this.quote(s, phase))),
     ]);
 
@@ -180,7 +194,7 @@ export class LandingTapeService {
    * says which one — so a weekend reading is never presented as current.
    */
   private async fmpCell(id: LandingCell["id"], symbol: string): Promise<LandingCell | null> {
-    const q: FmpQuote | null = await this.fmp.getQuote(symbol);
+    const q = await this.fmpQuote(symbol);
     if (!q) return null;
     const at = q.timestamp * 1000;
     const live = Date.now() - at <= LIVE_WINDOW_MS;
@@ -192,6 +206,19 @@ export class LandingTapeService {
       basis: live ? "live" : "close",
       date: live ? null : etDate(new Date(at)),
     };
+  }
+
+  /** One FMP quote through the budget: cached on success, backed off on failure. */
+  private async fmpQuote(symbol: string): Promise<FmpQuote | null> {
+    const hit = this.fmpQuotes.get(symbol);
+    const now = Date.now();
+    if (hit) {
+      const ttl = hit.quote ? FMP_TTL_MS : FMP_BACKOFF_MS;
+      if (now - hit.at < ttl) return hit.quote;
+    }
+    const quote = await this.fmp.getQuote(symbol);
+    this.fmpQuotes.set(symbol, { at: now, quote });
+    return quote;
   }
 
   /* ── Polygon fallback for S&P and gold ──────────────────────────────── */
@@ -269,7 +296,7 @@ export class LandingTapeService {
 
   /* ── FRED (official daily closes) ───────────────────────────────────── */
 
-  private async fredCell(id: "VIX", series: string): Promise<LandingCell | null> {
+  private async fredCell(id: "VIX" | "BRENT", series: string): Promise<LandingCell | null> {
     const pair = await this.fredPair(series);
     if (!pair) return null;
     return {
