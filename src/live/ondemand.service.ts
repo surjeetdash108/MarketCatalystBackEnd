@@ -152,6 +152,10 @@ interface BarsDoc {
 
 /** Company profile TTL — matches the vendor's own 15-minute delay. */
 const COMPANY_TTL_MS = 15 * 60_000;
+/** Key-stats summary memo — bridges the gap until the full company doc lands. */
+const COMPANY_SUMMARY_TTL_MS = 5 * 60_000;
+/** Per-source budget for the summary fan-out; a slower source → its tiles null. */
+const SUMMARY_CALL_BUDGET_MS = 3_000;
 /** Earnings transcripts change once a quarter — re-check at most daily. */
 const TRANSCRIPT_TTL_MS = 24 * 3600_000;
 /** Daily bars: at most one vendor refresh per ticker per day. */
@@ -234,6 +238,10 @@ export class OnDemandService implements OnModuleDestroy {
   /** In-memory hot cache: parsed Firestore docs, keyed {TICKER}_{res}. */
   private readonly memBars = new Map<string, BarsDoc>();
   private readonly memCompany = new Map<
+    string,
+    { data: Record<string, unknown>; at: number }
+  >();
+  private readonly memCompanySummary = new Map<
     string,
     { data: Record<string, unknown>; at: number }
   >();
@@ -1083,6 +1091,167 @@ export class OnDemandService implements OnModuleDestroy {
 
     this.inflight.set(key, p);
     return p;
+  }
+
+  /**
+   * Fast key-stats summary for the stock-detail header, served while
+   * /live/company builds the full doc for a ticker not yet in Firestore. The
+   * frontend fires both; this answers in ~1s, the full doc replaces it later.
+   *
+   * Only the calls those tiles need, all in parallel, each bounded by
+   * SUMMARY_CALL_BUDGET_MS — a slow/failed source nulls just its own tiles.
+   * Values come from the same helpers the full rebuild uses so tiles don't jump
+   * when the doc lands. Nothing is written to Firestore: the full doc stays the
+   * single source of truth. The FMP earnings fetch is memoized in FmpService
+   * for 60s, so the concurrent full rebuild reuses it rather than refetching.
+   */
+  async getCompanySummary(
+    ticker: string,
+  ): Promise<Record<string, unknown> | null> {
+    // Full doc already built (this instance) → it's a superset; serve it.
+    const full = this.memCompany.get(ticker);
+    if (full && Date.now() - full.at < 5 * 60_000) return full.data;
+
+    const memo = this.memCompanySummary.get(ticker);
+    if (memo && Date.now() - memo.at < COMPANY_SUMMARY_TTL_MS) return memo.data;
+
+    const key = `company_summary_${ticker}`;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown> | null> | undefined;
+    if (existing) return existing;
+
+    const p = this.buildCompanySummary(ticker).finally(() =>
+      this.inflight.delete(key),
+    );
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  private async buildCompanySummary(
+    ticker: string,
+  ): Promise<Record<string, unknown> | null> {
+    // Resolves null on timeout. The underlying call keeps running (fetchJson
+    // bounds it), which is harmless and lets memoized sources warm their cache.
+    const within = <T>(work: Promise<T>): Promise<T | null> =>
+      Promise.race([
+        work.catch(() => null),
+        sleep(SUMMARY_CALL_BUDGET_MS).then(() => null),
+      ]);
+
+    const to = new Date();
+    const from = new Date();
+    // Same window as computeFirstSyncTechnicals so the 52w / avg-vol figures
+    // are computed over the identical series the full doc will use.
+    from.setUTCFullYear(from.getUTCFullYear() - 2);
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+    const [details, quotes, aggs, epsHist, gaapTtm, divs] = await Promise.all([
+      within(
+        this.polygon.getTickerDetails(ticker) as Promise<Record<
+          string,
+          unknown
+        > | null>,
+      ),
+      within(this.polygon.getUniversalSnapshot([ticker])),
+      within(this.polygon.getAggsRange(ticker, iso(from), iso(to))),
+      within(
+        this.estimatesAdapter
+          ? this.estimatesAdapter.getEpsHistory(ticker)
+          : Promise.resolve([]),
+      ),
+      within(this.polygon.getTtmEps(ticker)),
+      within(this.polygon.getDividendHistory(ticker, 40)),
+    ]);
+
+    const q = quotes?.[0] as Record<string, unknown> | undefined;
+    if (!details && !q) return null;
+    const price = (q?.price as number | undefined) ?? null;
+
+    // EPS / P/E — non-GAAP TTM preferred, GAAP fallback (same as full doc).
+    const epsRows = epsHist ?? [];
+    const epsTtmReported = ttmReportedEpsFromRows(epsRows);
+    const eps = epsTtmReported ?? gaapTtm ?? null;
+    const peRatio =
+      eps != null && eps > 0 && price != null
+        ? Math.round((price / eps) * 100) / 100
+        : null;
+
+    // Next ER — FMP lists scheduled quarters with no actual yet.
+    const today = iso(new Date());
+    const nextEarningsDate =
+      epsRows
+        .filter((r) => r.epsActual == null && r.date >= today)
+        .map((r) => r.date)
+        .sort()[0] ?? null;
+
+    // Forward-annualized dividend (same methodology as the full doc).
+    let dividendPerShare: number | null = null;
+    let dividendYield: number | null = null;
+    const fwd = divs ? forwardAnnualDividend(divs) : null;
+    if (fwd) {
+      dividendPerShare = Math.round(fwd.perShare * 10000) / 10000;
+      if (price != null && price > 0) {
+        dividendYield = Math.round((fwd.perShare / price) * 10000) / 100;
+      }
+    }
+
+    // 52w range / distance from extremes / avg volume via the cron's own
+    // indicator function (no SPY map → beta stays null; not shown here).
+    let ind: ReturnType<typeof computeIndicators> = null;
+    if (aggs && aggs.length > 0) {
+      const bars: IndicatorBar[] = aggs.map((b) => ({
+        barDate: new Date(b.t).toISOString().slice(0, 10),
+        open: b.o,
+        high: b.h,
+        low: b.l,
+        close: b.c,
+        volume: b.v,
+        vwap: b.vw ?? null,
+      }));
+      ind = computeIndicators(bars.slice(-300), new Map());
+    }
+
+    // Sector / industry from Polygon's SIC only. The full doc's SEC fallback
+    // (for issuers Polygon lacks a SIC for) is too slow for this path → null.
+    const sic = details?.sic_code as string | number | null | undefined;
+    const hasSic =
+      sic != null && String(sic).trim() !== "" && String(sic).trim() !== "0";
+    const sicClass = hasSic ? classifyFromSic(sic) : null;
+
+    const summary: Record<string, unknown> = {
+      ticker,
+      name: details?.name ?? q?.name ?? ticker,
+      price,
+      pctChange: q?.changePercent ?? null,
+      prevClose: q?.previousClose ?? null,
+      volume: q?.volume ?? null,
+      marketCap: details
+        ? reconcileMarketCap(
+            details.market_cap,
+            price,
+            details.weighted_shares_outstanding,
+          )
+        : null,
+      exchange: details?.primary_exchange ?? null,
+      sector: sicClass?.sector ?? null,
+      industry: sicClass?.industry ?? null,
+      peRatio,
+      eps,
+      epsTtm: epsTtmReported,
+      nextEarningsDate,
+      dividendYield,
+      dividendPerShare,
+      high52: ind?.high52 ?? null,
+      low52: ind?.low52 ?? null,
+      pctFromHigh52: ind?.pctFromHigh52 ?? null,
+      pctFromLow52: ind?.pctFromLow52 ?? null,
+      avgVolume20: ind?.avgVolume20 ?? null,
+      // Lets the frontend tell this apart from the full company doc.
+      partial: true,
+      source: "polygon-summary",
+    };
+    this.memCompanySummary.set(ticker, { data: summary, at: Date.now() });
+    return summary;
   }
 
   /**

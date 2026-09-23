@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   Header,
+  Logger,
   NotFoundException,
   Post,
   Query,
@@ -64,6 +65,8 @@ function sendWithEtag(req: Request, res: Response, body: unknown): void {
 
 @Controller("live")
 export class OnDemandController {
+  private readonly logger = new Logger(OnDemandController.name);
+
   constructor(
         private readonly tickerAi: TickerAiAnalysisService,
     private readonly wmn: WhatMattersNowService,
@@ -235,12 +238,44 @@ private readonly ondemand: OnDemandService,
     @Req() req: Request,
     @Res() res: Response,
   ) {
+    const requestStart = Date.now();
     const sym = (ticker ?? "").toUpperCase().trim();
     if (!TICKER_RE.test(sym))
       throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
     const doc = await this.ondemand.getCompany(sym);
     if (!doc) throw new NotFoundException(`No data for ${sym}`);
     sendWithEtag(req, res, doc);
+    this.logger.log(
+      `GET /live/company?ticker=${sym} took ${Date.now() - requestStart}ms end-to-end`,
+    );
+  }
+
+  /**
+   * Fast key-stats (market cap, P/E, EPS, next ER, 52w, avg vol, sector,
+   * dividend) for a ticker whose company doc isn't in Firestore yet. The
+   * frontend calls this alongside /live/company and swaps in the full doc when
+   * it arrives. `partial: true` marks the response.
+   */
+  @Get("company/summary")
+  @UseGuards(FirebaseAuthGuard)
+  // Short: this only bridges the gap until the full doc exists, so an edge
+  // must not keep serving it after /live/company has the real thing.
+  @Header("Cache-Control", "public, max-age=60, s-maxage=60")
+  async companySummary(
+    @Query("ticker") ticker: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const requestStart = Date.now();
+    const sym = (ticker ?? "").toUpperCase().trim();
+    if (!TICKER_RE.test(sym))
+      throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+    const doc = await this.ondemand.getCompanySummary(sym);
+    if (!doc) throw new NotFoundException(`No data for ${sym}`);
+    sendWithEtag(req, res, doc);
+    this.logger.log(
+      `GET /live/company/summary?ticker=${sym} took ${Date.now() - requestStart}ms end-to-end`,
+    );
   }
 
   @Get("quotes")
