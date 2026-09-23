@@ -48,6 +48,7 @@ export interface AiInfrastructureTheme {
   /** Only matches companies no earlier theme in this list already claimed —
    *  makes this a residual/catch-all bucket instead of a normal theme. */
   fallbackOnly?: boolean;
+  excludeTickers?: string[];
 }
 
 export const AI_INFRASTRUCTURE_THEMES: AiInfrastructureTheme[] = [
@@ -250,7 +251,9 @@ export const AI_INFRASTRUCTURE_THEMES: AiInfrastructureTheme[] = [
       "Specialty Telecommunications",
       "Information Technology Services",
     ],
-    keywords: /\b(content delivery|CDN|edge network|edge delivery)\b/i,
+    keywords:
+      /\b(content delivery|CDN|edge network|edge delivery|cloudflare|fastly)\b/i,
+    excludeTickers: ["GOOGL"],
   },
   {
     key: "rare-earths",
@@ -408,6 +411,7 @@ export function classifyAiInfrastructure(
       if (c.delisted === true) return false;
       const ticker = c.ticker;
       if (typeof ticker !== "string") return false;
+      if (theme.excludeTickers?.includes(ticker)) return false;
 
       const industry = normalizedIndustry(c);
       if (!industry || !theme.industries.includes(industry)) return false;
