@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { LiveModule } from "../live/live.module";
+import { AiInfrastructureController } from "./ai-infrastructure.controller";
 import { AnalystActionsController } from "./analyst-actions.controller";
 import { CompaniesController } from "./companies.controller";
 import { DividendsController } from "./dividends.controller";
@@ -59,6 +60,7 @@ import { MoverCatalystsController } from "./mover-catalysts.controller";
     NewsController,
     RecapsController,
     MoverCatalystsController,
+    AiInfrastructureController,
   ],
   providers: [MarketDataService],
 })
