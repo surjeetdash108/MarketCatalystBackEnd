@@ -81,6 +81,7 @@ export interface LandingCell {
 
 export interface LandingQuote {
   sym: string;
+  value: number;
   pctChange: number;
 }
 
@@ -113,6 +114,41 @@ const LIVE_WINDOW_MS = 30 * 60_000;
 const LOOKBACK_DAYS = 14;
 
 const DELAY_MINUTES = 15;
+
+/**
+ * Weekday window where the marquee goes blank instead of showing the prior
+ * session's close next to the coming one. Not tied to the vendor's own
+ * "pre" phase (that starts ~4am ET) or to the premarket orchestrator's
+ * 08:00 ET run — this is purely a display reset in the window right before
+ * the open.
+ */
+const RESET_START_MIN = 7 * 60 + 30; // 07:30 ET
+const RESET_END_MIN = 8 * 60; // 08:00 ET
+
+/** Minutes since midnight ET, and the ET weekday (0=Sun…6=Sat), no tz library. */
+function etClock(now: Date = new Date()): { weekday: number; minutes: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour12: false,
+    weekday: "short",
+    hour: "numeric",
+    minute: "numeric",
+  }).formatToParts(now);
+  const wd = parts.find((p) => p.type === "weekday")?.value ?? "Mon";
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "0") % 24;
+  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  return {
+    weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(wd),
+    minutes: hour * 60 + minute,
+  };
+}
+
+/** True Mon–Fri 07:30–08:00 ET. Weekends are skipped — there is no open to reset into. */
+function inMorningReset(now: Date = new Date()): boolean {
+  const { weekday, minutes } = etClock(now);
+  if (weekday === 0 || weekday === 6) return false;
+  return minutes >= RESET_START_MIN && minutes < RESET_END_MIN;
+}
 
 /** Where the last known value of each cell is kept between restarts. */
 const SAVED_COLLECTION = "landing_tape";
@@ -159,6 +195,7 @@ export class LandingTapeService {
 
   /** Never throws — a failed build serves the last good body, or an empty one. */
   async get(): Promise<LandingTape> {
+    if (inMorningReset()) return this.resetBody();
     if (this.cache) {
       const ttl = this.cache.body.phase === "closed" ? CLOSED_TTL_MS : TTL_MS;
       if (Date.now() - this.cache.at < ttl) return this.cache.body;
@@ -190,6 +227,18 @@ export class LandingTapeService {
     } finally {
       this.inFlight = null;
     }
+  }
+
+  /** Blank body served during the 07:30–08:00 ET reset window — no vendor calls. */
+  private resetBody(): LandingTape {
+    return {
+      asOf: new Date().toISOString(),
+      phase: "pre",
+      stale: false,
+      delayMinutes: DELAY_MINUTES,
+      cells: [],
+      quotes: [],
+    };
   }
 
   private async build(): Promise<LandingTape> {
@@ -370,9 +419,13 @@ export class LandingTapeService {
   }
 
   private async quote(it: TapeItem, phase: LandingPhase): Promise<LandingQuote | null> {
-    if (!this.isRolled(it, phase)) return { sym: it.label, pctChange: it.pctChange! };
+    if (!this.isRolled(it, phase)) {
+      return { sym: it.label, value: it.value!, pctChange: it.pctChange! };
+    }
     const pair = it.proxyTicker ? await this.lastTwoCloses(it.proxyTicker) : null;
-    return pair ? { sym: it.label, pctChange: pct(pair.last.c, pair.prev.c) } : null;
+    return pair
+      ? { sym: it.label, value: pair.last.c, pctChange: pct(pair.last.c, pair.prev.c) }
+      : null;
   }
 
   /**
