@@ -92,7 +92,7 @@ const workerModules = isLiveRole
     // collection the website renders (marketcatalyst.ai/posts). Both roles so
     // the console — served by the live service — can drive it.
     BlogsModule,
-    // POST /mcp (McpApiKeyGuard) + /admin/mcp-keys (AdminGuard). Both roles,
+    // POST /mcp (McpApiKeyGuard) + /api/admin/mcp-keys (AdminGuard). Both roles,
     // same reasoning as BlogsModule above: an external MCP client reaches
     // this over the public internet, so it has to live on the
     // --allow-unauthenticated live service, not just the IAM-gated worker.

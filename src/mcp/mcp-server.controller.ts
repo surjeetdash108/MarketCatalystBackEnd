@@ -40,8 +40,13 @@ export class McpServerController {
   async handlePost(@Req() req: Request, @Res() res: Response) {
     const server = this.mcpServer.build();
     try {
+      // Plain JSON responses instead of a one-shot SSE stream: clients now reach
+      // this through the Firebase Hosting rewrite on app.marketcatalyst.ai
+      // (/mcp → market-catalyst-live), and a proxied CDN hop is the last place
+      // to depend on event-stream passthrough. Stateless calls never stream.
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
+        enableJsonResponse: true,
       });
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
