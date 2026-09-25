@@ -58,17 +58,20 @@ export interface FmpNewsRow {
 }
 
 /**
- * Normalised company profile (`/stable/profile`) — only the classification
- * fields. Used to REFINE the sector Polygon's SIC code produces (FMP carries a
- * clean GICS `sector`/`industry` where Polygon has only a free-text SIC that
- * dumps e.g. Bitcoin miners into "Finance Services"). Price/marketCap/name stay
- * Polygon-owned — this never becomes a second price source.
+ * Normalised company profile (`/stable/profile`). Used to REFINE the sector
+ * Polygon's SIC code produces (FMP carries a clean GICS `sector`/`industry`
+ * where Polygon has only a free-text SIC that dumps e.g. Bitcoin miners into
+ * "Finance Services"), and to supply `description`: FMP's is the fuller,
+ * business-operations writeup (what most other portals show); Polygon's is a
+ * shorter, more generic blurb. Price/marketCap/name stay Polygon-owned — this
+ * never becomes a second price source.
  */
 export interface FmpCompanyProfileRow {
   symbol: string;
   companyName: string | null;
   sector: string | null;
   industry: string | null;
+  description: string | null;
 }
 
 /** Normalised analyst grades consensus (rating tallies + label). */
@@ -355,13 +358,16 @@ export class FmpService {
   }
 
   /**
-   * Company profile (`/stable/profile`) — used ONLY for FMP's GICS `sector`/
-   * `industry` classification, which is cleaner than the free-text SIC Polygon
-   * returns (e.g. FMP codes IREN "Technology" where Polygon's SIC lands on
-   * "Finance Services"). Best-effort: `retries:0` so a momentary 429 degrades to
-   * the SIC-derived sector fast; null when the key is absent or FMP has no row.
-   * The caller whitelists FMP's sector string against the app's canonical set
-   * (see resolveSector/normalizeFmpSector) so an unrecognised label is ignored.
+   * Company profile (`/stable/profile`) — used for FMP's GICS `sector`/
+   * `industry` classification (cleaner than Polygon's free-text SIC, e.g. FMP
+   * codes IREN "Technology" where Polygon's SIC lands on "Finance Services")
+   * and for `description` (FMP's is the fuller business-operations writeup;
+   * Polygon's ticker-details `description` is a shorter, more generic blurb —
+   * see PolygonCompanyProfileAdapter). Best-effort: `retries:0` so a momentary
+   * 429 degrades fast to the Polygon-only fields; null when the key is absent
+   * or FMP has no row. The caller whitelists FMP's sector string against the
+   * app's canonical set (see resolveSector/normalizeFmpSector) so an
+   * unrecognised label is ignored.
    */
   async getCompanyProfile(
     ticker: string,
@@ -380,6 +386,7 @@ export class FmpService {
       companyName: str(o.companyName),
       sector: str(o.sector),
       industry: str(o.industry),
+      description: str(o.description),
     };
   }
 
