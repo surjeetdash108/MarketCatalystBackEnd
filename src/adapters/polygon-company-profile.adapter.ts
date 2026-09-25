@@ -228,7 +228,11 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       week52Range: null,
       volume: null,
       averageVolume: null,
-      description: details.description ?? null,
+      // FMP's description is the fuller business-operations writeup (matches
+      // what other portals show); Polygon's is shorter and more generic.
+      // Prefer FMP when available, fall back to Polygon (no key, no row, or a
+      // vendor miss) rather than leaving the field null.
+      description: fmpProfile?.description ?? details.description ?? null,
       peRatio,
       eps,
       dividendYield,
