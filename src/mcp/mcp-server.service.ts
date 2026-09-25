@@ -12,7 +12,7 @@ import { RICHER_THEME, composeRicherBody } from "./blog-templates/richer";
 import { buildStyleGuide } from "./blog-templates/style-guide";
 import type { BlogComposeInput, BlogTemplateId } from "./blog-templates/types";
 
-const zoneSchema = z.enum(["edu", "recap", "research"]);
+const zoneSchema = z.enum(["edu", "recap", "research", "news"]);
 const templateSchema = z.enum(["simple", "richer"]);
 
 function text(value: unknown) {

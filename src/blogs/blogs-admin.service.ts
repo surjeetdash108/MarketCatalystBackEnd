@@ -42,16 +42,17 @@ const THEME = "blog_theme";
 const THEME_DOC = "current";
 
 /** The four zones the console understands. */
-export type Zone = "edu" | "recap" | "research";
+export type Zone = "edu" | "recap" | "research" | "news";
 
 /** The three canonical blog types (see BlogType in the website data layer). */
-type BlogType = "educational" | "recap" | "research";
+type BlogType = "educational" | "recap" | "research" | "news";
 
 /** zone → canonical type (what gets stored). */
 const ZONE_TO_TYPE: Record<Zone, BlogType> = {
   edu: "educational",
   recap: "recap",
   research: "research",
+  news: "news",
 };
 
 /** canonical type → zone (what the GET view reports). */
@@ -59,6 +60,7 @@ const TYPE_TO_ZONE: Record<BlogType, Zone> = {
   educational: "edu",
   recap: "recap",
   research: "research",
+  news: "news",
 };
 
 /** Source-document kinds the post page can draw. */
