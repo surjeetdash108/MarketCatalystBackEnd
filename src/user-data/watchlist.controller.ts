@@ -20,18 +20,18 @@ import { setWithCreatedAt } from "../common/firestore-batch.util";
 import { SubscriptionsService } from "../plans/subscriptions.service";
 import { DEFAULT_PLAN_ID } from "../plans/plans.registry";
 
-/**
- * How many tickers a FREE-tier user may add to one watchlist.
- *
- * NEW ADDITIONS ONLY. A free user who already holds more than this keeps every
- * ticker they saved — nothing is removed, hidden or truncated, and no existing
- * document is rewritten. The limit only refuses to grow a list past the cap, so
- * turning it on cannot cost anyone data they can currently see.
- *
- * Re-adding a ticker the list already holds is always allowed: arrayUnion makes
- * it a no-op, and refusing it would be a confusing error for no benefit.
- */
-const FREE_WATCHLIST_LIMIT = 5;
+// /**
+//  * How many tickers a FREE-tier user may add to one watchlist.
+//  *
+//  * NEW ADDITIONS ONLY. A free user who already holds more than this keeps every
+//  * ticker they saved — nothing is removed, hidden or truncated, and no existing
+//  * document is rewritten. The limit only refuses to grow a list past the cap, so
+//  * turning it on cannot cost anyone data they can currently see.
+//  *
+//  * Re-adding a ticker the list already holds is always allowed: arrayUnion makes
+//  * it a no-op, and refusing it would be a confusing error for no benefit.
+//  */
+// const FREE_WATCHLIST_LIMIT = 5;
 
 const TICKER_RE = /^[A-Z][A-Z0-9.-]{0,9}$/;
 const MAX_LISTS = 25;
@@ -93,32 +93,32 @@ export class WatchlistController {
     }
   }
 
-  /**
-   * Refuse an add that would push a free-tier list past the cap.
-   *
-   * Silent on every paid plan, and silent when the ticker is already in the
-   * list. Any failure to resolve the plan ALLOWS the add: a billing lookup
-   * hiccup must not block someone from using their own watchlist.
-   */
-  private async assertCanAdd(
-    uid: string,
-    existing: string[],
-    ticker: string,
-  ): Promise<void> {
-    if (existing.includes(ticker)) return;
-    if (existing.length < FREE_WATCHLIST_LIMIT) return;
-    let planId: string;
-    try {
-      planId = (await this.subscriptions.forUser(uid)).planId;
-    } catch {
-      return; // fail open — never lock a user out of their own list
-    }
-    if (planId !== DEFAULT_PLAN_ID) return;
-    throw new ForbiddenException(
-      `The free plan holds up to ${FREE_WATCHLIST_LIMIT} tickers per watchlist. ` +
-        `Remove one, or upgrade to add more.`,
-    );
-  }
+  // /**
+  //  * Refuse an add that would push a free-tier list past the cap.
+  //  *
+  //  * Silent on every paid plan, and silent when the ticker is already in the
+  //  * list. Any failure to resolve the plan ALLOWS the add: a billing lookup
+  //  * hiccup must not block someone from using their own watchlist.
+  //  */
+  // private async assertCanAdd(
+  //   uid: string,
+  //   existing: string[],
+  //   ticker: string,
+  // ): Promise<void> {
+  //   if (existing.includes(ticker)) return;
+  //   if (existing.length < FREE_WATCHLIST_LIMIT) return;
+  //   let planId: string;
+  //   try {
+  //     planId = (await this.subscriptions.forUser(uid)).planId;
+  //   } catch {
+  //     return; // fail open — never lock a user out of their own list
+  //   }
+  //   if (planId !== DEFAULT_PLAN_ID) return;
+  //   throw new ForbiddenException(
+  //     `The free plan holds up to ${FREE_WATCHLIST_LIMIT} tickers per watchlist. ` +
+  //       `Remove one, or upgrade to add more.`,
+  //   );
+  // }
 
   private col(uid: string) {
     return this.firebase.firestore.collection(`users/${uid}/watchlists`);
@@ -246,7 +246,7 @@ export class WatchlistController {
     const snap = await ref.get();
     if (!snap.exists) throw new NotFoundException("watchlist not found");
     await this.assertTickerExists(ticker);
-    await this.assertCanAdd(uid, this.normTickers(snap.data()?.tickers), ticker);
+    // await this.assertCanAdd(uid, this.normTickers(snap.data()?.tickers), ticker);
     await ref.set(
       {
         tickers: FieldValue.arrayUnion(ticker),
@@ -304,7 +304,7 @@ export class WatchlistController {
     const snap = await ref.get();
     await this.assertTickerExists(ticker);
     if (snap.exists) {
-      await this.assertCanAdd(uid, this.normTickers(snap.data()?.tickers), ticker);
+      // await this.assertCanAdd(uid, this.normTickers(snap.data()?.tickers), ticker);
       // Never write `name` here — the user may have renamed the default list,
       // and this legacy endpoint must not clobber that rename.
       await ref.set(
