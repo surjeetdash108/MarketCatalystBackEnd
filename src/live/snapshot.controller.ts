@@ -99,8 +99,12 @@ export class SnapshotController {
     res.json({
       quotes,
       cacheAgeMs: ageMs,
-      refreshedFrom: "polygon-snapshot",
-      delayNote: "Underlying feed is ~15 minutes delayed on the current plan.",
+      refreshedFrom:
+        this.snapshots.source === "fmp" ? "fmp-quote" : "polygon-snapshot",
+      delayNote:
+        this.snapshots.source === "fmp"
+          ? "FMP quote — near real-time on the current plan."
+          : "Underlying feed is ~15 minutes delayed on the current plan.",
       servedAt: new Date().toISOString(),
     });
   }

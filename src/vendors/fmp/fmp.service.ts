@@ -5,9 +5,11 @@ import { fetchJson, type FetchJsonOptions } from "../../common/http.util";
 /**
  * Financial Modeling Prep (FMP) — a SUPPLEMENTARY vendor, wired only for the
  * data Polygon structurally cannot provide (earnings estimates/surprises,
- * analyst ratings) plus optional sector performance. It NEVER supplies
- * price/OHLCV/snapshot/news/corporate actions — those stay Polygon-owned so
- * there is a single source of truth for price.
+ * analyst ratings) plus optional sector performance. It does not supply
+ * OHLCV/news/corporate actions — those stay Polygon-owned. The one price path
+ * it can own is the live quote cache, and only when `LIVE_QUOTE_SOURCE=fmp`
+ * (snapshot-cache.service.ts); that swaps the single source rather than mixing
+ * two, so there is still one source of truth for price at a time.
  *
  * Uses FMP's current `/stable/` API (the legacy `/api/v3` + `/api/v4` paths are
  * deprecated and now return 403). Auth is a `?apikey=` query param (redacted in
@@ -30,6 +32,24 @@ const num = (v: unknown): number | null => {
   if (v == null) return null;
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : null;
+};
+
+/** Maps one quote row; null when it carries no symbol or no usable price. */
+const toFullQuote = (r: any): FmpFullQuote | null => {
+  const price = num(r?.price);
+  if (!r?.symbol || price == null) return null;
+  return {
+    symbol: String(r.symbol).toUpperCase(),
+    price,
+    change: num(r.change),
+    changePercentage: num(r.changePercentage),
+    previousClose: num(r.previousClose),
+    open: num(r.open),
+    dayHigh: num(r.dayHigh),
+    dayLow: num(r.dayLow),
+    volume: num(r.volume),
+    timestamp: num(r.timestamp),
+  };
 };
 
 /** Normalised earnings-calendar row (per report date, all companies). */
@@ -213,6 +233,21 @@ export interface FmpQuote {
   timestamp: number;
 }
 
+/** A full `/stable/quote` (or `/stable/batch-quote`) row, for the live quote cache. */
+export interface FmpFullQuote {
+  symbol: string;
+  price: number | null;
+  change: number | null;
+  changePercentage: number | null;
+  previousClose: number | null;
+  open: number | null;
+  dayHigh: number | null;
+  dayLow: number | null;
+  volume: number | null;
+  /** Unix seconds of the last print. */
+  timestamp: number | null;
+}
+
 @Injectable()
 export class FmpService {
   private readonly logger = new Logger(FmpService.name);
@@ -235,6 +270,10 @@ export class FmpService {
     { at: number; rows: FmpEarningsSurpriseRow[] }
   >();
   private static readonly EARNINGS_CACHE_TTL_MS = 60_000;
+  // Set once `/stable/batch-quote` answers with a plan/auth refusal, so every
+  // later getQuotes() goes straight to per-symbol calls instead of paying a
+  // doomed request each refresh. Process-lifetime: a plan upgrade needs a restart.
+  private batchQuoteUnsupported = false;
 
   constructor(private readonly config: ConfigService) {
     this.apiKey = this.config.get("FMP_API_KEY", "");
@@ -252,6 +291,11 @@ export class FmpService {
   /** True once a key is present — callers should skip work when disabled. */
   get enabled(): boolean {
     return !!this.apiKey;
+  }
+
+  /** False once batch-quote has been refused by the plan (see getQuotes). */
+  get batchQuoteSupported(): boolean {
+    return !this.batchQuoteUnsupported;
   }
 
   /** Reserve the next evenly-spaced send slot, then wait until it arrives. Safe
@@ -417,7 +461,8 @@ export class FmpService {
   /**
    * Latest quote for one symbol (`/stable/quote`). Covers indices (^GSPC,
    * ^VIX) and commodity futures (GCUSD, BZUSD) as well as equities. One symbol
-   * per call: `/stable/batch-quote` is not on the current plan. Returns null on
+   * per call; for many symbols use getQuotes() (batch-quote verified available
+   * on the current plan 2026-09-28). Returns null on
    * a plan-restricted symbol, an empty answer or any error — never throws.
    */
   async getQuote(symbol: string): Promise<FmpQuote | null> {
@@ -440,6 +485,84 @@ export class FmpService {
       this.logger.warn(`FMP quote ${symbol} failed: ${(err as Error)?.message ?? err}`);
       return null;
     }
+  }
+
+  /**
+   * Full quotes for many symbols — the live quote cache's FMP source
+   * (`LIVE_QUOTE_SOURCE=fmp`). One `/stable/batch-quote` call when the plan has it;
+   * otherwise one `/stable/quote` per symbol through the shared pacer, so N
+   * symbols cost N calls and ~N × FMP_MIN_INTERVAL_MS of wall time. Symbols FMP
+   * cannot price are simply absent from the result. Throws only when the batch
+   * call fails for a reason other than the plan refusing it.
+   */
+  async getQuotes(symbols: string[]): Promise<FmpFullQuote[]> {
+    if (!this.enabled || symbols.length === 0) return [];
+    const started = Date.now();
+
+    if (!this.batchQuoteUnsupported) {
+      try {
+        const rows = await this.get(
+          `batch-quote?symbols=${encodeURIComponent(symbols.join(","))}`,
+        );
+        const quotes = rows
+          .map(toFullQuote)
+          .filter((q): q is FmpFullQuote => !!q);
+        this.logLiveFetch("batch-quote", symbols, quotes, started);
+        return quotes;
+      } catch (err) {
+        const msg = (err as Error)?.message ?? String(err);
+        // 401/402/403 = endpoint not on this plan. Anything else (timeout, 5xx)
+        // is transient and must not permanently downgrade to per-symbol calls.
+        if (!/-> 40[123]:/.test(msg)) throw err;
+        this.batchQuoteUnsupported = true;
+        this.logger.warn(
+          "FMP batch-quote not available on this plan — falling back to one /quote call per symbol.",
+        );
+      }
+    }
+
+    const rows = await Promise.all(
+      symbols.map((s) =>
+        this.get(`quote?symbol=${encodeURIComponent(s)}`)
+          .then(([r]) => toFullQuote(r))
+          .catch((err) => {
+            this.logger.warn(
+              `FMP quote ${s} failed: ${(err as Error)?.message ?? err}`,
+            );
+            return null;
+          }),
+      ),
+    );
+    const quotes = rows.filter((q): q is FmpFullQuote => !!q);
+    this.logLiveFetch("per-symbol quote", symbols, quotes, started);
+    return quotes;
+  }
+
+  /**
+   * One line per live-quote fetch, so the log shows plainly that live prices
+   * are coming from FMP: mode, how many priced, time taken, a sample, and
+   * which symbols FMP could not price (those go to LIVE_QUOTE_FALLBACK_SOURCE).
+   */
+  private logLiveFetch(
+    mode: string,
+    requested: string[],
+    quotes: FmpFullQuote[],
+    started: number,
+  ) {
+    const priced = new Set(quotes.map((q) => q.symbol));
+    const missing = requested.filter((s) => !priced.has(s.toUpperCase()));
+    const sample = quotes
+      .slice(0, 3)
+      .map((q) => `${q.symbol}=${q.price}`)
+      .join(" ");
+    const line =
+      `LIVE DATA from FMP (${mode}): ${quotes.length}/${requested.length} ` +
+      `priced in ${Date.now() - started}ms [${sample}${quotes.length > 3 ? " …" : ""}]` +
+      (missing.length
+        ? ` — not priced by FMP: ${missing.slice(0, 10).join(",")}${missing.length > 10 ? " …" : ""}`
+        : "");
+    if (missing.length) this.logger.warn(line);
+    else this.logger.log(line);
   }
 
   /** Sector performance snapshot (`/stable/sector-performance-snapshot`). */

@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { createHash } from "crypto";
 import { ConfigService } from "@nestjs/config";
 import { fetchJson } from "../common/http.util";
+import { FmpService, type FmpFullQuote } from "../vendors/fmp/fmp.service";
 
 /**
  * O(1)-upstream price cache: one vendor call per refresh interval, regardless
@@ -23,7 +24,31 @@ import { fetchJson } from "../common/http.util";
  * And it costs almost nothing in freshness: the underlying feed is already
  * ~15 minutes delayed, so a 10-second refresh makes data 910s old instead of
  * 900s — under 2% worse, for ~1% of the infrastructure.
+ *
+ * VENDOR SWITCH (LIVE_QUOTE_SOURCE / LIVE_QUOTE_FALLBACK_SOURCE)
+ * `LIVE_QUOTE_SOURCE=polygon` (default) or `fmp` picks who fills this cache;
+ * revert is an env change, no code. `LIVE_QUOTE_FALLBACK_SOURCE` (default
+ * `none`) fills only the tickers the primary failed to price. Deliberately NOT
+ * `QUOTE_SOURCE` — that one belongs to QUOTE_ADAPTER (market-indices job) in
+ * adapters.module.ts, which is Polygon-only and throws on `fmp` at boot.
+ * Caveats of `fmp`:
+ *   - One `/stable/batch-quote` call per refresh (verified on the current plan
+ *     2026-09-28, quotes ~seconds old vs Polygon's ~15 min). If a plan ever
+ *     loses batch-quote it degrades to ONE CALL PER TICKER per refresh, paced
+ *     through FmpService's shared queue, slowing other FMP callers.
+ *   - FMP's quote has no VWAP, last-minute bar, extended-hours session split
+ *     or market status; those SnapshotQuote fields are null under `fmp`.
  */
+
+type QuoteSource = "polygon" | "fmp" | "none";
+
+function parseSource(
+  raw: string | undefined,
+  fallback: QuoteSource,
+): QuoteSource {
+  const v = (raw ?? "").trim().toLowerCase();
+  return v === "polygon" || v === "fmp" || v === "none" ? v : fallback;
+}
 
 const REFRESH_MS_DEFAULT = 10_000;
 /** Drop a ticker from the refresh set after this long with no requests. */
@@ -86,6 +111,9 @@ export class SnapshotCacheService implements OnModuleDestroy {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly refreshMs: number;
+  /** Which vendor fills the cache; read by the controller to label responses. */
+  readonly source: QuoteSource;
+  private readonly fallbackSource: QuoteSource;
 
   private readonly cache = new Map<string, CacheEntry>();
   /** ticker -> last time a client asked for it; drives the refresh set. */
@@ -101,7 +129,22 @@ export class SnapshotCacheService implements OnModuleDestroy {
     lastError: "",
   };
 
-  constructor(private readonly config: ConfigService) {
+  constructor(
+    private readonly config: ConfigService,
+    private readonly fmp: FmpService,
+  ) {
+    this.source = parseSource(
+      this.config.get<string>("LIVE_QUOTE_SOURCE"),
+      "polygon",
+    );
+    const fb = parseSource(
+      this.config.get<string>("LIVE_QUOTE_FALLBACK_SOURCE"),
+      "none",
+    );
+    this.fallbackSource = fb === this.source ? "none" : fb;
+    this.logger.log(
+      `live quotes: source=${this.source} fallback=${this.fallbackSource}`,
+    );
     this.apiKey = this.config.get("POLYGON_API_KEY", "");
     this.baseUrl = this.config
       .get("POLYGON_API_BASE_URL", "https://api.polygon.io")
@@ -204,29 +247,58 @@ export class SnapshotCacheService implements OnModuleDestroy {
   /**
    * One upstream call for every tracked ticker. The whole point: N tickers cost
    * one request, and user count does not appear in this function at all.
+   * (Under LIVE_QUOTE_SOURCE=fmp without batch-quote it is N calls — see top.)
    */
   private async refresh(tickers: string[]): Promise<void> {
-    if (tickers.length === 0 || this.refreshing || !this.apiKey) return;
+    const primaryOk = this.canFetch(this.source);
+    if (
+      tickers.length === 0 ||
+      this.refreshing ||
+      (!primaryOk && !this.canFetch(this.fallbackSource))
+    ) {
+      return;
+    }
     this.refreshing = true;
     const started = Date.now();
     try {
-      const list = tickers.join(",");
-      // v3 universal snapshot rather than the v2 per-ticker one. Same plan, same
-      // delay, same single call for N tickers — but it also carries the
-      // early/late trading session breakdown and the last minute bar, so the
-      // extended-hours figures no longer need a second endpoint.
-      const url =
-        `${this.baseUrl}/v3/snapshot` +
-        `?ticker.any_of=${encodeURIComponent(list)}&limit=250&apiKey=${this.apiKey}`;
-      const res = await fetchJson<{ results?: any[] }>(url);
-      this.stats.upstreamCalls++;
+      let quotes: SnapshotQuote[] = [];
+      let primaryErr: Error | null = null;
+      // A primary with no key (e.g. LIVE_QUOTE_SOURCE=fmp on a service missing the
+      // FMP_API_KEY secret) is skipped, so the fallback serves every ticker
+      // instead of the cache silently staying empty.
+      if (primaryOk) {
+        try {
+          quotes = await this.fetchFrom(this.source, tickers);
+        } catch (err) {
+          primaryErr = err as Error;
+        }
+      }
+
+      // The fallback fills only what the primary could not price, so a healthy
+      // primary never has its numbers overwritten by a second vendor.
+      const got = new Set(quotes.map((q) => q.ticker));
+      const missing = tickers.filter((t) => !got.has(t));
+      if (missing.length > 0 && this.canFetch(this.fallbackSource)) {
+        try {
+          quotes = quotes.concat(
+            await this.fetchFrom(this.fallbackSource, missing),
+          );
+        } catch (err) {
+          this.logger.warn(
+            `snapshot fallback (${this.fallbackSource}) failed: ${(err as Error).message}`,
+          );
+        }
+      }
+      if (primaryErr && quotes.length === 0) throw primaryErr;
 
       const now = Date.now();
-      for (const t of res.results ?? []) {
-        this.cache.set(t.ticker, { quote: this.map(t), fetchedAt: now });
+      for (const q of quotes) {
+        this.cache.set(q.ticker, { quote: q, fetchedAt: now });
       }
       this.stats.lastRefreshMs = Date.now() - started;
-      this.stats.lastError = "";
+      this.stats.lastError = primaryErr
+        ? `${this.source}: ${primaryErr.message}`
+        : "";
     } catch (err) {
       // Keep serving stale data rather than blanking the UI — the previous
       // value is far more useful than nothing on a delayed feed.
@@ -235,6 +307,66 @@ export class SnapshotCacheService implements OnModuleDestroy {
     } finally {
       this.refreshing = false;
     }
+  }
+
+  private canFetch(source: QuoteSource): boolean {
+    if (source === "polygon") return !!this.apiKey;
+    if (source === "fmp") return this.fmp.enabled;
+    return false;
+  }
+
+  private async fetchFrom(
+    source: QuoteSource,
+    tickers: string[],
+  ): Promise<SnapshotQuote[]> {
+    if (source === "fmp") {
+      const batched = this.fmp.batchQuoteSupported;
+      const rows = await this.fmp.getQuotes(tickers);
+      // Honest accounting: without batch-quote every ticker is its own call.
+      this.stats.upstreamCalls += batched ? 1 : tickers.length;
+      return rows.map((q) => this.mapFmp(q));
+    }
+    if (source !== "polygon") return [];
+
+    const list = tickers.join(",");
+    // v3 universal snapshot rather than the v2 per-ticker one. Same plan, same
+    // delay, same single call for N tickers — but it also carries the
+    // early/late trading session breakdown and the last minute bar, so the
+    // extended-hours figures no longer need a second endpoint.
+    const url =
+      `${this.baseUrl}/v3/snapshot` +
+      `?ticker.any_of=${encodeURIComponent(list)}&limit=250&apiKey=${this.apiKey}`;
+    const res = await fetchJson<{ results?: any[] }>(url);
+    this.stats.upstreamCalls++;
+    return (res.results ?? []).map((t) => this.map(t));
+  }
+
+  /**
+   * FMP's quote carries its own price/change/%change, all mutually consistent,
+   * so they are used as-is. Fields FMP has no equivalent for stay null rather
+   * than being guessed (see the caveats at the top of this file).
+   */
+  private mapFmp(q: FmpFullQuote): SnapshotQuote {
+    return {
+      ticker: q.symbol,
+      price: q.price,
+      change: q.change,
+      changePct: q.changePercentage,
+      previousClose: q.previousClose,
+      open: q.open,
+      dayHigh: q.dayHigh,
+      dayLow: q.dayLow,
+      dayVolume: q.volume,
+      dayVwap: null,
+      minuteClose: null,
+      minuteAt: null,
+      // FMP timestamps are Unix SECONDS (Polygon's are nanoseconds).
+      vendorUpdatedAt: q.timestamp != null ? q.timestamp * 1000 : null,
+      earlyTradingChangePct: null,
+      lateTradingChangePct: null,
+      regularTradingChangePct: null,
+      marketStatus: null,
+    };
   }
 
   private map(t: any): SnapshotQuote {
