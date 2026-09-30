@@ -225,12 +225,18 @@ export class WatchlistController {
     @CurrentUser() uid: string,
     @Param("id") id: string,
   ): Promise<{ watchlists: WatchlistSummary[] }> {
-    const all = await this.col(uid).get();
-    if (all.size <= 1)
-      throw new BadRequestException("Cannot delete your only watchlist");
-    await this.col(uid).doc(id).delete();
+    const ref = this.col(uid).doc(id);
+    if (!(await ref.get()).exists)
+      throw new NotFoundException("watchlist not found");
+    // Deleting the LAST list is allowed: listAll() below finds none left and
+    // recreates an empty "My Watchlist", so the user always ends with one
+    // list and deleting everything resets to the original empty state.
+    await ref.delete();
     // Drop the list's cached AI summary too — nothing else ever revisits that
     // doc id, so without this it would linger in ai_watchlist_analysis forever.
+    // ORDER MATTERS: this must run BEFORE listAll(). When the deleted list was
+    // the default one, listAll() recreates it under the same "default" id, and
+    // the fresh empty list must not inherit the old list's cached summary.
     await this.aiAnalysis.deleteWatchlistSummary(uid, id);
     return { watchlists: await this.listAll(uid) };
   }
