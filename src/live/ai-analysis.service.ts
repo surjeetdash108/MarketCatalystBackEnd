@@ -583,7 +583,9 @@ export class AiAnalysisService {
           conviction: (h.conviction as string | undefined) ?? null,
         };
       })
-      .filter((h) => h.ticker);
+      // Closed positions (every share sold) keep their history but are not
+      // part of the portfolio the summary describes.
+      .filter((h) => h.ticker && h.shares > 0);
 
     return this.aggregate({
       kind: "portfolio",
