@@ -120,6 +120,21 @@ export class WatchlistController {
     );
   }
 
+  /**
+   * Tickers allowed per watchlist for this user: the free-tier cap, or null
+   * for no limit. Sent with the lists so the client can show usage ("3 / 5")
+   * and explain a full list up front, from the same plan check that enforces
+   * it. Fails open (null) like assertCanAdd — the server still enforces.
+   */
+  private async tickerLimitFor(uid: string): Promise<number | null> {
+    try {
+      const { planId } = await this.subscriptions.forUser(uid);
+      return planId === DEFAULT_PLAN_ID ? FREE_WATCHLIST_LIMIT : null;
+    } catch {
+      return null;
+    }
+  }
+
   private col(uid: string) {
     return this.firebase.firestore.collection(`users/${uid}/watchlists`);
   }
@@ -182,8 +197,12 @@ export class WatchlistController {
   @Get("watchlists")
   async listWatchlists(
     @CurrentUser() uid: string,
-  ): Promise<{ watchlists: WatchlistSummary[] }> {
-    return { watchlists: await this.listAll(uid) };
+  ): Promise<{ watchlists: WatchlistSummary[]; tickerLimit: number | null }> {
+    const [watchlists, tickerLimit] = await Promise.all([
+      this.listAll(uid),
+      this.tickerLimitFor(uid),
+    ]);
+    return { watchlists, tickerLimit };
   }
 
   @Post("watchlists")
