@@ -1,5 +1,60 @@
 # MarketCatalyst — Task Tracker
 
+> ## ⏱ State sync — 2026-08-16 · FMP NEWS, ON-DEMAND COMPLETENESS, COVERAGE SELF-HEAL, SCALE-TO-ZERO COST (deployed to prod)
+>
+> _This block is newest and authoritative where it differs from the blocks
+> below. It records seven changes deployed to production on 2026-08-16 (worker
+> `market-catalyst-backend` rev 00101, live `market-catalyst-live` rev 00040,
+> UI hosting redeployed, new Cloud Run Job `premarket-job`)._
+>
+> **This doc, specifically:** New Done rows are captured in the dated task
+> subsection **"Cost Architecture, On-Demand Completeness & Coverage Self-Heal
+> (2026-08-16)"** below (T-149a–g). Materially, **T-148a is now largely resolved**:
+> the premarket bundle runs as a dedicated **Cloud Run Job** (`premarket-job`) fired
+> by the `run-premarket-job` scheduler (`0 8 * * 1-5` ET), and the intraday jobs run
+> every 5 min — automated refresh runs in production, with the worker intentionally
+> scale-to-zero. T-148b/c/d (browser→backend reachability, its security prereq, and
+> the Polygon key rotation) are untouched by this session.
+>
+> **A · FMP news (new).** News feed MERGES Polygon + FMP (deduped by URL, Polygon
+> wins); every article carries a `vendor` field, badged in the UI with `source` +
+> `sentiment`. Backend: `NEWS_FMP_SOURCE=fmp`, new `src/adapters/fmp-news.adapter.ts`
+> + `NEWS_FMP_ADAPTER`, a `news.job.ts` merge loop, `/live/news` stamps `vendor`; FMP
+> `getStockNews()` → `/stable/news/stock`.
+>
+> **B · Stock-detail wiring fixes.** `market-catalyst-live` (serves `/live/*` +
+> `/market-data/*`) was on a stale image → redeployed. `/live/company` now builds
+> peRatio/eps/dividendYield/dividendPerShare/peers. UI: analyst popup PT
+> median/low-high + recent grades; commentary thumbnails; IPO Shares/Deal-size
+> columns; MoverPopup null-guards RVOL/RS.
+>
+> **C · stock-history self-heal → RS/tech coverage 70 → 376/385.** A once-failed
+> ticker was wrongly marked "backfilled" and never re-attempted; `stock-history.job.ts`
+> now runs a `count()` guard that re-triggers the deep window when a "backfilled"
+> ticker has < 65 stored bars.
+>
+> **D · On-demand completeness + shared compute.** `ondemand.getCompany` first-fetch
+> returns the FULL detail-page dataset (technicals + ranked RS/tech) and persists
+> ~2yr bars so nightly crons rank the new ticker. Crons persist RAW scores
+> (`rsScore`; `techMomentum`/`techTrend`/`techRsi`); PURE compute functions shared by
+> cron + on-demand.
+>
+> **E · Earnings full-US coverage.** Forward (FMP) calendar resolves symbols against
+> the ~13,106-row Polygon US ticker reference (not the ~385 tracked companies). Aug 26
+> 2026: 4 → 38 reporters; `earnings_events` ~7.3k → ~8.8k.
+>
+> **F · Nightly sync integrity.** `companies.job.ts` no longer merge-writes
+> placeholder nulls for `beta`/`volume`/`averageVolume`/`week52Range`; field ownership
+> is single-owner across the nightly chain.
+>
+> **G · Cost architecture → scale-to-zero (~$75–90/mo → <$15/mo).** Worker
+> `market-catalyst-backend` → `--min-instances=0` + CPU throttling. Premarket bundle →
+> **Cloud Run Job** `premarket-job` (`node dist/job-entry.js` booting
+> `src/app-job.module.ts`, worker modules minus ServeStaticModule; task-timeout 3600s,
+> 2Gi/1cpu, ~18 min/weekday ≈ $0.50/mo). Scheduler `run-premarket-job`
+> (`0 8 * * 1-5` ET) fires it as `scheduler-invoker@`; old `sync-premarket` scheduler
+> DELETED. Intraday syncs 2 → 5 min. Manual: `gcloud run jobs execute premarket-job`.
+
 > ## ⏱ State sync — 2026-07-27 · TWO ENVIRONMENTS (stage + prod), env-driven config
 >
 > _This block is newest and authoritative where it differs from the blocks
@@ -346,11 +401,28 @@ v1.5 | June 2026
 
 | ID | Task | Type | Est. | Pri | Assignee | Sprint | Status | Notes |
 |---|---|---|---|---|---|---|---|---|
-| T-148a | Run `create-scheduler-jobs.sh`: create Cloud Scheduler jobs for all sync jobs + create the `scheduler-invoker` service account + grant it `run.invoker` | Infra | 0.5d | P0 | Infra Eng | S-13 | Not Started | 🔴 **Nothing refreshes automatically in production.** No Cloud Scheduler jobs exist in **any** region and no `scheduler-invoker` SA exists — the script was never run. With `min-instances=0` the in-process `@Cron` decorators never fire. Every populated collection is frozen at its last **manual** run. |
+| T-148a | Run `create-scheduler-jobs.sh`: create Cloud Scheduler jobs for all sync jobs + create the `scheduler-invoker` service account + grant it `run.invoker` | Infra | 0.5d | P0 | Infra Eng | S-13 | **Largely resolved** | 🔴 **Nothing refreshes automatically in production.** No Cloud Scheduler jobs exist in **any** region and no `scheduler-invoker` SA exists — the script was never run. With `min-instances=0` the in-process `@Cron` decorators never fire. Every populated collection is frozen at its last **manual** run. ✅ **2026-08-16 — automated refresh now runs in prod (see the 2026-08-16 block, G):** the premarket bundle is a dedicated **Cloud Run Job** `premarket-job` fired by the `run-premarket-job` scheduler (`0 8 * * 1-5` ET) as `scheduler-invoker@` (granted `roles/run.invoker` on the job), and intraday syncs run every 5 min (`*/5 9-16 * * 1-5`: quotes/movers/breadth/indices/fear-greed). The worker is intentionally scale-to-zero, so the schedulers — not `@Cron` — drive refresh. T-148b/c/d remain open. |
 | T-148b | Firebase Hosting rewrite → Cloud Run so the browser can reach the backend; set `NEXT_PUBLIC_BACKEND_URL` and rebuild the bundle | Infra | 0.5d | P0 | Infra Eng | S-13 | Not Started | 🔴 `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4400` is baked into the production bundle and blocked as mixed content. Disables in prod: admin **Monitor** tab, extended-hours moves, market-status pill, all `/plans` + `/admin/*` endpoints, and any future Stripe checkout/webhook. **Blocked on T-148c — do not do this first.** |
 | T-148c | Set `ADMIN_GUARD_TRUST_IAM=false` **before** T-148b | Infra | 0.25d | P0 | Infra Eng | S-13 | Not Started | ⚠ **Ordering is a security requirement.** Cloud Run currently runs `--no-allow-unauthenticated`, so IAM is the guard. The moment a Hosting rewrite fronts it, `/sync/:job/run`, `/purge` and `/retention` become world-callable unless this flag is flipped first. |
 | T-148d | Rotate `POLYGON_API_KEY` (exposed in chat, never rotated) | Infra | 0.25d | P0 | Infra Eng | S-13 | Not Started | Secret Manager version 4 is enabled. `deploy/rotate-polygon-key.sh` automates everything **except** generating the replacement key at Polygon — that step is manual and must be done by the account holder. ⚠ **2026-08-03 re-verify: still Not Started** — key remains un-rotated (R49). |
 | T-148e | 🆕 **Analyst Actions → Polygon (not FMP).** Per the 2026-08-02 request, migrate `analyst-actions.job.ts` off FMP `grades-consensus` onto a real per-firm feed (Polygon Benzinga-ratings add-on wired into a new `PolygonService` method, or a funded Benzinga key), and change the stored shape from a single consensus doc (`source:'fmp_consensus_interim'`) to per-firm events (firm/action/ratingOld→New/ptOld→New/date) | Backend | 3.5d | P0 | Backend | S-13 | Not Started | ⚠ **2026-08-03:** commit `afd4429` was a to-do note only (touched `src/live/*`+`src/user-data/*`); no code migration exists. `PolygonService` currently has **no** analyst method, and `BENZINGA_API_KEY` is empty. This is why the UI shows Analyst as "active from FMP". Tracks delivery row **R41** (5%). |
+
+#### Cost Architecture, On-Demand Completeness & Coverage Self-Heal (2026-08-16, prod)
+
+> Deployed to production on 2026-08-16 (worker rev 00101, live rev 00040, UI
+> hosting redeployed, new Cloud Run Job `premarket-job`). Every row below is
+> **Done = LIVE** (deployed and exercisable in production). Source of record: the
+> 2026-08-16 State sync block at the top of this file and `DELIVERY-PLAN-STATUS.md`.
+
+| ID | Task | Type | Est. | Pri | Assignee | Sprint | Status | Notes |
+|---|---|---|---|---|---|---|---|---|
+| T-149a | FMP news integration: new `src/adapters/fmp-news.adapter.ts` + `NEWS_FMP_ADAPTER` token, `NEWS_FMP_SOURCE=fmp`; `news.job.ts` merge loop + `/live/news` on-demand path both stamp `vendor`; FMP `getStockNews()` → `/stable/news/stock`; UI vendor + sentiment pills + thumbnails | Backend + FE | 1.5d | P1 | Full Stack | S-14 | **Done** | News feed now MERGES Polygon + FMP, deduped by URL (Polygon wins). Every article carries `vendor` ("polygon"\|"fmp"). Deliberate, licensed expansion of FMP scope (was "never news"); FMP `sentiment` frequently null. See F-07. |
+| T-149b | Stock-detail wiring: redeploy `market-catalyst-live` off a stale image; `/live/company` builds peRatio/eps/dividendYield/dividendPerShare/peers; UI fixes (analyst-popup PT median/low-high + recent grades, commentary thumbnails, IPO Shares/Deal-size columns, MoverPopup null-guards RVOL/RS) | Backend + FE | 1d | P0 | Full Stack | S-14 | **Done** | Root cause: both `/live/*` and `/market-data/*` route to `market-catalyst-live`, which was serving a stale image. `/live/company` was a slim profile-only doc. See F-17. |
+| T-149c | `stock-history.job.ts`: `count()` guard re-triggers the deep window when a "backfilled" ticker still has < 65 (`MIN_HEALTHY_BARS`) stored bars | Backend | 0.5d | P0 | Backend | S-14 | **Done** | 🐛 A ticker whose deep-history fetch once failed was wrongly marked "backfilled" (`earliestSyncedFrom` set) and never re-attempted, so ~250 tickers (incl. every mega-cap) stayed below rs-rating's 65-bar minimum and unscored. Self-healing + self-limiting. **rsRating coverage 70 → 376/385.** |
+| T-149d | On-demand completeness: `ondemand.getCompany` first-fetch returns the full detail-page set (technicals + ranked RS/tech), persists ~2yr bars to `ohlcv_bars`; crons persist RAW scores (`rsScore`; `techMomentum`/`techTrend`/`techRsi`); extract shared PURE compute (`computeIndicators`, `computeRsScore`+`rsPercentile`, `computeTechComponents`+`techRatingFromComponents`) used by BOTH cron + on-demand | Backend | 2d | P0 | Backend | S-14 | **Done** | Identical field sets across cron and on-demand. Existing cron ranks stay authoritative; a single-ticker percentile is computed only when a brand-new ticker lacks one. See F-17. |
+| T-149e | `earnings.job.ts loadRefNames`: resolve forward FMP calendar symbols against the ~13,106-row Polygon US ticker reference (`tickers`), keep US CS/ADRC listings with Polygon names, drop FMP worldwide rows — stop filtering to the ~385 tracked `companies` | Backend | 1d | P1 | Backend | S-14 | **Done** | Now lists ALL US reporters (Aug 26 2026: 4 → 38); `earnings_events` ~7.3k → ~8.8k. Reported/historical rows were already full-US (Polygon). NOTE: `/market-data/earnings` still returns the whole collection — add date-windowed loading if it grows. See F-02. |
+| T-149f | `companies.job.ts`: stop merge-writing placeholder nulls `beta`/`volume`/`averageVolume`/`week52Range`; establish single field-owner across the nightly chain | Backend | 0.5d | P0 | Backend | S-14 | **Done** | 🐛 The profile write was nulling `beta`/`volume` between runs (`beta` owned by technical-indicators, `volume` by market-quotes). `averageVolume`/`week52Range` are dead (UI uses avgVolume20/50 + computes the 52-week range client-side). Ownership now single-owner: companies → technical-indicators → rs-rating → tech-rating; market-quotes owns price/pctChange/volume. |
+| T-149g | Cost architecture → scale-to-zero: worker `market-catalyst-backend` `--min-instances=0` + CPU throttling; premarket bundle → **Cloud Run Job** `premarket-job` (new `src/job-entry.ts` + `src/app-job.module.ts`, worker modules minus ServeStaticModule); scheduler `run-premarket-job` (`0 8 * * 1-5` ET) via OAuth POST as `scheduler-invoker@`; delete old `sync-premarket` scheduler; intraday syncs 2 → 5 min | Infra | 1.5d | P0 | Infra Eng | S-14 | **Done** | The always-on worker (`min-instances=1` + `--no-cpu-throttling` ≈ $65/mo) existed only to host the DETACHED premarket bundle. Job config: task-timeout 3600s, max-retries 1, 2Gi/1cpu, ~18 min/weekday ≈ $0.50/mo (validated: execution completed in 1091s, exit 0). Honest bill ~$75–90/mo → <$15/mo. Manual run: `gcloud run jobs execute premarket-job` (NOT `POST /sync/premarket/run`, killed on the scale-to-zero worker). Resolves T-148a. |
 
 #### Stripe
 

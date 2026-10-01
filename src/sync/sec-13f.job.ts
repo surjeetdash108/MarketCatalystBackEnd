@@ -92,18 +92,26 @@ export class Sec13FJob implements OnModuleInit {
           (a, b) => b.value - a.value,
         );
         const totalValue = positions.reduce((sum, p) => sum + p.value, 0);
-        // Written individually rather than folded into the positions batch so
-        // it keeps its original position in the sequence — this doc gates the
-        // next run via latestAccessionNumber and must land before the children.
-        await setWithCreatedAt(this.firebase.firestore, fundRef, {
-          fundName: fund.displayName,
-          latestFilingDate: latest13F.filingDate,
-          latestAccessionNumber: latest13F.accessionNumber,
-          totalPositions: positions.length,
-          totalValue,
-          updatedAt: new Date().toISOString(),
-        });
-        fundsWritten++;
+
+        // An empty info-table (no parsed positions) is almost always a transient
+        // fetch failure or a 13F-NT with no holdings — NOT a real "fund now holds
+        // nothing". Writing totalPositions:0/totalValue:0 AND advancing the
+        // accession watermark would poison the fund doc with zeros and gate this
+        // accession out forever (the latestAccessionNumber check above would then
+        // skip it). Skip entirely so the next run retries this same accession.
+        if (positions.length === 0) {
+          this.logger.warn(
+            `${fund.displayName}: 13F info-table for ${latest13F.accessionNumber} ` +
+              `parsed 0 positions — skipping (watermark not advanced, will retry)`,
+          );
+          continue;
+        }
+
+        // Write the filing + positions CHILDREN before advancing the fund
+        // watermark. The fund doc's latestAccessionNumber gates the next run, so
+        // if it landed first and the process crashed before the children wrote,
+        // this accession would be marked "synced" with no positions and the gate
+        // would skip it forever. Children-first means a crash just re-runs.
         const filingRef = fundRef
           .collection("filings")
           .doc(latest13F.accessionNumber);
@@ -131,6 +139,18 @@ export class Sec13FJob implements OnModuleInit {
         }
         await batchSetWithCreatedAt(this.firebase.firestore, writes);
         positionsWritten += Math.min(positions.length, 200);
+
+        // Advance the fund watermark LAST — only now that the children are
+        // durably written. latestAccessionNumber here gates the next run.
+        await setWithCreatedAt(this.firebase.firestore, fundRef, {
+          fundName: fund.displayName,
+          latestFilingDate: latest13F.filingDate,
+          latestAccessionNumber: latest13F.accessionNumber,
+          totalPositions: positions.length,
+          totalValue,
+          updatedAt: new Date().toISOString(),
+        });
+        fundsWritten++;
       } catch (err) {
         this.logger.error(
           `Failed syncing 13F for ${fund.displayName}: ${err.message}\n${err.stack}`,

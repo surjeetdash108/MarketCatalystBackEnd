@@ -10,6 +10,7 @@ import type {
   TickerUniverseAdapter,
 } from "./types";
 import { withFallback } from "./with-fallback.util";
+import { isoDateFromMs } from "../common/date.util";
 
 /**
  * Seams for the three domains that were hardcoded to PolygonService: daily bars,
@@ -25,9 +26,6 @@ import { withFallback } from "./with-fallback.util";
  * so a future vendor maps to the canonical shape rather than to Polygon's.
  */
 
-function isoDate(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
-}
 
 // ── Daily bars ──────────────────────────────────────────────────────────────
 
@@ -47,7 +45,7 @@ export class PolygonMarketBarsAdapter implements MarketBarsAdapter {
     const bars = await this.polygon.getAggsRange(ticker, from, to);
     return {
       data: bars.map((b) => ({
-        date: isoDate(b.t),
+        date: isoDateFromMs(b.t),
         open: b.o,
         high: b.h,
         low: b.l,

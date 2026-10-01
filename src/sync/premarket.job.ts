@@ -50,11 +50,19 @@ const MARKET_WIDE: string[] = [
   "macro-regime", // FRED-only, self-contained regime label
   "earnings",
   "ipos",
-  "edgar-ipo-pipeline", // SEC S-1/424B registrations; no Firestore deps
+  // edgar-ipo-pipeline moved to Saturday: S-1/424B registrations move over
+  // weeks, so a weekday fetch bought nothing and sat ahead of market-hours
+  // work. `ipos` stays here — a debut prices on a weekday and is wanted the
+  // same morning.
   "news",
   "analyst-actions",
-  "sec-form4",
-  "sec-13f",
+  // sec-form4, sec-13f and institutional-ownership are NOT here on purpose.
+  // 13-F is a QUARTERLY filing and institutional-ownership is a rollup of it,
+  // so running them every weekday morning re-read data that changes four times
+  // a year, ahead of the market-hours jobs. They have their own Saturday
+  // scheduler entries instead (sync-*-weekend), staggered so the rollup runs
+  // after the filings it depends on. Premarket itself is weekday-only, so a
+  // weekend phase in here would never have fired.
   "dividends",
   "options-chains", // its own small OPTIONS_UNIVERSE
 ];
@@ -62,6 +70,9 @@ const MARKET_WIDE: string[] = [
 /** Phase 3 — over the dynamic `companies` universe. */
 const PER_TICKER: string[] = [
   "companies", // refresh profiles of the active set
+  // companies-financials-backfill moved to Saturday: it is a cursor backfill
+  // filling gaps the profile sweep has not reached yet, with no deadline of
+  // its own — the definition of work that does not need a trading morning.
   "stock-history", // ohlcv_bars substrate the compute jobs read
   "edgar-8k", // earnings 8-Ks; reads ohlcv_bars for reaction
   "technical-indicators",

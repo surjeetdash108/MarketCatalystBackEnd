@@ -5,14 +5,17 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { IPOS_ADAPTER, type IposAdapter } from "../adapters/types";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
+import { FmpService } from "../vendors/fmp/fmp.service";
+import { classifyFromSic } from "../common/sic-tv.util";
+import { isoDate } from "../common/date.util";
 
 const JOB_NAME = "ipos";
-const LOOKBACK_DAYS = 45;
+// Cover the full "Recent IPO performance" range so every displayed name is
+// reprocessed (aftermarket returns + sector). Was 45, which left IPOs older
+// than ~6 weeks in the list without a refreshed doc/sector.
+const LOOKBACK_DAYS = 120;
 const LOOKAHEAD_DAYS = 90;
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 function slugify(name: string): string {
   return name
@@ -40,6 +43,7 @@ export class IposJob implements OnModuleInit {
   constructor(
     @Inject(IPOS_ADAPTER) private readonly ipos: IposAdapter,
     private readonly polygon: PolygonService,
+    private readonly fmp: FmpService,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
@@ -109,12 +113,33 @@ export class IposJob implements OnModuleInit {
           }
         }
 
+        // Sector from Polygon's ticker reference (SIC → sector). New IPO tickers
+        // aren't in the `companies` universe yet, so the UI had no sector to show;
+        // fetch it here per listed name (best-effort).
+        let sector: string | null = null;
+        if (e.symbol) {
+          try {
+            const [details, fmpProfile] = await Promise.all([
+              this.polygon.getTickerDetails(e.symbol),
+              this.fmp.enabled
+                ? this.fmp.getCompanyProfile(e.symbol).catch(() => null)
+                : Promise.resolve(null),
+            ]);
+            sector = classifyFromSic(
+              details?.sic_code as string | number | undefined,
+            ).sector;
+          } catch {
+            // Best-effort; leave null if the reference lookup fails.
+          }
+        }
+
         docs.push({
           id,
           data: {
             date: e.date,
             symbol: e.symbol,
             name: e.name,
+            sector,
             exchange: e.exchange,
             priceLow: low,
             priceHigh: high,

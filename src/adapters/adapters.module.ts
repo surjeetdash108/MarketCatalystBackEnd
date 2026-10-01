@@ -2,6 +2,15 @@ import { Module } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PolygonModule } from "../vendors/polygon/polygon.module";
 import { PolygonService } from "../vendors/polygon/polygon.service";
+import { FmpModule } from "../vendors/fmp/fmp.module";
+import { FmpService } from "../vendors/fmp/fmp.service";
+import { SecEdgarModule } from "../vendors/sec-edgar/sec-edgar.module";
+import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
+import { BenzingaModule } from "../vendors/benzinga/benzinga.module";
+import { BenzingaService } from "../vendors/benzinga/benzinga.service";
+import { BenzingaNewsAdapter } from "./benzinga-news.adapter";
+import { FmpEarningsEstimatesAdapter } from "./earnings-estimates.adapter";
+import { FmpAnalystRatingsAdapter } from "./analyst-ratings.adapter";
 import { CompositeCompanyProfileAdapter } from "./composite-company-profile.adapter";
 import { CompositeMoverEnrichmentAdapter } from "./composite-mover-enrichment.adapter";
 import { CompositeMoversAdapter } from "./composite-movers.adapter";
@@ -10,6 +19,8 @@ import { PolygonCompanyProfileAdapter } from "./polygon-company-profile.adapter"
 import { PolygonMoverEnrichmentAdapter } from "./polygon-mover-enrichment.adapter";
 import { PolygonMoversAdapter } from "./polygon-movers.adapter";
 import { PolygonNewsAdapter } from "./polygon-news.adapter";
+import { TradingViewNewsAdapter } from "./tradingview-news.adapter";
+import { FmpNewsAdapter } from "./fmp-news.adapter";
 import {
   CompositeDividendsAdapter,
   PolygonDividendsAdapter,
@@ -18,6 +29,7 @@ import { CompositeIposAdapter, PolygonIposAdapter } from "./ipos.adapters";
 import {
   CompositeSectorsAdapter,
   PolygonSectorsAdapter,
+  FmpSectorsAdapter,
 } from "./sectors.adapters";
 import {
   CompositeFinancialsAdapter,
@@ -38,13 +50,20 @@ import {
   MOVERS_ADAPTER,
   MOVER_ENRICHMENT_ADAPTER,
   NEWS_ADAPTER,
+  NEWS_FMP_ADAPTER,
+  NEWS_BENZINGA_ADAPTER,
+  NEWS_TRADINGVIEW_ADAPTER,
   QUOTE_ADAPTER,
   SECTORS_ADAPTER,
+  EARNINGS_ESTIMATES_ADAPTER,
+  ANALYST_RATINGS_ADAPTER,
 } from "./types";
 
 // Every composite is Polygon-only. The list is where a second vendor becomes
 // selectable again — add its name here and one entry to the bySource map.
 const POLYGON_ONLY_SOURCES = ["polygon", "none"];
+/** Domains where FMP is a selectable primary/fallback (has an adapter here). */
+const POLYGON_OR_FMP_SOURCES = ["polygon", "fmp", "none"];
 
 function parseSource(config, key, validSources, fallbackDefault) {
   const raw = config.get(key, fallbackDefault);
@@ -97,23 +116,25 @@ function buildComposite(
 }
 
 @Module({
-  imports: [PolygonModule],
+  imports: [PolygonModule, FmpModule, SecEdgarModule, BenzingaModule],
   providers: [
     PolygonCompanyProfileAdapter,
     PolygonMoversAdapter,
     PolygonMoverEnrichmentAdapter,
     PolygonNewsAdapter,
+    BenzingaNewsAdapter,
     {
       provide: COMPANY_PROFILE_ADAPTER,
-      inject: [ConfigService, PolygonService],
-      useFactory: (config, polygon) =>
+      inject: [ConfigService, PolygonService, FmpService, SecEdgarService],
+      useFactory: (config, polygon, fmp: FmpService, secEdgar: SecEdgarService) =>
         buildComposite(
           config,
           "COMPANY_PROFILE",
           POLYGON_ONLY_SOURCES,
           { primary: "polygon", fallback: "none" },
           {
-            polygon: () => new PolygonCompanyProfileAdapter(polygon),
+            polygon: () =>
+              new PolygonCompanyProfileAdapter(polygon, fmp, secEdgar),
             none: () => null,
           },
           CompositeCompanyProfileAdapter,
@@ -137,18 +158,30 @@ function buildComposite(
     },
     {
       provide: MOVER_ENRICHMENT_ADAPTER,
-      inject: [ConfigService, PolygonService],
-      useFactory: (config, polygon) =>
+      inject: [ConfigService, PolygonService, FmpService],
+      useFactory: (config, polygon, fmp: FmpService) =>
         buildComposite(
           config,
           "MOVER_ENRICHMENT",
           POLYGON_ONLY_SOURCES,
           { primary: "polygon", fallback: "none" },
           {
-            polygon: () => new PolygonMoverEnrichmentAdapter(polygon),
+            polygon: () => new PolygonMoverEnrichmentAdapter(polygon, fmp),
             none: () => null,
           },
           CompositeMoverEnrichmentAdapter,
+        ),
+    },
+    {
+      // Third news provider (§1). Constructed always so the pipeline shape is
+      // fixed, but INERT until TRADINGVIEW_NEWS_URL is set — see the adapter
+      // for why it reads a licensed feed rather than scraping the site.
+      provide: NEWS_TRADINGVIEW_ADAPTER,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) =>
+        new TradingViewNewsAdapter(
+          String(config.get("TRADINGVIEW_NEWS_URL", "")).trim() || null,
+          String(config.get("TRADINGVIEW_NEWS_KEY", "")).trim() || null,
         ),
     },
     {
@@ -156,6 +189,21 @@ function buildComposite(
       inject: [PolygonService],
       useFactory: (polygon) =>
         new CompositeNewsAdapter(new PolygonNewsAdapter(polygon), null),
+    },
+    {
+      // Optional FMP news, merged with Polygon by news.job. Defaults to "none";
+      // set NEWS_FMP_SOURCE=fmp (and FMP_API_KEY) to enable the second feed.
+      provide: NEWS_FMP_ADAPTER,
+      inject: [ConfigService, FmpService],
+      useFactory: (config: ConfigService, fmp: FmpService) => {
+        const source = parseSource(config, "NEWS_FMP_SOURCE", ["fmp", "none"], "none");
+        return source === "fmp" ? new FmpNewsAdapter(fmp) : null;
+      },
+    },
+    {
+      provide: NEWS_BENZINGA_ADAPTER,
+      inject: [BenzingaService],
+      useFactory: (benzinga: BenzingaService) => new BenzingaNewsAdapter(benzinga),
     },
     {
       provide: DIVIDENDS_ADAPTER,
@@ -191,15 +239,18 @@ function buildComposite(
     },
     {
       provide: SECTORS_ADAPTER,
-      inject: [ConfigService, PolygonService],
-      useFactory: (config, polygon) =>
+      inject: [ConfigService, PolygonService, FmpService],
+      useFactory: (config, polygon, fmp: FmpService) =>
         buildComposite(
           config,
           "SECTORS",
-          POLYGON_ONLY_SOURCES,
+          // FMP is selectable here (real aggregates) — SECTORS_SOURCE=fmp or
+          // SECTORS_FALLBACK_SOURCE=fmp. Defaults stay polygon/none.
+          POLYGON_OR_FMP_SOURCES,
           { primary: "polygon", fallback: "none" },
           {
             polygon: () => new PolygonSectorsAdapter(polygon),
+            fmp: () => new FmpSectorsAdapter(fmp),
             none: () => null,
           },
           CompositeSectorsAdapter,
@@ -269,12 +320,44 @@ function buildComposite(
           CompositeFinancialsAdapter,
         ),
     },
+    {
+      // Opt-in estimates seam. Defaults to "none" → null, so the earnings job is
+      // untouched until EARNINGS_ESTIMATES_SOURCE=fmp (and FMP_API_KEY) are set.
+      provide: EARNINGS_ESTIMATES_ADAPTER,
+      inject: [ConfigService, FmpService],
+      useFactory: (config: ConfigService, fmp: FmpService) => {
+        const source = parseSource(
+          config,
+          "EARNINGS_ESTIMATES_SOURCE",
+          ["fmp", "none"],
+          "none",
+        );
+        return source === "fmp" ? new FmpEarningsEstimatesAdapter(fmp) : null;
+      },
+    },
+    {
+      // Opt-in analyst-ratings seam. Defaults to "none" → null, so the
+      // analyst-actions job stays a no-op until ANALYST_SOURCE=fmp.
+      provide: ANALYST_RATINGS_ADAPTER,
+      inject: [ConfigService, FmpService],
+      useFactory: (config: ConfigService, fmp: FmpService) => {
+        const source = parseSource(
+          config,
+          "ANALYST_SOURCE",
+          ["fmp", "none"],
+          "none",
+        );
+        return source === "fmp" ? new FmpAnalystRatingsAdapter(fmp) : null;
+      },
+    },
   ],
   exports: [
     COMPANY_PROFILE_ADAPTER,
     MOVERS_ADAPTER,
     MOVER_ENRICHMENT_ADAPTER,
     NEWS_ADAPTER,
+    NEWS_FMP_ADAPTER,
+    NEWS_BENZINGA_ADAPTER,
     DIVIDENDS_ADAPTER,
     IPOS_ADAPTER,
     SECTORS_ADAPTER,
@@ -282,6 +365,8 @@ function buildComposite(
     MARKET_BARS_ADAPTER,
     TICKER_UNIVERSE_ADAPTER,
     FINANCIALS_ADAPTER,
+    EARNINGS_ESTIMATES_ADAPTER,
+    ANALYST_RATINGS_ADAPTER,
   ],
 })
 export class AdaptersModule {}

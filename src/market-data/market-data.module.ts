@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { LiveModule } from "../live/live.module";
+import { AiInfrastructureController } from "./ai-infrastructure.controller";
 import { AnalystActionsController } from "./analyst-actions.controller";
 import { CompaniesController } from "./companies.controller";
 import { DividendsController } from "./dividends.controller";
@@ -10,6 +11,7 @@ import { IpoPipelineController } from "./ipo-pipeline.controller";
 import { MacroRegimeController } from "./macro-regime.controller";
 import { InsiderPositionsController } from "./insider-positions.controller";
 import { InsiderTransactionsController } from "./insider-transactions.controller";
+import { InstitutionalOwnershipController } from "./institutional-ownership.controller";
 import { IposController } from "./ipos.controller";
 import { MacroEventsController } from "./macro-events.controller";
 import { MarketDataService } from "./market-data.service";
@@ -18,6 +20,7 @@ import { MarketSentimentController } from "./market-sentiment.controller";
 import { NewsController } from "./news.controller";
 import { RecapsController } from "./recaps.controller";
 import { SectorsController } from "./sectors.controller";
+import { MoverCatalystsController } from "./mover-catalysts.controller";
 
 /**
  * Screen-facing read module for market-wide (non-user-owned) data — Movers,
@@ -52,9 +55,12 @@ import { SectorsController } from "./sectors.controller";
     DividendsController,
     InsiderTransactionsController,
     InsiderPositionsController,
+    InstitutionalOwnershipController,
     MarketSentimentController,
     NewsController,
     RecapsController,
+    MoverCatalystsController,
+    AiInfrastructureController,
   ],
   providers: [MarketDataService],
 })

@@ -23,11 +23,20 @@ import { PolygonService } from "../vendors/polygon/polygon.service";
  */
 
 const JOB_NAME = "corporate-actions";
+/** Must match stock-history.job.ts's JOB_NAME — the job whose synced range this
+ *  job clears when a new split executes (BUG-DATA-001). */
+const STOCK_HISTORY_JOB_NAME = "stock-history";
 const BATCH_SIZE = 40;
 const HISTORY_LIMIT = 200;
 const ANNUAL_YEARS = 10;
 const CAGR_YEARS = 5;
 const DELAY_MS = 120;
+// BUG-001 split re-adjustment is gated OFF by default. When a split executes it
+// would clear stock-history's synced range (a Firestore delete) and set a
+// baseline watermark (an insert) to force a full adjusted re-backfill. Held
+// disabled so ingestion performs NO watermark insert/delete; set
+// SPLIT_READJUST_ENABLED=true to activate once a DB-writing change is approved.
+const SPLIT_READJUST_ENABLED = process.env.SPLIT_READJUST_ENABLED === "true";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface AnnualTotal {
@@ -42,7 +51,9 @@ interface AnnualTotal {
  * for distributions.
  */
 export function annualTotals(
-  history: Array<{ exDividendDate: string | null; cashAmount: number }>,
+  // cashAmount is nullable (Polygon can omit it); the `?? 0` below keeps a null
+  // row out of the sum without fabricating a 0 amount anywhere it is stored.
+  history: Array<{ exDividendDate: string | null; cashAmount: number | null }>,
 ): AnnualTotal[] {
   const byYear = new Map<number, { total: number; payments: number }>();
   for (const d of history) {
@@ -153,7 +164,9 @@ export class CorporateActionsJob implements OnModuleInit {
 
       const divDocs: { id: string; data: Record<string, unknown> }[] = [];
       const splitDocs: { id: string; data: Record<string, unknown> }[] = [];
+      const today = new Date().toISOString().slice(0, 10);
       let failed = 0;
+      let splitResets = 0;
 
       for (const ticker of batch) {
         try {
@@ -171,50 +184,114 @@ export class CorporateActionsJob implements OnModuleInit {
           const ttmTotal = ttm.reduce((s, d) => s + (d.cashAmount ?? 0), 0);
           const price = priceByTicker.get(ticker) ?? null;
 
-          divDocs.push({
-            id: ticker,
-            data: {
-              ticker,
-              // Newest first, as returned. The chart reverses for display; the
-              // "next/most recent payment" reads are the common case.
-              history: history.map((d) => ({
-                exDividendDate: d.exDividendDate,
-                paymentDate: d.paymentDate,
-                declarationDate: d.declarationDate,
-                recordDate: d.recordDate,
-                amount: d.cashAmount,
-                dividendType: d.dividendType,
-                frequency: d.frequency,
-              })),
-              annualTotals: totals.slice(0, ANNUAL_YEARS),
-              ttmTotal:
-                ttm.length > 0 ? Math.round(ttmTotal * 10000) / 10000 : null,
-              ttmPayments: ttm.length,
-              yieldPct:
-                price != null && ttm.length > 0
-                  ? Math.round((ttmTotal / price) * 10000) / 100
-                  : null,
-              yieldBasisPrice: price,
-              cagr5yPct: dividendCagr(totals, CAGR_YEARS),
-              increaseStreakYears: increaseStreak(totals),
-              frequency: history[0]?.frequency ?? null,
-              isPayer: history.length > 0,
-              source: "polygon",
-              updatedAt: new Date().toISOString(),
-            },
-          });
+          // A non-throwing empty history means Polygon returned no dividends this
+          // run (often a transient/throttled miss). Writing the degenerate
+          // history:[]/isPayer:false/null aggregates through merge:true would
+          // clobber a prior good dividend record, so skip the whole write and let
+          // merge preserve it. A genuine non-payer simply never gets a doc created.
+          if (history.length > 0) {
+            divDocs.push({
+              id: ticker,
+              data: {
+                ticker,
+                // Newest first, as returned. The chart reverses for display; the
+                // "next/most recent payment" reads are the common case.
+                history: history.map((d) => ({
+                  exDividendDate: d.exDividendDate,
+                  paymentDate: d.paymentDate,
+                  declarationDate: d.declarationDate,
+                  recordDate: d.recordDate,
+                  amount: d.cashAmount,
+                  dividendType: d.dividendType,
+                  frequency: d.frequency,
+                })),
+                annualTotals: totals.slice(0, ANNUAL_YEARS),
+                ttmTotal:
+                  ttm.length > 0 ? Math.round(ttmTotal * 10000) / 10000 : null,
+                ttmPayments: ttm.length,
+                yieldPct:
+                  price != null && ttm.length > 0
+                    ? Math.round((ttmTotal / price) * 10000) / 100
+                    : null,
+                yieldBasisPrice: price,
+                cagr5yPct: dividendCagr(totals, CAGR_YEARS),
+                increaseStreakYears: increaseStreak(totals),
+                frequency: history[0]?.frequency ?? null,
+                isPayer: history.length > 0,
+                source: "polygon",
+                updatedAt: new Date().toISOString(),
+              },
+            });
+          }
 
           const splits = await this.polygon.getSplits(ticker);
-          splitDocs.push({
-            id: ticker,
-            data: {
-              ticker,
-              splits,
-              latestSplit: splits[0] ?? null,
-              source: "polygon",
-              updatedAt: new Date().toISOString(),
-            },
-          });
+
+          // ── Stock-split re-adjustment trigger (BUG-DATA-001) ──────────────
+          // ohlcv_bars are stored adjusted=true. When a split EXECUTES after a
+          // ticker's history was last fully backfilled, stock-history.job's
+          // daily forward increment writes post-split-adjusted bars while the
+          // older stored bars keep the pre-split basis — so the series mixes two
+          // adjustment bases and every window spanning the split (52w range,
+          // SMA/EMA, MACD, beta, pivots) is computed on inconsistent data.
+          // Nothing else resets that watermark, so the corruption persists until
+          // the pre-split bars age out of the plan window.
+          //
+          // Trigger: the NEWEST split that has actually EXECUTED (executionDate
+          // on/before today — announced/future splits are ignored because
+          // adjusted data only changes on the execution date). When that split
+          // post-dates the one we last accounted for, wipe stock-history's
+          // synced range for JUST this ticker via clearSyncedRange; its next run
+          // then re-fetches the whole plan window adjusted=true and overwrites
+          // every stored bar (merge:false) on ONE basis. The per-ticker marker
+          // below (a `corporate-actions` watermark, isolated from the on-demand
+          // path that overwrites the splits doc) makes the reset fire AT MOST
+          // ONCE per split. A ticker with no executed split never enters this
+          // block, so the normal incremental path is fully preserved for it.
+          //
+          // First sighting sets a BASELINE without a re-backfill: the stored
+          // history was itself fetched adjusted=true and already reflects every
+          // past split on one basis, so re-fetching the whole (largely
+          // long-settled) split universe on deploy would be a needless mass
+          // reload. Only splits that execute AFTER the baseline can desync it,
+          // and those are exactly what force the reset.
+          const newestExecutedSplit =
+            splits.find((s) => s.executionDate && s.executionDate <= today) ??
+            null;
+          if (SPLIT_READJUST_ENABLED && newestExecutedSplit) {
+            const execDate = newestExecutedSplit.executionDate;
+            const { lastSyncedThrough: reflectedSplitDate } =
+              await this.meta.getSyncedRange(JOB_NAME, ticker);
+            if (reflectedSplitDate == null) {
+              // Baseline only — no reset (see above).
+              await this.meta.setWatermark(JOB_NAME, ticker, execDate);
+            } else if (execDate > reflectedSplitDate) {
+              await this.meta.clearSyncedRange(STOCK_HISTORY_JOB_NAME, ticker);
+              await this.meta.setWatermark(JOB_NAME, ticker, execDate);
+              splitResets++;
+              this.logger.log(
+                `New split for ${ticker} (executed ${execDate}) — cleared ` +
+                  `stock-history range for a full adjusted re-backfill.`,
+              );
+            }
+            // else: newest executed split already reflected → no action.
+          }
+
+          // Empty splits (non-throwing) → Polygon returned none this run. Writing
+          // splits:[]/latestSplit:null through merge:true would clobber a good
+          // stored split record on a transient miss, so skip the write. A ticker
+          // that has genuinely never split simply never gets a doc created.
+          if (splits.length > 0) {
+            splitDocs.push({
+              id: ticker,
+              data: {
+                ticker,
+                splits,
+                latestSplit: splits[0] ?? null,
+                source: "polygon",
+                updatedAt: new Date().toISOString(),
+              },
+            });
+          }
         } catch (err) {
           this.logger.error(
             `corporate actions failed for ${ticker}: ${err.message}`,
@@ -238,6 +315,7 @@ export class CorporateActionsJob implements OnModuleInit {
       return {
         dividendDocs: divDocs.length,
         splitDocs: splitDocs.length,
+        splitResets,
         failed,
       };
     } catch (err) {

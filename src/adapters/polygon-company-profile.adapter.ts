@@ -1,40 +1,89 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { sectorFromSic } from "../common/sic-sector.util";
+import { classifyFromSic } from "../common/sic-tv.util";
+import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
+import { reconcileMarketCap } from "../common/validate.util";
+import {
+  forwardAnnualDividend,
+  type DivHistItem,
+} from "../common/dividend-annualization.util";
 import { PolygonService } from "../vendors/polygon/polygon.service";
+import { FmpService } from "../vendors/fmp/fmp.service";
 import {
   AdapterResult,
   AdapterWarning,
   CanonicalCompany,
   CompanyProfileAdapter,
 } from "./types";
+import { isoDate } from "../common/date.util";
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 @Injectable()
 export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
   readonly sourceName = "polygon";
   private readonly logger = new Logger(PolygonCompanyProfileAdapter.name);
 
-  constructor(private readonly polygon: PolygonService) {}
+  constructor(
+    private readonly polygon: PolygonService,
+    // FMP is used ONLY to refine the sector classification (its GICS `sector` is
+    // cleaner than Polygon's free-text SIC). Best-effort and self-disabling when
+    // no key is set — the sector then falls back to the SIC mapping.
+    private readonly fmp: FmpService,
+    // Authoritative free SIC lookup, used ONLY as a fallback when Polygon omits
+    // sic_code (foreign private issuers / ADRs). Mirrors the on-demand path so a
+    // bulk sync classifies them the same way instead of re-nulling the sector.
+    private readonly secEdgar: SecEdgarService,
+  ) {}
 
   async fetchCompany(
     ticker: string,
   ): Promise<AdapterResult<CanonicalCompany> | null> {
     const details = await this.polygon.getTickerDetails(ticker);
     if (!details) return null;
+    // One classification, used for sector AND industry so they cannot disagree.
+    // Polygon omits sic_code for many foreign filers / ADRs; when it does, fall
+    // back to the SEC's authoritative SIC (same standard classifyFromSic uses)
+    // so the bulk companies.job persists the sector instead of overwriting it
+    // with null. Fail-safe: getSicByTicker returns null on any error.
+    const polySic = details.sic_code;
+    const hasPolySic =
+      polySic != null &&
+      String(polySic).trim() !== "" &&
+      String(polySic).trim() !== "0";
+    const resolvedSic = hasPolySic
+      ? polySic
+      : await this.secEdgar.getSicByTicker(ticker);
+    const sicClass = classifyFromSic(resolvedSic);
+    // Kicked off in parallel with the price/eps/peers/dividend fetches below so
+    // it adds max(), not sum(), to latency. Null on any failure → SIC fallback.
+    const fmpProfilePromise = this.fmp.enabled
+      ? this.fmp.getCompanyProfile(ticker).catch(() => null)
+      : Promise.resolve(null);
     // These three used to be declared FIELD_NOT_SUPPORTED here, on the belief
     // that Polygon sells neither a peer list nor a dividend yield. Both were
     // wrong in different ways, verified against the live plan on 2026-07-21:
     //   peers  — /v1/related-companies is authorized and returns real tickers.
     //   yield  — there is indeed no yield PRODUCT, but the dividend history that
-    //            derives it is right there; a trailing-12-month sum over price
-    //            is the same number a vendor would sell back.
+    //            derives it is right there; a FORWARD-ANNUALIZED run-rate over
+    //            price is the number a vendor would sell back (see the helpers
+    //            below and the matching logic in live/ondemand.service.ts).
     const warnings: AdapterWarning[] = [];
     let price = null;
     let pctChange = null;
-    try {
+    // Prefer the universal snapshot — the SAME source the on-demand path uses —
+    // so a swept doc and a viewed doc derive price/pctChange identically, instead
+    // of the sweep writing a stale daily-bar close over the live snapshot value.
+    const snap = (
+      (await this.polygon.getUniversalSnapshot([ticker]).catch(() => [])) as Array<{
+        price?: number | null;
+        changePercent?: number | null;
+      }>
+    )[0];
+    if (snap?.price != null) {
+      price = snap.price;
+      pctChange = snap.changePercent ?? null;
+    }
+    // Daily-bar close as a coverage fallback for thin names the snapshot misses.
+    if (price == null) try {
       const to = new Date();
       const from = new Date(to);
       from.setUTCDate(from.getUTCDate() - 7);
@@ -113,24 +162,23 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
     let dividendYield: number | null = null;
     try {
       const history = await this.polygon.getDividendHistory(ticker, 40);
-      const cutoff = new Date();
-      cutoff.setUTCFullYear(cutoff.getUTCFullYear() - 1);
-      const cutoffIso = isoDate(cutoff);
-      // Trailing twelve months by ex-date. Special/one-off distributions are
-      // included deliberately: TTM yield is what was actually paid out, not
-      // what the regular schedule implies.
-      const ttm = history.filter(
-        (d) => d.exDividendDate != null && d.exDividendDate >= cutoffIso,
-      );
-      if (ttm.length > 0) {
-        const total = ttm.reduce((sum, d) => sum + (d.cashAmount ?? 0), 0);
-        dividendPerShare = Math.round(total * 10000) / 10000;
+      // FORWARD-ANNUALIZED yield (matches live/ondemand.service.ts). Both
+      // dividendPerShare and dividendYield are built from the forward run-rate:
+      //   forwardAnnualDividend = (most-recent REGULAR per-payment amount)
+      //                           × (payments-per-year for the payer's cadence)
+      //   dividendYield         = forwardAnnualDividend / price   (price > 0)
+      // A trailing-12-month SUM overstates the yield whenever a rolling 365-day
+      // window happens to hold a 5th quarterly ex-date (PEP: ~5.25% TTM vs the
+      // true ~4.27% forward). Cadence comes from Polygon's `frequency` integer,
+      // else from the median ex-date spacing; special/one-time distributions are
+      // excluded. When the cadence is indeterminate BOTH stay null — never a TTM
+      // fallback. dividendPerShare keeps the forward-annual meaning throughout.
+      const fwd = forwardAnnualDividend(history);
+      if (fwd) {
+        dividendPerShare = Math.round(fwd.perShare * 10000) / 10000;
         if (price != null && price > 0) {
-          dividendYield = Math.round((total / price) * 10000) / 100;
+          dividendYield = Math.round((fwd.perShare / price) * 10000) / 100;
         }
-      } else if (history.length === 0) {
-        // A non-payer is a real answer, not a gap — leave both null silently.
-        dividendPerShare = null;
       }
     } catch (err) {
       const reason = err.message;
@@ -144,12 +192,20 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       });
     }
 
+    const fmpProfile = await fmpProfilePromise;
+
     const data: CanonicalCompany = {
       ticker,
       name: details.name ?? null,
       price,
       pctChange,
-      marketCap: details.market_cap ?? null,
+      // Prefer the current price × shares when Polygon's reference market_cap is
+      // grossly stale (see reconcileMarketCap); otherwise keep Polygon's value.
+      marketCap: reconcileMarketCap(
+        details.market_cap,
+        price,
+        details.weighted_shares_outstanding,
+      ),
       beta: null,
       // sic_description is an INDUSTRY ("ELECTRONIC COMPUTERS"), not a sector.
       // Writing it to both fields put SIC descriptions in companies.sector,
@@ -157,13 +213,26 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       // computed within an SIC code rather than a sector, and the field could
       // never be joined against the `sectors` collection. Derive the sector
       // from sic_code instead; null when unmappable, never a guess.
-      sector: sectorFromSic(details.sic_code),
-      industry: details.sic_description ?? null,
+      // Sector AND industry from one call so they always agree. The vendor's
+      // own labels are deliberately NOT used: FMP is GICS and sic_description is
+      // raw uppercase SIC ("FIRE, MARINE & CASUALTY INSURANCE"), neither of
+      // which is the TradingView vocabulary the app now standardises on.
+      sector: sicClass.sector,
+      industry: sicClass.industry,
+      // Kept so a future taxonomy revision can reclassify from stored data.
+      // Uses the resolved SIC (Polygon, or the SEC fallback above) so a
+      // SEC-derived sector and its sicCode stay consistent.
+      sicCode: resolvedSic == null ? null : String(resolvedSic),
+      sicDescription: details.sic_description ?? null,
       exchange: details.primary_exchange ?? null,
       week52Range: null,
       volume: null,
       averageVolume: null,
-      description: details.description ?? null,
+      // FMP's description is the fuller business-operations writeup (matches
+      // what other portals show); Polygon's is shorter and more generic.
+      // Prefer FMP when available, fall back to Polygon (no key, no row, or a
+      // vendor miss) rather than leaving the field null.
+      description: fmpProfile?.description ?? details.description ?? null,
       peRatio,
       eps,
       dividendYield,

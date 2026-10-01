@@ -1,5 +1,10 @@
 export interface CanonicalCompany {
   ticker: string;
+  /** Raw SEC SIC code the sector/industry were derived from, stored so the
+   *  taxonomy can be recomputed later without re-hitting a vendor. Optional:
+   *  adapters that have no SIC simply omit it. */
+  sicCode?: string | null;
+  sicDescription?: string | null;
   name: string | null;
   price: number | null;
   pctChange: number | null;
@@ -33,6 +38,10 @@ export interface MoverEnrichment {
   name: string | null;
   sector: string | null;
   cap: CapBucket | null;
+  /** Raw USD market cap from the same ticker-details fetch the `cap` tier is
+   *  bucketed from — surfaced so the Movers table can show the real number,
+   *  not just the tier. Null when the vendor has no market cap for the ticker. */
+  marketCap: number | null;
 }
 
 export interface CanonicalNewsArticle {
@@ -40,7 +49,10 @@ export interface CanonicalNewsArticle {
   ticker: string;
   headline: string;
   summary: string | null;
+  /** Publisher / outlet name (e.g. "Reuters", "Benzinga"). */
   source: string;
+  /** Which data vendor delivered this article — "polygon" | "fmp". */
+  vendor: string;
   url: string;
   category: string | null;
   sentiment: "positive" | "negative" | "neutral" | null;
@@ -179,6 +191,16 @@ export interface NewsAdapter {
     from: string,
     to: string,
   ): Promise<AdapterResult<CanonicalNewsArticle[]>>;
+  /**
+   * OPTIONAL market-wide newest-news fetch (no ticker filter), used to keep the
+   * "Live" feed head current independent of the per-ticker cursor. Only vendors
+   * with a market-wide endpoint implement it (Polygon does; FMP per-ticker does
+   * not) — callers must feature-detect before calling.
+   */
+  fetchMarketNews?(
+    from: string,
+    to: string,
+  ): Promise<AdapterResult<CanonicalNewsArticle[]>>;
 }
 
 export interface DividendsAdapter {
@@ -251,6 +273,15 @@ export const MOVER_ENRICHMENT_ADAPTER: unique symbol = Symbol(
   "MOVER_ENRICHMENT_ADAPTER",
 );
 export const NEWS_ADAPTER: unique symbol = Symbol("NEWS_ADAPTER");
+/** Optional TradingView news source, merged alongside Polygon and FMP.
+ *  Inert unless TRADINGVIEW_NEWS_URL points at a LICENSED feed. */
+export const NEWS_TRADINGVIEW_ADAPTER: unique symbol = Symbol(
+  "NEWS_TRADINGVIEW_ADAPTER",
+);
+/** Optional FMP news source, merged alongside NEWS_ADAPTER (Polygon). */
+export const NEWS_FMP_ADAPTER: unique symbol = Symbol("NEWS_FMP_ADAPTER");
+/** Optional Benzinga news source, providing real-time news and WIIM (Why Is It Moving). */
+export const NEWS_BENZINGA_ADAPTER: unique symbol = Symbol("NEWS_BENZINGA_ADAPTER");
 export const DIVIDENDS_ADAPTER: unique symbol = Symbol("DIVIDENDS_ADAPTER");
 export const IPOS_ADAPTER: unique symbol = Symbol("IPOS_ADAPTER");
 export const SECTORS_ADAPTER: unique symbol = Symbol("SECTORS_ADAPTER");
@@ -260,6 +291,14 @@ export const TICKER_UNIVERSE_ADAPTER: unique symbol = Symbol(
   "TICKER_UNIVERSE_ADAPTER",
 );
 export const FINANCIALS_ADAPTER: unique symbol = Symbol("FINANCIALS_ADAPTER");
+/** Optional (FMP) earnings-estimates seam; null when EARNINGS_ESTIMATES_SOURCE=none. */
+export const EARNINGS_ESTIMATES_ADAPTER: unique symbol = Symbol(
+  "EARNINGS_ESTIMATES_ADAPTER",
+);
+/** Optional (FMP) analyst-ratings seam; null when ANALYST_SOURCE=none. */
+export const ANALYST_RATINGS_ADAPTER: unique symbol = Symbol(
+  "ANALYST_RATINGS_ADAPTER",
+);
 
 export function capBucket(marketCap: number | null): CapBucket | null {
   if (marketCap == null) return null;

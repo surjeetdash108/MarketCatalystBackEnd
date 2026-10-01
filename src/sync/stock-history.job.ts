@@ -9,9 +9,51 @@ import { activeUniverse } from "../common/ticker-universe";
 import { MARKET_BARS_ADAPTER, type MarketBarsAdapter } from "../adapters/types";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { planHistoryFloor } from "../vendors/polygon/polygon.service";
+import { addDays, isoDate } from "../common/date.util";
 
 const JOB_NAME = "stock-history";
-const BATCH_SIZE = 60;
+// Whole universe per run. At 60/day against ~586 names `ohlcv_bars` took ~10
+// DAYS to cycle, so most tickers' bars were days stale — and everything derived
+// from them was wrong, not just old: technical-indicators computes
+// week5ChangePct off this collection, and a sample showed 59% of values
+// disagreeing with the real bars including outright SIGN FLIPS (BOXL stored
+// +117.9% vs a real -18.6%, ACH -66.0% vs +26.2%, and blue chips like NIO/D/ACM
+// inverted too).
+//
+// Cheap because writes are INCREMENTAL from a per-ticker watermark: a daily run
+// appends ~1 bar per ticker (~586 writes/day ≈ $0.03/mo), not a full re-fetch.
+// Only a brand-new ticker pays the ~252-doc deep fill, once.
+const BATCH_SIZE = 600;
+
+/** A price/volume the vendor could plausibly have meant. */
+const finiteNonNegative = (v: unknown): boolean =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0;
+
+/**
+ * True when a daily bar is internally coherent and not from the future.
+ *
+ * Deliberately permissive: it rejects only what CANNOT be real, so a genuine
+ * outlier (a micro-cap that really did move 900%) still stores. A zero price is
+ * allowed through as non-negative but the high/low ordering check catches the
+ * degenerate rows that matter.
+ */
+function isSaneBar(
+  bar: { open?: unknown; high?: unknown; low?: unknown; close?: unknown; volume?: unknown },
+  barDate: string,
+  today: string,
+): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(barDate)) return false;
+  if (barDate > today) return false; // a session that has not happened
+  const { open, high, low, close, volume } = bar;
+  if (![open, high, low, close].every(finiteNonNegative)) return false;
+  if (volume != null && !finiteNonNegative(volume)) return false;
+  // High must bound the session; low must floor it.
+  const h = high as number, l = low as number;
+  const o = open as number, c = close as number;
+  if (h < l) return false;
+  if (o > h || c > h || o < l || c < l) return false;
+  return true;
+}
 
 /**
  * First-run backfill depth. Was 300 days, which capped the chart at 1Y and left
@@ -25,17 +67,16 @@ const BATCH_SIZE = 60;
  * planHistoryFloor() below instead of being allowed to run off the end.
  */
 const BACKFILL_DAYS = 365 * 5;
+
+/**
+ * Below this many stored bars a ticker cannot be scored by rs-rating (which
+ * needs ≥65) or the technical-indicators job. Used to detect tickers stranded
+ * by the old deep-fill bug — see the self-heal guard in run().
+ */
+const MIN_HEALTHY_BARS = 65;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
-function addDays(d: Date, n: number): Date {
-  const copy = new Date(d);
-  copy.setUTCDate(copy.getUTCDate() + n);
-  return copy;
-}
 
 @Injectable()
 export class StockHistoryJob implements OnModuleInit {
@@ -80,6 +121,7 @@ export class StockHistoryJob implements OnModuleInit {
       // would stay null for every ticker.
       const batch = rotating.includes("SPY") ? rotating : ["SPY", ...rotating];
       const today = isoDate(new Date());
+      let rejectedBars = 0;
       const floor = planHistoryFloor();
       let barsWritten = 0;
       let tickersUpdated = 0;
@@ -108,13 +150,33 @@ export class StockHistoryJob implements OnModuleInit {
           const clampedForward = forwardFrom < floor ? floor : forwardFrom;
           if (clampedForward <= today) windows.push([clampedForward, today]);
 
+          // Self-heal tickers stranded by the old deep-fill bug. A ticker whose
+          // deep window once failed was wrongly marked done (earliestSyncedFrom
+          // set), so it never re-attempts the deep window and only ever accrues
+          // the daily forward increment — never reaching the ≥65 bars rs-rating
+          // and technical-indicators need. If it claims to be backfilled but is
+          // still short, force the deep window to run again. A genuinely
+          // short-history name (recent IPO) simply re-fetches its few bars each
+          // run; a stranded name fills to full history once and then stops
+          // qualifying (its count jumps well above the threshold).
+          let stranded = false;
+          if (earliestSyncedFrom != null && earliestSyncedFrom <= floor) {
+            const cnt = await this.firebase.firestore
+              .collection("ohlcv_bars")
+              .where("ticker", "==", ticker)
+              .count()
+              .get();
+            if (cnt.data().count < MIN_HEALTHY_BARS) stranded = true;
+          }
+
           const needsDeepFill =
-            earliestSyncedFrom == null || earliestSyncedFrom > floor;
+            earliestSyncedFrom == null || earliestSyncedFrom > floor || stranded;
           if (needsDeepFill) {
             // Stop the day before the known edge so the two windows don't
-            // overlap; with no known edge, take the whole plan window at once.
+            // overlap; with no known edge — or a stranded ticker being refilled
+            // from scratch — take the whole plan window at once.
             const backTo =
-              earliestSyncedFrom == null
+              earliestSyncedFrom == null || stranded
                 ? today
                 : isoDate(addDays(new Date(earliestSyncedFrom), -1));
             if (floor <= backTo) windows.push([floor, backTo]);
@@ -154,6 +216,19 @@ export class StockHistoryJob implements OnModuleInit {
             let lastDate = watermark;
             for (const bar of bars) {
               const barDate = bar.date;
+              // Reject a bar that cannot be true before it is stored.
+              //
+              // Nothing validated vendor numbers on the way in, so a NaN, an
+              // Infinity, a negative price or a future-dated session would be
+              // written verbatim and then silently poison every window
+              // indicator built on it — 52-week range, SMA/EMA, MACD, beta,
+              // pivots — for as long as it stayed inside the window. Dropping
+              // the bar costs one session; storing it corrupts a year of
+              // derived values.
+              if (!isSaneBar(bar, barDate, today)) {
+                rejectedBars++;
+                continue;
+              }
               writes.push({
                 ref: col.doc(`${ticker}_${barDate}`),
                 data: {
@@ -196,6 +271,11 @@ export class StockHistoryJob implements OnModuleInit {
         JOB_NAME,
         (cursor + BATCH_SIZE) % universe.length,
       );
+      if (rejectedBars > 0) {
+        this.logger.warn(
+          `stock-history: rejected ${rejectedBars} implausible bar(s) — see isSaneBar`,
+        );
+      }
       await this.meta.record(JOB_NAME, { ok: true, count: barsWritten });
       return { barsWritten, tickersUpdated };
     } catch (err) {

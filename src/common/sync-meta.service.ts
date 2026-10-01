@@ -7,6 +7,17 @@ export interface SyncResult {
   ok: boolean;
   count?: number;
   error?: string;
+  /**
+   * Firestore documents READ by this run.
+   *
+   * Reads are the largest line on the bill and nothing attributes them: a
+   * 30-day measurement found ~75M reads of which only ~28% could be traced to
+   * a specific job, by hand, from bar limits times universe size. Firestore's
+   * own metrics carry no collection or caller label, so without this the
+   * question "which job costs the money" has no answer and optimisation is
+   * guesswork. Jobs that read in bulk should report it.
+   */
+  docsRead?: number;
 }
 
 @Injectable()
@@ -42,6 +53,7 @@ export class SyncMetaService {
       lastSyncedAt: now,
       lastStatus: result.ok ? "ok" : "error",
       lastCount: result.count ?? null,
+      lastDocsRead: result.docsRead ?? null,
       ...(result.ok
         ? { lastSuccessAt: now, lastSuccessCount: result.count ?? null }
         : { lastFailedAt: now, lastError: result.error ?? null }),
@@ -190,5 +202,24 @@ export class SyncMetaService {
         updatedAt: new Date().toISOString(),
       },
     );
+  }
+
+  /**
+   * Wipes BOTH edges of an entity's synced range for a job by deleting its
+   * `sync_watermarks/{jobName}__{entityKey}` doc, so the next run sees the
+   * entity as never-synced and re-fetches its full window from scratch.
+   *
+   * Used by corporate-actions.job when a NEW split executes for a ticker
+   * (BUG-DATA-001): clearing stock-history's range forces a full adjusted
+   * re-backfill that rewrites every stored bar (merge:false) on ONE adjustment
+   * basis, instead of leaving pre-split bars on the old basis while the daily
+   * forward increment writes new bars on the post-split basis. Deleting a
+   * non-existent doc is a harmless no-op.
+   */
+  async clearSyncedRange(jobName: string, entityKey: string): Promise<void> {
+    await this.firebase.firestore
+      .collection("sync_watermarks")
+      .doc(`${jobName}__${entityKey}`)
+      .delete();
   }
 }

@@ -1,6 +1,7 @@
-import { Controller, Get, Header } from "@nestjs/common";
+import { Controller, Get, Header, UseGuards } from "@nestjs/common";
 import { CachedCollectionsService } from "../live/cached-collections.service";
 import { MarketDataService } from "./market-data.service";
+import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
 /**
  * GET /market-data/macro-regime — the rules-based FRED-derived market regime
@@ -8,6 +9,10 @@ import { MarketDataService } from "./market-data.service";
  * commentary "General perspective" / macro regime read.
  */
 @Controller("market-data")
+// Market data is the product. These read surfaces answered anonymous
+// callers, returning full datasets — the policy lived only in a Firestore
+// rules file that nothing enforces, because no client talks to Firestore.
+@UseGuards(FirebaseAuthGuard)
 export class MacroRegimeController {
   constructor(
     private readonly marketData: MarketDataService,

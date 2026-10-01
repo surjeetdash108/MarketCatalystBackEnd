@@ -6,10 +6,12 @@ import {
   Query,
   Req,
   Res,
+  UseGuards,
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { SnapshotCacheService } from "./snapshot-cache.service";
 import { MarketStatusService } from "./market-status.service";
+import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
 /**
  * Cached price snapshot — the scalable alternative to the SSE stream.
@@ -25,9 +27,18 @@ import { MarketStatusService } from "./market-status.service";
  */
 
 const TICKER_RE = /^[A-Z.]{1,10}$/;
-const MAX_TICKERS = 50;
+// Matches the vendor's own per-call ceiling (`limit=250` on the universal
+// snapshot), so a whole-screen request is ONE upstream call rather than several.
+// Was 50, which forced the heatmap (~455 tiles) into 10 round-trips just to
+// overlay live prices. Raising it costs no extra vendor load: SnapshotCacheService
+// refreshes the demanded set on a shared timer, so upstream stays O(1) in users.
+const MAX_TICKERS = 250;
 
 @Controller("live")
+// Market data is the product. These read surfaces answered anonymous
+// callers, returning full datasets — the policy lived only in a Firestore
+// rules file that nothing enforces, because no client talks to Firestore.
+@UseGuards(FirebaseAuthGuard)
 export class SnapshotController {
   constructor(
     private readonly snapshots: SnapshotCacheService,
@@ -88,8 +99,12 @@ export class SnapshotController {
     res.json({
       quotes,
       cacheAgeMs: ageMs,
-      refreshedFrom: "polygon-snapshot",
-      delayNote: "Underlying feed is ~15 minutes delayed on the current plan.",
+      refreshedFrom:
+        this.snapshots.source === "fmp" ? "fmp-quote" : "polygon-snapshot",
+      delayNote:
+        this.snapshots.source === "fmp"
+          ? "FMP quote — near real-time on the current plan."
+          : "Underlying feed is ~15 minutes delayed on the current plan.",
       servedAt: new Date().toISOString(),
     });
   }

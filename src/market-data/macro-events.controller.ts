@@ -1,6 +1,8 @@
-import { Controller, Get, Header } from "@nestjs/common";
+import { Controller, Get, Header, UseGuards } from "@nestjs/common";
 import { CachedCollectionsService } from "../live/cached-collections.service";
 import { MarketDataService } from "./market-data.service";
+import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
+import { macroEventKind } from "./macro-event-kind";
 
 /**
  * GET /market-data/macro-events — backs the Macro & VIX screen's live
@@ -8,6 +10,10 @@ import { MarketDataService } from "./market-data.service";
  * sync job on demand when stale/empty per decision #3a.
  */
 @Controller("market-data")
+// Market data is the product. These read surfaces answered anonymous
+// callers, returning full datasets — the policy lived only in a Firestore
+// rules file that nothing enforces, because no client talks to Firestore.
+@UseGuards(FirebaseAuthGuard)
 export class MacroEventsController {
   constructor(
     private readonly marketData: MarketDataService,
@@ -22,6 +28,12 @@ export class MacroEventsController {
   async macroEvents() {
     await this.marketData.ensureFresh("macro-events");
     const { macro_events } = await this.cached.get(["macro_events"]);
-    return macro_events;
+    // Add `kind` (speech / report / data) so the client can tell an event that
+    // never has figures from a release that is simply not out yet (QA row 185).
+    // Computed per response — nothing is written back to Firestore.
+    return (macro_events as Array<Record<string, unknown>>).map((e) => ({
+      ...e,
+      kind: macroEventKind(typeof e.name === "string" ? e.name : null),
+    }));
   }
 }

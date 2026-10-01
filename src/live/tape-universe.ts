@@ -39,6 +39,13 @@ export interface TapeSymbol {
    * multiplier there would be worse than an honest 1:1 proxy price.
    */
   multiplier?: number;
+  /**
+   * FRED series id for a REAL price (commodities / crypto), used instead of the
+   * ETF proxy: the tile shows this value, not `proxyTicker`'s share price. FRED
+   * is daily, so the price is end-of-day granularity but the true level (e.g.
+   * gold ~$4,000/oz, BTC ~$100k) rather than GLD/IBIT's fund price.
+   */
+  fredSeries?: string;
 }
 
 /** Index tiles, via ETF proxies — the current plan does not include indices. */
@@ -76,7 +83,7 @@ export const TAPE_INDICES: TapeSymbol[] = [
   {
     id: "RUT",
     kind: "index",
-    label: "Russell 2K",
+    label: "Russell 2000",
     proxyTicker: "IWM",
     isProxy: true,
     note: "ETF proxy for the Russell 2000 index",
@@ -94,17 +101,23 @@ export const TAPE_INDICES: TapeSymbol[] = [
     id: "WTI",
     kind: "index",
     label: "WTI Crude",
-    proxyTicker: "USO",
-    isProxy: true,
-    note: "ETF proxy for WTI crude oil",
+    proxyTicker: null,
+    isProxy: false,
+    note: "WTI crude oil spot (FRED)",
+    fredSeries: "DCOILWTICO", // real crude price, not the USO ETF
   },
   {
     id: "GOLD",
     kind: "index",
     label: "Gold",
+    // FRED's LBMA gold series was discontinued (~2021), and GLD's raw share
+    // price (~$400) is not the spot. But GLD holds physical gold (~0.0919 oz per
+    // share), so spot ≈ GLD × 10.89 — live AND accurate to well under 1%, unlike
+    // USO's roll-decay drift. The multiplier erodes only ~0.4%/yr (expense ratio).
     proxyTicker: "GLD",
     isProxy: true,
-    note: "ETF proxy for spot gold",
+    note: "Spot gold ≈ GLD ETF × 10.89 (physical-gold backed)",
+    multiplier: 10.89,
   },
   {
     id: "DXY",
@@ -113,6 +126,31 @@ export const TAPE_INDICES: TapeSymbol[] = [
     proxyTicker: "UUP",
     isProxy: true,
     note: "ETF proxy for the US Dollar Index",
+  },
+  {
+    id: "BTC",
+    kind: "index",
+    label: "Bitcoin",
+    // Polygon/Massive carries no direct BTC/USD pair on this plan, and the IBIT
+    // ETF proxy shows the fund's ~$35 share price, not the ~$100k spot. FRED's
+    // Coinbase series carries the real BTC/USD price (daily granularity).
+    proxyTicker: null,
+    isProxy: false,
+    note: "Bitcoin BTC/USD, Coinbase (FRED)",
+    fredSeries: "CBBTCUSD",
+  },
+  {
+    id: "ETH",
+    kind: "index",
+    label: "Ethereum",
+    // Same reasoning as BTC above: no direct ETH/USD pair on this Polygon plan,
+    // and the spot-ether ETFs price in fund shares rather than the coin. FRED
+    // carries Coinbase's ETH/USD alongside its BTC/USD series, at the same
+    // daily granularity.
+    proxyTicker: null,
+    isProxy: false,
+    note: "Ethereum ETH/USD, Coinbase (FRED)",
+    fredSeries: "CBETHUSD",
   },
 ];
 

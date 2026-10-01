@@ -1,7 +1,8 @@
-import { Controller, Get, Header, Req, Res, Sse } from "@nestjs/common";
+import { Controller, Get, Header, Req, Res, Sse, UseGuards } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { Observable, interval, map, merge } from "rxjs";
 import { TapeService, type TapeFrame } from "./tape.service";
+import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
 /**
  * Header ticker tape, streamed from our origin.
@@ -47,6 +48,10 @@ export class TapeController {
    *   event: heartbeat  every 20s, so a silent market is distinguishable from
    *                     a dead connection
    */
+  // Deliberately unauthenticated: EventSource cannot set request headers, so
+  // an SSE stream can never carry a bearer token. Guarding it did not secure
+  // anything — it just made the stream fail and the client fall back to
+  // polling /live/tape, which is guarded and does carry a token.
   @Sse("tape/stream")
   stream(): Observable<SseEvent> {
     // Ref counting is tied to the CLIENT's subscription, not to this handler
@@ -88,6 +93,8 @@ export class TapeController {
    * upstream call — TapeService.currentFrame() refuses to refetch inside a
    * refresh window.
    */
+  // Guarded: fetched through the API client, which attaches the token.
+  @UseGuards(FirebaseAuthGuard)
   @Get("tape")
   @Header(
     "Cache-Control",

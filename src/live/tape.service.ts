@@ -4,6 +4,7 @@ import { createHash } from "crypto";
 import { Observable, ReplaySubject } from "rxjs";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { MarketStatusService } from "./market-status.service";
+import { FredService } from "../vendors/fred/fred.service";
 import {
   snapshotSymbols,
   tapeUniverse,
@@ -53,6 +54,12 @@ const IDLE_REFRESH_MS = 15 * 60_000;
  * pointless requests a day for a number that changes once.
  */
 const TREASURY_TTL_MS = 6 * 60 * 60_000;
+// Commodities / crypto (WTI, Gold, Bitcoin) come from FRED — the REAL price,
+// not an ETF proxy. The old proxies drift far from the underlying (USO read
+// ~$127 vs crude ~$82; GLD/IBIT show the fund's share price, not spot). Each
+// item declares its `fredSeries` in tape-universe.ts. FRED series are daily, so
+// a 6h TTL is plenty.
+const FRED_TTL_MS = 6 * 60 * 60_000;
 
 const DELAY_NOTE =
   "Underlying feed is ~15 minutes delayed on the current plan.";
@@ -136,6 +143,12 @@ export class TapeService implements OnModuleDestroy {
     at: number;
   } | null = null;
 
+  // FRED-backed tiles (WTI / Gold / Bitcoin), cached per series id.
+  private fredCache = new Map<
+    string,
+    { value: number; prevValue: number | null; at: number }
+  >();
+
   readonly stats = {
     upstreamCalls: 0,
     framesBroadcast: 0,
@@ -149,6 +162,7 @@ export class TapeService implements OnModuleDestroy {
   constructor(
     private readonly polygon: PolygonService,
     private readonly marketStatus: MarketStatusService,
+    private readonly fred: FredService,
     config: ConfigService,
   ) {
     this.universe = tapeUniverse(config.get<string>("TAPE_STOCKS"));
@@ -259,9 +273,21 @@ export class TapeService implements OnModuleDestroy {
       const bySymbol = new Map(rows.map((r) => [r.ticker, r]));
 
       const rate = await this.treasuryTile();
+      // Refresh every FRED-backed series (WTI / Gold / Bitcoin) — real prices,
+      // not ETF proxies. TTL-gated, so this is at most one call per series / 6h.
+      await Promise.all(
+        [
+          ...new Set(
+            this.universe
+              .map((s) => s.fredSeries)
+              .filter((x): x is string => !!x),
+          ),
+        ].map((series) => this.refreshFred(series)),
+      );
 
       const items: TapeItem[] = this.universe.map((s) => {
         if (s.kind === "rate") return rate(s);
+        if (s.fredSeries) return this.fredTile(s); // real price from FRED, not an ETF proxy
         const r = s.proxyTicker ? bySymbol.get(s.proxyTicker) : undefined;
         // Index-level fields scale by the proxy ETF's fixed share-to-index
         // ratio (see TapeSymbol.multiplier's docblock); % change is
@@ -413,6 +439,63 @@ export class TapeService implements OnModuleDestroy {
         dayLow: null,
         prevClose: prev,
       };
+    };
+  }
+
+  /**
+   * WTI crude tile from FRED (DCOILWTICO) — the true spot price. Mirrors
+   * `treasuryTile()`: a TTL cache over a daily FRED series, so at most one FRED
+   * call every 6h regardless of frame rate. FRED sometimes reports "." for a
+   * missing day, so we pull a small window and keep the two most recent numeric
+   * observations for the value + day-over-day change.
+   */
+  /** Refresh one FRED series into the cache (TTL-gated). Keeps the last good
+   * value on failure — a stale real print beats dropping the tile. */
+  private async refreshFred(series: string): Promise<void> {
+    const cached = this.fredCache.get(series);
+    if (cached && Date.now() - cached.at <= FRED_TTL_MS) return;
+    try {
+      const obs = await this.fred.getLatestObservations(series, 6);
+      this.stats.upstreamCalls++;
+      const vals = obs
+        .map((o) => Number(o.value))
+        .filter((n) => Number.isFinite(n));
+      if (vals.length > 0) {
+        this.fredCache.set(series, {
+          value: vals[0],
+          prevValue: vals.length > 1 ? vals[1] : null,
+          at: Date.now(),
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`FRED ${series} refresh failed: ${errMessage(err)}`);
+    }
+  }
+
+  /** Build a tile for a FRED-backed symbol (real spot price, not an ETF proxy). */
+  private fredTile(s: TapeSymbol): TapeItem {
+    const c = s.fredSeries ? this.fredCache.get(s.fredSeries) : undefined;
+    const value = c?.value ?? null;
+    const prev = c?.prevValue ?? null;
+    const pct =
+      value != null && prev != null && prev !== 0
+        ? Math.round(((value - prev) / prev) * 10000) / 100
+        : null;
+    return {
+      id: s.id,
+      kind: s.kind,
+      label: s.label,
+      name: null,
+      proxyTicker: null,
+      isProxy: false,
+      note: s.note,
+      value,
+      change: pct,
+      pctChange: pct,
+      open: null,
+      dayHigh: null,
+      dayLow: null,
+      prevClose: prev,
     };
   }
 

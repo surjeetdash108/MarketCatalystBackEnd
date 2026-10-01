@@ -8,7 +8,7 @@ import { SubscriptionsService } from "./subscriptions.service";
  * Read-models for the admin Users / Subscriptions / Revenue screens.
  *
  * Aggregation happens SERVER-side, not in the browser, for two reasons:
- * revenue must not depend on a client correctly summing paise, and the `users`
+ * revenue must not depend on a client correctly summing cents, and the `users`
  * collection is owner-scoped in Firestore rules — a client cannot list it
  * without opening every user's document to every signed-in account.
  */
@@ -194,8 +194,7 @@ export class AdminAnalyticsService {
     const [adoptSnap, userSnap] = await Promise.all([
       this.firebase.firestore
         .collection("feature_adoption")
-        .get()
-        .catch(() => null),
+        .get(),
       this.firebase.firestore.collection("users").get(),
     ]);
 
@@ -246,8 +245,7 @@ export class AdminAnalyticsService {
         .collection("payments")
         .orderBy("paymentDate", "desc")
         .limit(limit)
-        .get()
-        .catch(() => null),
+        .get(),
       this.firebase.firestore.collection("users").limit(1000).get(),
     ]);
     const emailByUid = new Map(
@@ -263,7 +261,10 @@ export class AdminAnalyticsService {
         planId: p.planId ?? null,
         planName: p.planName ?? null,
         amount: p.amount ?? 0,
-        currency: p.currency ?? "INR",
+        // Currency comes from the payment record; the fallback matches the plan
+        // catalog (plans.registry.ts — USD, the single source of truth), never
+        // a hardcoded INR that contradicts the $-priced plans (BUG-DATA-013).
+        currency: p.currency ?? "USD",
         paymentStatus: p.paymentStatus ?? null,
         paymentDate: p.paymentDate ?? null,
         subscriptionStartDate: p.subscriptionStartDate ?? null,
@@ -277,15 +278,14 @@ export class AdminAnalyticsService {
    * Revenue rolled up from `payments`.
    *
    * Only SUCCESS rows count — refunds and failures must never inflate revenue.
-   * Amounts are summed in minor units as integers; converting to rupees before
-   * summing would accumulate float error across thousands of rows.
+   * Amounts are summed in minor units as integers; converting to major units
+   * (dollars) before summing would accumulate float error across thousands of rows.
    */
   async revenue(): Promise<RevenueSummary> {
     const [paySnap, userSnap, plans] = await Promise.all([
       this.firebase.firestore
         .collection("payments")
-        .get()
-        .catch(() => null),
+        .get(),
       this.firebase.firestore.collection("users").get(),
       this.plans.list(),
     ]);
@@ -300,15 +300,25 @@ export class AdminAnalyticsService {
     let totalMinor = 0;
     let currentYearMinor = 0;
     let paymentsCounted = 0;
+    // Reporting currency = the first SUCCESS payment's currency. Payments in any
+    // OTHER currency are still recorded in `currencies` (so `mixedCurrencies`
+    // flags them) but EXCLUDED from every monetary total — summing minor units
+    // across currencies produces a meaningless number.
+    let primary: string | null = null;
 
     const thisYear = String(new Date().getUTCFullYear());
 
     for (const doc of paySnap?.docs ?? []) {
       const p = doc.data();
       if (p.paymentStatus !== "SUCCESS") continue;
+      // Fallback matches the USD plan catalog (plans.registry.ts), not INR — see
+      // subscriptionRows above (BUG-DATA-013).
+      const cur = p.currency ?? "USD";
+      currencies.add(cur);
+      if (primary === null) primary = cur;
+      if (cur !== primary) continue; // never mix currencies into the totals
       const amount = typeof p.amount === "number" ? p.amount : 0;
       const date: string = p.paymentDate ?? "";
-      currencies.add(p.currency ?? "INR");
 
       totalMinor += amount;
       paymentsCounted++;
@@ -350,9 +360,11 @@ export class AdminAnalyticsService {
       if (sub.planId === "free") free++;
     }
 
-    const primary = currencies.size > 0 ? [...currencies][0] : "INR";
+    // Default to USD (the plan catalog's currency) when no payments carry one,
+    // rather than INR which contradicts the $-priced plans (BUG-DATA-013).
+    const primaryCur = primary ?? "USD";
     return {
-      currency: primary,
+      currency: primaryCur,
       totalMinor,
       currentYearMinor,
       byPlan: [...byPlan.entries()]
@@ -376,8 +388,8 @@ export class AdminAnalyticsService {
       excludedStaff: userSnap.size - customerDocs.length,
       paymentsCounted,
       // Summing across currencies would be meaningless; surfaced so the UI can
-      // warn rather than silently adding rupees to dollars.
-      mixedCurrencies: [...currencies].filter((c) => c !== primary),
+      // warn rather than silently mixing currencies.
+      mixedCurrencies: [...currencies].filter((c) => c !== primaryCur),
     };
   }
 }

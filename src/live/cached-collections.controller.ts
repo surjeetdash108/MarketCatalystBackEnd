@@ -6,9 +6,11 @@ import {
   Query,
   Req,
   Res,
+  UseGuards,
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { CachedCollectionsService } from "./cached-collections.service";
+import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
 /**
  * GET /live/collections?names=companies,market_indices,…
@@ -21,6 +23,10 @@ const NAME_RE = /^[a-z_]{1,40}$/;
 const MAX_NAMES = 24;
 
 @Controller("live")
+// Market data is the product. These read surfaces answered anonymous
+// callers, returning full datasets — the policy lived only in a Firestore
+// rules file that nothing enforces, because no client talks to Firestore.
+@UseGuards(FirebaseAuthGuard)
 export class CachedCollectionsController {
   constructor(private readonly cached: CachedCollectionsService) {}
 

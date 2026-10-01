@@ -8,9 +8,17 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { activeUniverse } from "../common/ticker-universe";
 import { FINANCIALS_ADAPTER, type FinancialsAdapter } from "../adapters/types";
 import { SyncRegistry } from "../common/sync-registry.service";
+import {
+  ttmReportedEpsFromRows,
+  latestAnnualEpsGrowth,
+  annualEpsGrowthInputsPresent,
+  type EpsHistoryRow,
+} from "./financials.job";
 
 const JOB_NAME = "fundamentals-growth";
-const BATCH_SIZE = 60;
+// Configurable so a backfill can cover the whole universe in one run
+// (FUNDAMENTALS_BATCH_SIZE=442), matching the financials job's pattern.
+const BATCH_SIZE = Number(process.env.FUNDAMENTALS_BATCH_SIZE) || 60;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const round = (n: number, p = 4) => Math.round(n * 10 ** p) / 10 ** p;
 
@@ -51,6 +59,25 @@ export class FundamentalsGrowthJob implements OnModuleInit {
         { length: Math.min(BATCH_SIZE, universe.length) },
         (_, i) => universe[(cursor + i) % universe.length],
       );
+      // Batch-read the fresh financials docs (for the FMP non-GAAP epsHistory —
+      // financials.job runs just before this in the premarket bundle) and the
+      // company docs (for the current price → non-GAAP P/E). Same-basis as the
+      // earnings/EPS fix so P/E + EPS growth match NASDAQ/IBD, not GAAP.
+      const finSnaps = await this.firebase.firestore.getAll(
+        ...batch.map((t) => this.firebase.firestore.collection("financials").doc(t)),
+      );
+      const coSnaps = await this.firebase.firestore.getAll(
+        ...batch.map((t) => this.firebase.firestore.collection("companies").doc(t)),
+      );
+      const epsHistByTicker = new Map<string, EpsHistoryRow[]>();
+      const priceByTicker = new Map<string, number | null>();
+      finSnaps.forEach((s) => {
+        if (s.exists) epsHistByTicker.set(s.id, (s.data()?.epsHistory ?? []) as EpsHistoryRow[]);
+      });
+      coSnaps.forEach((s) => {
+        if (s.exists) priceByTicker.set(s.id, (s.data()?.price ?? null) as number | null);
+      });
+
       const writes = [];
       let skipped = 0;
       for (const ticker of batch) {
@@ -63,7 +90,20 @@ export class FundamentalsGrowthJob implements OnModuleInit {
           const periods = result.data;
           const [latest, prior] = periods;
           if (!latest) {
-            skipped++;
+            // No Polygon annual statement — every field below is Polygon-derived,
+            // so there is nothing to recompute. But epsGrowthYoY comes from the
+            // FMP epsHistory we already batch-read, and a stale one must still be
+            // cleared here: SNDK is skipped on this branch, which is why its wrong
+            // -7.22% survived the first pass of this fix entirely.
+            const hist = epsHistByTicker.get(ticker) ?? [];
+            if (
+              latestAnnualEpsGrowth(hist) == null &&
+              annualEpsGrowthInputsPresent(hist)
+            ) {
+              writes.push({ ticker, data: { epsGrowthYoY: null } });
+            } else {
+              skipped++;
+            }
             await sleep(this.financials.requestDelayMs);
             continue;
           }
@@ -74,12 +114,22 @@ export class FundamentalsGrowthJob implements OnModuleInit {
             latest.revenue != null
               ? (latest.revenue - prior.revenue) / prior.revenue
               : null;
-          const epsGrowth =
+          // GAAP fallback, used only when FMP has no history. Same two guards as
+          // the FMP path (latestAnnualEpsGrowth): a positive base, and a
+          // magnitude cap — without the cap a near-zero prior year produced
+          // ANV -49,100% and SPRY -2,275%.
+          const epsGrowthRaw =
             prior &&
             prior.dilutedEps != null &&
             prior.dilutedEps > 0 &&
             latest.dilutedEps != null
               ? (latest.dilutedEps - prior.dilutedEps) / prior.dilutedEps
+              : null;
+          const epsGrowth =
+            epsGrowthRaw != null &&
+            Number.isFinite(epsGrowthRaw) &&
+            Math.abs(epsGrowthRaw) <= 10
+              ? epsGrowthRaw
               : null;
           const gp =
             latest.grossProfit ??
@@ -90,14 +140,67 @@ export class FundamentalsGrowthJob implements OnModuleInit {
             gp != null && latest.revenue != null && latest.revenue > 0
               ? gp / latest.revenue
               : null;
+
+          // Non-GAAP (FMP consensus basis) — same as NASDAQ/IBD, from epsHistory.
+          // epsTtm = last 4 reported quarters; P/E = price ÷ epsTtm; EPS growth =
+          // latest-vs-prior full fiscal year. Fall back to the Polygon GAAP
+          // epsGrowth only when FMP has no history yet.
+          const epsHist = epsHistByTicker.get(ticker) ?? [];
+          const epsTtm = ttmReportedEpsFromRows(epsHist);
+          const price = priceByTicker.get(ticker) ?? null;
+          const peReported =
+            epsTtm != null && epsTtm > 0 && price != null && price > 0
+              ? Math.round((price / epsTtm) * 100) / 100
+              : null;
+          const epsGrowthReported = latestAnnualEpsGrowth(epsHist);
+          // The figure is rendered beside epsTtm (non-GAAP). A GAAP-derived
+          // POSITIVE growth next to a negative non-GAAP EPS reads as a
+          // contradiction — GILD showed "+77%" against EPS -0.39 — so drop the
+          // fallback when the two bases disagree in sign. The FMP path is exempt:
+          // it is computed from the same actuals epsTtm is.
+          // NOTE: positive growth beside a NEGATIVE eps is not a contradiction
+          // and must not be suppressed. Growth is last-completed-fiscal-year;
+          // eps is trailing-twelve-month. GILD is the worked example — FY25 8.15
+          // vs FY24 4.61 is a real +76.8%, while its TTM is -0.39 because Q2 FY26
+          // took a -6.75 charge. Both figures are correct for their own window.
+          // An earlier revision nulled these out and was throwing away good data.
+          const epsGrowthFinal =
+            epsGrowthReported != null
+              ? epsGrowthReported
+              : epsGrowth == null
+                ? null
+                : round(epsGrowth);
+
           writes.push({
             ticker,
             data: {
-              revenueGrowthYoY: revGrowth == null ? null : round(revGrowth),
-              epsGrowthYoY: epsGrowth == null ? null : round(epsGrowth),
-              grossMargin: grossMargin == null ? null : round(grossMargin),
+              // Conditional (merge:true): revenueGrowthYoY/epsGrowthYoY/grossMargin
+              // are null when a period is missing or the prior-year base is
+              // non-positive — that's "couldn't compute", not a real value. Writing
+              // null onto the shared companies doc would clobber the last good
+              // figure, so omit each unless computed (mirrors the eps/peRatio spread
+              // below).
+              ...(revGrowth != null
+                ? { revenueGrowthYoY: round(revGrowth) }
+                : {}),
+              // Reaching this line means the Polygon annual statement WAS
+              // fetched (the !latest branch above returns early), so inputs were
+              // evaluated by definition — a null result is "these inputs support
+              // no figure" and the stored value must be cleared, not preserved.
+              // Gating this on FMP epsHistory instead left ANV/SPRY/ANGI/GILD
+              // stale: they have no FMP history, which is precisely why the GAAP
+              // fallback ran for them in the first place.
+              epsGrowthYoY: epsGrowthFinal,
+              ...(grossMargin != null
+                ? { grossMargin: round(grossMargin) }
+                : {}),
               fundamentalsFiscalYear: latest.fiscalYear,
               fundamentalsUpdatedAt: new Date().toISOString(),
+              // Non-GAAP TTM EPS + P/E (null-safe: only override when we have the
+              // FMP history + a price, else leave the profile's existing value).
+              ...(epsTtm != null ? { epsTtm } : {}),
+              ...(peReported != null ? { peRatio: peReported } : {}),
+              ...(epsTtm != null ? { eps: epsTtm } : {}),
             },
           });
         } catch (err) {

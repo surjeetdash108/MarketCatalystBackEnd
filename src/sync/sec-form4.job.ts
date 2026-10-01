@@ -1,3 +1,4 @@
+import { getTickerToCik } from "../common/sec-cik-map.util";
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { chunkedBatchSet } from "../common/firestore-batch.util";
@@ -9,18 +10,13 @@ import { SyncRegistry } from "../common/sync-registry.service";
 const JOB_NAME = "sec-form4";
 const BATCH_SIZE = 20;
 const FILINGS_PER_COMPANY = 3;
+// Form 4 price fields occasionally carry a garbage per-share value (a footnote
+// artifact, or a total dollar amount landing in the price field) — e.g. a
+// $2,110,482/sh row that fabricates a multi-billion-dollar transaction. No US
+// equity trades near this: the priciest (BRK.A) is well under $1M/sh, so any
+// per-share price above the ceiling is discarded (null) rather than stored.
+const MAX_PLAUSIBLE_SHARE_PRICE = 1_000_000;
 
-async function fetchTickerToCik(userAgent: string) {
-  const res = await fetch("https://www.sec.gov/files/company_tickers.json", {
-    headers: { "User-Agent": userAgent },
-  });
-  const data = (await res.json()) as Record<string, { ticker: string; cik_str: string | number }>;
-  const map = new Map<string, string>();
-  for (const entry of Object.values(data)) {
-    map.set(entry.ticker.toUpperCase(), String(entry.cik_str));
-  }
-  return map;
-}
 
 @Injectable()
 export class SecForm4Job implements OnModuleInit {
@@ -52,7 +48,8 @@ export class SecForm4Job implements OnModuleInit {
         { length: BATCH_SIZE },
         (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
       );
-      const tickerToCik = await fetchTickerToCik(
+      const tickerToCik = await getTickerToCik(
+        this.firebase.firestore,
         "Market Catalyst Backend hello@inc108.com",
       );
       const docs = [];
@@ -83,8 +80,18 @@ export class SecForm4Job implements OnModuleInit {
             transactions.forEach((t, i) => {
               const shares =
                 Number(t.transactionAmounts?.transactionShares?.value) || 0;
+              const rawPrice = Number(
+                t.transactionAmounts?.transactionPricePerShare?.value,
+              );
+              // Keep only a positive, plausible per-share price; anything else
+              // (0, blank, NaN, or an implausibly huge garbage value) → null so
+              // no fabricated dollar value is derived downstream.
               const price =
-                t.transactionAmounts?.transactionPricePerShare?.value;
+                Number.isFinite(rawPrice) &&
+                rawPrice > 0 &&
+                rawPrice <= MAX_PLAUSIBLE_SHARE_PRICE
+                  ? rawPrice
+                  : null;
               docs.push({
                 id: `${filing.accessionNumber}_${i}`,
                 data: {
@@ -99,7 +106,7 @@ export class SecForm4Job implements OnModuleInit {
                     t.transactionAmounts?.transactionAcquiredDisposedCode
                       ?.value,
                   shares,
-                  pricePerShare: price ? Number(price) : null,
+                  pricePerShare: price,
                   sharesOwnedAfter:
                     Number(
                       t.postTransactionAmounts?.sharesOwnedFollowingTransaction

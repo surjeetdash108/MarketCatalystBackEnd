@@ -1,5 +1,52 @@
 # Deploying Market Catalyst Backend to Firebase / GCP (Cloud Run + Cloud Scheduler)
 
+> # ⛔ READ THIS FIRST — `git push` DOES NOT DEPLOY THE BACKEND
+>
+> There are **three** Cloud Run services. Only two of them matter, and **neither
+> is deployed by pushing to git.**
+>
+> | Service | Region | Deployed by | What it actually does |
+> |---|---|---|---|
+> | **`market-catalyst-backend`** | us-central1 | **manual `gcloud run deploy --source .`** | ✅ **THE WORKER.** Runs every cron/sync job. |
+> | **`market-catalyst-live`** | us-central1 | **manual `gcloud run deploy --source .`** | ✅ **THE READ API.** Serves `/api`, `/live`, `/market-data`. |
+> | `market-catalyst-be` | us-east4 | git push (Firebase App Hosting) | ⚠️ Near-dormant. Runs almost nothing. |
+>
+> **A backend change is NOT live until BOTH us-central1 services are deployed
+> with `gcloud`.** Pushing to `prod` only rebuilds `market-catalyst-be`, which
+> is not the service doing the work.
+>
+> ```bash
+> # from MarketCatalystBackEnd/ — BOTH are required for a code change
+> gcloud run deploy market-catalyst-backend --source . --region us-central1 --project market-catalyst-502415
+> gcloud run deploy market-catalyst-live    --source . --region us-central1 --project market-catalyst-502415
+> ```
+>
+> **How this bites you (it already has, 2026-08-21).** A fix to
+> `institutional-ownership.job` was committed, pushed, and the App Hosting
+> rollout went green — so it looked deployed. It was not: `market-catalyst-be`
+> does not run that job. `market-catalyst-backend` was still on the old image,
+> and the 03:00 ET cron would have run the OLD code and written nothing. The
+> giveaway was in the logs — real job output (`OptionsChainsJob`, cursor
+> advances) appears only under `market-catalyst-backend`, while
+> `market-catalyst-be` shows little beyond route registration.
+>
+> **Confirm what is actually running before believing a deploy:**
+> ```bash
+> gcloud run services describe market-catalyst-backend --region us-central1 \
+>   --project market-catalyst-502415 --format='value(status.latestReadyRevisionName)'
+> ```
+>
+> Two follow-on traps, both of which have wasted time here:
+> * **`market-catalyst-be` is not fully inert** — it has fired `AutoPurgeJob`.
+>   Both services carry `APP_ROLE=worker`, so if their images ever diverge, two
+>   different versions of a job can write the same Firestore collection.
+> * **Reads are cached after a job succeeds.** `/market-data/*` goes through
+>   `CachedCollectionsService` (5-min TTL) and `/live/*` has its own cache, both
+>   *inside the app* — so `cache-control: no-cache` and a CDN `x-cache: MISS`
+>   will still hand you stale data. A job can be correct while the API looks
+>   unchanged for several minutes. Wait out the TTL before concluding it failed.
+
+
 This backend both **ingests** (pulls from vendor APIs → writes Firestore) and
 **serves** the frontend: the Next.js app calls this service's REST/SSE surface
 (`/api`, `/market-data`, `/live`) — same-origin in production, proxied by
@@ -13,12 +60,25 @@ Firebase Hosting rewrites to the public `market-catalyst-live` Cloud Run service
 > setting `PROJECT_ID` in §0 (and use the matching `deploy/env.<env>.yaml`).
 > `.firebaserc` provides `stage`/`prod` aliases for `--project`.
 
-**Runtime model:** the app is a long-running NestJS server. On Cloud Run we deploy
-it **scale-to-zero** and let **Cloud Scheduler** trigger each sync job over HTTP
-(`POST /sync/<job>/run`) on its schedule. The in-process `@nestjs/schedule` cron
-is therefore **not** the driver in production (a scaled-to-zero instance has no
-warm process to fire it) — Cloud Scheduler is. Both use the same schedules, so
-behavior is identical; Scheduler just survives scale-to-zero.
+**Runtime model:** the app is a NestJS server. On Cloud Run the worker service
+(`market-catalyst-backend`) runs **scale-to-zero** (`--min-instances=0`, CPU
+throttled — the Cloud Run default, do **not** pass `--no-cpu-throttling`) and
+**Cloud Scheduler** triggers the short intraday sync jobs over HTTP
+(`POST /sync/<job>/run`) on their schedule; the instance cold-starts per trigger
+and bills per request. The in-process `@nestjs/schedule` cron is **not** the
+driver in production (a scaled-to-zero instance has no warm process to fire it)
+— Cloud Scheduler is.
+
+> **2026-08-16 — scale-to-zero cost cut (bill ~$75–90/mo → <$15/mo).** The worker
+> was previously always-on (`--min-instances=1` + `--no-cpu-throttling`, ≈$65/mo)
+> *only* to host the detached premarket bundle, which returns `202` and keeps
+> running past Cloud Run's 900s request limit. That bundle now runs as a separate
+> **Cloud Run Job** `premarket-job` (§3c), so the worker can scale to zero.
+> Scale-to-zero is safe because the worker's remaining `@Cron` handlers
+> (auto-purge/retention) are gated off (`ENABLE_SCHEDULED_JOBS` unset → no-ops)
+> and the `@Interval` metering flush (`api-usage.service`) flushes on
+> `onModuleDestroy`/SIGTERM — the same pattern already proven on the
+> scale-to-zero live service.
 
 Prerequisites: a **Blaze** (pay-as-you-go) Firebase project — Cloud Run, Cloud
 Scheduler, and the backfill write-bursts all require it. `gcloud` + `firebase` CLIs
@@ -118,6 +178,28 @@ done
 
 ## 3. Deploy the service to Cloud Run
 
+> ✅ **For a routine CODE-ONLY roll, use the image-only form below — NOT the full
+> `--set-*` commands.** `--set-secrets` / `--set-env-vars` REPLACE the entire set,
+> so any secret or env the running service gained later (FMP_API_KEY on both
+> services; FRED_API_KEY + OPENROUTER_API_KEY + `EARNINGS_ESTIMATES_SOURCE=fmp`
+> on live) is silently dropped if the command below is even slightly out of date.
+> Deploying the image alone inherits all existing env/secrets/scaling and cannot
+> drift:
+> ```bash
+> # worker — builds from source, keeps existing config
+> gcloud run deploy market-catalyst-backend --source . \
+>   --region "$REGION" --project "$PROJECT_ID"
+> # live — reuse the image the worker deploy just built, keep existing config
+> IMAGE=$(gcloud run services describe market-catalyst-backend --region "$REGION" \
+>           --format='value(spec.template.spec.containers[0].image)')
+> gcloud run services update market-catalyst-live --image "$IMAGE" \
+>   --region "$REGION" --project "$PROJECT_ID"
+> ```
+> The full `--set-*` commands below are for a FIRST deploy or an intentional
+> config change only. If you use them, they MUST list every secret/env the
+> service currently has (verify with `gcloud run services describe … --format=
+> 'value(spec.template.spec.containers[0].env)'` first).
+
 **There are two services, built from one image**, selected by `APP_ROLE`:
 
 | | `market-catalyst-backend` (worker) | `market-catalyst-live` (live) |
@@ -126,7 +208,8 @@ done
 | Reachable by | Cloud Scheduler / `gcloud proxy` only | **the public internet** |
 | Mounts | everything: sync, purge, retention, flags, plans, ops UI at `/` | `LiveModule` + `/health` **only** |
 | `--timeout` | `900` (batch jobs) | `3600` (long-lived SSE) |
-| Workload | 25 cron jobs, one 35-min run | ticker-tape SSE fan-out |
+| Scaling | `--min-instances=0`, CPU throttled (scale-to-zero) | `--min-instances=0` |
+| Workload | short intraday sync jobs (§5) + admin/ops — the long premarket bundle is now the separate `premarket-job` Cloud Run Job (§3c) | ticker-tape SSE fan-out |
 
 **Why two and not one.** The browser has to hold an open connection to
 `/live/tape/stream`, so that service must be `--allow-unauthenticated`. On the
@@ -151,8 +234,26 @@ gcloud run deploy market-catalyst-backend \
   --memory=512Mi \
   --timeout=900 \
   --env-vars-file="$ENV_FILE" \
-  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
+  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FMP_API_KEY=FMP_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest,OPENROUTER_API_KEY=OPENROUTER_API_KEY:latest,GROQ_API_KEY=GROQ_API_KEY:latest"
 ```
+
+> ⚠ **All FOUR secrets are required — `FMP_API_KEY` included.** `--set-secrets`
+> REPLACES the entire secret set, so omitting `FMP_API_KEY` (as an earlier
+> version of this command did) silently drops it on the next deploy and disables
+> every FMP-backed feature the worker runs: `EARNINGS_ESTIMATES_SOURCE`,
+> `ANALYST_SOURCE`, `NEWS_FMP_SOURCE`, `SECTORS_FALLBACK_SOURCE`,
+> `ECON_CALENDAR_SOURCE` (all `=fmp` in `env.production.yaml`) plus the sector
+> FMP-refinement in the company/mover/ipos sync jobs. `FmpService` self-disables
+> with no key, so there is NO error — coverage just quietly goes to null. Verify
+> after deploy: `gcloud run services describe market-catalyst-backend --region
+> "$REGION" --format='value(spec.template.spec.containers[0].env)' | tr ';' '\n'
+> | grep FMP_API_KEY` must print a `secretKeyRef`.
+
+> **`--min-instances=0` + default CPU throttling is intentional (2026-08-16).**
+> The worker only handles short scheduled jobs + admin now, so it scales to zero
+> and bills per request. Do **not** re-add `--min-instances=1` or
+> `--no-cpu-throttling` — those were only needed for the old detached premarket
+> run, which is now the `premarket-job` Cloud Run Job (§3c).
 
 > ⚠ **`POLYGON_PAGE_DELAY_MS=0` is required, not optional.** It lives in
 > `deploy/env.production.yaml`. The code default is `12500` (the FREE tier's
@@ -167,10 +268,50 @@ gcloud run deploy market-catalyst-backend \
 
 ### 3b. Deploy the public live service (ticker tape)
 
-Same image, different role and *very* different Cloud Run settings:
+Same image, different role. **Use the image-only update — it is the routine
+path and it cannot drift:**
 
 ```bash
 # Reuse the image the deploy above built, so both services run identical code.
+IMAGE=$(gcloud run services describe market-catalyst-backend --region "$REGION" \
+          --format='value(spec.template.spec.containers[0].image)')
+
+gcloud run services update market-catalyst-live \
+  --image "$IMAGE" \
+  --region "$REGION" --project "$PROJECT_ID"
+```
+
+`services update --image` swaps the code and inherits every existing env var,
+secret and scaling setting. Nothing to keep in sync, nothing to forget.
+
+> ⚠ **DO NOT use the full `--set-*` recipe below for a routine deploy.**
+> `--set-env-vars` and `--set-secrets` REPLACE the entire set — anything absent
+> from the command is deleted from the service. On 2026-08-26 this section
+> listed 7 env vars and 1 secret while the service was actually running **12 env
+> vars and 5 secrets**, so following it verbatim would have silently dropped:
+>
+> - `FIRESTORE_DATABASE_ID=mc-regional` — live would fall back to the empty
+>   `(default)` database and every read would return nothing
+> - `OPENROUTER_MODEL`, `OPENROUTER_FALLBACK_MODEL`, `OPENROUTER_API_KEY` — all
+>   AI features silently disabled
+> - `FMP_API_KEY`, `FRED_API_KEY`, `GROQ_API_KEY` — earnings estimates, macro
+>   and AI vendors all unauthenticated
+> - `EARNINGS_ESTIMATES_SOURCE`, `SEC_EDGAR_USER_AGENT`
+>
+> A doc listing env vars will always rot behind the service. **Before using the
+> full recipe, regenerate it from the running service** rather than trusting
+> what is written here:
+>
+> ```bash
+> gcloud run services describe market-catalyst-live --region "$REGION" \
+>   --format='value(spec.template.spec.containers[0].env)'
+> ```
+
+<details>
+<summary><b>Full recipe — FIRST deploy or an intentional config change only</b>
+(verified against the running service 2026-08-26)</summary>
+
+```bash
 IMAGE=$(gcloud run services describe market-catalyst-backend --region "$REGION" \
           --format='value(spec.template.spec.containers[0].image)')
 
@@ -183,9 +324,11 @@ gcloud run deploy market-catalyst-live \
   --concurrency=200 \
   --memory=1Gi \
   --timeout=3600 \
-  --set-env-vars="APP_ROLE=live,NODE_ENV=production,FIREBASE_PROJECT_ID=market-catalyst-502415,POLYGON_API_BASE_URL=https://api.massive.com,CORS_ORIGINS=https://marketcatalyst.web.app,POLYGON_PAGE_DELAY_MS=0,ADMIN_GUARD_TRUST_IAM=false" \
-  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest"
+  --set-env-vars="APP_ROLE=live,NODE_ENV=production,FIREBASE_PROJECT_ID=market-catalyst-502415,FIRESTORE_DATABASE_ID=mc-regional,POLYGON_API_BASE_URL=https://api.massive.com,CORS_ORIGINS=https://marketcatalyst.web.app,POLYGON_PAGE_DELAY_MS=0,ADMIN_GUARD_TRUST_IAM=false,EARNINGS_ESTIMATES_SOURCE=fmp,OPENROUTER_MODEL=openrouter/free,OPENROUTER_FALLBACK_MODEL=google/gemma-4-31b-it:free,SEC_EDGAR_USER_AGENT=Market Catalyst Backend hello@inc108.com" \
+  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FMP_API_KEY=FMP_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest,OPENROUTER_API_KEY=OPENROUTER_API_KEY:latest,GROQ_API_KEY=GROQ_API_KEY:latest"
 ```
+
+</details>
 
 > ⚠ **`ADMIN_GUARD_TRUST_IAM=false` is REQUIRED here — omitting it is a data
 > leak.** Admin read-models are mounted on the live role (commit b73851a), and
@@ -308,35 +451,112 @@ Grab the URL:
 export SERVICE_URL=$(gcloud run services describe market-catalyst-backend --region "$REGION" --format='value(status.url)')
 ```
 
+### 3c. Deploy the premarket Cloud Run **Job** (2026-08-16)
+
+The premarket bundle runs ~18 min/weekday — past Cloud Run's 900s request limit —
+so it is **not** a request on the worker service anymore. It runs as a **Cloud Run
+Job** `premarket-job` built from the *same image*, overriding the entrypoint to
+`node dist/job-entry.js` (`src/job-entry.ts` boots a Nest application context via
+`src/app-job.module.ts` — the worker's modules **minus** `ServeStaticModule`,
+which crashes a no-HTTP context — then runs `SyncRegistry.get(SYNC_JOB ?? "premarket")()`
+and exits). This is what lets the worker service scale to zero.
+
+```bash
+# Reuse the image the worker deploy built, so the job runs identical code.
+IMAGE=$(gcloud run services describe market-catalyst-backend --region "$REGION" \
+          --format='value(spec.template.spec.containers[0].image)')
+
+gcloud run jobs create premarket-job \
+  --image "$IMAGE" \
+  --region "$REGION" \
+  --command="node" --args="dist/job-entry.js" \
+  --task-timeout=3600 \
+  --max-retries=1 \
+  --memory=2Gi --cpu=1 \
+  --service-account="backend-runtime@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --env-vars-file="$ENV_FILE" \
+  --set-secrets="POLYGON_API_KEY=POLYGON_API_KEY:latest,FINNHUB_API_KEY=FINNHUB_API_KEY:latest,FRED_API_KEY=FRED_API_KEY:latest"
+# Redeploy after a code change: same command with `jobs update` instead of `jobs create`
+# (or `gcloud run jobs deploy premarket-job --source . --command=node --args=dist/job-entry.js …`).
+```
+
+Run it manually (this replaces the retired `POST /sync/premarket/run` — that
+detached path would be killed on the now scale-to-zero worker):
+
+```bash
+gcloud run jobs execute premarket-job --region "$REGION"          # fire-and-forget
+gcloud run jobs execute premarket-job --region "$REGION" --wait   # block until it exits
+```
+
+`SYNC_JOB` defaults to `premarket`; set it to any registered sync name to reuse
+the same image+entrypoint for a single job (`--update-env-vars=SYNC_JOB=<name>`).
+Its Cloud Scheduler trigger `run-premarket-job` is created in §5.
+
 ## 4. Create the Scheduler invoker service account
 
 ```bash
 gcloud iam service-accounts create scheduler-invoker --display-name="Cloud Scheduler → Cloud Run invoker"
 export INVOKER_SA="scheduler-invoker@${PROJECT_ID}.iam.gserviceaccount.com"
+# HTTP invoke on the worker service (intraday sync schedulers):
 gcloud run services add-iam-policy-binding market-catalyst-backend \
+  --region "$REGION" --member="serviceAccount:${INVOKER_SA}" --role="roles/run.invoker"
+# Run Admin API invoke on the JOB (the run-premarket-job scheduler, §5):
+gcloud run jobs add-iam-policy-binding premarket-job \
   --region "$REGION" --member="serviceAccount:${INVOKER_SA}" --role="roles/run.invoker"
 ```
 
-## 5. Create THE scheduler job (singular — 2026-07-26 on-demand redesign)
+## 5. Create the scheduler jobs (2026-08-16 — Job trigger + 5-min intraday)
 
-One Cloud Scheduler entry (`sync-premarket`, 08:00 ET weekdays →
-`/sync/premarket/run`) replaces the previous 22. The script below creates it
-AND deletes the retired per-job schedules:
+Two kinds of Cloud Scheduler entry now, both as `scheduler-invoker@`:
+
+**(a) `run-premarket-job` — triggers the Cloud Run Job (§3c).** 08:00 ET
+weekdays. It does **not** POST to the worker; it calls the Run Admin API to
+execute the job, authenticated with an OAuth token (needs `roles/run.invoker`
+on the job, granted in §4). The old `sync-premarket` HTTP scheduler is DELETED.
 
 ```bash
-PROJECT_ID="$PROJECT_ID" REGION="$REGION" SERVICE_URL="$SERVICE_URL" INVOKER_SA="$INVOKER_SA" \
-  ./deploy/create-scheduler-jobs.sh
+gcloud scheduler jobs create http run-premarket-job \
+  --project="$PROJECT_ID" --location="$REGION" \
+  --schedule="0 8 * * 1-5" --time-zone="America/New_York" \
+  --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/premarket-job:run" \
+  --http-method=POST \
+  --oauth-service-account-email="$INVOKER_SA" \
+  --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
+
+# Retire the old HTTP premarket scheduler if it still exists:
+gcloud scheduler jobs delete sync-premarket --project="$PROJECT_ID" --location="$REGION" --quiet 2>/dev/null || true
 ```
+
+**(b) Intraday HTTP sync schedulers — every 5 min during the session.** OIDC
+POST to `/sync/<job>/run` on the worker (the same pattern as before, relaxed
+from every 2 min to every 5 min — `*/5 9-16 * * 1-5` ET) for
+`market-quotes`, `movers`, `breadth`, `indices`, `fear-greed`:
+
+```bash
+for JOB in market-quotes movers breadth indices fear-greed; do
+  gcloud scheduler jobs create http "sync-${JOB}" \
+    --project="$PROJECT_ID" --location="$REGION" \
+    --schedule="*/5 9-16 * * 1-5" --time-zone="America/New_York" \
+    --uri="${SERVICE_URL}/sync/${JOB}/run" --http-method=POST \
+    --oidc-service-account-email="$INVOKER_SA" --oidc-token-audience="$SERVICE_URL" \
+    --attempt-deadline="900s"
+done
+```
+
+> ⚠ `deploy/create-scheduler-jobs.sh` is **stale** — it still creates the retired
+> single `sync-premarket` HTTP job and points at `/sync/premarket/run`. Use the
+> commands above instead until that script is updated.
 
 ## 6. First fill (one-time, optional)
 
 There is no universe backfill anymore — the DB starts empty and grows with
 usage (on-demand `/live/bars` + `/live/company`) plus the premarket warm. To
-prime the cache immediately instead of waiting for tomorrow's premarket run:
+prime the cache immediately instead of waiting for tomorrow's premarket run,
+execute the Cloud Run Job (2026-08-16 — replaces the retired detached
+`POST /sync/premarket/run`, which would be killed on the scale-to-zero worker):
 
 ```bash
-TOKEN=$(gcloud auth print-identity-token --audiences="$SERVICE_URL")
-curl -s -X POST -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/sync/premarket/run" | head -c 400
+gcloud run jobs execute premarket-job --region "$REGION" --wait
 ```
 
 To reset the market-data collections to the on-demand shape (keeps users,
@@ -368,6 +588,9 @@ npm run start:dev         # http://localhost:4400  (monitor at /, ops API at /sy
   barDate+~400d, `news` = publishedAt+~90d) — see the root README migration notes.
 - Cloud Run scale-to-zero means the first Scheduler hit each run does a cold start
   (~a few seconds incl. Firestore's first gRPC channel) — fine for cron cadence.
+- **2026-08-16 cost architecture.** Moving the premarket bundle to `premarket-job`
+  (~18 min/weekday ≈ $0.50/mo) let the worker service drop `--min-instances=1` +
+  `--no-cpu-throttling` for scale-to-zero — total infra bill ~$75–90/mo → <$15/mo.
 
 ## 7. Free CDN via Firebase Hosting (2026-07-26)
 

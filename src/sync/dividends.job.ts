@@ -4,13 +4,11 @@ import { chunkedBatchSet } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { DIVIDENDS_ADAPTER, type DividendsAdapter } from "../adapters/types";
 import { SyncRegistry } from "../common/sync-registry.service";
+import { isoDate } from "../common/date.util";
 
 const JOB_NAME = "dividends";
 const LOOKAHEAD_DAYS = 30;
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 /**
  * Stable, unique document ID for one dividend event.

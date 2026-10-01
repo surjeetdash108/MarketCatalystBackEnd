@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { fetchJson } from "../../common/http.util";
+import { finiteOrNull, nonNegIntOrNull } from "../../common/validate.util";
 
 // Polygon rebranded to Massive (Oct 2025); api.polygon.io still resolves but is
 // being phased out in favour of api.massive.com. Kept configurable so the host
@@ -15,6 +16,24 @@ const DEFAULT_BASE_URL = "https://api.polygon.io";
 const DEFAULT_PAGE_DELAY_MS = 12_500;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Financial-statement unit assertion. Polygon tags each statement node with a
+ * `unit`: monetary nodes carry an ISO-4217 currency code ("USD", or "USD /
+ * shares" for per-share figures), while non-monetary nodes use lowercase tokens
+ * ("shares", "pure"). Every consumer here assumes raw USD dollars, so a node
+ * whose LEADING unit token is a three-letter code OTHER than USD is a genuine
+ * currency mismatch — return that code so the caller can warn and null the value
+ * rather than silently storing a foreign-denominated number as if it were USD.
+ * Everything else (absent/non-string unit, USD-based, "shares", "pure", ratios)
+ * is accepted unchanged, so the normal USD path is untouched. Deliberately
+ * conservative: only an explicit non-USD currency code trips it.
+ */
+function nonUsdCurrencyUnit(unit: unknown): string | null {
+  if (typeof unit !== "string") return null;
+  const lead = unit.trim().split(/[\s/]/)[0];
+  return /^[A-Z]{3}$/.test(lead) && lead !== "USD" ? lead : null;
+}
 
 export interface PolygonAggBar {
   T: string;
@@ -177,7 +196,40 @@ export class PolygonService {
       `${this.baseUrl}/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${from}/${to}` +
         `?adjusted=true&sort=asc&limit=${limit}&apiKey=${this.apiKey}`,
     );
-    return res.results ?? [];
+    const results = res.results ?? [];
+    // BUG-DATA-011 root cause + fix. `adjusted=true` makes Polygon return
+    // SPLIT-ADJUSTED volume, which it emits as a FLOAT: the raw session volume
+    // multiplied by the cumulative split factor (e.g. 18_569_371.05639 for a
+    // non-integer ratio such as 3:2). Real session volume is a whole number of
+    // shares, but every stored/served bar path reads `v`/`b.v` verbatim
+    // (ohlcv_bars via the bars adapter, on-demand stock_bars via
+    // fetchAndStore/refreshIncremental, intraday_bars via getIntradayBars), so
+    // the fraction propagates into 52w / SMA / EMA / RVOL / avgVolume. Normalise
+    // to whole shares HERE — the single vendor boundary all bar fetches flow
+    // through. Prices stay split-adjusted; only volume is rounded. Callers that
+    // read only OHLC (getDailyQuote, ipos/fear-greed/company-profile) are
+    // unaffected because they never read `v`.
+    for (const b of results) {
+      // Volume: split-adjusted floats arrive here (BUG-DATA-011). `Math.round`
+      // alone let `NaN` (Math.round(NaN)===NaN) and negatives pass straight
+      // through into 52w/SMA/EMA/RVOL/avgVolume. `nonNegIntOrNull` rounds a
+      // valid volume to whole shares and rejects NaN/negative. `PolygonAggBar.v`
+      // is a non-null `number` that every downstream consumer reads
+      // arithmetically, so an invalid value coerces to 0 rather than null — a
+      // null would break sorts/Math.min on the bar arrays. (Follow-up: widen the
+      // interface to `number | null` so "unknown volume" is distinguishable from
+      // a true 0.)
+      b.v = nonNegIntOrNull(b.v) ?? 0;
+      // OHLC: strip non-finite values (NaN/±Infinity) so a corrupt bar cannot
+      // poison downstream sums/EMAs (NaN propagates through every subsequent
+      // calc). finiteOrNull keeps legitimate 0/negatives; strictNullChecks is
+      // off so assigning null to these number fields is type-safe here.
+      b.o = finiteOrNull(b.o);
+      b.h = finiteOrNull(b.h);
+      b.l = finiteOrNull(b.l);
+      b.c = finiteOrNull(b.c);
+    }
+    return results;
   }
 
   /**
@@ -197,6 +249,30 @@ export class PolygonService {
     to: string,
   ): Promise<PolygonAggBar[]> {
     return this.getAggsRange(ticker, from, to, timespan, multiplier, 50_000);
+  }
+
+  /**
+   * The OFFICIAL 16:00 ET regular-session close for one ticker on one date, via
+   * the daily open-close endpoint. `/v2/aggs` daily `c` is the last trade over
+   * the FULL extended session (incl. after-hours), which skews classic pivots;
+   * this endpoint's `close` is the official regular-session close. Only used to
+   * correct the keyLevels.daily pivot basis — `afterHours`/`preMarket` are
+   * deliberately ignored.
+   *
+   * Fail-safe by design: any error / 404 / missing field returns null so callers
+   * fall back to the stored daily close (no new failure mode). Never throws.
+   * `date` is YYYY-MM-DD.
+   */
+  async getOfficialClose(ticker: string, date: string): Promise<number | null> {
+    try {
+      const res = await fetchJson<{ close?: unknown }>(
+        `${this.baseUrl}/v1/open-close/${ticker}/${date}` +
+          `?adjusted=true&apiKey=${this.apiKey}`,
+      );
+      return finiteOrNull(res.close);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -227,7 +303,10 @@ export class PolygonService {
       paymentDate: string | null;
       declarationDate: string | null;
       recordDate: string | null;
-      cashAmount: number;
+      // Nullable: Polygon can omit cash_amount on a row (e.g. a stock-only
+      // distribution). Read null-safe below; consumers must `?? 0` in sums and
+      // never store a fabricated 0 as the amount.
+      cashAmount: number | null;
       dividendType: string | null;
       frequency: number | null;
     }>
@@ -241,7 +320,7 @@ export class PolygonService {
       paymentDate: d.pay_date ?? null,
       declarationDate: d.declaration_date ?? null,
       recordDate: d.record_date ?? null,
-      cashAmount: d.cash_amount,
+      cashAmount: d.cash_amount ?? null,
       dividendType: d.dividend_type ?? null,
       frequency: d.frequency ?? null,
     }));
@@ -398,21 +477,66 @@ export class PolygonService {
     );
     return (res.results ?? []).map((r: any) => {
       const s = r.session ?? {};
+      // Every numeric snapshot field is passed through finiteOrNull so a vendor
+      // NaN/Infinity degrades to null (already the field's type) instead of
+      // flowing into the Premarket/After-Hours change math.
+      //
+      // Price is close-aware. `s.price` is the last-trade price; off-hours it can
+      // drift from the official regular-session close (`s.close`) that consumer
+      // finance sites display (this is the ~5% SIRI weekend gap). So OUTSIDE
+      // regular hours we prefer the regular-session close, and DURING regular
+      // hours we keep the live last-trade price. `r.market_status` is Polygon's
+      // outer session state ("open" only during RTH); previous_close is the last
+      // resort. Field names match the snake_case the rest of this map already uses.
+      const marketOpen = r.market_status === "open";
+      const sessionPrice = marketOpen
+        ? finiteOrNull(s.price ?? s.close ?? s.previous_close)
+        : finiteOrNull(s.close ?? s.price ?? s.previous_close);
+
+      /* Price and change have to describe the SAME trade.
+       *
+       * `s.change` / `s.change_percent` are the vendor's, and they are measured
+       * from `s.price` — the last trade, extended hours included. The block
+       * above deliberately does NOT always show `s.price`: outside regular
+       * hours it prefers `s.close`, the official regular-session close, because
+       * that is the number consumer finance sites print.
+       *
+       * Passing the vendor's percentage straight through alongside a
+       * substituted price paired a figure with a base it was not measured from.
+       * On the SIRI weekend case that is the ~5% gap the note above describes,
+       * and it surfaces as a row whose price and percentage cannot both be
+       * right — the Movers board showing one site's price beside another's
+       * percentage.
+       *
+       * So: keep the vendor's numbers when the vendor's price is what we show,
+       * and re-derive them from the close when the close is what we show. The
+       * pair is then internally consistent either way. previousClose is the
+       * base in both cases, so nothing else about the semantics changes. */
+      const prevClose = finiteOrNull(s.previous_close);
+      const usingVendorPrice = sessionPrice != null && sessionPrice === finiteOrNull(s.price);
+      const derived =
+        !usingVendorPrice && sessionPrice != null && prevClose != null && prevClose > 0
+          ? {
+              change: sessionPrice - prevClose,
+              changePercent: ((sessionPrice - prevClose) / prevClose) * 100,
+            }
+          : null;
+
       return {
         ticker: r.ticker,
         name: r.name ?? null,
         marketStatus: r.market_status ?? null,
-        price: s.price ?? null,
-        change: s.change ?? null,
-        changePercent: s.change_percent ?? null,
-        earlyTradingChangePercent: s.early_trading_change_percent ?? null,
-        lateTradingChangePercent: s.late_trading_change_percent ?? null,
-        open: s.open ?? null,
-        high: s.high ?? null,
-        low: s.low ?? null,
-        previousClose: s.previous_close ?? null,
-        volume: s.volume ?? null,
-        vwap: s.vwap ?? null,
+        price: sessionPrice,
+        change: derived ? derived.change : finiteOrNull(s.change),
+        changePercent: derived ? derived.changePercent : finiteOrNull(s.change_percent),
+        earlyTradingChangePercent: finiteOrNull(s.early_trading_change_percent),
+        lateTradingChangePercent: finiteOrNull(s.late_trading_change_percent),
+        open: finiteOrNull(s.open),
+        high: finiteOrNull(s.high),
+        low: finiteOrNull(s.low),
+        previousClose: finiteOrNull(s.previous_close),
+        volume: finiteOrNull(s.volume),
+        vwap: finiteOrNull(s.vwap),
       };
     });
   }
@@ -462,7 +586,32 @@ export class PolygonService {
     const eps =
       inc?.diluted_earnings_per_share?.value ??
       inc?.basic_earnings_per_share?.value;
-    return typeof eps === "number" ? eps : null;
+    if (typeof eps === "number") return eps;
+    // Fallback: Polygon carries no TTM row for many mid/small caps — approximate
+    // trailing-twelve-month EPS by summing the 4 most recent quarterly diluted
+    // EPS. Only when all 4 quarters carry a value, so a short history (recent
+    // IPO) never understates TTM with a partial sum.
+    return this.getTtmEpsFromQuarters(ticker);
+  }
+
+  /** TTM EPS approximated as the sum of the last 4 quarterly EPS, else null. */
+  private async getTtmEpsFromQuarters(ticker: string): Promise<number | null> {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
+        `&timeframe=quarterly&limit=4&apiKey=${this.apiKey}`,
+    );
+    const rows = res.results ?? [];
+    if (rows.length < 4) return null;
+    let sum = 0;
+    for (const r of rows.slice(0, 4)) {
+      const inc = r?.financials?.income_statement;
+      const q =
+        inc?.diluted_earnings_per_share?.value ??
+        inc?.basic_earnings_per_share?.value;
+      if (typeof q !== "number") return null;
+      sum += q;
+    }
+    return Math.round(sum * 100) / 100;
   }
 
   /**
@@ -554,7 +703,21 @@ export class PolygonService {
     );
     return (res.results ?? []).map((p: any) => {
       const inc = p.financials?.income_statement ?? {};
-      const v = (k: string) => inc[k]?.value ?? null;
+      // Assert the vendor's per-node currency unit before trusting the value: a
+      // node explicitly denominated in a NON-USD currency is nulled (with a
+      // warning) rather than stored as if it were the raw USD dollars every
+      // consumer assumes. USD / per-share / unitless nodes pass through unchanged.
+      const v = (k: string) => {
+        const node = inc[k];
+        const badUnit = nonUsdCurrencyUnit(node?.unit);
+        if (badUnit) {
+          this.logger.warn(
+            `Non-USD unit "${badUnit}" on income_statement.${k} for ${ticker}; nulling value.`,
+          );
+          return null;
+        }
+        return node?.value ?? null;
+      };
       return {
         fiscalYear: p.fiscal_year ?? null,
         fiscalPeriod: p.fiscal_period ?? null,
@@ -598,21 +761,31 @@ export class PolygonService {
     // Every statement node is `{ value, unit, label, order }`; only `value` is
     // read. Statements are flattened wholesale rather than field-by-field so a
     // new panel needs no vendor-layer change.
-    const values = (node: Record<string, any> | undefined) =>
+    const values = (node: Record<string, any> | undefined, section: string) =>
       Object.fromEntries(
-        Object.entries(node ?? {}).map(([k, v]) => [
-          k,
-          typeof v?.value === "number" ? v.value : null,
-        ]),
+        Object.entries(node ?? {}).map(([k, v]) => {
+          // Same non-USD currency assertion as getIncomeStatements: a node
+          // explicitly denominated in a foreign currency is nulled + warned
+          // rather than stored as raw USD dollars. USD / per-share / unitless
+          // (typeof value !== number) nodes pass through unchanged.
+          const badUnit = nonUsdCurrencyUnit(v?.unit);
+          if (badUnit) {
+            this.logger.warn(
+              `Non-USD unit "${badUnit}" on ${section}.${k} for ${ticker}; nulling value.`,
+            );
+            return [k, null];
+          }
+          return [k, typeof v?.value === "number" ? v.value : null];
+        }),
       );
     return (res.results ?? []).map((p: any) => ({
       fiscalYear: p.fiscal_year ?? null,
       fiscalPeriod: p.fiscal_period ?? null,
       endDate: p.end_date ?? null,
       filingDate: p.filing_date ?? null,
-      income: values(p.financials?.income_statement),
-      balanceSheet: values(p.financials?.balance_sheet),
-      cashFlow: values(p.financials?.cash_flow_statement),
+      income: values(p.financials?.income_statement, "income_statement"),
+      balanceSheet: values(p.financials?.balance_sheet, "balance_sheet"),
+      cashFlow: values(p.financials?.cash_flow_statement, "cash_flow_statement"),
     }));
   }
 
@@ -694,7 +867,10 @@ export class PolygonService {
       recordDate: string | null;
       paymentDate: string | null;
       declarationDate: string | null;
-      dividend: number;
+      // Nullable: Polygon can omit cash_amount on a calendar row. Read null-safe
+      // below; the dividends job guards falsy amounts and stores the amount
+      // as-is (never a fabricated 0).
+      dividend: number | null;
       yield: number | null;
       frequency: string | null;
     }>
@@ -724,7 +900,7 @@ export class PolygonService {
           recordDate: d.record_date ?? null,
           paymentDate: d.pay_date ?? null,
           declarationDate: d.declaration_date ?? null,
-          dividend: d.cash_amount,
+          dividend: d.cash_amount ?? null,
           yield: null,
           frequency: d.frequency != null ? (FREQ[d.frequency] ?? null) : null,
         });
@@ -831,6 +1007,33 @@ export class PolygonService {
     const res = await fetchJson<{ results?: PolygonNewsArticle[] }>(
       `${this.baseUrl}/v2/reference/news?ticker=${ticker}` +
         `&published_utc.gte=${from}&published_utc.lte=${to}` +
+        `&order=desc&sort=published_utc&limit=${limit}&apiKey=${this.apiKey}`,
+    );
+    return res.results ?? [];
+  }
+
+  /**
+   * MARKET-WIDE newest news (NO ticker filter) — the freshest stories across the
+   * whole market, newest-first. Feeds the "Live" intraday feed's HEAD so its top
+   * is always the absolute-newest article regardless of the per-ticker cursor
+   * batch (which refreshes only ~80 tickers/run and can lag a fresh story by
+   * hours). `limit` is higher than the per-ticker call because one request must
+   * span many tickers. Same shape as getNews so the adapter maps them identically.
+   */
+  /**
+   * Market-wide news, newest first. `limit` goes to 1000 per call — measured
+   * live, limit=1000 returns 1000 articles spanning 859 DISTINCT tickers in a
+   * single request, which is why the news sync fetches in bulk here rather than
+   * once per ticker.
+   */
+  async getMarketNews(
+    from: string,
+    to: string,
+    limit = 1000,
+  ): Promise<PolygonNewsArticle[]> {
+    const res = await fetchJson<{ results?: PolygonNewsArticle[] }>(
+      `${this.baseUrl}/v2/reference/news` +
+        `?published_utc.gte=${from}&published_utc.lte=${to}` +
         `&order=desc&sort=published_utc&limit=${limit}&apiKey=${this.apiKey}`,
     );
     return res.results ?? [];

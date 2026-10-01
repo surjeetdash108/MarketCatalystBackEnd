@@ -1,6 +1,33 @@
 import { Firestore } from "firebase-admin/firestore";
 
 const MAX_BATCH_WRITES = 500;
+/**
+ * Firestore caps a single commit at 10 MiB. Chunking on document COUNT alone
+ * was not enough: a job whose documents are large blows the size limit long
+ * before it reaches 500 of them. intraday-bars (a full session of bars per
+ * ticker, 40 tickers a run) failed with "Transaction too big", and
+ * analyst-actions hit "Request payload size exceeds the limit: 11534336 bytes"
+ * the same way. Budget well under the cap: the estimate below counts JSON
+ * characters, while the wire format adds field names, type tags and index
+ * entries the estimate cannot see.
+ *
+ * The margin has to be wide, not cosmetic. intraday_bars documents are arrays
+ * of ~780 seven-field maps, and Firestore re-encodes every field NAME for every
+ * element, so the stored form runs several times the JSON character count. A
+ * 6 MiB budget still produced a single oversized commit for one run of this job;
+ * 1.5 MiB is sized so that even a 4-5x expansion stays under the 10 MiB cap.
+ */
+const MAX_BATCH_BYTES = 1.5 * 1024 * 1024;
+
+/** Rough serialized size of a document's payload. Only needs to be good enough
+ *  to keep a commit under the cap, so a cheap JSON length beats an exact walk. */
+function approxBytes(data: unknown): number {
+  try {
+    return JSON.stringify(data)?.length ?? 0;
+  } catch {
+    return 0;
+  }
+}
 
 /**
  * How many refs to resolve per getAll(). Firestore documents no hard cap, but
@@ -76,8 +103,11 @@ export async function batchSetWithCreatedAt(
     writes.map((w) => w.ref),
   );
 
-  for (let i = 0; i < writes.length; i += MAX_BATCH_WRITES) {
-    const chunk = writes.slice(i, i + MAX_BATCH_WRITES);
+  // Flush on EITHER limit — document count or estimated payload size.
+  let chunk: PendingWrite[] = [];
+  let chunkBytes = 0;
+  const flush = async () => {
+    if (chunk.length === 0) return;
     const batch = firestore.batch();
     for (const { ref, data, merge = true } of chunk) {
       batch.set(
@@ -87,7 +117,24 @@ export async function batchSetWithCreatedAt(
       );
     }
     await batch.commit();
+    chunk = [];
+    chunkBytes = 0;
+  };
+
+  for (const w of writes) {
+    const size = approxBytes(w.data);
+    // A single oversized document still goes on its own rather than being
+    // dropped — Firestore's own 1 MiB per-document limit is the backstop there.
+    if (
+      chunk.length >= MAX_BATCH_WRITES ||
+      (chunk.length > 0 && chunkBytes + size > MAX_BATCH_BYTES)
+    ) {
+      await flush();
+    }
+    chunk.push(w);
+    chunkBytes += size;
   }
+  await flush();
 }
 
 /**

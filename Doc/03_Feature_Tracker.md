@@ -1,5 +1,68 @@
 # MarketCatalyst — Feature Tracker
 
+> ## ⏱ State sync — 2026-08-16 · FMP NEWS, ON-DEMAND COMPLETENESS, COVERAGE SELF-HEAL, SCALE-TO-ZERO COST (deployed to prod)
+>
+> _This block is newest and authoritative where it differs from the blocks
+> below. It records seven changes deployed to production on 2026-08-16 (worker
+> `market-catalyst-backend` rev 00101, live `market-catalyst-live` rev 00040,
+> UI hosting redeployed, new Cloud Run Job `premarket-job`)._
+>
+> **This doc, specifically:** No feature changes status tier; three feature areas
+> deepened and are more complete. **F-07 Live Market Feed / Commentary** now shows
+> Polygon **+ FMP** news with a per-article `vendor` badge + sentiment pill +
+> thumbnail (A/B). **F-17 Stock Detail** gets the full detail-page dataset
+> (technicals + ranked RS/tech) on the first on-demand fetch, and `/live/company`
+> now carries peRatio/eps/dividendYield/DPS/peers (B/D). **F-02 Earnings Calendar**
+> now lists ALL US reporters (Aug 26: 4→38), not just the ~385 tracked names (E).
+> RS/tech-rating coverage self-healed 70 → 376/385 (C). Separately, the honest
+> hosting bill dropped ~$75–90/mo → <$15/mo via a scale-to-zero worker + a premarket
+> Cloud Run Job (G).
+>
+> **A · FMP news (new).** The news feed MERGES Polygon + FMP articles, deduped by URL
+> (Polygon wins). Every article carries a `vendor` field ("polygon" | "fmp"), badged
+> in the UI alongside `source` and `sentiment`. Backend: env `NEWS_FMP_SOURCE=fmp`,
+> new `src/adapters/fmp-news.adapter.ts` + `NEWS_FMP_ADAPTER` token, a `news.job.ts`
+> merge loop, and the `/live/news` on-demand path stamps `vendor`; FMP client
+> `getStockNews()` → `/stable/news/stock`. UI: `commentary.tsx` + `stock.tsx` render
+> vendor + sentiment pills + thumbnails. Deliberate, licensed FMP-scope expansion;
+> FMP `sentiment` frequently null.
+>
+> **B · Stock-detail wiring fixes.** The `market-catalyst-live` service (serves both
+> `/live/*` and `/market-data/*`) was on a stale image and was redeployed.
+> `/live/company` now builds peRatio/eps/dividendYield/dividendPerShare/peers. UI:
+> dashboard analyst popup shows price-target median/low-high + recent grades;
+> commentary thumbnails; IPO "Shares" + "Deal size" columns; MoverPopup null-guards
+> RVOL/RS (was fake "0×"/"0/99").
+>
+> **C · stock-history self-heal → RS/tech coverage 70 → 376/385.** A ticker whose
+> deep-history fetch once failed was wrongly marked "backfilled" and never
+> re-attempted, so ~250 tickers (incl. every mega-cap) stayed unscored below the
+> 65-bar minimum. `stock-history.job.ts` now runs a `count()` guard that re-triggers
+> the deep window when a "backfilled" ticker has < 65 stored bars.
+>
+> **D · On-demand completeness + shared compute.** `ondemand.getCompany`'s first-time
+> fetch returns the FULL detail-page dataset (technicals + ranked RS/tech) and
+> persists ~2yr bars so nightly crons also rank the new ticker. Crons persist RAW
+> scores (`rsScore`; `techMomentum`/`techTrend`/`techRsi`); PURE compute functions
+> are shared by cron + on-demand.
+>
+> **E · Earnings full-US coverage.** The forward (FMP) earnings calendar resolves
+> every FMP symbol against the ~13,106-row Polygon US ticker reference rather than
+> filtering to the ~385 tracked `companies`. Aug 26 2026: 4 → 38 reporters;
+> `earnings_events` ~7.3k → ~8.8k.
+>
+> **F · Nightly sync integrity.** `companies.job.ts` no longer merge-writes
+> placeholder nulls for `beta`/`volume`/`averageVolume`/`week52Range`; field
+> ownership is single-owner across the nightly chain.
+>
+> **G · Cost architecture → scale-to-zero (~$75–90/mo → <$15/mo).** The always-on
+> worker (`min-instances=1` + `--no-cpu-throttling` ≈ $65/mo) that only hosted the
+> detached premarket bundle is now `--min-instances=0` + CPU throttling. The
+> premarket bundle became a **Cloud Run Job** `premarket-job` (`node dist/job-entry.js`
+> booting `src/app-job.module.ts` — worker modules minus ServeStaticModule), fired by
+> the `run-premarket-job` scheduler (`0 8 * * 1-5` ET); intraday syncs relaxed 2 → 5
+> min. Manual run: `gcloud run jobs execute premarket-job`.
+
 > ## ⏱ State sync — 2026-07-27 · TWO ENVIRONMENTS (stage + prod), env-driven config
 >
 > _This block is newest and authoritative where it differs from the blocks
@@ -304,7 +367,7 @@ v1.4 | July 2026
 
 | ID | Feature | Phase | Tier | Status | % | Owner | Notes |
 |---|---|---|---|---|---|---|---|
-| F-02 | Earnings Calendar | MVP | Free+ | **In Progress** | 60% | Full Stack | Views: Today/Tomorrow/This Week/Next Week/Custom. Kanban BMO/AMC grid. Row columns: ticker, report time, cap bucket, sector, EPS actual/est/surprise%, Rev actual/est/surprise%, guidance status, post-print reaction. Tag pills: Beats EPS, Misses Rev, Raises Guide, Lowers Guide, Inline, Mixed, High Short Interest, Large Move, Options Active. Side-by-side layout: calendar `col-6` + EPS history `col-6` (fixed from previous col-7 overflow). |
+| F-02 | Earnings Calendar | MVP | Free+ | **In Progress** | 60% | Full Stack | Views: Today/Tomorrow/This Week/Next Week/Custom. Kanban BMO/AMC grid. Row columns: ticker, report time, cap bucket, sector, EPS actual/est/surprise%, Rev actual/est/surprise%, guidance status, post-print reaction. Tag pills: Beats EPS, Misses Rev, Raises Guide, Lowers Guide, Inline, Mixed, High Short Interest, Large Move, Options Active. Side-by-side layout: calendar `col-6` + EPS history `col-6` (fixed from previous col-7 overflow). **2026-08-16:** the forward calendar now lists **ALL US reporters** — `earnings.job.ts` resolves FMP calendar symbols against the ~13,106-row Polygon US ticker reference instead of filtering to the ~385 tracked `companies` (Aug 26 2026: 4 → 38 reporters; `earnings_events` ~7.3k → ~8.8k). See the 2026-08-16 block (E). |
 | F-49 | Earnings Inline Detail Panel | MVP | Free+ | **Complete** | 100% | Full Stack | When an earnings row is selected (`selEarning` state), an accordion-style detail panel appears inline below the calendar — no drawer or modal. Shows: company logo, name, sector, timing pill, EPS estimate, EPS actual, guidance status, price reaction/implied move, AI-generated read. File: `screens/earnings.tsx`. |
 | F-03 | Earnings Detail Drawer | MVP | Free+ | **Not Started** | 0% | Full Stack | Full right-side drawer (70% width desktop, full mobile). Tabs: Summary / Transcript / Audio / News / Peers. EPS/Rev headline metrics, guidance summary, 8-quarter history chart, earnings transcript, call audio player, latest news 24h, peer reactions. Embeds F-06 AI summary. |
 | F-04 | Earnings Setup Card (Pre-Announce) | MVP | Pro+ | **Not Started** | 0% | Full Stack | Pre-announcement card per scheduled ticker: implied move (options), last 4 earnings reactions, analyst sentiment trend 30d, peer performance pre-announcement, key questions for quarter. |
@@ -350,7 +413,7 @@ v1.4 | July 2026
 
 | ID | Feature | Phase | Tier | Status | % | Owner | Notes |
 |---|---|---|---|---|---|---|---|
-| F-17 | Stock Detail Page | MVP | Free+ | **In Progress** | 85% | Full Stack | UI complete: sym selector bar (fbar), sd-head (logo/name/price/actions), sd-grid (chart col + ratings col). CandleChart SVG + RsiPane. Key stats grid. AI Technical Analysis. Financials bar chart. TrGauge (5-segment Technical Rating) + indicator table, Peers minirows, Industry Group rank, Earnings history, Insider/Institutional section. **Real data as of 2026-07-22 (LIVE, Firestore-read — no backend call needed):** 52-week high/low + `pctFromHigh52`/`pctFromLow52` (`has52w` guard, falls back to ±2% band when absent); SMA and EMA ladders at 10/20/30/50/100/200 (`smaLadder`/`emaLadder`); VWAP (key-levels row shows Above/Below VWAP from the real value); real peers from Polygon `/v1/related-companies` (`liveCompany.peers`, sector-filter fallback for untracked tickers); dividend history card + drawer from `dividend_history/{ticker}` via `useDividendHistory` (annual totals, TTM, derived yield, 5-yr CAGR, payout, ex-div countdown, explicit "Dividend suspended" state for lapsed payers); balance sheet + cash flow in the financials drawer (`fin.hasBalanceSheet`) from `financials.job.ts`, which previously fetched and discarded them; split-adjusted disclosure note backed by `splits/{ticker}`; **RSI pane is now real** — `RsiPane` receives `company.rsi14Series` (90-point rolling RSI-14) instead of a seeded walk. Files: `app/iq/screens/stock.tsx`, `app/iq/hooks/useCompany.ts`, `useDividendHistory.ts`, `useSplits.ts`, `useFinancials.ts`. Remaining: interactive zoom, options/block-trades sections, AI narrative (F-31, still NOT BUILT — all "AI Technical Analysis" copy on this screen is fabricated static text). |
+| F-17 | Stock Detail Page | MVP | Free+ | **In Progress** | 85% | Full Stack | UI complete: sym selector bar (fbar), sd-head (logo/name/price/actions), sd-grid (chart col + ratings col). CandleChart SVG + RsiPane. Key stats grid. AI Technical Analysis. Financials bar chart. TrGauge (5-segment Technical Rating) + indicator table, Peers minirows, Industry Group rank, Earnings history, Insider/Institutional section. **Real data as of 2026-07-22 (LIVE, Firestore-read — no backend call needed):** 52-week high/low + `pctFromHigh52`/`pctFromLow52` (`has52w` guard, falls back to ±2% band when absent); SMA and EMA ladders at 10/20/30/50/100/200 (`smaLadder`/`emaLadder`); VWAP (key-levels row shows Above/Below VWAP from the real value); real peers from Polygon `/v1/related-companies` (`liveCompany.peers`, sector-filter fallback for untracked tickers); dividend history card + drawer from `dividend_history/{ticker}` via `useDividendHistory` (annual totals, TTM, derived yield, 5-yr CAGR, payout, ex-div countdown, explicit "Dividend suspended" state for lapsed payers); balance sheet + cash flow in the financials drawer (`fin.hasBalanceSheet`) from `financials.job.ts`, which previously fetched and discarded them; split-adjusted disclosure note backed by `splits/{ticker}`; **RSI pane is now real** — `RsiPane` receives `company.rsi14Series` (90-point rolling RSI-14) instead of a seeded walk. Files: `app/iq/screens/stock.tsx`, `app/iq/hooks/useCompany.ts`, `useDividendHistory.ts`, `useSplits.ts`, `useFinancials.ts`. Remaining: interactive zoom, options/block-trades sections, AI narrative (F-31, still NOT BUILT — all "AI Technical Analysis" copy on this screen is fabricated static text). **2026-08-16 (LIVE):** the `market-catalyst-live` service was on a stale image and was redeployed (rev 00040); a first-time on-demand `/live/company` fetch now returns the FULL detail-page dataset — technicals **and** RS + tech rating ranked against the cached universe — and the endpoint carries peRatio/eps/dividendYield/dividendPerShare/peers (was profile-only). Closes the first-load gap (slim doc, unranked new tickers). See the 2026-08-16 block (B/D). |
 | F-65 | Extended-Hours / Market-Status Strip | MVP | Free+ | **In Progress** | 60% | Full Stack | Snapshot cache upgraded v2 → **v3 universal snapshot**, adding `earlyTradingChangePct`, `lateTradingChangePct`, `regularTradingChangePct`, `marketStatus`. New `src/live/market-status.service.ts` + `GET /live/market-status`. Frontend `useExtendedHours` hook consumes it. **BUILT — NOT REACHABLE IN PROD:** both the extended-hours moves and the vendor market-status pill go through the backend HTTP API, which the browser cannot reach (see header note). Works locally against `localhost:4400`. |
 | F-50 | Stock Chart Right-Click Notes (Firebase) | MVP | Pro+ | **Complete** | 100% | Full Stack | Right-click context menu on chart div. Opens centered modal with textarea. Saves to Firestore `stock_comments` collection: `{uid, sym, name, comment, createdAt: Timestamp}`. Notes card below chart shows history with datetime + ✕ delete per note. `loadNotes()` / `saveNote()` / `deleteNote()` async helpers using `collection, addDoc, getDocs, query, where, orderBy, Timestamp, deleteDoc, doc`. `useCallback` + `useEffect` refreshes notes on symbol change. File: `screens/stock.tsx`. |
 | F-18 | Peer View | MVP | Pro+ | **Not Started** | 0% | Full Stack | 5–10 closest peers by sector/industry group/business model. Table: ticker, 1D/1W/1M perf, market cap, next earnings date, analyst rating consensus, valuation snapshot. |
@@ -378,7 +441,7 @@ v1.4 | July 2026
 
 | ID | Feature | Phase | Tier | Status | % | Owner | Notes |
 |---|---|---|---|---|---|---|---|
-| F-07 | Live Market Feed | MVP | Free+ | **In Progress** | 80% | Full Stack | Commentary screen has 5 functional filter tabs: Live (all items), Premarket, After Hours, My names, Macro. FeedItem component shared across tabs. Ticker search bar (SEARCH_SYMS autocomplete dropdown): typing a symbol opens `NewsDrawer` sliding panel with `buildNewsHistory()` categorized items (Catalyst, Technical, Sector, Analyst, Earnings, Calendar, Coverage, Product, Guidance). "Open full stock page →" button in NewsDrawer calls `openStockFull(sym)`. Remaining: WebSocket real-time data, pin/mark-read, push delivery. |
+| F-07 | Live Market Feed | MVP | Free+ | **In Progress** | 80% | Full Stack | Commentary screen has 5 functional filter tabs: Live (all items), Premarket, After Hours, My names, Macro. FeedItem component shared across tabs. Ticker search bar (SEARCH_SYMS autocomplete dropdown): typing a symbol opens `NewsDrawer` sliding panel with `buildNewsHistory()` categorized items (Catalyst, Technical, Sector, Analyst, Earnings, Calendar, Coverage, Product, Guidance). "Open full stock page →" button in NewsDrawer calls `openStockFull(sym)`. Remaining: WebSocket real-time data, pin/mark-read, push delivery. **2026-08-16:** the news feed now MERGES Polygon **+ FMP** articles (deduped by URL, Polygon wins), each rendering a `vendor` badge + sentiment pill + thumbnail in `commentary.tsx` — a deliberate, licensed expansion of FMP's scope. Feed is now dual-vendor, not Polygon-only. See the 2026-08-16 block (A/B). |
 | F-61 | Commentary Quick News Lookup — Bottom Card + Context-Aware | MVP | Free+ | **Complete** | 100% | Full Stack | Permanent card at bottom of col-8 feed column (replaces sidebar position). Title switches: `activeTab === 3 ? "Tracked names" : "Quick news lookup"`. Chip list switches: My names tab shows `[...mySymbols]` chips (user's watchlist), all other tabs show 8 hardcoded ticker chips. General perspective card in col-4 has `flex: 1` so its bottom aligns with this card. Atomic subtasks: (1) remove standalone Quick news lookup from col-4; (2) add card below feed card in col-8; (3) wire activeTab condition for title/chips; (4) add flex:1 to General perspective. File: `screens/commentary.tsx`. |
 | F-33 | Story Stocks Section | Phase 2 | Pro+ | **Not Started** | 0% | Full Stack | Curated section for stocks with active narrative. AI-tagged via news cluster density + price/volume anomaly. Card: what/why/what changed today/next catalyst date/affected peers+ETFs+sectors. |
 

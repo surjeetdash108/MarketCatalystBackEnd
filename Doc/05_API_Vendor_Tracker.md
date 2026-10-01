@@ -1,5 +1,124 @@
 # Market Intelligence Platform — API Vendor Tracker
 
+> ## ⏱ State sync — 2026-08-21 · vendor stack corrected · FMP seams LIVE · sector = TradingView taxonomy · full scheduler table
+>
+> _Newest and authoritative where it differs from the blocks below. Verified
+> against a full code re-survey of `src/sync`, `src/adapters`, `src/vendors`._
+>
+> **Vendor stack (actually wired in `src/vendors/`).**
+> · **Polygon / Massive** (`api.massive.com`) — single source of truth for price,
+>   OHLCV bars, snapshots, corporate actions, and news-of-record; **primary of
+>   every composite adapter**.
+> · **FMP** (supplementary; `/stable/` API) — LIVE seams in prod: earnings
+>   estimates/actuals (`EARNINGS_ESTIMATES_SOURCE=fmp`), analyst ratings + price
+>   targets (`ANALYST_SOURCE=fmp`), merged news feed (`NEWS_FMP_SOURCE=fmp`),
+>   economic calendar (`ECON_CALENDAR_SOURCE=fmp`), sector-PERFORMANCE **fallback
+>   only** (`SECTORS_FALLBACK_SOURCE=fmp`), plus institutional (13F) ownership and
+>   earnings-call transcripts. NEVER price/OHLCV/snapshot/corp-actions/sector-
+>   classification. See `Doc/FMP-INTEGRATION.md`.
+> · **FRED** — macroeconomic series (macro-events, macro-regime).
+> · **SEC-EDGAR** — filings + the **SIC code**: Form 4 (insider), 13F positions,
+>   8-K (earnings press releases + filings wire), S-1/424B (IPO pipeline), and the
+>   `getSicByTicker` fallback used for sector classification.
+> · **LLM gateway** (`llm-gateway.service.ts`) — **Groq primary → OpenRouter
+>   fallback** for on-demand ticker AI analysis + weekly/monthly roll-ups.
+> · **Finnhub — NOT wired.** A `FINNHUB_API_KEY` secret is still provisioned but no
+>   code uses it (no redistribution licence). **Stripe** remains planned/not
+>   integrated (see §1.1 below).
+>
+> **Sector/industry** are derived from the SEC SIC code via the **TradingView /
+> RBICS taxonomy** (`classifyFromSic`, `src/common/sic-tv.util.ts`), NOT from
+> Polygon's `sic_description` or FMP's GICS label. The old GICS/SPDR scheme
+> (`sic-sector.util.ts`: `sectorFromSic`/`resolveSector`/`CRYPTO_TICKERS`) is dead
+> code.
+>
+> **Composite-adapter model.** Each domain resolves a DI token via
+> `buildComposite()` reading `<NAME>_SOURCE` / `<NAME>_FALLBACK_SOURCE`; fallback
+> is automatic (`withFallback`, tags `FALLBACK_USED`) and only `SECTORS` has an
+> active vendor fallback (polygon→fmp). All other domains are polygon-only or an
+> opt-in `["fmp","none"]` seam.
+>
+> **Deploy/runtime topology** — see the top of `deploy/DEPLOY.md` and the
+> 2026-08-21 block in `Doc/02_Architecture_Document_Tracker.md`: worker
+> `market-catalyst-backend` + read-API `market-catalyst-live` are BOTH manual
+> `gcloud run deploy` (us-central1); git push only rebuilds the dormant App
+> Hosting `market-catalyst-be`. UI is a REST client, not a Firestore reader.
+>
+> **Current scheduler / sync-job table** (supersedes §6 below; all register via
+> `SyncRegistry`, `America/New_York`; premarket orchestrates the daily run):
+>
+> | Job | Cron (ET) | Collection(s) | Vendor / adapter |
+> |---|---|---|---|
+> | premarket | `0 8 * * 1-5` | (orchestrator; warms `companies`) | OnDemand + registry |
+> | companies | `0 2 * * *` | companies | Polygon profile + SEC-EDGAR SIC |
+> | companies-financials-backfill | `30 4 * * *` | companies | Polygon |
+> | company-quotes | `*/5 4-20 * * 1-5` | companies | Polygon snapshot |
+> | stock-history | `0 3 * * *` | ohlcv_bars | Polygon (cursor, watermark) |
+> | corporate-actions | `40 6 * * *` | dividend_history, splits | Polygon (cursor) |
+> | technical-indicators | `10 4 * * *` | companies | compute over ohlcv_bars |
+> | rs-rating | `0 4 * * *` | companies | compute |
+> | tech-rating | `15 4 * * *` | companies | compute |
+> | fundamentals-growth | `30 4 * * *` | companies | Polygon financials |
+> | financials | `45 4 * * *` | financials | Polygon + FMP estimates (cursor 150) |
+> | earnings | `0 6,21 * * *` | earnings_events, tickers | Polygon + FMP calendar |
+> | earnings-actuals | `*/5 6-7,16-17 * * 1-5` | earnings_events | FMP + AI |
+> | analyst-actions | `0 6 * * *` | analyst_actions | FMP (full sweep) |
+> | dividends | `20 6 * * *` | dividends | Polygon |
+> | ipos | `15 6 * * *` | ipos | Polygon + FMP + classifyFromSic |
+> | edgar-ipo-pipeline | `0 8 * * 1-5` | ipo_pipeline | SEC-EDGAR |
+> | edgar-8k | `0 8,17,20 * * 1-5` | filings_wire, earnings_announcements | SEC-EDGAR |
+> | sec-form4 | `30 1 * * *` | insider_transactions | SEC-EDGAR (cursor) |
+> | sec-13f | `0 1 * * *` | fund_holdings/*/positions | SEC-EDGAR |
+> | institutional-ownership | `0 3 * * *` | institutional_ownership | FMP (cursor) |
+> | news | `*/10 * * * *` | news, companies.newsCount | Polygon + FMP + TradingView(dormant) — market-wide head |
+> | ticker-period-analysis | Fri `30/45 16`, `30 17` | ticker_weekly/monthly_ai_analysis | LLM gateway |
+> | options-chains | `0 19 * * 1-5` | options_chains | Polygon (OPTIONS_UNIVERSE) |
+> | intraday-bars | `25 16 * * 1-5` | intraday_bars | Polygon (cursor) |
+> | market-quotes | `7 18 * * 1-5` | tickers | Polygon grouped-daily |
+> | market-movers | `0 18 * * 1-5` | market_movers(+history) | Polygon + enrichment |
+> | market-indices | `5 18 * * 1-5` | market_indices(+history) | Polygon |
+> | market-breadth | `30 18 * * 1-5` | market_breadth | compute over ohlcv_bars |
+> | sectors | `0 18 * * 1-5` | sectors(+history) | Polygon primary / FMP fallback |
+> | fear-greed | `15 18 * * 1-5` | market_sentiment(+history) | Polygon + breadth |
+> | macro-events | `10 18 * * 1-5` | macro_events | FRED + FMP econ-calendar |
+> | macro-regime | `0 8 * * 1-5` | macro_regime | FRED |
+> | recaps | `45 18 * * 1-5` | recaps | composes other collections |
+> | ticker-universe | `0 3 * * 0` | tickers | Polygon (weekly) |
+
+
+> ## ⏱ State sync — 2026-08-16 · FMP NEWS LIVE + full-US earnings (deployed to prod)
+>
+> _Newest block; authoritative where it differs from the blocks below. It records
+> the first FMP feed that **reaches users**, and corrects the 2026-08-03
+> vendor-key audit for FMP specifically._
+>
+> **FMP news is now IN SCOPE and LIVE in prod.** Previously FMP was worker-only
+> and "never served to the browser" (2026-07-24 block). That is no longer true
+> for news: the news feed now **merges Polygon + FMP** articles, deduped by URL
+> (**Polygon wins** a collision). Wiring: `FmpService.getStockNews()` →
+> `/stable/news/stock`; `src/adapters/fmp-news.adapter.ts` + `NEWS_FMP_ADAPTER`
+> token; env **`NEWS_FMP_SOURCE=fmp`**; merge loop in `news.job.ts`; `/live/news`
+> on-demand path (`ondemand.service.ts`) also writes `vendor`. Every article now
+> carries `vendor` (`"polygon"`|`"fmp"`), badged in the UI (`commentary.tsx`,
+> `stock.tsx`) alongside publisher `source` + `sentiment`.
+> · ⚠ **Redistribution licensing** for serving FMP news was flagged and
+>   **accepted by the user** — a deliberate exception to Polygon-only-to-users.
+> · ⚠ FMP article `sentiment` is **frequently null**.
+>
+> **`FMP_API_KEY` is now funded in prod.** The 2026-08-03 audit found it
+> present-but-empty in the local `.env`; news working in prod confirms the key is
+> populated in the runtime environment (Secret Manager via ADC). The R41/R42/R47
+> "data-dead" caveat in the 2026-08-03 block is therefore lifted for prod.
+>
+> **Earnings calendar is now full-US.** The FMP **forward** earnings calendar no
+> longer filters to the ~385 tracked `companies`. `earnings.job.ts`
+> (`loadRefNames`) resolves every FMP calendar symbol against the ~13,106-row
+> Polygon US ticker reference (`tickers` collection, written by
+> `ticker-universe.job`), keeping CS/ADRC US listings (Polygon names) and dropping
+> FMP's worldwide rows. Reported/historical rows were already full-US (Polygon
+> `getFinancialsByFilingDate`). `earnings_events` total ~7.3k → ~8.8k.
+> See `FMP-INTEGRATION.md` §3 (Tier 1C + Tier 1A full-US note).
+
 > ## ⏱ State sync — 2026-08-03 · VENDOR-KEY AUDIT (only Polygon is funded in the inspected `.env`)
 >
 > _Read alongside the 2026-07-27 block below: keys are supposed to come from
@@ -345,8 +464,8 @@ Listed here so the intent is recorded, **not** because anything is wired. State 
 | Real-time quotes (WebSocket) | Polygon.io (Paid) | Finnhub (Free, 50 symbols) | ✅ Finnhub free tier | Polygon WebSocket needs paid plan |
 | OHLCV historical data | Polygon.io (Paid) | Twelve Data (Free/Paid) | ✅ Twelve Data 800/day free | Backfill 2yr on first run |
 | Indices (S&P, Nasdaq, Dow, etc.) | Polygon.io | Finnhub | ✅ Finnhub free | Index quotes via same WS connection |
-| News and headlines | Benzinga (Paid) | Finnhub (Free) | ✅ Finnhub basic news | Benzinga needed for "Why It Matters" category tagging |
-| Earnings calendar + actuals | FMP (Paid) | Benzinga | ❌ Free tiers too limited | FMP has best earnings calendar coverage |
+| News and headlines | **Polygon** (primary) + **FMP** (merged, wired 2026-08-16) | Finnhub (Free) | ✅ | LIVE in prod: `news.job.ts` merges Polygon `/v2/reference/news` + FMP `/stable/news/stock` (`getStockNews()`, `fmp-news.adapter.ts`, `NEWS_FMP_SOURCE=fmp`), deduped by URL (**Polygon wins**), each article badged `vendor`. FMP redistribution flagged + accepted; FMP `sentiment` often null. |
+| Earnings calendar + actuals | FMP (Paid) | Benzinga | ❌ Free tiers too limited | FMP has best earnings calendar coverage. **Full-US since 2026-08-16:** forward FMP calendar resolved against the Polygon `tickers` reference (not just the ~385 tracked `companies`); reported rows already full-US via Polygon. |
 | Earnings transcripts | FMP (Paid — included in plan) | Intrinio ($250+/mo) | ❌ No free option | FMP includes transcripts on paid plans; avoid Motley Fool/Refinitiv |
 | Analyst ratings + targets | Benzinga (Paid) | FMP (Paid) | ❌ No meaningful free tier | Benzinga has real-time ratings stream |
 | 13F filings | SEC EDGAR (Free) | — | ✅ Completely free | Rate limit: 10 req/sec; parse XML directly |
@@ -1125,8 +1244,8 @@ Sub-collection: users/{uid}/notifications/{notificationId}
 |---|---|---|---|---|
 | Quote Ingestion | Polygon.io WS | Real-time | Redis quote cache (TTL 5s) | NOT Firestore — too expensive |
 | OHLCV Ingestion | Polygon.io REST | On-demand + backfill | ClickHouse | Historical tick + candle data |
-| News Ingestion | Benzinga WS | Real-time | Firestore `news` | Publish to Redis pub/sub for WS fan-out |
-| Earnings Calendar Sync | FMP REST | Every 15 min | Firestore `earnings_events` | Upsert by ticker+quarter key |
+| News Ingestion | **Polygon + FMP REST (merged)** *(FMP wired 2026-08-16)* | Premarket + on-demand | Firestore `news` | `news.job.ts` merges Polygon `/v2/reference/news` + FMP `/stable/news/stock`, deduped by URL (Polygon wins); each doc carries `vendor`. (Benzinga WS never wired.) |
+| Earnings Calendar Sync | FMP REST | Premarket (MARKET_WIDE phase) | Firestore `earnings_events` | Upsert by ticker+quarter key. **Full-US** since 2026-08-16 (forward calendar filtered via Polygon `tickers` ref). |
 | Analyst Actions Ingest | Benzinga REST | Every 5 min | Firestore `analyst_actions` | Real-time feed |
 | Macro Calendar Sync | Finnhub REST | Daily 6am ET | Firestore `macro_events` | Upsert by date+event slug |
 | Options Chain (on-demand) | Tradier REST | On-demand + 60s cache | Redis `options:{sym}:{expiry}` (NOT Firestore) | Powers `/menu/options` screen; never written to Firestore |

@@ -4,11 +4,13 @@ import {
   Get,
   Header,
   Query,
+  UseGuards,
 } from "@nestjs/common";
 import { FUND_UNIVERSE } from "../common/fund-universe";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { CachedCollectionsService } from "../live/cached-collections.service";
 import { MarketDataService } from "./market-data.service";
+import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
 const ACCESSION_RE = /^[A-Za-z0-9.\-]{1,32}$/;
 
@@ -21,6 +23,10 @@ const ACCESSION_RE = /^[A-Za-z0-9.\-]{1,32}$/;
  * same shape as the UI's old client-side `fetchPositions`.
  */
 @Controller("market-data")
+// Market data is the product. These read surfaces answered anonymous
+// callers, returning full datasets — the policy lived only in a Firestore
+// rules file that nothing enforces, because no client talks to Firestore.
+@UseGuards(FirebaseAuthGuard)
 export class InsiderPositionsController {
   constructor(
     private readonly marketData: MarketDataService,

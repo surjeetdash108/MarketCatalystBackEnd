@@ -27,8 +27,16 @@ runConfig:
   memoryMiB: 512
 
 env:
+  # RUNTIME-only: if NODE_ENV=production leaks into the BUILD, `npm ci` prunes
+  # devDependencies and `nest build` fails with "nest: not found" (@nestjs/cli is
+  # a devDependency). Scoping to runtime lets the build install devDeps as it
+  # does locally, while the running service still gets NODE_ENV=production.
   - variable: NODE_ENV
     value: "production"
+    availability: ["RUNTIME"]
+
+  - variable: PORT
+    value: "8080"
 
   # ─── Service role (src/app.module.ts) ────────────────────────────────────────
   # This backend is the WORKER: runs the @Cron/Scheduler-triggered sync jobs and
@@ -81,8 +89,35 @@ env:
     value: "none"
   - variable: SECTORS_SOURCE
     value: "polygon"
+  # FMP only as a fallback here: its GICS sector labels differ from the ETF-proxy
+  # labels the UI matches on (in-sector rank), so it must NOT be primary until
+  # that mapping is verified. See Doc/FMP-INTEGRATION.md (Tier 2A caveat).
   - variable: SECTORS_FALLBACK_SOURCE
-    value: "none"
+    value: "fmp"
+
+  # ── FMP-backed gap-fillers (supplementary vendor; Doc/FMP-INTEGRATION.md) ──
+  # These fill features Polygon has no feed for, so FMP is the primary source.
+  - variable: EARNINGS_ESTIMATES_SOURCE
+    value: "fmp"
+  - variable: ANALYST_SOURCE
+    value: "fmp"
+  # Economic calendar: FMP adds the forward US release schedule + estimates FRED
+  # lacks. "none" reverts the macro-events job to FRED-only.
+  - variable: ECON_CALENDAR_SOURCE
+    value: "fmp"
+  # Per-run cursor batch for the financials job. 150 covers the ~385-ticker
+  # universe in ~3 runs and keeps nightly full-refresh to ~3 nights, while staying
+  # inside the 900s request timeout. 40 reverts. (analyst-actions is a
+  # full-universe sweep each run — no batch/cursor.)
+  - variable: FINANCIALS_BATCH_SIZE
+    value: "150"
+  # Tickers per run for institutional-ownership.job. Steady state is 25 (one FMP
+  # call per ticker — the current quarter; earlier quarters are already stored
+  # and are not refetched). Raise it temporarily only to backfill history for a
+  # widened universe: at 120 the whole universe is covered in two runs, which is
+  # how the initial 4-quarter backfill was done on 2026-08-21.
+  - variable: INSTITUTIONAL_BATCH_SIZE
+    value: "25"
   - variable: QUOTE_SOURCE
     value: "polygon"
   - variable: QUOTE_FALLBACK_SOURCE
@@ -129,12 +164,11 @@ env:
     value: "false"
 
   # ─── Secrets (Google Secret Manager) ─────────────────────────────────────────
-  # These are the four the worker uses (per deploy/DEPLOY.md --set-secrets). Each
-  # MUST already exist in Secret Manager for market-catalyst-502415 and be
-  # granted to the backend, or the rollout fails. Create + grant every one first:
-  #   firebase apphosting:secrets:set POLYGON_API_KEY  --project market-catalyst-502415
+  # CRITICAL SECURITY WARNING: Do NOT put plain-text API keys as `value: "..."` in this file!
+  # This file is checked into version control. You must use Google Secret Manager.
+  # Run these commands to set them up:
+  #   firebase apphosting:secrets:set POLYGON_API_KEY --project market-catalyst-502415
   #   firebase apphosting:secrets:grantaccess POLYGON_API_KEY --backend <BACKEND_ID> --project market-catalyst-502415
-  # (repeat for FMP_API_KEY, FINNHUB_API_KEY, FRED_API_KEY)
   - variable: POLYGON_API_KEY
     secret: POLYGON_API_KEY
   - variable: FMP_API_KEY
@@ -143,14 +177,24 @@ env:
     secret: FINNHUB_API_KEY
   - variable: FRED_API_KEY
     secret: FRED_API_KEY
-
-  # Optional vendors (code warns and no-ops if unset — see the vendor services'
-  # onModuleInit). Uncomment once the secret exists for this project.
+  - variable: OPENROUTER_API_KEY
+    secret: OPENROUTER_API_KEY
   # - variable: BENZINGA_API_KEY
   #   secret: BENZINGA_API_KEY
-  # - variable: TRADIER_ACCESS_TOKEN
-  #   secret: TRADIER_ACCESS_TOKEN
-  # - variable: UNUSUAL_WHALES_API_KEY
-  #   secret: UNUSUAL_WHALES_API_KEY
-  # - variable: SENTRY_DSN
-  #   secret: SENTRY_DSN
+
+  # Free slugs get retired without notice (deepseek-chat-v3:free began 404ing
+  # with "unavailable for free"). Pick a replacement from the entries priced at
+  # 0 in https://openrouter.ai/api/v1/models, and prefer an instruct ("-it")
+  # model over a reasoning one — reasoning models can return empty content.
+  # "openrouter/free" is an auto-router across free models, so it survives both
+  # retirements and per-model rate limits.
+  - variable: OPENROUTER_MODEL
+    value: "openrouter/free"
+  # Second-chance model, used only when the primary returns no parseable JSON
+  # (bad auto-route, upstream 429, or a 402 on the paid :online web plugin).
+  # It is always called WITHOUT web search, so a no-news ticker still gets a
+  # technicals-only read instead of a blank widget. Must be a CAPABLE instruct
+  # model: a small one returns a half-filled object.
+  - variable: OPENROUTER_FALLBACK_MODEL
+    value: "google/gemma-4-31b-it:free"
+

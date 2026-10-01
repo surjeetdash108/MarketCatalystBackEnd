@@ -1,6 +1,7 @@
-import { Controller, Get, Header } from "@nestjs/common";
+import { Controller, Get, Header, UseGuards } from "@nestjs/common";
 import { CachedCollectionsService } from "../live/cached-collections.service";
 import { MarketDataService } from "./market-data.service";
+import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
 /**
  * GET /market-data/earnings-announcements — SEC-EDGAR 8-K item-2.02 earnings
@@ -9,6 +10,10 @@ import { MarketDataService } from "./market-data.service";
  * "earnings movers" and the earnings detail's Session/Reaction rows.
  */
 @Controller("market-data")
+// Market data is the product. These read surfaces answered anonymous
+// callers, returning full datasets — the policy lived only in a Firestore
+// rules file that nothing enforces, because no client talks to Firestore.
+@UseGuards(FirebaseAuthGuard)
 export class EarningsAnnouncementsController {
   constructor(
     private readonly marketData: MarketDataService,

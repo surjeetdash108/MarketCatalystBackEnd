@@ -58,6 +58,10 @@ export class MarketBreadthJob implements OnModuleInit {
         .toISOString()
         .slice(0, 10);
       const byDate = new Map<string, DayAgg>();
+      // Counted, not estimated: this job reads BARS_PER_TICKER documents for
+      // every ticker in the universe, five times a trading day, and was the
+      // largest single read line we could attribute.
+      let docsRead = 0;
 
       // Per-ticker read (bounded memory) — same pattern as technical-indicators.
       // Reading the whole collection at once would be tens of thousands of docs
@@ -69,6 +73,7 @@ export class MarketBreadthJob implements OnModuleInit {
           .orderBy("barDate", "desc")
           .limit(BARS_PER_TICKER)
           .get();
+        docsRead += snap.size;
         if (snap.size < 2) continue;
         // asc so [i] vs [i-1] is today vs yesterday.
         const bars = snap.docs.map((d) => d.data()).reverse();
@@ -129,6 +134,13 @@ export class MarketBreadthJob implements OnModuleInit {
             advancers: a.adv,
             decliners: a.dec,
             unchanged: a.unch,
+            // How much of the universe actually had a bar for this session.
+            // Daily bars arrive late and incompletely, so a day's breadth is
+            // provisional until most of the universe has reported — consumers
+            // must be able to tell a settled day from one still filling in
+            // rather than publishing 4-vs-14 as though it were final.
+            covered: a.adv + a.dec + a.unch,
+            universe: TICKER_UNIVERSE.length,
             netAdvancers: a.adv - a.dec,
             upVolume: a.upVol,
             downVolume: a.downVol,
@@ -144,9 +156,11 @@ export class MarketBreadthJob implements OnModuleInit {
       });
 
       await chunkedBatchSet(this.firebase.firestore, "market_breadth", docs);
-      await this.meta.record(JOB_NAME, { ok: true, count: docs.length });
-      this.logger.log(`market_breadth: wrote ${docs.length} trading day(s)`);
-      return { days: docs.length };
+      await this.meta.record(JOB_NAME, { ok: true, count: docs.length, docsRead });
+      this.logger.log(
+        `market_breadth: wrote ${docs.length} trading day(s) from ${docsRead} bar reads`,
+      );
+      return { days: docs.length, docsRead };
     } catch (err) {
       await this.meta.record(JOB_NAME, { ok: false, error: err.message });
       throw err;

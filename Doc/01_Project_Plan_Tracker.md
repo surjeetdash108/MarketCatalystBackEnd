@@ -1,4 +1,78 @@
 
+> ## ⏱ State sync — 2026-08-16 · FMP NEWS, ON-DEMAND COMPLETENESS, COVERAGE SELF-HEAL, SCALE-TO-ZERO COST (deployed to prod)
+>
+> _This block is newest and authoritative where it differs from the blocks
+> below. It records seven changes deployed to production on 2026-08-16 (worker
+> `market-catalyst-backend` rev 00101, live `market-catalyst-live` rev 00040,
+> UI hosting redeployed, new Cloud Run Job `premarket-job`)._
+>
+> **This doc, specifically:** No plan epic changes. The big item for this plan is
+> **G — cost architecture**: §9 gap 2 ("no scheduled data refresh") was already
+> superseded on 2026-07-26, and the premarket bundle is now a dedicated **Cloud Run
+> Job** (`premarket-job`) triggered by the new `run-premarket-job` scheduler
+> (`0 8 * * 1-5` ET) while the worker runs scale-to-zero — so automated refresh runs
+> in production and the honest monthly bill drops from ~$75–90 to <$15. The Data
+> Layer epic deepens: the news feed adds FMP (A), the earnings calendar reaches
+> full-US coverage (E), and RS/tech-rating coverage self-heals 70 → 376/385 (C).
+>
+> **A · FMP news (new — was previously out of scope).** The news feed now MERGES
+> Polygon + FMP articles, deduped by URL (Polygon wins). Every article carries a
+> `vendor` field ("polygon" | "fmp"), badged in the UI alongside `source` and
+> `sentiment`. Backend: env `NEWS_FMP_SOURCE=fmp`, new `src/adapters/fmp-news.adapter.ts`
+> + `NEWS_FMP_ADAPTER` token, a `news.job.ts` merge loop, and the `/live/news`
+> on-demand path also stamps `vendor`; FMP client `getStockNews()` hits
+> `/stable/news/stock`. Deliberate, licensed expansion of FMP scope; FMP `sentiment`
+> is frequently null.
+>
+> **B · Stock-detail wiring fixes.** The `market-catalyst-live` service (which serves
+> both `/live/*` and `/market-data/*`) was on a stale image and was redeployed.
+> `/live/company` now builds peRatio/eps/dividendYield/dividendPerShare/peers (was
+> profile-only). UI: dashboard analyst popup shows price-target median/low-high +
+> recent grades; commentary thumbnails; IPO "Shares" + "Deal size" columns; dashboard
+> MoverPopup null-guards RVOL/RS (was rendering fake "0×"/"0/99").
+>
+> **C · stock-history self-heal → RS/tech coverage 70 → 376/385.** A ticker whose
+> deep-history fetch once failed was wrongly marked "backfilled" and never
+> re-attempted, so ~250 tickers (incl. every mega-cap) stayed below rs-rating's
+> 65-bar minimum and unscored. `stock-history.job.ts` now runs a `count()` guard that
+> re-triggers the deep window when a "backfilled" ticker has < 65 stored bars.
+> rsRating coverage went 70 → 376/385 (remaining are genuine recent-IPOs with < 65
+> trading days).
+>
+> **D · On-demand completeness + shared compute.** `ondemand.getCompany`'s first-time
+> fetch now returns the FULL detail-page dataset (technicals + ranked RS/tech) and
+> persists ~2yr bars to `ohlcv_bars` so the nightly crons also rank the new ticker.
+> Crons now persist RAW scores (`rsScore`; `techMomentum`/`techTrend`/`techRsi`), and
+> PURE compute functions are shared by both cron and on-demand (`computeIndicators`,
+> `computeRsScore`+`rsPercentile`, `computeTechComponents`+`techRatingFromComponents`).
+>
+> **E · Earnings full-US coverage.** The forward (FMP) earnings calendar no longer
+> filters to the ~385 tracked `companies`: it resolves every FMP symbol against the
+> ~13,106-row Polygon US ticker reference (`tickers`), keeping US CS/ADRC listings and
+> dropping FMP's worldwide rows. Aug 26 2026 went 4 → 38 reporters; `earnings_events`
+> ~7.3k → ~8.8k. `/market-data/earnings` still returns the whole collection.
+>
+> **F · Nightly sync integrity (single field-owner).** `companies.job.ts` no longer
+> merge-writes placeholder nulls for `beta`, `volume`, `averageVolume`, `week52Range`
+> (the profile write was nulling them between runs). Field ownership is now
+> single-owner across the nightly chain: companies (profile) → technical-indicators
+> (indicators+beta+high52/low52+keyLevels) → rs-rating (rsRating+rsScore) → tech-rating
+> (techRating+components+sectorRank); market-quotes owns price/pctChange/volume.
+>
+> **G · Cost architecture → scale-to-zero (~$75–90/mo → <$15/mo).** The dominant cost
+> was the always-on worker (`min-instances=1` + `--no-cpu-throttling` ≈ $65/mo), which
+> existed only to host the DETACHED premarket bundle. The worker
+> `market-catalyst-backend` is now `--min-instances=0` + CPU throttling (scale-to-zero,
+> billed per request). The premarket bundle became a **Cloud Run Job** `premarket-job`
+> (same image, `node dist/job-entry.js`): `src/job-entry.ts` boots a Nest context via
+> the new `src/app-job.module.ts` (worker modules minus ServeStaticModule) and runs
+> `SyncRegistry.get(SYNC_JOB ?? "premarket")()` then exits (task-timeout 3600s,
+> 2Gi/1cpu, ~18 min/weekday ≈ $0.50/mo). Scheduler `run-premarket-job` (`0 8 * * 1-5`
+> ET) triggers it via OAuth POST as `scheduler-invoker@`; the old `sync-premarket`
+> scheduler was DELETED. Intraday syncs relaxed 2 min → 5 min (`*/5 9-16 * * 1-5`).
+> Manual premarket is now `gcloud run jobs execute premarket-job` (NOT
+> `POST /sync/premarket/run`, killed on the scale-to-zero worker).
+
 > ## ⏱ State sync — 2026-07-27 · TWO ENVIRONMENTS (stage + prod), env-driven config
 >
 > _This block is newest and authoritative where it differs from the blocks
@@ -568,6 +642,13 @@ and 2 are infrastructure and gate several \"finished\" features.
     was never run. With `min-instances=0` the in-process `@Cron` decorators
     never fire, so **no sync job has ever run automatically in production** ---
     every row in Firestore came from a manual run.
+    > ⚠ **Superseded 2026-08-16 (see the 2026-08-16 block).** Automated refresh
+    > now runs in production: the premarket bundle is a dedicated **Cloud Run Job**
+    > `premarket-job`, fired by the `run-premarket-job` scheduler (`0 8 * * 1-5` ET)
+    > as `scheduler-invoker@`, and the intraday jobs run every 5 min
+    > (`*/5 9-16 * * 1-5`). The worker itself is intentionally scale-to-zero. This
+    > gap is closed; re-verify the remaining item ("browser cannot reach the
+    > backend", gap 1) independently.
 
 3.  **`POLYGON_API_KEY` is un-rotated.** It was exposed in chat. Secret Manager
     version 4 is enabled. `deploy/rotate-polygon-key.sh` automates the whole

@@ -5,6 +5,7 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { TICKER_UNIVERSE } from "../common/ticker-universe";
 import { PolygonService } from "../vendors/polygon/polygon.service";
+import { isoDate } from "../common/date.util";
 
 /**
  * Intraday aggregate bars → `intraday_bars/{ticker}_{key}`.
@@ -48,9 +49,6 @@ const RESOLUTIONS: Resolution[] = [
   { key: "30min", multiplier: 30, timespan: "minute", lookbackDays: 45 },
 ];
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 function daysAgo(n: number): string {
   const d = new Date();

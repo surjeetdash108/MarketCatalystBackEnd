@@ -26,17 +26,14 @@ export class MarketDataService {
    * `staleMs` for a job with its own faster cadence (e.g. `news`, whose cron
    * runs every 30 min) so this doesn't wait 20h to refresh it.
    *
-   * SyncRegistry's `isRunning` flag is informational only (see
-   * sync-registry.service.ts) — it does not dedupe concurrent callers — so
-   * this keeps its own in-flight map to make concurrent requests for the same
-   * stale job share one vendor call instead of stampeding it. A failed run is
-   * logged and swallowed: the caller still serves whatever Firestore already
-   * has (possibly empty), same resilience contract as
-   * CachedCollectionsService.get().
+   * Bounded by `maxWaitMs` (default 3000ms) so an on-demand sync job that takes
+   * 30+ seconds never hangs the user-facing HTTP request — it returns whatever
+   * Firestore currently has while the sync finishes in the background.
    */
   async ensureFresh(
     jobName: string,
     staleMs: number = STALE_MS,
+    maxWaitMs: number = 3000,
   ): Promise<void> {
     const status: Record<string, unknown> = await this.meta.status(jobName);
     const lastSuccessAt = (status.lastSuccessAt ??
@@ -62,6 +59,8 @@ export class MarketDataService {
         .finally(() => this.inflight.delete(jobName));
       this.inflight.set(jobName, run);
     }
-    await this.inflight.get(jobName);
+
+    const timer = new Promise((resolve) => setTimeout(resolve, maxWaitMs));
+    await Promise.race([this.inflight.get(jobName), timer]);
   }
 }

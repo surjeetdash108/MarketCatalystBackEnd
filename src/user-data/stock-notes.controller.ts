@@ -11,12 +11,18 @@ import {
   Query,
   UseGuards,
 } from "@nestjs/common";
-import { Timestamp } from "firebase-admin/firestore";
+import {
+  DocumentSnapshot,
+  QueryDocumentSnapshot,
+  Timestamp,
+} from "firebase-admin/firestore";
 import { CurrentUser } from "../common/current-user.decorator";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
 const SYM_RE = /^[A-Z][A-Z0-9.-]{0,9}$/;
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 100;
 
 interface StockNote {
   id: string;
@@ -24,6 +30,23 @@ interface StockNote {
   name: string;
   comment: string;
   createdAt: string;
+}
+
+interface StockNotesPage {
+  items: StockNote[];
+  /** Pass back as `?cursor=` for the next page; null when there are no more. */
+  nextCursor: string | null;
+}
+
+function toStockNote(d: QueryDocumentSnapshot | DocumentSnapshot): StockNote {
+  const data = d.data() ?? {};
+  return {
+    id: d.id,
+    sym: data.sym as string,
+    name: data.name as string,
+    comment: data.comment as string,
+    createdAt: (data.createdAt as Timestamp).toDate().toISOString(),
+  };
 }
 
 /**
@@ -60,16 +83,67 @@ export class StockNotesController {
       .orderBy("createdAt", "asc")
       .get();
 
-    return snap.docs.reverse().map((d) => {
-      const data = d.data();
-      return {
-        id: d.id,
-        sym: data.sym as string,
-        name: data.name as string,
-        comment: data.comment as string,
-        createdAt: (data.createdAt as Timestamp).toDate().toISOString(),
-      };
-    });
+    return snap.docs.reverse().map(toStockNote);
+  }
+
+  /**
+   * Every note the caller owns, across all tickers, newest first — backs the
+   * profile / My Workspace "Chart Notes" view. Cursor-paginated (cursor = the
+   * last note id of the previous page); the client groups by `sym` for the
+   * per-ticker layout.
+   *
+   * Deliberately needs no composite index: the query is a lone `uid` equality
+   * (served by Firestore's automatic single-field index) and the newest-first
+   * sort + paging happen in memory. The trade-off is that every page reads all
+   * of the caller's notes — fine at per-user note volumes; if that ever grows
+   * large, move to a (uid ASC, createdAt DESC) index with `startAfter`.
+   */
+  @Get("stock-notes/all")
+  async listAll(
+    @CurrentUser() uid: string,
+    @Query("limit") limitRaw: string | undefined,
+    @Query("cursor") cursor: string | undefined,
+  ): Promise<StockNotesPage> {
+    const limit =
+      limitRaw === undefined
+        ? DEFAULT_PAGE_SIZE
+        : Number.parseInt(limitRaw, 10);
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_SIZE)
+      throw new BadRequestException(
+        `limit must be an integer between 1 and ${MAX_PAGE_SIZE}`,
+      );
+
+    const snap = await this.firebase.firestore
+      .collection("stock_comments")
+      .where("uid", "==", uid)
+      .get();
+
+    // Newest first; id tie-break keeps the order (and so the cursor) stable
+    // when two notes share a createdAt.
+    const notes = snap.docs
+      .map(toStockNote)
+      .sort((a, b) =>
+        a.createdAt === b.createdAt
+          ? b.id.localeCompare(a.id)
+          : b.createdAt.localeCompare(a.createdAt),
+      );
+
+    let start = 0;
+    if (cursor) {
+      // Only the caller's own notes are in `notes`, so an unknown id or
+      // another user's id both land here — reject rather than silently
+      // restarting from page 1.
+      const idx = notes.findIndex((n) => n.id === cursor);
+      if (idx === -1) throw new BadRequestException("Invalid cursor");
+      start = idx + 1;
+    }
+
+    const items = notes.slice(start, start + limit);
+    const hasMore = start + limit < notes.length;
+    return {
+      items,
+      nextCursor: hasMore ? items[items.length - 1].id : null,
+    };
   }
 
   @Post("stock-notes")
