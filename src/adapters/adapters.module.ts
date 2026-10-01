@@ -158,15 +158,21 @@ function buildComposite(
     },
     {
       provide: MOVER_ENRICHMENT_ADAPTER,
-      inject: [ConfigService, PolygonService, FmpService],
-      useFactory: (config, polygon, fmp: FmpService) =>
+      inject: [ConfigService, PolygonService, FmpService, SecEdgarService],
+      useFactory: (
+        config,
+        polygon,
+        fmp: FmpService,
+        secEdgar: SecEdgarService,
+      ) =>
         buildComposite(
           config,
           "MOVER_ENRICHMENT",
           POLYGON_ONLY_SOURCES,
           { primary: "polygon", fallback: "none" },
           {
-            polygon: () => new PolygonMoverEnrichmentAdapter(polygon, fmp),
+            polygon: () =>
+              new PolygonMoverEnrichmentAdapter(polygon, fmp, secEdgar),
             none: () => null,
           },
           CompositeMoverEnrichmentAdapter,

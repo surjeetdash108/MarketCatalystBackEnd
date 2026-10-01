@@ -181,7 +181,7 @@ function macd(closes: number[]) {
   };
 }
 
-function rvol(volumes: number[], window = RVOL_WINDOW) {
+export function rvol(volumes: number[], window = RVOL_WINDOW) {
   if (volumes.length < window + 1) return null;
   const latest = volumes[volumes.length - 1];
   const prior = volumes.slice(-window - 1, -1);

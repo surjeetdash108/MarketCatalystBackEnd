@@ -1,3 +1,4 @@
+import { rvol } from "./technical-indicators.job";
 import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { AllSourcesFailedError } from "../adapters/adapter-error";
 import {
@@ -30,7 +31,7 @@ export class MarketMoversJob implements OnModuleInit {
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
-  ) {}
+  ) { }
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
@@ -42,6 +43,26 @@ export class MarketMoversJob implements OnModuleInit {
 
   async scheduled() {
     await this.registry.get(JOB_NAME)();
+  }
+  private async loadRvol(ticker: string): Promise<number | null> {
+    const snap = await this.firebase.firestore
+      .collection("ohlcv_bars")
+      .where("ticker", "==", ticker)
+      .orderBy("barDate", "desc")
+      .limit(21)
+      .get();
+
+    const volumes = snap.docs
+      .map((d) => d.data().volume)
+      .filter(
+        (v): v is number =>
+          typeof v === "number" && Number.isFinite(v),
+      )
+      .reverse();
+
+    const value = rvol(volumes);
+
+    return value == null ? null : Math.round(value * 100) / 100;
   }
 
   async run() {
@@ -55,6 +76,7 @@ export class MarketMoversJob implements OnModuleInit {
         );
       }
       const enrichmentByTicker = new Map();
+      const rvolByTicker = new Map<string, number | null>();
       for (const m of topMovers) {
         try {
           const enriched = await this.enrichment.enrichTicker(m.ticker);
@@ -95,6 +117,12 @@ export class MarketMoversJob implements OnModuleInit {
           }
         }
         await sleep(DELAY_MS);
+        try {
+          rvolByTicker.set(m.ticker, await this.loadRvol(m.ticker));
+        } catch (err) {
+          this.logger.warn(`RVOL failed for ${m.ticker}: ${err.message}`);
+          rvolByTicker.set(m.ticker, null);
+        }
       }
       const writes: PendingWrite[] = [];
       const col = this.firebase.firestore.collection("market_movers");
@@ -109,9 +137,10 @@ export class MarketMoversJob implements OnModuleInit {
           ...(enriched?.warnings ?? []),
         ];
         if (enriched?.value == null) enrichmentFailures++;
-        const doc = {
+          const doc = {
           ...m,
           ...enriched?.value,
+          rvol: rvolByTicker.get(m.ticker) ?? null,
           direction,
           source: this.movers.sourceName,
           warnings,
@@ -161,8 +190,8 @@ export class MarketMoversJob implements OnModuleInit {
         count: gainers.length + losers.length,
         ...(enrichmentFailures > 0
           ? {
-              error: `${enrichmentFailures}/${topMovers.length} movers missing name/sector/cap enrichment`,
-            }
+            error: `${enrichmentFailures}/${topMovers.length} movers missing name/sector/cap enrichment`,
+          }
           : {}),
       });
       return {
