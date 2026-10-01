@@ -1308,9 +1308,25 @@ export class OnDemandService implements OnModuleDestroy {
     ticker: string,
   ): Promise<{ data: Buffer; contentType: string } | null> {
     const mem = this.memLogo.get(ticker);
-    if (mem && Date.now() - mem.at < 24 * 60 * 60_000) return mem.data;
+    if (mem && mem.data && Date.now() - mem.at < 24 * 60 * 60_000) return mem.data;
     this.recordUsage(ticker);
-    const img = await this.polygon.getBrandingImage(ticker).catch(() => null);
+    let img = await this.polygon.getBrandingImage(ticker).catch(() => null);
+    if (!img) {
+      try {
+        const parqetResp = await fetch(
+          `https://assets.parqet.com/logos/symbol/${encodeURIComponent(ticker)}?format=png`,
+          { headers: { "User-Agent": "MarketCatalyst/1.0" } },
+        );
+        if (parqetResp.ok) {
+          const contentType =
+            parqetResp.headers.get("content-type") ?? "image/png";
+          const data = Buffer.from(await parqetResp.arrayBuffer());
+          img = { data, contentType };
+        }
+      } catch {
+        // Fall back to null
+      }
+    }
     this.memLogo.set(ticker, { data: img, at: Date.now() });
     return img;
   }
