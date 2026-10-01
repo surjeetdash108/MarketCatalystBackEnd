@@ -20,18 +20,21 @@ import { setWithCreatedAt } from "../common/firestore-batch.util";
 import { SubscriptionsService } from "../plans/subscriptions.service";
 import { DEFAULT_PLAN_ID } from "../plans/plans.registry";
 
-// /**
-//  * How many tickers a FREE-tier user may add to one watchlist.
-//  *
-//  * NEW ADDITIONS ONLY. A free user who already holds more than this keeps every
-//  * ticker they saved — nothing is removed, hidden or truncated, and no existing
-//  * document is rewritten. The limit only refuses to grow a list past the cap, so
-//  * turning it on cannot cost anyone data they can currently see.
-//  *
-//  * Re-adding a ticker the list already holds is always allowed: arrayUnion makes
-//  * it a no-op, and refusing it would be a confusing error for no benefit.
-//  */
-// const FREE_WATCHLIST_LIMIT = 5;
+/**
+ * How many tickers a FREE-tier user may add to one watchlist, or null for no
+ * limit. THE ONE SWITCH for the cap: it controls both enforcement
+ * (assertCanAdd) and what the app is told to display (tickerLimitFor), so the
+ * two can never disagree.
+ *
+ * Currently null — the limit was turned off in prod (Sep 30, "tickers limit is
+ * removed"). Set it back to a number (it was 5) to re-enable; the app's usage
+ * count and "watchlist full" notice then return automatically.
+ *
+ * NEW ADDITIONS ONLY when enabled. A free user who already holds more than
+ * this keeps every ticker they saved — nothing is removed, hidden or truncated.
+ * Re-adding a ticker the list already holds is always allowed.
+ */
+const FREE_WATCHLIST_LIMIT: number | null = null;
 
 const TICKER_RE = /^[A-Z][A-Z0-9.-]{0,9}$/;
 const MAX_LISTS = 25;
@@ -93,32 +96,51 @@ export class WatchlistController {
     }
   }
 
-  // /**
-  //  * Refuse an add that would push a free-tier list past the cap.
-  //  *
-  //  * Silent on every paid plan, and silent when the ticker is already in the
-  //  * list. Any failure to resolve the plan ALLOWS the add: a billing lookup
-  //  * hiccup must not block someone from using their own watchlist.
-  //  */
-  // private async assertCanAdd(
-  //   uid: string,
-  //   existing: string[],
-  //   ticker: string,
-  // ): Promise<void> {
-  //   if (existing.includes(ticker)) return;
-  //   if (existing.length < FREE_WATCHLIST_LIMIT) return;
-  //   let planId: string;
-  //   try {
-  //     planId = (await this.subscriptions.forUser(uid)).planId;
-  //   } catch {
-  //     return; // fail open — never lock a user out of their own list
-  //   }
-  //   if (planId !== DEFAULT_PLAN_ID) return;
-  //   throw new ForbiddenException(
-  //     `The free plan holds up to ${FREE_WATCHLIST_LIMIT} tickers per watchlist. ` +
-  //       `Remove one, or upgrade to add more.`,
-  //   );
-  // }
+  /**
+   * Refuse an add that would push a free-tier list past the cap.
+   *
+   * A no-op while FREE_WATCHLIST_LIMIT is null. Otherwise silent on every paid
+   * plan, and silent when the ticker is already in the list. Any failure to
+   * resolve the plan ALLOWS the add: a billing lookup hiccup must not block
+   * someone from using their own watchlist.
+   */
+  private async assertCanAdd(
+    uid: string,
+    existing: string[],
+    ticker: string,
+  ): Promise<void> {
+    const limit = FREE_WATCHLIST_LIMIT;
+    if (limit === null) return;
+    if (existing.includes(ticker)) return;
+    if (existing.length < limit) return;
+    let planId: string;
+    try {
+      planId = (await this.subscriptions.forUser(uid)).planId;
+    } catch {
+      return; // fail open — never lock a user out of their own list
+    }
+    if (planId !== DEFAULT_PLAN_ID) return;
+    throw new ForbiddenException(
+      `The free plan holds up to ${limit} tickers per watchlist. ` +
+        `Remove one, or upgrade to add more.`,
+    );
+  }
+
+  /**
+   * Tickers allowed per watchlist for this user: the free-tier cap, or null
+   * for no limit. Sent with the lists so the client can show usage ("3 / 5")
+   * and explain a full list up front, from the same switch and plan check that
+   * enforce it. Fails open (null) like assertCanAdd.
+   */
+  private async tickerLimitFor(uid: string): Promise<number | null> {
+    if (FREE_WATCHLIST_LIMIT === null) return null;
+    try {
+      const { planId } = await this.subscriptions.forUser(uid);
+      return planId === DEFAULT_PLAN_ID ? FREE_WATCHLIST_LIMIT : null;
+    } catch {
+      return null;
+    }
+  }
 
   private col(uid: string) {
     return this.firebase.firestore.collection(`users/${uid}/watchlists`);
@@ -182,8 +204,12 @@ export class WatchlistController {
   @Get("watchlists")
   async listWatchlists(
     @CurrentUser() uid: string,
-  ): Promise<{ watchlists: WatchlistSummary[] }> {
-    return { watchlists: await this.listAll(uid) };
+  ): Promise<{ watchlists: WatchlistSummary[]; tickerLimit: number | null }> {
+    const [watchlists, tickerLimit] = await Promise.all([
+      this.listAll(uid),
+      this.tickerLimitFor(uid),
+    ]);
+    return { watchlists, tickerLimit };
   }
 
   @Post("watchlists")
@@ -225,12 +251,18 @@ export class WatchlistController {
     @CurrentUser() uid: string,
     @Param("id") id: string,
   ): Promise<{ watchlists: WatchlistSummary[] }> {
-    const all = await this.col(uid).get();
-    if (all.size <= 1)
-      throw new BadRequestException("Cannot delete your only watchlist");
-    await this.col(uid).doc(id).delete();
+    const ref = this.col(uid).doc(id);
+    if (!(await ref.get()).exists)
+      throw new NotFoundException("watchlist not found");
+    // Deleting the LAST list is allowed: listAll() below finds none left and
+    // recreates an empty "My Watchlist", so the user always ends with one
+    // list and deleting everything resets to the original empty state.
+    await ref.delete();
     // Drop the list's cached AI summary too — nothing else ever revisits that
     // doc id, so without this it would linger in ai_watchlist_analysis forever.
+    // ORDER MATTERS: this must run BEFORE listAll(). When the deleted list was
+    // the default one, listAll() recreates it under the same "default" id, and
+    // the fresh empty list must not inherit the old list's cached summary.
     await this.aiAnalysis.deleteWatchlistSummary(uid, id);
     return { watchlists: await this.listAll(uid) };
   }
@@ -246,7 +278,11 @@ export class WatchlistController {
     const snap = await ref.get();
     if (!snap.exists) throw new NotFoundException("watchlist not found");
     await this.assertTickerExists(ticker);
-    // await this.assertCanAdd(uid, this.normTickers(snap.data()?.tickers), ticker);
+    await this.assertCanAdd(
+      uid,
+      this.normTickers(snap.data()?.tickers),
+      ticker,
+    );
     await ref.set(
       {
         tickers: FieldValue.arrayUnion(ticker),
@@ -304,7 +340,11 @@ export class WatchlistController {
     const snap = await ref.get();
     await this.assertTickerExists(ticker);
     if (snap.exists) {
-      // await this.assertCanAdd(uid, this.normTickers(snap.data()?.tickers), ticker);
+      await this.assertCanAdd(
+        uid,
+        this.normTickers(snap.data()?.tickers),
+        ticker,
+      );
       // Never write `name` here — the user may have renamed the default list,
       // and this legacy endpoint must not clobber that rename.
       await ref.set(

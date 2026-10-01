@@ -77,6 +77,10 @@ export class NotificationsService {
         .collection(`users/${u.id}/portfolios/default/holdings`)
         .get();
       for (const h of holdings.docs) {
+        // A closed position (every share sold) is no longer tracked. A doc
+        // without a numeric `shares` predates that field and still counts.
+        const held: unknown = h.data()?.shares;
+        if (typeof held === "number" && held <= 0) continue;
         // Holding doc id IS the ticker; the field is a fallback.
         const t = (h.data()?.ticker as string | undefined) ?? h.id;
         if (t) tickers.add(t.toUpperCase());
