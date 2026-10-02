@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { classifyFromSic } from "../common/sic-tv.util";
+import { classifyFromSic, resolveSicCode } from "../common/sic-tv.util";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { reconcileMarketCap } from "../common/validate.util";
 import {
@@ -28,9 +28,8 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
     // cleaner than Polygon's free-text SIC). Best-effort and self-disabling when
     // no key is set — the sector then falls back to the SIC mapping.
     private readonly fmp: FmpService,
-    // Authoritative free SIC lookup, used ONLY as a fallback when Polygon omits
-    // sic_code (foreign private issuers / ADRs). Mirrors the on-demand path so a
-    // bulk sync classifies them the same way instead of re-nulling the sector.
+    // Authoritative free SIC lookup, used as canonical source with Polygon as fallback.
+    // Mirrors the on-demand and mover-enrichment paths so bulk sync classifies them identically.
     private readonly secEdgar: SecEdgarService,
   ) {}
 
@@ -39,19 +38,9 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
   ): Promise<AdapterResult<CanonicalCompany> | null> {
     const details = await this.polygon.getTickerDetails(ticker);
     if (!details) return null;
-    // One classification, used for sector AND industry so they cannot disagree.
-    // Polygon omits sic_code for many foreign filers / ADRs; when it does, fall
-    // back to the SEC's authoritative SIC (same standard classifyFromSic uses)
-    // so the bulk companies.job persists the sector instead of overwriting it
-    // with null. Fail-safe: getSicByTicker returns null on any error.
-    const polySic = details.sic_code;
-    const hasPolySic =
-      polySic != null &&
-      String(polySic).trim() !== "" &&
-      String(polySic).trim() !== "0";
-    const resolvedSic = hasPolySic
-      ? polySic
-      : await this.secEdgar.getSicByTicker(ticker);
+    // Canonical classification: SEC EDGAR regulatory filing SIC primary, Polygon fallback.
+    const secSic = await this.secEdgar.getSicByTicker(ticker);
+    const resolvedSic = resolveSicCode(secSic, details.sic_code);
     const sicClass = classifyFromSic(resolvedSic);
     // Kicked off in parallel with the price/eps/peers/dividend fetches below so
     // it adds max(), not sum(), to latency. Null on any failure → SIC fallback.

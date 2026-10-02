@@ -9,7 +9,7 @@ import {
 } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
-import { classifyFromSic } from "../common/sic-tv.util";
+import { classifyFromSic, resolveSicCode } from "../common/sic-tv.util";
 import { SnapshotCacheService } from "./snapshot-cache.service";
 import {
   forwardAnnualDividend,
@@ -977,19 +977,9 @@ export class OnDemandService implements OnModuleDestroy {
       // GAUZ, a 20-F filer), which left sector/industry blank on the detail page.
       // When it's missing, fall back to the SEC's authoritative SIC — free, and
       // the SAME standard classifyFromSic consumes — so the classification still
-      // lands in the TradingView taxonomy (no second vocabulary). Fail-safe:
-      // getSicByTicker returns null on any error, preserving prior behaviour;
-      // only attempted when we actually have a details profile to attach it to.
-      const polygonSic = details?.sic_code as string | number | null | undefined;
-      const hasPolygonSic =
-        polygonSic != null &&
-        String(polygonSic).trim() !== "" &&
-        String(polygonSic).trim() !== "0";
-      const resolvedSic: string | number | null = hasPolygonSic
-        ? (polygonSic as string | number)
-        : details
-          ? await this.secEdgar.getSicByTicker(ticker)
-          : null;
+      // Canonical classification: SEC EDGAR regulatory filing SIC primary, Polygon fallback.
+      const secSic = details ? await this.secEdgar.getSicByTicker(ticker) : null;
+      const resolvedSic = resolveSicCode(secSic, details?.sic_code as string | number | undefined);
       const sicClass = classifyFromSic(resolvedSic);
       // Nightly fundamentals-growth writes epsGrowthYoY / revenueGrowthYoY /
       // grossMargin to the company doc; this on-demand rebuild doesn't recompute

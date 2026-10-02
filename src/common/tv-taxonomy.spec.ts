@@ -6,7 +6,7 @@ import {
   isTvIndustry,
   sectorForIndustry,
 } from "./tv-taxonomy";
-import { classifyFromSic } from "./sic-tv.util";
+import { classifyFromSic, resolveSicCode } from "./sic-tv.util";
 
 /**
  * These lock the classification down so it cannot silently drift back to the
@@ -187,3 +187,26 @@ describe("SIC 799x amusement codes", () => {
     expect(classifyFromSic("4841").sector).toBe("Communications"); // Comcast/Charter
   });
 });
+
+describe("resolveSicCode", () => {
+  it("prefers official SEC EDGAR SIC over Polygon reference SIC", () => {
+    // SDEV: SEC EDGAR has 6199 (Finance), Polygon has stale 2834 (Pharma)
+    expect(resolveSicCode("6199", "2834")).toBe("6199");
+    expect(resolveSicCode(6199, 2834)).toBe("6199");
+  });
+
+  it("falls back to Polygon reference SIC when SEC EDGAR has no SIC or returns 0", () => {
+    expect(resolveSicCode(null, "3674")).toBe("3674");
+    expect(resolveSicCode("", "3674")).toBe("3674");
+    expect(resolveSicCode("0", "3674")).toBe("3674");
+    expect(resolveSicCode(undefined, 3674)).toBe("3674");
+  });
+
+  it("returns null when both sources are missing or zero", () => {
+    expect(resolveSicCode(null, null)).toBeNull();
+    expect(resolveSicCode("0", "0")).toBeNull();
+    expect(resolveSicCode("", "")).toBeNull();
+    expect(resolveSicCode(undefined, undefined)).toBeNull();
+  });
+});
+

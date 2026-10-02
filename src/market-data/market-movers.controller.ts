@@ -30,8 +30,49 @@ export class MarketMoversController {
   )
   async movers() {
     await this.marketData.ensureFresh("market-movers");
-    const { market_movers } = await this.cached.get(["market_movers"]);
-    return market_movers;
+    const { market_movers, companies } = await this.cached.get([
+      "market_movers",
+      "companies",
+    ]);
+
+    const companyByTicker = new Map<
+      string,
+      { sector?: string; industry?: string; name?: string; marketCap?: number | null }
+    >();
+
+    if (Array.isArray(companies)) {
+      for (const c of companies as Array<{
+        ticker?: string;
+        sector?: string;
+        industry?: string;
+        name?: string;
+        marketCap?: number | null;
+      }>) {
+        const sym = c.ticker?.trim().toUpperCase();
+        if (sym && c.sector && c.sector !== "—") {
+          companyByTicker.set(sym, c);
+        }
+      }
+    }
+
+    if (!Array.isArray(market_movers)) return market_movers;
+
+    return (market_movers as Array<Record<string, unknown>>).map((m) => {
+      const sym = String(m.ticker ?? "").trim().toUpperCase();
+      const comp = companyByTicker.get(sym);
+      if (comp) {
+        return {
+          ...m,
+          sector: comp.sector,
+          ...(comp.industry ? { industry: comp.industry } : {}),
+          ...(comp.name && !m.name ? { name: comp.name } : {}),
+          ...(typeof comp.marketCap === "number" && comp.marketCap > 0 && !m.marketCap
+            ? { marketCap: comp.marketCap }
+            : {}),
+        };
+      }
+      return m;
+    });
   }
 
   /**

@@ -37,6 +37,7 @@ export type CapBucket = "Mega" | "Large" | "Mid" | "Small" | "Micro";
 export interface MoverEnrichment {
   name: string | null;
   sector: string | null;
+  industry?: string | null;
   cap: CapBucket | null;
   /** Raw USD market cap from the same ticker-details fetch the `cap` tier is
    *  bucketed from — surfaced so the Movers table can show the real number,

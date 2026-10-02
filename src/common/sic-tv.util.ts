@@ -348,3 +348,28 @@ export function classifyFromSic(
   const sector = sectorForIndustry(industry);
   return sector ? { sector, industry } : NONE;
 }
+
+/**
+ * Canonical SIC code resolution across all backend adapters and services.
+ *
+ * 1. SEC EDGAR is the official regulatory filing authority for US-listed companies.
+ *    Corporate pivots, reverse mergers, and SPAC acquisitions are reflected promptly
+ *    in SEC filings (10-K, 8-K, 10-Q), whereas third-party reference databases frequently
+ *    harbor stale, historical pre-pivot SIC codes.
+ * 2. If SEC EDGAR has no valid non-zero SIC code (or for foreign issuers / errors),
+ *    fall back to Polygon's reference sic_code.
+ * 3. Returns null if neither source provides a usable non-zero SIC code.
+ */
+export function resolveSicCode(
+  secSic: string | number | null | undefined,
+  polygonSic: string | number | null | undefined,
+): string | number | null {
+  const cleanSec = secSic != null ? String(secSic).trim() : "";
+  if (cleanSec !== "" && cleanSec !== "0") return cleanSec;
+
+  const cleanPoly = polygonSic != null ? String(polygonSic).trim() : "";
+  if (cleanPoly !== "" && cleanPoly !== "0") return cleanPoly;
+
+  return null;
+}
+

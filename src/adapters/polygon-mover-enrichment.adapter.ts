@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { FmpService } from "../vendors/fmp/fmp.service";
-import { classifyFromSic } from "../common/sic-tv.util";
+import { classifyFromSic, resolveSicCode } from "../common/sic-tv.util";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import {
   AdapterResult,
@@ -30,33 +30,16 @@ export class PolygonMoverEnrichmentAdapter implements MoverEnrichmentAdapter {
         : Promise.resolve(null),
     ]);
     if (!details) return null;
-    const polySic = details.sic_code;
-    const hasPolySic =
-      polySic != null &&
-      String(polySic).trim() !== "" &&
-      String(polySic).trim() !== "0";
 
     const secSic = await this.secEdgar.getSicByTicker(ticker);
-
-    const resolvedSic =
-      secSic != null
-        ? secSic
-        : hasPolySic
-          ? polySic
-          : null;
-
+    const resolvedSic = resolveSicCode(secSic, details.sic_code);
     const sicClass = classifyFromSic(resolvedSic);
-    // Sector: prefer FMP's GICS classification, else derive from the SIC CODE
-    // (not the free-text sic_description, which never matched the app's 11 SPDR
-    // sector names and broke the movers sector filter). Null when unmapped.
+
     const data: MoverEnrichment = {
       name: details.name ?? null,
-      // TradingView (RBICS) taxonomy, derived from the SIC code — the single
-      // classification path, so a ticker first seen here matches the one the
-      // profile job writes later.
       sector: sicClass.sector,
+      industry: sicClass.industry,
       cap: capBucket(details.market_cap ?? null),
-      // Same value the tier is bucketed from — kept raw for the table column.
       marketCap: details.market_cap ?? null,
     };
     return {
