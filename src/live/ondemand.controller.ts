@@ -23,6 +23,7 @@ import { MarketGlanceService } from "./market-glance.service";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { TickerSearchService } from "./ticker-search.service";
 import { SearchedTickersService } from "./searched-tickers.service";
+import { EtfMarketService } from "./etf-market.service";
 import { OPTIONS_UNIVERSE } from "../common/options-universe";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
@@ -42,6 +43,7 @@ import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
  *   GET /live/search?q=apple                    → in-memory universe search (no Firestore)
  *   POST /live/searched-ticker {ticker}          → record a resolved ticker search/selection
  *   GET /live/most-searched-tickers?limit=10     → top searched tickers, by selection count
+ *   GET /live/etf-market                        → dynamic ETF discovery & classification (10 sections)
  *
  * Responses carry Cache-Control + ETag so each BROWSER also caches: a repeat
  * view inside the max-age costs zero requests, and a 304 costs no body.
@@ -68,15 +70,16 @@ export class OnDemandController {
   private readonly logger = new Logger(OnDemandController.name);
 
   constructor(
-        private readonly tickerAi: TickerAiAnalysisService,
+    private readonly tickerAi: TickerAiAnalysisService,
     private readonly wmn: WhatMattersNowService,
-private readonly ondemand: OnDemandService,
+    private readonly ondemand: OnDemandService,
     private readonly aiAnalysis: AiAnalysisService,
     private readonly search: TickerSearchService,
     private readonly searchedTickers: SearchedTickersService,
     private readonly marketScan: MarketScanService,
     private readonly marketGlance: MarketGlanceService,
     private readonly secEdgar: SecEdgarService,
+    private readonly etfMarketService: EtfMarketService,
   ) {}
 
   /**
@@ -562,5 +565,42 @@ private readonly ondemand: OnDemandService,
   @Header("Cache-Control", "no-store")
   stats() {
     return { ...this.ondemand.stats, search: this.search.stats };
+  }
+
+  /**
+   * Dynamic ETF discovery and classification across 10 MarketCatalyst categories:
+   * Largest, Equity, Bitcoin, Ethereum, Gold, Fixed Income, Real Estate, Total Market,
+   * Commodities, Leveraged.
+   */
+  @Get("etf-market")
+  @Header("Cache-Control", "public, max-age=120, s-maxage=120, stale-while-revalidate=300")
+  async etfMarket(
+    @Query("limit") limit: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const parsedLimit = limit ? parseInt(limit, 10) : undefined;
+    const data = await this.etfMarketService.getCategorizedEtfs(
+      Number.isFinite(parsedLimit) && (parsedLimit as number) > 0
+        ? parsedLimit
+        : undefined,
+    );
+    sendWithEtag(req, res, data);
+  }
+
+  @Get("etfs/market-funds")
+  @Header("Cache-Control", "public, max-age=120, s-maxage=120, stale-while-revalidate=300")
+  async etfMarketFundsAlias(
+    @Query("limit") limit: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const parsedLimit = limit ? parseInt(limit, 10) : undefined;
+    const data = await this.etfMarketService.getCategorizedEtfs(
+      Number.isFinite(parsedLimit) && (parsedLimit as number) > 0
+        ? parsedLimit
+        : undefined,
+    );
+    sendWithEtag(req, res, data);
   }
 }
