@@ -35,6 +35,7 @@ import {
   CompositeFinancialsAdapter,
   CompositeMarketBarsAdapter,
   CompositeTickerUniverseAdapter,
+  FmpFinancialsAdapter,
   PolygonFinancialsAdapter,
   PolygonMarketBarsAdapter,
   PolygonTickerUniverseAdapter,
@@ -312,15 +313,16 @@ function buildComposite(
     },
     {
       provide: FINANCIALS_ADAPTER,
-      inject: [ConfigService, PolygonService],
-      useFactory: (config, polygon) =>
+      inject: [ConfigService, PolygonService, FmpService],
+      useFactory: (config, polygon, fmp) =>
         buildComposite(
           config,
           "FINANCIALS",
-          POLYGON_ONLY_SOURCES,
+          POLYGON_OR_FMP_SOURCES,
           { primary: "polygon", fallback: "none" },
           {
             polygon: () => new PolygonFinancialsAdapter(polygon),
+            fmp: () => new FmpFinancialsAdapter(fmp),
             none: () => null,
           },
           CompositeFinancialsAdapter,

@@ -29,6 +29,7 @@ import {
   ttmReportedEpsFromRows,
   type SplitEvent,
   type EpsHistoryRow,
+  type PolygonFinancialRow,
 } from "../sync/financials.job";
 import {
   computeIndicators,
@@ -1509,14 +1510,41 @@ export class OnDemandService implements OnModuleDestroy {
         (prev?.quarters ?? []).map((q) => [q.endDate, q.epsEstimateReported ?? null]),
       );
 
+      // Fetch quarterly financial statements (via Polygon with automatic FMP fallback).
+      let rows: PolygonFinancialRow[] = [];
+      try {
+        rows = await this.polygon.getFinancialStatements(
+          ticker,
+          "quarterly",
+          FIN_QUARTERS,
+        );
+      } catch (err: any) {
+        this.logger.warn(
+          `Quarterly financials fetch failed for ${ticker}: ${err.message}`,
+        );
+      }
+
+      // If fresh provider data cannot be obtained, preserve previously stored
+      // Firestore records rather than throwing HTTP 500.
+      if (rows.length === 0) {
+        if (snap.exists) {
+          const stored = snap.data() as Record<string, unknown>;
+          this.logger.warn(
+            `Returning previously stored Firestore financials for ${ticker} after provider empty/failure`,
+          );
+          this.memFinancials.set(ticker, { data: stored, at: Date.now() });
+          return stored;
+        }
+        return null;
+      }
+
       // FMP estimates fetched HERE (not only in the sync job) so any ticker a
       // user opens gets forward `annualEstimates` + full-history quarterly
       // epsEstimate immediately — coverage no longer depends on the sync cursor
       // having already reached this ticker. earnings_events + the prior doc are
       // fallbacks so a transient FMP miss never downgrades what we already had.
-      const [rows, estimates, fmpAnnual, fmpQ, splits, rawEpsHist] =
+      const [estimates, fmpAnnual, fmpQ, splits, rawEpsHist] =
         await Promise.all([
-          this.polygon.getFinancialStatements(ticker, "quarterly", FIN_QUARTERS),
           this.earningsEstimatesFor(ticker),
           this.estimatesAdapter
             ? this.estimatesAdapter

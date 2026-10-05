@@ -1,5 +1,6 @@
 import { Logger } from "@nestjs/common";
 import { PolygonService } from "../vendors/polygon/polygon.service";
+import { FmpService } from "../vendors/fmp/fmp.service";
 import type {
   AdapterResult,
   CanonicalBar,
@@ -168,6 +169,28 @@ export class PolygonFinancialsAdapter implements FinancialsAdapter {
             "Served by /vX/reference/financials — Polygon's EXPERIMENTAL namespace. The replacement (/stocks/financials/v1/*) needs Advanced or the Financials add-on, so this path cannot be upgraded on Starter and may break without deprecation notice.",
         },
       ],
+    };
+  }
+}
+
+export class FmpFinancialsAdapter implements FinancialsAdapter {
+  readonly sourceName = "fmp";
+  constructor(private readonly fmp: FmpService) {}
+
+  get requestDelayMs() {
+    return 50;
+  }
+
+  async fetchIncomeStatements(
+    ticker: string,
+    timeframe: string,
+    limit: number,
+  ): Promise<AdapterResult<CanonicalIncomeStatement[]>> {
+    const data = await this.fmp.getIncomeStatements(ticker, timeframe, limit);
+    return {
+      data,
+      source: this.sourceName,
+      warnings: [],
     };
   }
 }
