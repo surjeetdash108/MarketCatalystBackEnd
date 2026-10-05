@@ -31,6 +31,7 @@ import { SearchedTickersService } from "./searched-tickers.service";
 import { MoverCatalystService } from "./mover-catalyst.service";
 import { ETFClassifier } from "./etf-classifier";
 import { EtfMarketService } from "./etf-market.service";
+import { EarningsTranscriptSummaryService } from "./earnings-transcript-summary.service";
 
 /**
  * Live (delayed) price streaming for the Search screen and the header tape.
@@ -80,6 +81,7 @@ import { EtfMarketService } from "./etf-market.service";
     MoverCatalystService,
     ETFClassifier,
     EtfMarketService,
+    EarningsTranscriptSummaryService,
   ],
   exports: [
     WhatMattersNowService,
@@ -100,6 +102,7 @@ import { EtfMarketService } from "./etf-market.service";
     MoverCatalystService,
     ETFClassifier,
     EtfMarketService,
+    EarningsTranscriptSummaryService,
   ],
 })
 export class LiveModule {}

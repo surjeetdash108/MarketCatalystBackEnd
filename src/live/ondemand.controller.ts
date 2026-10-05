@@ -24,6 +24,7 @@ import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { TickerSearchService } from "./ticker-search.service";
 import { SearchedTickersService } from "./searched-tickers.service";
 import { EtfMarketService } from "./etf-market.service";
+import { EarningsTranscriptSummaryService } from "./earnings-transcript-summary.service";
 import { OPTIONS_UNIVERSE } from "../common/options-universe";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
@@ -80,6 +81,7 @@ export class OnDemandController {
     private readonly marketGlance: MarketGlanceService,
     private readonly secEdgar: SecEdgarService,
     private readonly etfMarketService: EtfMarketService,
+    private readonly transcriptSummary: EarningsTranscriptSummaryService,
   ) {}
 
   /**
@@ -492,6 +494,25 @@ export class OnDemandController {
     const doc = await this.ondemand.getTranscript(sym);
     if (!doc) throw new NotFoundException(`No data for ${sym}`);
     sendWithEtag(req, res, doc);
+  }
+
+  @Get("earnings-transcript-summary")
+  @UseGuards(FirebaseAuthGuard)
+  @Header(
+    "Cache-Control",
+    "public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400",
+  )
+  async earningsTranscriptSummary(
+    @Query("ticker") ticker: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? "").toUpperCase().trim();
+    if (!TICKER_RE.test(sym))
+      throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+    const summary = await this.transcriptSummary.getSummary(sym);
+    if (!summary) throw new NotFoundException(`No transcript summary available for ${sym}`);
+    sendWithEtag(req, res, summary);
   }
 
   @Get("options-chain")
