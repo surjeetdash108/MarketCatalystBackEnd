@@ -5,6 +5,8 @@ import { Observable, ReplaySubject } from "rxjs";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { MarketStatusService } from "./market-status.service";
 import { FredService } from "../vendors/fred/fred.service";
+import { FmpService, type FmpFullQuote } from "../vendors/fmp/fmp.service";
+import { DailyClosesCache, isRolled, pctMove } from "./session-closes";
 import {
   snapshotSymbols,
   tapeUniverse,
@@ -40,6 +42,24 @@ import {
  * refresh makes the tape 960s old instead of 900s — 6.7% worse on data that is
  * already a quarter-hour stale. Polling harder would buy nothing a user could
  * perceive while multiplying upstream traffic.
+ *
+ * NON-STOCK TILES ARE THE INSTRUMENT ITSELF, FROM FMP (T262, T151)
+ * Indices (S&P 500, Nasdaq Composite, Dow, Russell 2000, VIX), gold, crude,
+ * the dollar index, bitcoin, ether and the 10Y yield come from FMP quotes of
+ * the instrument (`fmpSymbol` in tape-universe.ts) — one batch call per refresh
+ * beside the Polygon snapshot — so every tile shows the same level, move and
+ * previous close as the landing page and consumer sites. There is NO ETF ×
+ * multiplier fallback: a refresh without an answer keeps the tile's last good
+ * FMP value (marked `stale`), and after an answer with nothing in it FMP is
+ * left alone for FMP_BACKOFF_MS. Those tiles keep refreshing while the market
+ * is closed (crypto trades 24/7; futures and the VIX nearly round the clock).
+ * Only a deployment WITHOUT an FMP key uses the old ETF / FRED / treasury
+ * sources.
+ *
+ * ROLLED SNAPSHOTS ARE REBUILT (T175)
+ * Off-hours, once Polygon's snapshot has rolled over (price == previous close,
+ * 0.00%), a stock (or keyless proxy) tile is rebuilt from the last two
+ * completed daily sessions — see session-closes.ts, shared with the landing tape.
  */
 
 /** Refresh while the tape can actually move (pre, regular or post session). */
@@ -63,6 +83,11 @@ const FRED_TTL_MS = 6 * 60 * 60_000;
 
 const DELAY_NOTE =
   "Underlying feed is ~15 minutes delayed on the current plan.";
+
+/** After FMP returns no usable quote at all, leave it alone this long. */
+const FMP_BACKOFF_MS = 5 * 60_000;
+
+const FMP_NOTE = "Live quote of the instrument itself, not an ETF proxy";
 
 /**
  * `catch (err)` binds `unknown`, and a thrown non-Error (a string, a rejected
@@ -106,6 +131,13 @@ export interface TapeItem {
   dayHigh: number | null;
   dayLow: number | null;
   prevClose: number | null;
+  /**
+   * ET date (YYYY-MM-DD) of the completed session the figures describe, set
+   * only when a rolled snapshot was rebuilt from daily bars. Absent = current.
+   */
+  asOfDate?: string;
+  /** True when this refresh got no answer for the tile and it shows its last good value. */
+  stale?: boolean;
 }
 
 export interface TapeFrame {
@@ -124,6 +156,13 @@ export class TapeService implements OnModuleDestroy {
 
   private readonly universe: TapeSymbol[];
   private readonly snapshotTickers: string[];
+  /** FMP symbols (`^GSPC`, `GCUSD`, …) asked for in one batch per refresh. Empty without a key. */
+  private readonly fmpSymbols: string[];
+  /** Last good FMP quote per symbol — what a tile shows when a refresh gets no answer. */
+  private readonly lastGoodFmp = new Map<string, FmpFullQuote>();
+  /** Last two completed sessions per ticker, for rolled snapshots. */
+  private readonly closes: DailyClosesCache;
+  private fmpBackoffUntil = 0;
 
   /** Replay 1 so a mid-window subscriber renders immediately. */
   private readonly frames = new ReplaySubject<TapeFrame>(1);
@@ -157,16 +196,31 @@ export class TapeService implements OnModuleDestroy {
     lastRefreshMs: 0,
     lastRefreshAt: "",
     lastError: "",
+    fmpCalls: 0,
+    /** FMP tiles that got a fresh quote on the last FMP call (of fmpSymbols). */
+    fmpTilesFresh: 0,
+    fmpTiles: 0,
+    lastFmpError: "",
   };
 
   constructor(
     private readonly polygon: PolygonService,
     private readonly marketStatus: MarketStatusService,
     private readonly fred: FredService,
+    private readonly fmp: FmpService,
     config: ConfigService,
   ) {
     this.universe = tapeUniverse(config.get<string>("TAPE_STOCKS"));
-    this.snapshotTickers = snapshotSymbols(this.universe);
+    // With an FMP key, FMP-backed tiles need nothing from Polygon: the snapshot
+    // carries only the stocks (and any tile without an fmpSymbol).
+    this.fmpSymbols = this.fmp.enabled
+      ? this.universe.map((s) => s.fmpSymbol).filter((x): x is string => !!x)
+      : [];
+    this.snapshotTickers = snapshotSymbols(
+      this.universe.filter((s) => !this.fromFmp(s)),
+    );
+    this.stats.fmpTiles = this.fmpSymbols.length;
+    this.closes = new DailyClosesCache(this.polygon, this.logger);
   }
 
   onModuleDestroy() {
@@ -259,41 +313,50 @@ export class TapeService implements OnModuleDestroy {
       // entirely. The timer keeps ticking (15-min cadence) only to re-check
       // the phase, so the tape resumes by itself at the next session open.
       if (phase === "closed" && this.lastFrame && !this.lastFrame.stale) {
+        // Stocks cannot move while closed; FMP tiles can (crypto trades 24/7,
+        // futures and the VIX nearly round the clock), so only they refresh.
+        if (this.fmpSymbols.length > 0) await this.refreshFmpTilesOnly();
         if (this.clients > 0) this.ensureTimer(IDLE_REFRESH_MS);
         return;
       }
 
-      // One request for every equity on the tape — indices proxies and
-      // mega-caps together. `ticker.any_of` is what makes this O(1) in the
-      // number of symbols instead of one call each.
-      const rows = await this.polygon.getUniversalSnapshot(
-        this.snapshotTickers,
-      );
-      this.stats.upstreamCalls++;
+      // One request for every equity on the tape — the mega-caps (plus the
+      // index proxies when no FMP key is configured). `ticker.any_of` is what
+      // makes this O(1) in the number of symbols instead of one call each.
+      const rows = this.snapshotTickers.length
+        ? await this.polygon.getUniversalSnapshot(this.snapshotTickers)
+        : [];
+      if (this.snapshotTickers.length) this.stats.upstreamCalls++;
       const bySymbol = new Map(rows.map((r) => [r.ticker, r]));
 
-      const rate = await this.treasuryTile();
-      // Refresh every FRED-backed series (WTI / Gold / Bitcoin) — real prices,
-      // not ETF proxies. TTL-gated, so this is at most one call per series / 6h.
+      // The old daily sources, only for tiles FMP does not serve (no key).
+      const legacy = this.universe.filter((s) => !this.fromFmp(s));
+      const rate = legacy.some((s) => s.kind === "rate")
+        ? await this.treasuryTile()
+        : null;
+      // FRED-backed series (WTI / Bitcoin / Ethereum without an FMP key).
+      // TTL-gated, so this is at most one call per series / 6h.
       await Promise.all(
         [
           ...new Set(
-            this.universe
-              .map((s) => s.fredSeries)
-              .filter((x): x is string => !!x),
+            legacy.map((s) => s.fredSeries).filter((x): x is string => !!x),
           ),
         ].map((series) => this.refreshFred(series)),
       );
 
-      const items: TapeItem[] = this.universe.map((s) => {
-        if (s.kind === "rate") return rate(s);
+      // Every non-stock tile, one FMP batch call.
+      const fresh = await this.fetchFmp();
+
+      const items: TapeItem[] = await Promise.all(this.universe.map(async (s) => {
+        if (this.fromFmp(s)) return this.fmpTile(s, fresh);
+        if (s.kind === "rate" && rate) return rate(s);
         if (s.fredSeries) return this.fredTile(s); // real price from FRED, not an ETF proxy
         const r = s.proxyTicker ? bySymbol.get(s.proxyTicker) : undefined;
         // Index-level fields scale by the proxy ETF's fixed share-to-index
         // ratio (see TapeSymbol.multiplier's docblock); % change is
         // scale-invariant and is left as the ETF's own move.
         const mult = s.multiplier ?? 1;
-        return {
+        const item: TapeItem = {
           id: s.id,
           kind: s.kind,
           label: s.label,
@@ -311,7 +374,8 @@ export class TapeService implements OnModuleDestroy {
           dayLow: r?.low != null ? r.low * mult : null,
           prevClose: r?.previousClose != null ? r.previousClose * mult : null,
         };
-      });
+        return isRolled(item, phase) ? this.fromLastSessions(item, s) : item;
+      }));
 
       this.stats.lastRefreshMs = Date.now() - started;
       this.stats.lastRefreshAt = new Date().toISOString();
@@ -496,6 +560,119 @@ export class TapeService implements OnModuleDestroy {
       dayHigh: null,
       dayLow: null,
       prevClose: prev,
+    };
+  }
+
+  /** True when the tile is served by FMP (it has an fmpSymbol and a key is configured). */
+  private fromFmp(s: TapeSymbol): boolean {
+    return !!s.fmpSymbol && this.fmp.enabled;
+  }
+
+  /**
+   * One FMP batch call for every FMP tile. Updates the last-good map and
+   * returns the symbols that got a fresh, usable quote. Never throws: no key,
+   * the backoff window, an error or an empty answer all yield an empty set, and
+   * the tiles then show their last good value.
+   */
+  private async fetchFmp(): Promise<Set<string>> {
+    const fresh = new Set<string>();
+    if (this.fmpSymbols.length === 0) return fresh;
+    if (Date.now() < this.fmpBackoffUntil) return fresh;
+    try {
+      const quotes = await this.fmp.getQuotes(this.fmpSymbols);
+      this.stats.fmpCalls++;
+      for (const q of quotes) {
+        if (q.price == null || q.changePercentage == null) continue;
+        this.lastGoodFmp.set(q.symbol, q);
+        fresh.add(q.symbol);
+      }
+      this.stats.lastFmpError = fresh.size > 0 ? "" : "no usable quote in FMP's answer";
+    } catch (err) {
+      this.stats.lastFmpError = errMessage(err);
+      this.logger.warn(`FMP tape quotes failed: ${errMessage(err)}`);
+    }
+    this.stats.fmpTilesFresh = fresh.size;
+    if (fresh.size === 0) this.fmpBackoffUntil = Date.now() + FMP_BACKOFF_MS;
+    return fresh;
+  }
+
+  /**
+   * A tile from its FMP quote (fresh, else last good, else empty — never an ETF
+   * approximation). `change` is the PERCENT move on price tiles and the
+   * absolute percentage-point move on the rate tile, as the UI expects.
+   */
+  private fmpTile(s: TapeSymbol, fresh: Set<string>): TapeItem {
+    const symbol = s.fmpSymbol ?? "";
+    const q = this.lastGoodFmp.get(symbol);
+    const rate = s.kind === "rate";
+    const base = {
+      id: s.id,
+      kind: s.kind,
+      label: s.label,
+      name: null,
+      // Still the ETF (or null): other callers read it as an equity ticker.
+      proxyTicker: s.proxyTicker,
+      isProxy: false,
+      note: rate ? s.note : FMP_NOTE,
+      ...(rate ? { unit: "percent" as const } : {}),
+    };
+    if (!q) {
+      return { ...base, value: null, change: null, pctChange: null, open: null, dayHigh: null, dayLow: null, prevClose: null };
+    }
+    const change = rate
+      ? q.price != null && q.previousClose != null
+        ? Math.round((q.price - q.previousClose) * 1000) / 1000
+        : q.change
+      : q.changePercentage;
+    return {
+      ...base,
+      value: q.price,
+      change,
+      pctChange: q.changePercentage,
+      open: q.open,
+      dayHigh: q.dayHigh,
+      dayLow: q.dayLow,
+      prevClose: q.previousClose,
+      ...(fresh.has(symbol) ? {} : { stale: true }),
+    };
+  }
+
+  /**
+   * While the market is closed: refresh only the FMP tiles of the last frame
+   * (stocks cannot move). Publishes only when FMP answered.
+   */
+  private async refreshFmpTilesOnly(): Promise<void> {
+    const fresh = await this.fetchFmp();
+    if (fresh.size === 0 || !this.lastFrame) return;
+    const byId = new Map(this.universe.map((s) => [s.id, s]));
+    const items = this.lastFrame.items.map((it) => {
+      const s = byId.get(it.id);
+      return s && this.fromFmp(s) ? this.fmpTile(s, fresh) : it;
+    });
+    this.publish({ ...this.lastFrame, items, asOf: new Date().toISOString() });
+  }
+
+  /**
+   * A rolled snapshot tile rebuilt from the last two completed sessions: the
+   * last close, its real move and its own day range. Keeps the tile as it was
+   * when no daily bars are available.
+   */
+  private async fromLastSessions(item: TapeItem, s: TapeSymbol): Promise<TapeItem> {
+    if (!s.proxyTicker) return item;
+    const pair = await this.closes.get(s.proxyTicker);
+    if (!pair) return item;
+    const m = s.multiplier ?? 1;
+    const pct = pctMove(pair.last.c, pair.prev.c);
+    return {
+      ...item,
+      value: pair.last.c * m,
+      change: pct,
+      pctChange: pct,
+      open: pair.last.o * m,
+      dayHigh: pair.last.h * m,
+      dayLow: pair.last.l * m,
+      prevClose: pair.prev.c * m,
+      asOfDate: pair.last.date,
     };
   }
 

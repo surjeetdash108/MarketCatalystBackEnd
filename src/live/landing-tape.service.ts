@@ -6,6 +6,7 @@ import { etDate } from "../common/market-calendar.util";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { TapeService, type TapeFrame, type TapeItem } from "./tape.service";
 import { TAPE_INDICES } from "./tape-universe";
+import { DailyClosesCache, isRolled } from "./session-closes";
 
 /**
  * The marketing site's hero figures — S&P 500, gold, VIX and Brent crude —
@@ -111,7 +112,6 @@ const FMP_BACKOFF_MS = 30 * 60_000;
 /** An FMP quote older than this is a completed session, not a live print. */
 const LIVE_WINDOW_MS = 30 * 60_000;
 /** Daily-bar lookback — wide enough to span a long weekend plus a holiday. */
-const LOOKBACK_DAYS = 14;
 
 const DELAY_MINUTES = 15;
 
@@ -169,8 +169,8 @@ export class LandingTapeService {
   private cache: { at: number; body: LandingTape } | null = null;
   private inFlight: Promise<LandingTape> | null = null;
 
-  /** Last two completed daily closes per ticker, valid for one ET date. */
-  private closes = new Map<string, { day: string; pair: Pair }>();
+  /** Last two completed daily closes per ticker (shared logic, session-closes.ts). */
+  private readonly closes: DailyClosesCache;
   private fred = new Map<string, { at: number; pair: Pair }>();
   /** Last FMP answer per symbol; `quote` null means the read failed at `at`. */
   private fmpQuotes = new Map<string, { at: number; quote: FmpQuote | null }>();
@@ -191,7 +191,9 @@ export class LandingTapeService {
     private readonly fredApi: FredService,
     private readonly fmp: FmpService,
     private readonly firebase: FirebaseAdminService,
-  ) {}
+  ) {
+    this.closes = new DailyClosesCache(this.polygon, this.logger);
+  }
 
   /** Never throws — a failed build serves the last good body, or an empty one. */
   async get(): Promise<LandingTape> {
@@ -383,16 +385,41 @@ export class LandingTapeService {
    * outside regular hours with the price sitting exactly on the previous close.
    */
   private isRolled(it: TapeItem | undefined, phase: LandingPhase): boolean {
-    if (!it || it.value == null || it.pctChange == null || it.prevClose == null) return true;
-    if (phase === "open") return false;
-    return Math.abs(it.value - it.prevClose) < 1e-9 || it.pctChange === 0;
+    return !it || isRolled(it, phase);
   }
+
 
   private async equityCell(
     id: "SPX" | "GOLD",
     it: TapeItem | undefined,
     phase: LandingPhase,
   ): Promise<LandingCell | null> {
+    // The app tape's tile is FMP's own quote of the instrument (it has an FMP
+    // key). Use it when fresh; when stale or empty give up, so resolve() serves
+    // the remembered real value — never an ETF × multiplier rebuild.
+    if (it && !it.isProxy) {
+      if (it.stale || it.value == null || it.pctChange == null) return null;
+      return {
+        id,
+        value: it.value,
+        pctChange: it.pctChange,
+        prevClose: it.prevClose,
+        basis: "live",
+        date: null,
+      };
+    }
+    // Keyless deployment only from here on: the tape tile is an ETF proxy.
+    // The app tape already rebuilt this tile from the last completed session.
+    if (it?.asOfDate && it.value != null && it.pctChange != null) {
+      return {
+        id,
+        value: it.value,
+        pctChange: it.pctChange,
+        prevClose: it.prevClose,
+        basis: "close",
+        date: it.asOfDate,
+      };
+    }
     if (!this.isRolled(it, phase)) {
       return {
         id,
@@ -429,28 +456,12 @@ export class LandingTapeService {
   }
 
   /**
-   * The last two COMPLETED sessions for a ticker. Today's bar is excluded:
-   * before the open it holds only pre-market prints, which is exactly the
-   * half-formed session this fallback exists to avoid. Cached for the ET day.
+   * The last two COMPLETED sessions for a ticker (session-closes.ts). Today's
+   * bar counts only once its session is final, so the evening after the close
+   * shows today's close rather than yesterday's.
    */
   private async lastTwoCloses(ticker: string): Promise<Pair | null> {
-    const today = etDate();
-    const hit = this.closes.get(ticker);
-    if (hit && hit.day === today) return hit.pair;
-
-    try {
-      const from = etDate(new Date(Date.now() - LOOKBACK_DAYS * 86_400_000));
-      const bars = (await this.polygon.getAggsRange(ticker, from, today))
-        .map((b) => ({ date: etDate(new Date(b.t)), c: b.c }))
-        .filter((b) => b.date < today && Number.isFinite(b.c));
-      if (bars.length < 2) return hit?.pair ?? null;
-      const pair = { last: bars[bars.length - 1], prev: bars[bars.length - 2] };
-      this.closes.set(ticker, { day: today, pair });
-      return pair;
-    } catch (err) {
-      this.logger.warn(`daily closes for ${ticker} failed: ${(err as Error)?.message ?? err}`);
-      return hit?.pair ?? null;
-    }
+    return this.closes.get(ticker);
   }
 
   /* ── FRED (official daily closes) ───────────────────────────────────── */
