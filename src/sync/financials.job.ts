@@ -5,16 +5,22 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { activeUniverse } from "../common/ticker-universe";
 import { PolygonService } from "../vendors/polygon/polygon.service";
-import { EARNINGS_ESTIMATES_ADAPTER } from "../adapters/types";
+import {
+  EARNINGS_ESTIMATES_ADAPTER,
+  FINANCIALS_ADAPTER,
+  type CanonicalFinancialStatement,
+  type FinancialsAdapter,
+} from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 
 /**
  * 10-quarter quarterly financials → `financials/{ticker}` (delivery-plan R29).
  *
  * Replaces the fabricated income-statement / EPS-history that Stock Detail and
- * the Earnings Hub rendered via earnHistory()/earnIncome(). Source is Polygon's
- * /vX/reference/financials (quarterly) — verified 10 real quarters available on
- * the current plan. Where a synced earnings_events estimate exists for the same
+ * the Earnings Hub rendered via earnHistory()/earnIncome(). Source is the
+ * FINANCIALS_ADAPTER: Polygon's /vX/reference/financials by default, falling
+ * back to FMP when Polygon fails or returns no periods (foreign private issuers
+ * such as GAUZ). Where a synced earnings_events estimate exists for the same
  * quarter, it is joined so the EPS chart can show estimate-vs-actual instead of
  * an invented surprise.
  *
@@ -79,10 +85,8 @@ export function dropPredecessorHistory<T extends { endDate?: string | null }>(
 const DELAY_MS = 120;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** One row as returned by PolygonService.getFinancialStatements(). */
-export type PolygonFinancialRow = Awaited<
-  ReturnType<PolygonService["getFinancialStatements"]>
->[number];
+/** One period as returned by FinancialsAdapter.fetchFinancialStatements(). */
+export type FinancialStatementRow = CanonicalFinancialStatement;
 
 /** One fiscal-year row — actuals only (Polygon annual financials). */
 export interface AnnualFinancials {
@@ -337,9 +341,9 @@ export function annualEpsGrowthInputsPresent(
   return epsHistory.some((h) => h.epsActual != null);
 }
 
-/** Maps one quarterly Polygon financials row onto the doc shape `financials/{ticker}.quarters` stores. */
+/** Maps one quarterly financials row onto the doc shape `financials/{ticker}.quarters` stores. */
 export function mapQuarterRow(
-  r: PolygonFinancialRow,
+  r: FinancialStatementRow,
   epsEstimate: number | null,
   epsActualReported: number | null = null,
   epsEstimateReported: number | null = null,
@@ -406,8 +410,8 @@ export function mapQuarterRow(
   };
 }
 
-/** Maps one annual Polygon financials row onto the doc shape `financials/{ticker}.annual` stores. */
-export function mapAnnualRow(r: PolygonFinancialRow): AnnualFinancials {
+/** Maps one annual financials row onto the doc shape `financials/{ticker}.annual` stores. */
+export function mapAnnualRow(r: FinancialStatementRow): AnnualFinancials {
   return {
     fiscalYear: r.fiscalYear,
     endDate: r.endDate,
@@ -426,6 +430,7 @@ export class FinancialsJob implements OnModuleInit {
 
   constructor(
     private readonly polygon: PolygonService,
+    @Inject(FINANCIALS_ADAPTER) private readonly financials: FinancialsAdapter,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
@@ -530,7 +535,7 @@ export class FinancialsJob implements OnModuleInit {
       let failed = 0;
       for (const ticker of batch) {
         try {
-          const rows = await this.polygon.getFinancialStatements(
+          const { data: rows } = await this.financials.fetchFinancialStatements(
             ticker,
             "quarterly",
             QUARTERS,
@@ -611,16 +616,17 @@ export class FinancialsJob implements OnModuleInit {
               `${ticker}: dropped ${quarters.length - quartersContinuous.length} pre-gap quarter(s) — ticker reused by a predecessor entity`,
             );
           }
-          // ── Annual (fiscal-year) history — actuals only, Polygon ──────────
+          // ── Annual (fiscal-year) history — actuals only ───────────────────
           // Same endpoint, timeframe=annual. Drives the Yearly tab's EPS +
           // Sales columns. Forward analyst estimates are NOT sourced here
           // (no estimates vendor is wired) — this is reported actuals only.
           let annual: AnnualFinancials[] = [];
           try {
-            const yr = await this.polygon.getFinancialStatements(
+            const { data: yr } = await this.financials.fetchFinancialStatements(
               ticker,
               "annual",
               ANNUAL_YEARS,
+              { incomeOnly: true },
             );
             annual = yr.map(mapAnnualRow);
           } catch (err) {

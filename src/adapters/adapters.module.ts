@@ -21,6 +21,7 @@ import { PolygonMoversAdapter } from "./polygon-movers.adapter";
 import { PolygonNewsAdapter } from "./polygon-news.adapter";
 import { TradingViewNewsAdapter } from "./tradingview-news.adapter";
 import { FmpNewsAdapter } from "./fmp-news.adapter";
+import { FmpFinancialsAdapter } from "./fmp-financials.adapter";
 import {
   CompositeDividendsAdapter,
   PolygonDividendsAdapter,
@@ -312,15 +313,19 @@ function buildComposite(
     },
     {
       provide: FINANCIALS_ADAPTER,
-      inject: [ConfigService, PolygonService],
-      useFactory: (config, polygon) =>
+      inject: [ConfigService, PolygonService, FmpService],
+      useFactory: (config, polygon, fmp: FmpService) =>
         buildComposite(
           config,
           "FINANCIALS",
-          POLYGON_ONLY_SOURCES,
-          { primary: "polygon", fallback: "none" },
+          // FMP is the default fallback: Polygon returns zero periods for
+          // foreign private issuers and its /vX/reference/financials endpoint is
+          // being sunset. Set FINANCIALS_SOURCE=fmp to make FMP primary.
+          POLYGON_OR_FMP_SOURCES,
+          { primary: "polygon", fallback: "fmp" },
           {
             polygon: () => new PolygonFinancialsAdapter(polygon),
+            fmp: () => new FmpFinancialsAdapter(fmp),
             none: () => null,
           },
           CompositeFinancialsAdapter,

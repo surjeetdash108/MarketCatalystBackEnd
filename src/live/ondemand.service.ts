@@ -6,6 +6,10 @@ import {
   type NewsAdapter,
   type CanonicalNewsArticle,
   EARNINGS_ESTIMATES_ADAPTER,
+  FINANCIALS_ADAPTER,
+  type FinancialsAdapter,
+  type AdapterResult,
+  type CanonicalFinancialStatement,
 } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
@@ -29,6 +33,7 @@ import {
   ttmReportedEpsFromRows,
   type SplitEvent,
   type EpsHistoryRow,
+  type QuarterFinancials,
 } from "../sync/financials.job";
 import {
   computeIndicators,
@@ -172,6 +177,14 @@ const DIV_ANNUAL_YEARS = 10;
 const DIV_CAGR_YEARS = 5;
 const FIN_QUARTERS = 10;
 const FIN_ANNUAL_YEARS = 8;
+/**
+ * A financials doc with no quarters is re-checked hourly instead of daily: an
+ * empty answer is usually transient (a vendor brownout, or the fallback vendor
+ * not yet configured), and caching it for a day blanked the Sales chart.
+ * Still long enough that a ticker no vendor covers (ETFs, funds) does not
+ * cost a vendor round-trip on every view.
+ */
+const EMPTY_FINANCIALS_TTL_MS = 3600_000;
 
 // news.job.ts's own cron runs every 30 min; this on-demand path only fills the
 // gap for a ticker the bulk sweep hasn't reached recently, so a shorter TTL is
@@ -340,6 +353,9 @@ export class OnDemandService implements OnModuleDestroy {
     // EARNINGS_ESTIMATES_SOURCE=none — on-demand then behaves Polygon-only.
     @Inject(EARNINGS_ESTIMATES_ADAPTER)
     private readonly estimatesAdapter: EarningsEstimatesAdapter | null,
+    // Statements source: Polygon, falling back to FMP when Polygon fails or
+    // has no periods for the ticker (foreign private issuers).
+    @Inject(FINANCIALS_ADAPTER) private readonly financials: FinancialsAdapter,
     // FMP is the only vendor providing earnings-call transcripts; behaves as a
     // no-op (returns null) when FMP_API_KEY is unset, same as the other FMP paths.
     private readonly fmp: FmpService,
@@ -1458,9 +1474,9 @@ export class OnDemandService implements OnModuleDestroy {
 
   /**
    * Per-ticker quarterly+annual financials, cache-aside on `financials/{ticker}`
-   * (same shape financials.job.ts's bulk cursor sweep writes). EPS estimates are
-   * matched against synced `earnings_events` only — Polygon carries no forward
-   * EPS estimates, so the estimate line degrades where none exists.
+   * (same shape financials.job.ts's bulk cursor sweep writes). Statements come
+   * from FINANCIALS_ADAPTER (Polygon → FMP fallback); EPS estimates from the
+   * FMP estimates adapter, with synced `earnings_events` as the fallback.
    */
   async getFinancials(ticker: string): Promise<Record<string, unknown> | null> {
     const mem = this.memFinancials.get(ticker);
@@ -1472,7 +1488,11 @@ export class OnDemandService implements OnModuleDestroy {
       const data = snap.data() as Record<string, unknown>;
       const created =
         typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
-      if (Number.isFinite(created) && Date.now() - created < DAILY_TTL_MS) {
+      const ttl =
+        Array.isArray(data.quarters) && data.quarters.length > 0
+          ? DAILY_TTL_MS
+          : EMPTY_FINANCIALS_TTL_MS;
+      if (Number.isFinite(created) && Date.now() - created < ttl) {
         this.memFinancials.set(ticker, { data, at: Date.now() });
         return data;
       }
@@ -1491,6 +1511,7 @@ export class OnDemandService implements OnModuleDestroy {
       const prev = snap.exists
         ? (snap.data() as {
             annualEstimates?: unknown[];
+            statementsSource?: string | null;
             quarters?: Array<{
               endDate?: string;
               epsEstimate?: number | null;
@@ -1514,9 +1535,17 @@ export class OnDemandService implements OnModuleDestroy {
       // epsEstimate immediately — coverage no longer depends on the sync cursor
       // having already reached this ticker. earnings_events + the prior doc are
       // fallbacks so a transient FMP miss never downgrades what we already had.
-      const [rows, estimates, fmpAnnual, fmpQ, splits, rawEpsHist] =
+      let statementsError: Error | null = null;
+      const [statements, estimates, fmpAnnual, fmpQ, splits, rawEpsHist] =
         await Promise.all([
-          this.polygon.getFinancialStatements(ticker, "quarterly", FIN_QUARTERS),
+          this.financials
+            .fetchFinancialStatements(ticker, "quarterly", FIN_QUARTERS)
+            .catch(
+              (err: Error): AdapterResult<CanonicalFinancialStatement[]> => {
+                statementsError = err;
+                return null;
+              },
+            ),
           this.earningsEstimatesFor(ticker),
           this.estimatesAdapter
             ? this.estimatesAdapter
@@ -1548,7 +1577,21 @@ export class OnDemandService implements OnModuleDestroy {
                 }>,
               ),
         ]);
-      const quarters = rows.map((r) => {
+      if (!statements) {
+        // Every statements source threw (e.g. Polygon 410 brownout + FMP
+        // down). A stale doc beats an error page; the 5-min memo bounds how
+        // soon this instance retries the vendors.
+        if (snap.exists) {
+          this.logger.warn(
+            `financials ${ticker}: all sources failed (${statementsError?.message}) — serving stored doc`,
+          );
+          const stale = snap.data() as Record<string, unknown>;
+          this.memFinancials.set(ticker, { data: stale, at: Date.now() });
+          return stale;
+        }
+        throw statementsError;
+      }
+      const freshQuarters = statements.data.map((r) => {
         const fmpActual = fmpQ?.epsActualFor(r.endDate) ?? null;
         const fmpEstimate = alignReportedEstimate(
           r.filingDate ?? r.endDate,
@@ -1569,13 +1612,22 @@ export class OnDemandService implements OnModuleDestroy {
               : null),
         );
       });
+      // Keep the stored quarters when every source came back empty this time,
+      // like annual/epsHistory/annualEstimates below. The doc is written with
+      // a full ref.set(), so [] here would wipe good data.
+      const keepPrevQuarters =
+        freshQuarters.length === 0 && (prev?.quarters?.length ?? 0) > 0;
+      const quarters = keepPrevQuarters
+        ? (prev.quarters as QuarterFinancials[])
+        : freshQuarters;
 
       let annual: ReturnType<typeof mapAnnualRow>[] = [];
       try {
-        const yr = await this.polygon.getFinancialStatements(
+        const { data: yr } = await this.financials.fetchFinancialStatements(
           ticker,
           "annual",
           FIN_ANNUAL_YEARS,
+          { incomeOnly: true },
         );
         annual = yr.map(mapAnnualRow);
       } catch {
@@ -1614,6 +1666,11 @@ export class OnDemandService implements OnModuleDestroy {
               ? prev.annualEstimates
               : [],
         source: "polygon-ondemand",
+        // Which vendor actually served the statements ("polygon" | "fmp"), so a
+        // fallback-served ticker is visible in Firestore without reading logs.
+        statementsSource: keepPrevQuarters
+          ? (prev?.statementsSource ?? null)
+          : statements.source,
         createdAt: now,
         updatedAt: now,
       };

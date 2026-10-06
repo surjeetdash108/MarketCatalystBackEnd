@@ -127,6 +127,26 @@ export interface FmpEarningsSurpriseRow {
   estimatedEarning: number | null;
 }
 
+export type FmpStatementKind =
+  "income-statement" | "balance-sheet-statement" | "cash-flow-statement";
+
+/**
+ * One period of one financial statement. Period labels are lifted out; every
+ * numeric field is kept under its FMP name in `values` (each statement carries
+ * 40–60 of them) and mapped onto the canonical vocabulary by the adapter.
+ */
+export interface FmpStatementRow {
+  /** Period end date (YYYY-MM-DD) — the join key across the three statements. */
+  date: string;
+  fiscalYear: string | null;
+  /** "Q1".."Q4" or "FY". */
+  period: string | null;
+  filingDate: string | null;
+  /** ISO currency of every monetary value in the row (e.g. "USD", "TWD"). */
+  reportedCurrency: string | null;
+  values: Record<string, number | null>;
+}
+
 /** Analyst price-target consensus (high/low/avg/median across firms). */
 export interface FmpPriceTargetConsensusRow {
   targetHigh: number | null;
@@ -602,6 +622,51 @@ export class FmpService {
         estimatedEpsAvg: num(o.epsAvg ?? o.estimatedEpsAvg),
         estimatedRevenueAvg: num(o.revenueAvg ?? o.estimatedRevenueAvg),
       };
+    });
+  }
+
+  /**
+   * One financial statement series (`/stable/income-statement`,
+   * `/stable/balance-sheet-statement`, `/stable/cash-flow-statement`), newest
+   * first. Unlike the other getters this THROWS when FMP is disabled: it backs
+   * a fallback chain, and an empty result would read as "the vendor has no
+   * statements" — masking the real primary failure behind a benign empty.
+   */
+  async getFinancialStatement(
+    kind: FmpStatementKind,
+    ticker: string,
+    period: "quarter" | "annual",
+    limit: number,
+  ): Promise<FmpStatementRow[]> {
+    if (!this.apiKey) {
+      throw new Error(
+        "FMP_API_KEY not set — FMP financial statements unavailable",
+      );
+    }
+    const rows = await this.get(
+      `${kind}?symbol=${encodeURIComponent(ticker)}&period=${period}&limit=${limit}`,
+    );
+    return rows.flatMap((r) => {
+      const o = r as Record<string, unknown>;
+      if (!o || typeof o.date !== "string" || !o.date) return [];
+      const values: Record<string, number | null> = {};
+      for (const [k, v] of Object.entries(o)) {
+        if (typeof v === "number") values[k] = num(v);
+      }
+      return [
+        {
+          date: o.date,
+          fiscalYear:
+            typeof o.fiscalYear === "string" || typeof o.fiscalYear === "number"
+              ? String(o.fiscalYear)
+              : null,
+          period: typeof o.period === "string" ? o.period : null,
+          filingDate: typeof o.filingDate === "string" ? o.filingDate : null,
+          reportedCurrency:
+            typeof o.reportedCurrency === "string" ? o.reportedCurrency : null,
+          values,
+        },
+      ];
     });
   }
 
