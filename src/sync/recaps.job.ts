@@ -4,6 +4,7 @@ import { setWithCreatedAt } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { isoDate } from "../common/date.util";
+import { splitMovers } from "../common/movers-split.util";
 
 /**
  * End-of-Day recap → `recaps/{date}` (delivery-plan R28).
@@ -110,11 +111,11 @@ export class RecapsJob implements OnModuleInit {
           };
         })
         .filter((m) => m.pctChange != null);
-      const byPct = [...movers].sort(
-        (a, b) => (b.pctChange ?? 0) - (a.pctChange ?? 0),
+      const { gainers: topGainers, losers: topLosers } = splitMovers(
+        movers,
+        (m) => m.pctChange,
+        TOP_N,
       );
-      const topGainers = byPct.slice(0, TOP_N);
-      const topLosers = byPct.slice(-TOP_N).reverse();
 
       // Sectors → leaders / laggards by % change.
       const sectors = sectorsSnap.docs

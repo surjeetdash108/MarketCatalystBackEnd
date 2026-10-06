@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { splitMovers } from "../common/movers-split.util";
 
 /**
  * "SCANX" market scans — Biggest % gainers/losers and Most active stocks,
@@ -124,15 +125,8 @@ export class MarketScanService {
   }
 
   private async computeBiggestPct(): Promise<BiggestPctScan> {
-    const rows = (await this.loadCompanies()).filter(
-      (c) => c.pctChange != null && Number.isFinite(c.pctChange) && !!c.sector,
-    );
-    const gainers = [...rows]
-      .sort((a, b) => (b.pctChange as number) - (a.pctChange as number))
-      .slice(0, TOP_N);
-    const losers = [...rows]
-      .sort((a, b) => (a.pctChange as number) - (b.pctChange as number))
-      .slice(0, TOP_N);
+    const rows = (await this.loadCompanies()).filter((c) => !!c.sector);
+    const { gainers, losers } = splitMovers(rows, (c) => c.pctChange, TOP_N);
     const toItem = (r: CompanyRow): ScanItem => ({
       ticker: r.ticker,
       name: r.name ?? null,
