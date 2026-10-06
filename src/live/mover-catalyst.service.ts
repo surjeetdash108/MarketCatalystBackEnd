@@ -19,6 +19,7 @@ export interface MoverCatalystDoc {
   catalyst: string;
   headline: string | null;
   summary: string | null;
+  bulletPoints?: string[];
   source: "benzinga_wiim" | "ai_synthesis" | "sec_filing" | "news_headline";
   vendor: "benzinga" | "polygon" | "fmp" | "sec" | "llm";
   newsUrl: string | null;
@@ -137,6 +138,12 @@ export class MoverCatalystService {
         const res = await this.benzingaAdapter.fetchNews(ticker, fromIso, toIso);
         if (res.data && res.data.length > 0) {
           const top = res.data[0];
+          const rawBullets = (top.summary || top.headline || "")
+            .split(/(?<=[.!?])\s+/)
+            .map((s) => s.trim())
+            .filter((s) => s.length > 15);
+          const bulletPoints = rawBullets.length > 0 ? rawBullets.slice(0, 3) : [top.headline];
+
           const doc: MoverCatalystDoc = {
             ticker,
             direction: direction ?? null,
@@ -144,6 +151,7 @@ export class MoverCatalystService {
             catalyst: top.summary || top.headline,
             headline: top.headline,
             summary: top.summary,
+            bulletPoints,
             source: "benzinga_wiim",
             vendor: "benzinga",
             newsUrl: top.url || null,
@@ -198,14 +206,24 @@ export class MoverCatalystService {
 Recent News:
 ${newsContext}
 
-Task: Explain why the stock moved in 1 to 2 clear, direct, informative sentences based on the news above. Do NOT use filler intros like "Based on the news". State the catalyst directly.`;
+Task: Explain why the stock gained or lost today.
+Respond ONLY with a JSON object:
+{
+  "summary": "1 to 2 clear, direct sentences explaining why the stock moved.",
+  "bulletPoints": [
+    "Key driver 1",
+    "Key driver 2",
+    "Key driver 3"
+  ]
+}
+Do NOT include any markdown code fences or other text outside the JSON object.`;
 
           const reply = await this.llm.chat(
             [
               {
                 role: "system",
                 content:
-                  "You are a Wall Street financial analyst providing brief, precise stock movement catalyst summaries.",
+                  "You are a Wall Street financial analyst providing brief, precise stock movement catalyst summaries with clear bullet point drivers.",
               },
               { role: "user", content: prompt },
             ],
@@ -213,13 +231,40 @@ Task: Explain why the stock moved in 1 to 2 clear, direct, informative sentences
           );
 
           if (reply && reply.trim().length > 10) {
+            let summaryText = reply.trim();
+            let bullets: string[] = [];
+            try {
+              const jsonMatch = reply.match(/\{[\s\S]*\}/);
+              if (jsonMatch) {
+                const parsed = JSON.parse(jsonMatch[0]);
+                if (parsed.summary && typeof parsed.summary === "string") {
+                  summaryText = parsed.summary.trim();
+                }
+                if (Array.isArray(parsed.bulletPoints)) {
+                  bullets = parsed.bulletPoints
+                    .map((b: any) => String(b).trim())
+                    .filter(Boolean);
+                }
+              }
+            } catch {
+              // Fallback to sentence splitting
+            }
+
+            if (!bullets.length) {
+              bullets = summaryText
+                .split(/(?<=[.!?])\s+/)
+                .map((s) => s.trim())
+                .filter((s) => s.length > 15);
+            }
+
             const doc: MoverCatalystDoc = {
               ticker,
               direction: direction ?? null,
               pctChange: pctChange ?? null,
-              catalyst: reply.trim(),
+              catalyst: summaryText,
               headline: first.headline,
               summary: first.summary,
+              bulletPoints: bullets.length > 0 ? bullets : [first.headline],
               source: "ai_synthesis",
               vendor: "llm",
               newsUrl: first.url || null,
@@ -235,6 +280,7 @@ Task: Explain why the stock moved in 1 to 2 clear, direct, informative sentences
       }
 
       // Headline Fallback when LLM is unavailable or unparseable
+      const fallbackBullets = topNews.map((n) => n.headline).filter(Boolean);
       const doc: MoverCatalystDoc = {
         ticker,
         direction: direction ?? null,
@@ -242,6 +288,7 @@ Task: Explain why the stock moved in 1 to 2 clear, direct, informative sentences
         catalyst: first.headline,
         headline: first.headline,
         summary: first.summary,
+        bulletPoints: fallbackBullets.length > 0 ? fallbackBullets : [first.headline],
         source: "news_headline",
         vendor: (first.vendor as any) || "polygon",
         newsUrl: first.url || null,
@@ -257,9 +304,13 @@ Task: Explain why the stock moved in 1 to 2 clear, direct, informative sentences
       ticker,
       direction: direction ?? null,
       pctChange: pctChange ?? null,
-      catalyst: `No major news catalyst reported for ${ticker} in the last 48 hours.`,
+      catalyst: `No major company-specific news catalyst reported for ${ticker} in the last 48 hours.`,
       headline: null,
       summary: null,
+      bulletPoints: [
+        `No direct press releases or SEC filings identified for ${ticker} in the last 48 hours.`,
+        `Movement is likely driven by broader market sentiment, sector rotation, or trading liquidity.`,
+      ],
       source: "news_headline",
       vendor: "polygon",
       newsUrl: null,
