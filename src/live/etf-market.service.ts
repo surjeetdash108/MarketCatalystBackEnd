@@ -45,8 +45,8 @@ export class EtfMarketService implements OnModuleInit {
   // In-memory cache for shares outstanding to avoid re-fetching unchanged share counts
   private readonly sharesCache = new Map<string, number>();
 
-  // 10-minute cache TTL: market data updates periodically while static metadata remains stable
-  private readonly CACHE_TTL_MS = 10 * 60_000;
+  // 7-day cache TTL: ETF directory classification changes rarely
+  private readonly CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
   private readonly FIRESTORE_COLLECTION = "etf_corner_cache";
   private readonly FIRESTORE_DOC = "latest";
 

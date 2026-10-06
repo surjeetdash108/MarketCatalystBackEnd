@@ -594,7 +594,7 @@ export class OnDemandController {
    * Commodities, Leveraged.
    */
   @Get("etf-market")
-  @Header("Cache-Control", "public, max-age=120, s-maxage=120, stale-while-revalidate=300")
+  @Header("Cache-Control", "public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400")
   async etfMarket(
     @Query("limit") limit: string | undefined,
     @Req() req: Request,
@@ -610,7 +610,7 @@ export class OnDemandController {
   }
 
   @Get("etfs/market-funds")
-  @Header("Cache-Control", "public, max-age=120, s-maxage=120, stale-while-revalidate=300")
+  @Header("Cache-Control", "public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400")
   async etfMarketFundsAlias(
     @Query("limit") limit: string | undefined,
     @Req() req: Request,
