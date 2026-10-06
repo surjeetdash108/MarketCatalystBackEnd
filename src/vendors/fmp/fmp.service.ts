@@ -94,6 +94,139 @@ export interface FmpCompanyProfileRow {
   description: string | null;
 }
 
+/** One row of FMP /stable/income-statement. */
+export interface FmpIncomeStatementRow {
+  date: string;
+  symbol: string;
+  reportedCurrency?: string;
+  cik?: string;
+  filingDate?: string;
+  acceptedDate?: string;
+  fiscalYear?: string | number;
+  period?: string;
+  revenue?: number | null;
+  costOfRevenue?: number | null;
+  grossProfit?: number | null;
+  researchAndDevelopmentExpenses?: number | null;
+  generalAndAdministrativeExpenses?: number | null;
+  sellingAndMarketingExpenses?: number | null;
+  sellingGeneralAndAdministrativeExpenses?: number | null;
+  otherExpenses?: number | null;
+  operatingExpenses?: number | null;
+  costAndExpenses?: number | null;
+  interestIncome?: number | null;
+  interestExpense?: number | null;
+  depreciationAndAmortization?: number | null;
+  ebitda?: number | null;
+  ebit?: number | null;
+  operatingIncome?: number | null;
+  totalOtherIncomeExpensesNet?: number | null;
+  incomeBeforeTax?: number | null;
+  incomeTaxExpense?: number | null;
+  netIncome?: number | null;
+  eps?: number | null;
+  epsDiluted?: number | null;
+  weightedAverageShsOut?: number | null;
+  weightedAverageShsOutDil?: number | null;
+}
+
+/** One row of FMP /stable/balance-sheet-statement. */
+export interface FmpBalanceSheetRow {
+  date: string;
+  symbol: string;
+  reportedCurrency?: string;
+  cik?: string;
+  filingDate?: string;
+  acceptedDate?: string;
+  fiscalYear?: string | number;
+  period?: string;
+  cashAndCashEquivalents?: number | null;
+  shortTermInvestments?: number | null;
+  cashAndShortTermInvestments?: number | null;
+  netReceivables?: number | null;
+  inventory?: number | null;
+  otherCurrentAssets?: number | null;
+  totalCurrentAssets?: number | null;
+  propertyPlantEquipmentNet?: number | null;
+  goodwill?: number | null;
+  intangibleAssets?: number | null;
+  goodwillAndIntangibleAssets?: number | null;
+  longTermInvestments?: number | null;
+  otherNonCurrentAssets?: number | null;
+  totalNonCurrentAssets?: number | null;
+  otherAssets?: number | null;
+  totalAssets?: number | null;
+  accountPayables?: number | null;
+  shortTermDebt?: number | null;
+  taxPayables?: number | null;
+  deferredRevenue?: number | null;
+  otherCurrentLiabilities?: number | null;
+  totalCurrentLiabilities?: number | null;
+  longTermDebt?: number | null;
+  deferredRevenueNonCurrent?: number | null;
+  otherNonCurrentLiabilities?: number | null;
+  totalNonCurrentLiabilities?: number | null;
+  otherLiabilities?: number | null;
+  totalLiabilities?: number | null;
+  commonStock?: number | null;
+  retainedEarnings?: number | null;
+  accumulatedOtherComprehensiveIncomeLoss?: number | null;
+  totalStockholdersEquity?: number | null;
+  totalEquity?: number | null;
+  totalLiabilitiesAndTotalEquity?: number | null;
+  totalDebt?: number | null;
+  netDebt?: number | null;
+}
+
+/** One row of FMP /stable/cash-flow-statement. */
+export interface FmpCashFlowRow {
+  date: string;
+  symbol: string;
+  reportedCurrency?: string;
+  cik?: string;
+  filingDate?: string;
+  acceptedDate?: string;
+  fiscalYear?: string | number;
+  period?: string;
+  netIncome?: number | null;
+  depreciationAndAmortization?: number | null;
+  deferredIncomeTax?: number | null;
+  stockBasedCompensation?: number | null;
+  changeInWorkingCapital?: number | null;
+  accountsReceivables?: number | null;
+  inventory?: number | null;
+  accountsPayables?: number | null;
+  otherWorkingCapital?: number | null;
+  otherNonCashItems?: number | null;
+  netCashProvidedByOperatingActivities?: number | null;
+  investmentsInPropertyPlantAndEquipment?: number | null;
+  acquisitionsNet?: number | null;
+  purchasesOfInvestments?: number | null;
+  salesMaturitiesOfInvestments?: number | null;
+  otherInvestingActivities?: number | null;
+  netCashProvidedByInvestingActivities?: number | null;
+  netDebtIssuance?: number | null;
+  longTermNetDebtIssuance?: number | null;
+  shortTermNetDebtIssuance?: number | null;
+  netStockIssuance?: number | null;
+  netCommonStockIssuance?: number | null;
+  commonStockIssuance?: number | null;
+  commonStockRepurchased?: number | null;
+  netDividendsPaid?: number | null;
+  commonDividendsPaid?: number | null;
+  otherFinancingActivities?: number | null;
+  netCashProvidedByFinancingActivities?: number | null;
+  effectOfForexChangesOnCash?: number | null;
+  netChangeInCash?: number | null;
+  cashAtEndOfPeriod?: number | null;
+  cashAtBeginningOfPeriod?: number | null;
+  operatingCashFlow?: number | null;
+  capitalExpenditure?: number | null;
+  freeCashFlow?: number | null;
+  incomeTaxesPaid?: number | null;
+  interestPaid?: number | null;
+}
+
 /** Normalised analyst grades consensus (rating tallies + label). */
 export interface FmpConsensusRow {
   symbol: string;
@@ -979,6 +1112,192 @@ export class FmpService {
       if (row) return row;
     }
     return null;
+  }
+
+  /**
+   * Normalized income statements matching Polygon's getIncomeStatements shape.
+   * Period can be "annual" or "quarterly" (defaults to "annual").
+   */
+  async getIncomeStatements(
+    ticker: string,
+    timeframe = "annual",
+    limit = 2,
+  ): Promise<
+    Array<{
+      fiscalYear: string | null;
+      fiscalPeriod: string | null;
+      endDate: string | null;
+      revenue: number | null;
+      costOfRevenue: number | null;
+      grossProfit: number | null;
+      netIncome: number | null;
+      operatingIncome: number | null;
+      dilutedEps: number | null;
+    }>
+  > {
+    if (!this.apiKey) return [];
+    const period = timeframe === "annual" ? "annual" : "quarter";
+    const rows = (await this.get(
+      `income-statement?symbol=${encodeURIComponent(ticker)}&period=${period}&limit=${limit}`,
+    ).catch(() => [])) as FmpIncomeStatementRow[];
+
+    return (Array.isArray(rows) ? rows : []).map((r) => ({
+      fiscalYear: r.fiscalYear ? String(r.fiscalYear) : null,
+      fiscalPeriod: r.period ?? null,
+      endDate: r.date ?? null,
+      revenue: num(r.revenue),
+      costOfRevenue: num(r.costOfRevenue),
+      grossProfit: num(r.grossProfit),
+      netIncome: num(r.netIncome),
+      operatingIncome: num(r.operatingIncome),
+      dilutedEps: num(r.epsDiluted ?? r.eps),
+    }));
+  }
+
+  /** Raw balance sheet rows from FMP. */
+  async getBalanceSheetStatements(
+    ticker: string,
+    timeframe = "annual",
+    limit = 2,
+  ): Promise<FmpBalanceSheetRow[]> {
+    if (!this.apiKey) return [];
+    const period = timeframe === "annual" ? "annual" : "quarter";
+    const res = await this.get(
+      `balance-sheet-statement?symbol=${encodeURIComponent(ticker)}&period=${period}&limit=${limit}`,
+    ).catch(() => []);
+    return Array.isArray(res) ? (res as FmpBalanceSheetRow[]) : [];
+  }
+
+  /** Raw cash flow statement rows from FMP. */
+  async getCashFlowStatements(
+    ticker: string,
+    timeframe = "annual",
+    limit = 2,
+  ): Promise<FmpCashFlowRow[]> {
+    if (!this.apiKey) return [];
+    const period = timeframe === "annual" ? "annual" : "quarter";
+    const res = await this.get(
+      `cash-flow-statement?symbol=${encodeURIComponent(ticker)}&period=${period}&limit=${limit}`,
+    ).catch(() => []);
+    return Array.isArray(res) ? (res as FmpCashFlowRow[]) : [];
+  }
+
+  /**
+   * All three financial statements for one ticker, merged into the canonical
+   * PolygonFinancialRow structure used across MarketCatalyst (financials.job,
+   * ondemand.service, etc.).
+   */
+  async getFinancialStatements(
+    ticker: string,
+    timeframe = "quarterly",
+    limit = 10,
+  ): Promise<
+    Array<{
+      fiscalYear: string | null;
+      fiscalPeriod: string | null;
+      endDate: string | null;
+      filingDate: string | null;
+      income: Record<string, number | null>;
+      balanceSheet: Record<string, number | null>;
+      cashFlow: Record<string, number | null>;
+    }>
+  > {
+    if (!this.apiKey) return [];
+    const period = timeframe === "annual" ? "annual" : "quarter";
+    const [income, bs, cf] = await Promise.all([
+      this.get(
+        `income-statement?symbol=${encodeURIComponent(ticker)}&period=${period}&limit=${limit}`,
+      ).catch(() => []),
+      this.get(
+        `balance-sheet-statement?symbol=${encodeURIComponent(ticker)}&period=${period}&limit=${limit}`,
+      ).catch(() => []),
+      this.get(
+        `cash-flow-statement?symbol=${encodeURIComponent(ticker)}&period=${period}&limit=${limit}`,
+      ).catch(() => []),
+    ]);
+
+    const bsByDate = new Map<string, FmpBalanceSheetRow>(
+      (Array.isArray(bs) ? (bs as FmpBalanceSheetRow[]) : [])
+        .filter((r) => r?.date)
+        .map((r) => [r.date, r]),
+    );
+    const cfByDate = new Map<string, FmpCashFlowRow>(
+      (Array.isArray(cf) ? (cf as FmpCashFlowRow[]) : [])
+        .filter((r) => r?.date)
+        .map((r) => [r.date, r]),
+    );
+
+    return (Array.isArray(income) ? (income as FmpIncomeStatementRow[]) : []).map(
+      (i) => {
+        const b: Partial<FmpBalanceSheetRow> = bsByDate.get(i.date) ?? {};
+        const c: Partial<FmpCashFlowRow> = cfByDate.get(i.date) ?? {};
+        return {
+          fiscalYear: i.fiscalYear ? String(i.fiscalYear) : null,
+          fiscalPeriod: i.period ?? null,
+          endDate: i.date ?? null,
+          filingDate:
+            i.filingDate ??
+            (i.acceptedDate ? String(i.acceptedDate).slice(0, 10) : null),
+          income: {
+            revenues: num(i.revenue),
+            cost_of_revenue: num(i.costOfRevenue),
+            gross_profit: num(i.grossProfit),
+            operating_income_loss: num(i.operatingIncome),
+            net_income_loss: num(i.netIncome),
+            diluted_earnings_per_share: num(i.epsDiluted ?? i.eps),
+            basic_earnings_per_share: num(i.eps),
+            operating_expenses: num(i.operatingExpenses),
+            research_and_development: num(i.researchAndDevelopmentExpenses),
+            selling_general_and_administrative_expenses: num(
+              i.sellingGeneralAndAdministrativeExpenses,
+            ),
+            income_tax_expense_benefit: num(i.incomeTaxExpense),
+            diluted_average_shares: num(
+              i.weightedAverageShsOutDil ?? i.weightedAverageShsOut,
+            ),
+          },
+          balanceSheet: {
+            assets: num(b.totalAssets),
+            current_assets: num(b.totalCurrentAssets),
+            liabilities: num(b.totalLiabilities),
+            current_liabilities: num(b.totalCurrentLiabilities),
+            equity: num(b.totalStockholdersEquity ?? b.totalEquity),
+            inventory: num(b.inventory),
+            long_term_debt: num(b.longTermDebt),
+          },
+          cashFlow: {
+            net_cash_flow: num(c.netChangeInCash),
+            net_cash_flow_from_operating_activities: num(
+              c.operatingCashFlow ?? c.netCashProvidedByOperatingActivities,
+            ),
+            net_cash_flow_from_investing_activities: num(
+              c.netCashProvidedByInvestingActivities,
+            ),
+            net_cash_flow_from_financing_activities: num(
+              c.netCashProvidedByFinancingActivities,
+            ),
+          },
+        };
+      },
+    );
+  }
+
+  /**
+   * TTM EPS approximated by summing the 4 most recent quarters of diluted EPS from FMP.
+   */
+  async getTtmEps(ticker: string): Promise<number | null> {
+    if (!this.apiKey) return null;
+    const inc = (await this.get(
+      `income-statement?symbol=${encodeURIComponent(ticker)}&period=quarter&limit=4`,
+    ).catch(() => [])) as FmpIncomeStatementRow[];
+    if (!Array.isArray(inc) || inc.length < 4) return null;
+    let sum = 0;
+    for (const r of inc.slice(0, 4)) {
+      const val = num(r?.epsDiluted ?? r?.eps);
+      if (val == null) return null;
+      sum += val;
+    }
+    return Math.round(sum * 100) / 100;
   }
 }
 

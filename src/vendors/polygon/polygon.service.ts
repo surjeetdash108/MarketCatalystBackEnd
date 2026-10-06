@@ -1,7 +1,8 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { fetchJson } from "../../common/http.util";
 import { finiteOrNull, nonNegIntOrNull } from "../../common/validate.util";
+import { FmpService } from "../fmp/fmp.service";
 
 // Polygon rebranded to Massive (Oct 2025); api.polygon.io still resolves but is
 // being phased out in favour of api.massive.com. Kept configurable so the host
@@ -121,8 +122,15 @@ export class PolygonService {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly pageDelayMs: number;
+  // Polygon's legacy /vX/reference/financials is retired (410 Gone) and replacement
+  // (/stocks/financials/v1/*) is not entitled on the $79 Starter plan (403).
+  // Latch true to avoid repeating failing requests and slowing requests down.
+  private massiveFinancialsUnavailable = true;
 
-  constructor(private readonly config: ConfigService) {
+  constructor(
+    private readonly config: ConfigService,
+    @Optional() private readonly fmp?: FmpService,
+  ) {
     this.apiKey = this.config.get("POLYGON_API_KEY", "");
     if (!this.apiKey) {
       this.logger.warn(
@@ -578,20 +586,42 @@ export class PolygonService {
   }
 
   async getTtmEps(ticker: string): Promise<number | null> {
-    const res = await fetchJson<any>(
-      `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
-        `&timeframe=ttm&limit=1&apiKey=${this.apiKey}`,
-    );
-    const inc = res.results?.[0]?.financials?.income_statement;
-    const eps =
-      inc?.diluted_earnings_per_share?.value ??
-      inc?.basic_earnings_per_share?.value;
-    if (typeof eps === "number") return eps;
-    // Fallback: Polygon carries no TTM row for many mid/small caps — approximate
-    // trailing-twelve-month EPS by summing the 4 most recent quarterly diluted
-    // EPS. Only when all 4 quarters carry a value, so a short history (recent
-    // IPO) never understates TTM with a partial sum.
-    return this.getTtmEpsFromQuarters(ticker);
+    if (this.massiveFinancialsUnavailable && this.fmp?.enabled) {
+      this.logger.log(
+        `[Financials] Massive financials unavailable for ${ticker} (403/410); falling back to FMP`,
+      );
+      const eps = await this.fmp.getTtmEps(ticker);
+      if (eps != null) {
+        this.logger.log(`[Financials] FMP TTM EPS fetched for ${ticker}: ${eps}`);
+        return eps;
+      }
+    }
+
+    try {
+      const res = await fetchJson<any>(
+        `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
+          `&timeframe=ttm&limit=1&apiKey=${this.apiKey}`,
+      );
+      const inc = res.results?.[0]?.financials?.income_statement;
+      const eps =
+        inc?.diluted_earnings_per_share?.value ??
+        inc?.basic_earnings_per_share?.value;
+      if (typeof eps === "number") return eps;
+      return this.getTtmEpsFromQuarters(ticker);
+    } catch (err: any) {
+      this.massiveFinancialsUnavailable = true;
+      if (this.fmp?.enabled) {
+        this.logger.log(
+          `[Financials] Massive financials unavailable for ${ticker} (403/410); falling back to FMP`,
+        );
+        const eps = await this.fmp.getTtmEps(ticker);
+        if (eps != null) {
+          this.logger.log(`[Financials] FMP TTM EPS fetched for ${ticker}: ${eps}`);
+          return eps;
+        }
+      }
+      return null;
+    }
   }
 
   /** TTM EPS approximated as the sum of the last 4 quarterly EPS, else null. */
@@ -697,39 +727,61 @@ export class PolygonService {
       dilutedEps: number | null;
     }>
   > {
-    const res = await fetchJson<any>(
-      `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
-        `&timeframe=${timeframe}&limit=${limit}&apiKey=${this.apiKey}`,
-    );
-    return (res.results ?? []).map((p: any) => {
-      const inc = p.financials?.income_statement ?? {};
-      // Assert the vendor's per-node currency unit before trusting the value: a
-      // node explicitly denominated in a NON-USD currency is nulled (with a
-      // warning) rather than stored as if it were the raw USD dollars every
-      // consumer assumes. USD / per-share / unitless nodes pass through unchanged.
-      const v = (k: string) => {
-        const node = inc[k];
-        const badUnit = nonUsdCurrencyUnit(node?.unit);
-        if (badUnit) {
-          this.logger.warn(
-            `Non-USD unit "${badUnit}" on income_statement.${k} for ${ticker}; nulling value.`,
-          );
-          return null;
-        }
-        return node?.value ?? null;
-      };
-      return {
-        fiscalYear: p.fiscal_year ?? null,
-        fiscalPeriod: p.fiscal_period ?? null,
-        endDate: p.end_date ?? null,
-        revenue: v("revenues"),
-        costOfRevenue: v("cost_of_revenue"),
-        grossProfit: v("gross_profit"),
-        netIncome: v("net_income_loss"),
-        operatingIncome: v("operating_income_loss"),
-        dilutedEps: v("diluted_earnings_per_share"),
-      };
-    });
+    if (this.massiveFinancialsUnavailable && this.fmp?.enabled) {
+      this.logger.log(
+        `[Financials] Massive financials unavailable for ${ticker} (403/410); falling back to FMP`,
+      );
+      const rows = await this.fmp.getIncomeStatements(ticker, timeframe, limit);
+      this.logger.log(
+        `[Financials] FMP income statements fetched for ${ticker} (${rows.length} records)`,
+      );
+      return rows;
+    }
+
+    try {
+      const res = await fetchJson<any>(
+        `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
+          `&timeframe=${timeframe}&limit=${limit}&apiKey=${this.apiKey}`,
+      );
+      return (res.results ?? []).map((p: any) => {
+        const inc = p.financials?.income_statement ?? {};
+        const v = (k: string) => {
+          const node = inc[k];
+          const badUnit = nonUsdCurrencyUnit(node?.unit);
+          if (badUnit) {
+            this.logger.warn(
+              `Non-USD unit "${badUnit}" on income_statement.${k} for ${ticker}; nulling value.`,
+            );
+            return null;
+          }
+          return node?.value ?? null;
+        };
+        return {
+          fiscalYear: p.fiscal_year ?? null,
+          fiscalPeriod: p.fiscal_period ?? null,
+          endDate: p.end_date ?? null,
+          revenue: v("revenues"),
+          costOfRevenue: v("cost_of_revenue"),
+          grossProfit: v("gross_profit"),
+          netIncome: v("net_income_loss"),
+          operatingIncome: v("operating_income_loss"),
+          dilutedEps: v("diluted_earnings_per_share"),
+        };
+      });
+    } catch (err: any) {
+      this.massiveFinancialsUnavailable = true;
+      if (this.fmp?.enabled) {
+        this.logger.log(
+          `[Financials] Massive financials unavailable for ${ticker} (403/410); falling back to FMP`,
+        );
+        const rows = await this.fmp.getIncomeStatements(ticker, timeframe, limit);
+        this.logger.log(
+          `[Financials] FMP income statements fetched for ${ticker} (${rows.length} records)`,
+        );
+        return rows;
+      }
+      return [];
+    }
   }
 
   /**
@@ -754,39 +806,65 @@ export class PolygonService {
       cashFlow: Record<string, number | null>;
     }>
   > {
-    const res = await fetchJson<any>(
-      `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
-        `&timeframe=${timeframe}&limit=${limit}&apiKey=${this.apiKey}`,
-    );
-    // Every statement node is `{ value, unit, label, order }`; only `value` is
-    // read. Statements are flattened wholesale rather than field-by-field so a
-    // new panel needs no vendor-layer change.
-    const values = (node: Record<string, any> | undefined, section: string) =>
-      Object.fromEntries(
-        Object.entries(node ?? {}).map(([k, v]) => {
-          // Same non-USD currency assertion as getIncomeStatements: a node
-          // explicitly denominated in a foreign currency is nulled + warned
-          // rather than stored as raw USD dollars. USD / per-share / unitless
-          // (typeof value !== number) nodes pass through unchanged.
-          const badUnit = nonUsdCurrencyUnit(v?.unit);
-          if (badUnit) {
-            this.logger.warn(
-              `Non-USD unit "${badUnit}" on ${section}.${k} for ${ticker}; nulling value.`,
-            );
-            return [k, null];
-          }
-          return [k, typeof v?.value === "number" ? v.value : null];
-        }),
+    if (this.massiveFinancialsUnavailable && this.fmp?.enabled) {
+      this.logger.log(
+        `[Financials] Massive financials unavailable for ${ticker} (403/410); falling back to FMP`,
       );
-    return (res.results ?? []).map((p: any) => ({
-      fiscalYear: p.fiscal_year ?? null,
-      fiscalPeriod: p.fiscal_period ?? null,
-      endDate: p.end_date ?? null,
-      filingDate: p.filing_date ?? null,
-      income: values(p.financials?.income_statement, "income_statement"),
-      balanceSheet: values(p.financials?.balance_sheet, "balance_sheet"),
-      cashFlow: values(p.financials?.cash_flow_statement, "cash_flow_statement"),
-    }));
+      const rows = await this.fmp.getFinancialStatements(ticker, timeframe, limit);
+      this.logger.log(
+        `[Financials] FMP financial statements fetched for ${ticker} (${rows.length} records)`,
+      );
+      return rows;
+    }
+
+    try {
+      const res = await fetchJson<any>(
+        `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
+          `&timeframe=${timeframe}&limit=${limit}&apiKey=${this.apiKey}`,
+      );
+      // Every statement node is `{ value, unit, label, order }`; only `value` is
+      // read. Statements are flattened wholesale rather than field-by-field so a
+      // new panel needs no vendor-layer change.
+      const values = (node: Record<string, any> | undefined, section: string) =>
+        Object.fromEntries(
+          Object.entries(node ?? {}).map(([k, v]) => {
+            // Same non-USD currency assertion as getIncomeStatements: a node
+            // explicitly denominated in a foreign currency is nulled + warned
+            // rather than stored as raw USD dollars. USD / per-share / unitless
+            // (typeof value !== number) nodes pass through unchanged.
+            const badUnit = nonUsdCurrencyUnit(v?.unit);
+            if (badUnit) {
+              this.logger.warn(
+                `Non-USD unit "${badUnit}" on ${section}.${k} for ${ticker}; nulling value.`,
+              );
+              return [k, null];
+            }
+            return [k, typeof v?.value === "number" ? v.value : null];
+          }),
+        );
+      return (res.results ?? []).map((p: any) => ({
+        fiscalYear: p.fiscal_year ?? null,
+        fiscalPeriod: p.fiscal_period ?? null,
+        endDate: p.end_date ?? null,
+        filingDate: p.filing_date ?? null,
+        income: values(p.financials?.income_statement, "income_statement"),
+        balanceSheet: values(p.financials?.balance_sheet, "balance_sheet"),
+        cashFlow: values(p.financials?.cash_flow_statement, "cash_flow_statement"),
+      }));
+    } catch (err: any) {
+      this.massiveFinancialsUnavailable = true;
+      if (this.fmp?.enabled) {
+        this.logger.log(
+          `[Financials] Massive financials unavailable for ${ticker} (403/410); falling back to FMP`,
+        );
+        const rows = await this.fmp.getFinancialStatements(ticker, timeframe, limit);
+        this.logger.log(
+          `[Financials] FMP financial statements fetched for ${ticker} (${rows.length} records)`,
+        );
+        return rows;
+      }
+      return [];
+    }
   }
 
   async getSectorPerformance(): Promise<
