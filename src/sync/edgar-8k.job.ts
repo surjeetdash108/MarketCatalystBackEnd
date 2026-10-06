@@ -88,16 +88,28 @@ const LOOKBACK_DAYS = 120;
 
 
 /**
- * Session from the SEC acceptance timestamp. EDGAR reports the acceptance
- * wall-clock in US-Eastern; we read the HH:MM directly (avoiding TZ math):
- * before 09:30 → BMO, at/after 16:00 → AMC, otherwise intraday.
+ * Session from the SEC acceptance timestamp.
+ *
+ * EDGAR's `acceptanceDateTime` is a real UTC instant ("…T11:00:28.000Z" for a
+ * filing EDGAR shows as accepted 07:00:28 ET). It used to be read as if it were
+ * Eastern wall-clock, which labelled 05:30–09:30 ET filings "Intraday" and
+ * 12:00–16:00 ET filings "AMC" (QA row 190). Convert to America/New_York first
+ * (DST-aware), then: before 09:30 → BMO, at/after 16:00 → AMC, else Intraday.
  */
-function sessionFromAcceptance(
+export function sessionFromAcceptance(
   acc?: string,
 ): "BMO" | "AMC" | "Intraday" | null {
-  if (!acc || acc.length < 16) return null;
-  const hh = Number(acc.slice(11, 13));
-  const mm = Number(acc.slice(14, 16));
+  if (!acc) return null;
+  const t = Date.parse(acc);
+  if (!Number.isFinite(t)) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(t));
+  const hh = Number(parts.find((p) => p.type === "hour")?.value);
+  const mm = Number(parts.find((p) => p.type === "minute")?.value);
   if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
   const mins = hh * 60 + mm;
   if (mins < 9 * 60 + 30) return "BMO";

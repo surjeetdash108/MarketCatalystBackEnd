@@ -46,15 +46,27 @@ export interface TapeSymbol {
    * gold ~$4,000/oz, BTC ~$100k) rather than GLD/IBIT's fund price.
    */
   fredSeries?: string;
+  /**
+   * The instrument itself on FMP (`^GSPC`, `GCUSD`, `BTCUSD`, …). With an FMP
+   * key configured this is the tile's ONLY source: the real level, move and
+   * previous close, the same numbers Yahoo/Google show — never `proxyTicker` ×
+   * `multiplier` (SPY × 10 closed 0.34% below the S&P 500 on 2026-10-01; GLD ×
+   * 10.89 showed gold up on a day it fell). If a refresh gets no answer the
+   * tile keeps its last good FMP value. `proxyTicker` / `multiplier` /
+   * `fredSeries` are used only when no FMP key is configured; `proxyTicker`
+   * also stays an equity ticker because the premarket hot set reads it.
+   */
+  fmpSymbol?: string;
 }
 
-/** Index tiles, via ETF proxies — the current plan does not include indices. */
+/** Index, commodity and crypto tiles: the instrument from FMP (`fmpSymbol`); proxies only without an FMP key. */
 export const TAPE_INDICES: TapeSymbol[] = [
   {
     id: "SPX",
     kind: "index",
     label: "S&P 500",
     proxyTicker: "SPY",
+    fmpSymbol: "^GSPC",
     isProxy: true,
     note: "ETF proxy for the S&P 500 index",
     multiplier: 10, // SPY is structured as ~1/10th of the S&P 500 by design.
@@ -64,6 +76,7 @@ export const TAPE_INDICES: TapeSymbol[] = [
     kind: "index",
     label: "Nasdaq",
     proxyTicker: "QQQ",
+    fmpSymbol: "^IXIC", // Nasdaq Composite: what Yahoo/Google call "Nasdaq" (not the ~13% higher Nasdaq-100)
     isProxy: true,
     note: "ETF proxy for the Nasdaq-100 index",
     // QQQ launched at 1/40th of NDX (1999) but has drifted since (expense
@@ -76,6 +89,7 @@ export const TAPE_INDICES: TapeSymbol[] = [
     kind: "index",
     label: "Dow",
     proxyTicker: "DIA",
+    fmpSymbol: "^DJI",
     isProxy: true,
     note: "ETF proxy for the Dow Jones index",
     multiplier: 100, // DIA is structured as ~1/100th of the DJIA by design.
@@ -85,6 +99,7 @@ export const TAPE_INDICES: TapeSymbol[] = [
     kind: "index",
     label: "Russell 2000",
     proxyTicker: "IWM",
+    fmpSymbol: "^RUT",
     isProxy: true,
     note: "ETF proxy for the Russell 2000 index",
     multiplier: 10, // Standard IWM≈RUT/10 approximation.
@@ -94,6 +109,7 @@ export const TAPE_INDICES: TapeSymbol[] = [
     kind: "index",
     label: "VIX",
     proxyTicker: "VIXY",
+    fmpSymbol: "^VIX",
     isProxy: true,
     note: "Decaying VIX futures ETN — directional proxy only, not the spot VIX level",
   },
@@ -105,6 +121,7 @@ export const TAPE_INDICES: TapeSymbol[] = [
     isProxy: false,
     note: "WTI crude oil spot (FRED)",
     fredSeries: "DCOILWTICO", // real crude price, not the USO ETF
+    fmpSymbol: "CLUSD", // WTI crude futures — live, where FRED's spot series lags days
   },
   {
     id: "GOLD",
@@ -118,6 +135,7 @@ export const TAPE_INDICES: TapeSymbol[] = [
     isProxy: true,
     note: "Spot gold ≈ GLD ETF × 10.89 (physical-gold backed)",
     multiplier: 10.89,
+    fmpSymbol: "GCUSD", // gold futures, the figure consumer sites show as "Gold"
   },
   {
     id: "DXY",
@@ -126,6 +144,7 @@ export const TAPE_INDICES: TapeSymbol[] = [
     proxyTicker: "UUP",
     isProxy: true,
     note: "ETF proxy for the US Dollar Index",
+    fmpSymbol: "DX-Y.NYB", // the ICE US Dollar Index itself (~100), not UUP's ~$29 share price
   },
   {
     id: "BTC",
@@ -138,6 +157,7 @@ export const TAPE_INDICES: TapeSymbol[] = [
     isProxy: false,
     note: "Bitcoin BTC/USD, Coinbase (FRED)",
     fredSeries: "CBBTCUSD",
+    fmpSymbol: "BTCUSD",
   },
   {
     id: "ETH",
@@ -151,6 +171,7 @@ export const TAPE_INDICES: TapeSymbol[] = [
     isProxy: false,
     note: "Ethereum ETH/USD, Coinbase (FRED)",
     fredSeries: "CBETHUSD",
+    fmpSymbol: "ETHUSD",
   },
 ];
 
@@ -162,6 +183,7 @@ export const TAPE_RATE: TapeSymbol = {
   proxyTicker: null,
   isProxy: false,
   note: "US Treasury 10-year constant-maturity yield, in percent",
+  fmpSymbol: "^TNX", // CBOE 10-year yield index, in percent — intraday, not a daily series
 };
 
 /**

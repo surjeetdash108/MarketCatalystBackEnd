@@ -114,8 +114,8 @@ export interface SecFiling {
   filingDate: string;
   accessionNumber: string;
   primaryDocument: string;
-  /** SEC acceptance timestamp, e.g. "2026-02-04T16:05:31.000Z"-ish local ET
-   *  string "2026-02-04T16:05:31.000Z". Used to derive BMO/AMC session. */
+  /** SEC acceptance timestamp — a UTC instant, e.g. "2026-07-23T11:00:28.000Z"
+   *  (= 07:00:28 ET). Convert to America/New_York before deriving BMO/AMC. */
   acceptanceDateTime?: string;
   /** 8-K item codes as a comma/space string, e.g. "2.02,9.01". */
   items?: string;
