@@ -151,6 +151,8 @@ describe("TapeService non-stock tiles come from FMP", () => {
     expect(spx.change).toBe(0.73); // percent move on every price tile
     expect(spx.prevClose).toBe(7666.45);
     expect(spx.isProxy).toBe(false);
+    expect(spx.source).toBe("fmp");
+    expect(item(f, "VIX").source).toBe("fmp"); // ^VIX, never badged as Polygon
     expect(spx.stale).toBeUndefined();
     expect(item(f, "NDX").value).toBe(27190.863); // the Composite, as on Yahoo
     expect(item(f, "GOLD").value).toBe(4194); // not GLD × 10.89
@@ -168,6 +170,7 @@ describe("TapeService non-stock tiles come from FMP", () => {
     expect(tnx.change).toBe(0.04); // 5.277 - 5.237, not 0.76
     expect(tnx.pctChange).toBe(0.76);
     expect(tnx.prevClose).toBe(5.237);
+    expect(tnx.source).toBe("fmp");
   });
 
   it("never touches the old sources while FMP is configured", async () => {
@@ -252,6 +255,7 @@ describe("TapeService non-stock tiles come from FMP", () => {
     expect(polygon.getUniversalSnapshot).toHaveBeenCalledTimes(1); // stocks stay frozen while closed
     expect(item(svc.lastKnownFrame!, "BTC").value).toBe(87000);
     expect(item(svc.lastKnownFrame!, "AAPL").pctChange).toBe(1.02);
+    expect(item(svc.lastKnownFrame!, "AAPL").source).toBe("polygon");
   });
 });
 
@@ -275,10 +279,13 @@ describe("TapeService without an FMP key (old sources)", () => {
     expect(fmp.getQuotes).not.toHaveBeenCalled();
     expect(item(f, "SPX").value).toBeCloseTo(7691.1, 6);
     expect(item(f, "SPX").isProxy).toBe(true);
+    expect(item(f, "SPX").source).toBe("polygon");
     expect(item(f, "WTI").value).toBe(60);
+    expect(item(f, "WTI").source).toBe("fred");
     expect(fred.getLatestObservations).toHaveBeenCalled();
     expect(polygon.getTreasuryYields).toHaveBeenCalled();
     expect(item(f, "US10Y").value).toBe(4.1);
+    expect(item(f, "US10Y").source).toBe("polygon");
   });
 
   it("rebuilds a rolled proxy tile from the last two sessions (T175)", async () => {
