@@ -14,7 +14,7 @@ import {
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { createHash } from "crypto";
-import { OnDemandService, BARS_TFS } from "./ondemand.service";
+import { OnDemandService, BARS_TFS, BARS_INTERVALS } from "./ondemand.service";
 import { AiAnalysisService } from "./ai-analysis.service";
 import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
 import { WhatMattersNowService } from "./what-matters-now.service";
@@ -31,7 +31,8 @@ import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 /**
  * On-demand data endpoints (see ondemand.service.ts for the caching design).
  *
- *   GET /live/bars?ticker=AAPL&tf=1Y            → bars, cache-aside via stock_bars
+ *   GET /live/bars?ticker=AAPL&tf=1Y            → bars for a date range, cache-aside via stock_bars
+ *   GET /live/bars?ticker=AAPL&interval=4H      → candles of one size (1m…1M, regular session), same cache
  *   GET /live/company?ticker=AAPL               → profile+price, cache-aside via companies
  *   GET /live/dividend-history?ticker=AAPL      → cache-aside via dividend_history
  *   GET /live/splits?ticker=AAPL                → cache-aside via splits
@@ -218,12 +219,28 @@ export class OnDemandController {
   async bars(
     @Query("ticker") ticker: string | undefined,
     @Query("tf") tf: string | undefined,
+    @Query("interval") interval: string | undefined,
     @Req() req: Request,
     @Res() res: Response,
   ) {
     const sym = (ticker ?? "").toUpperCase().trim();
     if (!TICKER_RE.test(sym))
       throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+    if (interval != null) {
+      if (tf != null)
+        throw new BadRequestException("pass either tf or interval, not both");
+      // NOT upper-cased: `1m` (minute) and `1M` (month) are different sizes.
+      // A repeated ?interval= arrives as an array — reject it, don't crash.
+      const size = typeof interval === "string" ? interval.trim() : "";
+      if (!this.ondemand.isValidInterval(size)) {
+        throw new BadRequestException(
+          `interval must be one of ${BARS_INTERVALS.join(", ")} (case-sensitive)`,
+        );
+      }
+      const result = await this.ondemand.getBarsByInterval(sym, size);
+      sendWithEtag(req, res, result);
+      return;
+    }
     const frame = (tf ?? "").toUpperCase().trim();
     if (!this.ondemand.isValidTf(frame)) {
       throw new BadRequestException(`tf must be one of ${BARS_TFS.join(", ")}`);

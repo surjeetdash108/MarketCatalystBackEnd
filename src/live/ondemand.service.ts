@@ -48,6 +48,7 @@ import {
 import { FmpService } from "../vendors/fmp/fmp.service";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { isoDate } from "../common/date.util";
+import { groupCandles, type CandleGrouping } from "./bars-aggregate.util";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -75,19 +76,24 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * BAR STORAGE — one doc per (ticker, resolution family), NOT one doc per bar
  * (the old ohlcv_bars stored ~300k single-bar docs):
  *
- *   stock_bars/{TICKER}_1min   ← 1H
- *   stock_bars/{TICKER}_5min   ← 1D · 1W   (5 sessions stored, sliced per tf)
- *   stock_bars/{TICKER}_30min  ← 1M        (22 sessions)
- *   stock_bars/{TICKER}_daily  ← 3M · 6M · 1Y · 5Y (widen-in-place)
+ *                              tf (range)            interval (candle size)
+ *   stock_bars/{TICKER}_1min   ← 1H                  1m
+ *   stock_bars/{TICKER}_5min   ← 1D · 1W             5m
+ *   stock_bars/{TICKER}_15min  ←                     15m
+ *   stock_bars/{TICKER}_30min  ← 1M                  30m · 1H · 2H · 4H
+ *   stock_bars/{TICKER}_daily  ← 3M · 6M · 1Y · 5Y   1D · 1W · 1M
  *
- * The daily doc carries `rangeDays`: if a user asked for 3M and a later user
+ * Every doc carries `rangeDays`: if a user asked for 3M and a later user
  * asks for 1Y, the doc is re-fetched at the wider range and REPLACED (never
  * duplicated); a narrower request is served as a slice of the wider doc with
  * zero vendor calls. That is the subset optimization: 5Y ⊃ 1Y ⊃ 6M ⊃ 3M.
+ *
+ * `interval` candles other than the stored sizes (1H/2H/4H, weekly, monthly)
+ * are built from these docs by bars-aggregate.util.ts — no extra vendor call.
  */
 
 export type BarsTf = "1H" | "1D" | "1W" | "1M" | "3M" | "6M" | "1Y" | "5Y";
-type Resolution = "1min" | "5min" | "30min" | "daily";
+type Resolution = "1min" | "5min" | "15min" | "30min" | "daily";
 
 export const BARS_TFS: BarsTf[] = [
   "1H",
@@ -126,9 +132,118 @@ const RES_PARAMS: Record<
 > = {
   "1min": { multiplier: 1, timespan: "minute" },
   "5min": { multiplier: 5, timespan: "minute" },
+  "15min": { multiplier: 15, timespan: "minute" },
   "30min": { multiplier: 30, timespan: "minute" },
   daily: { multiplier: 1, timespan: "day" },
 };
+
+/**
+ * Candle size for GET /live/bars?interval=… — the chart's candle picker and the
+ * technical-rating card both read these. Case-sensitive: `1m` is one minute,
+ * `1M` is one month.
+ */
+export type BarsInterval =
+  "1m" | "5m" | "15m" | "30m" | "1H" | "2H" | "4H" | "1D" | "1W" | "1M";
+
+export const BARS_INTERVALS: BarsInterval[] = [
+  "1m",
+  "5m",
+  "15m",
+  "30m",
+  "1H",
+  "2H",
+  "4H",
+  "1D",
+  "1W",
+  "1M",
+];
+
+interface IntervalSpec {
+  resolution: Resolution;
+  /** Calendar days of `resolution` bars the doc must hold. */
+  fetchDays: number;
+  grouping: CandleGrouping;
+  /** Newest N candles returned, after grouping. */
+  maxBars: number;
+}
+
+/**
+ * fetchDays is sized so every interval yields ≥ ~300 regular-session candles —
+ * enough warm-up for a 200-period moving average — after weekends/holidays:
+ *   15m: ~20 sessions × 26   ≈ 520     1H: ~50 sessions × 7 ≈ 350
+ *   30m: ~27 sessions × 13   ≈ 350     2H: ~88 sessions × 4 ≈ 350
+ *                                      4H: ~170 sessions × 2 ≈ 340
+ * The widest (4H, 250 days) puts ~5.5k extended-hours 30-minute bars in one
+ * doc, ~400 KB — well inside Firestore's 1 MiB doc limit.
+ *
+ * Weekly/monthly are bounded by the plan's 5-year history (~260 / ~60
+ * candles), so a 1M SMA 200 is simply not computable; the client shows it as
+ * unavailable rather than this endpoint padding the series.
+ */
+const INTERVAL: Record<BarsInterval, IntervalSpec> = {
+  "1m": {
+    resolution: "1min",
+    fetchDays: 5,
+    grouping: { kind: "session", minutes: 1 },
+    maxBars: 1500,
+  },
+  "5m": {
+    resolution: "5min",
+    fetchDays: 9,
+    grouping: { kind: "session", minutes: 5 },
+    maxBars: 1000,
+  },
+  "15m": {
+    resolution: "15min",
+    fetchDays: 30,
+    grouping: { kind: "session", minutes: 15 },
+    maxBars: 1000,
+  },
+  "30m": {
+    resolution: "30min",
+    fetchDays: 40,
+    grouping: { kind: "session", minutes: 30 },
+    maxBars: 1000,
+  },
+  "1H": {
+    resolution: "30min",
+    fetchDays: 75,
+    grouping: { kind: "session", minutes: 60 },
+    maxBars: 1000,
+  },
+  "2H": {
+    resolution: "30min",
+    fetchDays: 130,
+    grouping: { kind: "session", minutes: 120 },
+    maxBars: 600,
+  },
+  "4H": {
+    resolution: "30min",
+    fetchDays: 250,
+    grouping: { kind: "session", minutes: 240 },
+    maxBars: 400,
+  },
+  "1D": {
+    resolution: "daily",
+    fetchDays: 1830,
+    grouping: { kind: "none" },
+    maxBars: 1300,
+  },
+  "1W": {
+    resolution: "daily",
+    fetchDays: 1830,
+    grouping: { kind: "week" },
+    maxBars: 300,
+  },
+  "1M": {
+    resolution: "daily",
+    fetchDays: 1830,
+    grouping: { kind: "month" },
+    maxBars: 80,
+  },
+};
+
+type BarsSource = "memory" | "firestore" | "vendor";
 
 export interface StoredBar {
   t: number;
@@ -371,29 +486,114 @@ export class OnDemandService implements OnModuleDestroy {
     ticker: string;
     tf: BarsTf;
     bars: StoredBar[];
-    source: "memory" | "firestore" | "vendor";
+    source: BarsSource;
     asOf: string;
   }> {
     this.stats.barsRequests++;
     this.recordUsage(ticker);
     const spec = TF[tf];
-    const key = `${ticker}_${spec.resolution}`;
+    const { doc, source } = await this.loadBarsDoc(
+      ticker,
+      spec.resolution,
+      spec.fetchDays,
+    );
+    return {
+      ticker,
+      tf,
+      bars: this.slice(doc, spec),
+      source,
+      asOf: doc.createdAt,
+    };
+  }
+
+  isValidInterval(interval: string): interval is BarsInterval {
+    return (BARS_INTERVALS as string[]).includes(interval);
+  }
+
+  /**
+   * Candles of one SIZE (vs getBars' one date RANGE): the newest maxBars
+   * candles, oldest-first, regular session only for intraday sizes. Shares the
+   * stock_bars docs with getBars — 1H/2H/4H/1W/1M are re-grouped from a stored
+   * resolution, never fetched separately.
+   */
+  async getBarsByInterval(
+    ticker: string,
+    interval: BarsInterval,
+  ): Promise<{
+    ticker: string;
+    interval: BarsInterval;
+    bars: StoredBar[];
+    source: BarsSource;
+    asOf: string;
+  }> {
+    this.stats.barsRequests++;
+    this.recordUsage(ticker);
+    const spec = INTERVAL[interval];
+    const { doc, source } = await this.loadBarsDoc(
+      ticker,
+      spec.resolution,
+      spec.fetchDays,
+    );
+    return {
+      ticker,
+      interval,
+      bars: this.groupedBars(doc, interval, spec),
+      source,
+      asOf: doc.createdAt,
+    };
+  }
+
+  /**
+   * Re-grouping is memoised per doc OBJECT: every refresh path (Firestore
+   * read, incremental append, full fetch) produces a new doc object, so a
+   * stale grouping can never be served and entries vanish with their doc.
+   * Memory-cache hits — the common case — then cost no re-grouping at all.
+   */
+  private readonly grouped = new WeakMap<
+    BarsDoc,
+    Map<BarsInterval, StoredBar[]>
+  >();
+
+  private groupedBars(
+    doc: BarsDoc,
+    interval: BarsInterval,
+    spec: IntervalSpec,
+  ): StoredBar[] {
+    let perDoc = this.grouped.get(doc);
+    if (!perDoc) {
+      perDoc = new Map();
+      this.grouped.set(doc, perDoc);
+    }
+    let bars = perDoc.get(interval);
+    if (!bars) {
+      bars = groupCandles(doc.bars, spec.grouping).slice(-spec.maxBars);
+      perDoc.set(interval, bars);
+    }
+    return bars;
+  }
+
+  /**
+   * Cache-aside load of one (ticker, resolution) doc holding at least
+   * `fetchDays` of history: memory → Firestore → incremental append or
+   * widening fetch → first-ever vendor fetch. Shared by getBars and
+   * getBarsByInterval so both read and write the same stock_bars docs.
+   */
+  private async loadBarsDoc(
+    ticker: string,
+    resolution: Resolution,
+    fetchDays: number,
+  ): Promise<{ doc: BarsDoc; source: BarsSource }> {
+    const key = `${ticker}_${resolution}`;
 
     // 1. Per-instance memory (already-parsed doc).
     const mem = this.memBars.get(key);
     if (
       mem &&
-      isFresh(mem.createdAt, spec.resolution) &&
-      mem.rangeDays >= spec.fetchDays
+      isFresh(mem.createdAt, resolution) &&
+      mem.rangeDays >= fetchDays
     ) {
       this.stats.barsMemHits++;
-      return {
-        ticker,
-        tf,
-        bars: this.slice(mem, spec),
-        source: "memory",
-        asOf: mem.createdAt,
-      };
+      return { doc: mem, source: "memory" };
     }
 
     // 2. Firestore shared cache.
@@ -402,69 +602,35 @@ export class OnDemandService implements OnModuleDestroy {
     if (snap.exists) {
       const doc = snap.data() as BarsDoc;
       if (
-        isFresh(doc.createdAt, spec.resolution) &&
-        (doc.rangeDays ?? 0) >= spec.fetchDays
+        isFresh(doc.createdAt, resolution) &&
+        (doc.rangeDays ?? 0) >= fetchDays
       ) {
         this.memBars.set(key, doc);
         this.stats.barsFirestoreHits++;
-        return {
-          ticker,
-          tf,
-          bars: this.slice(doc, spec),
-          source: "firestore",
-          asOf: doc.createdAt,
-        };
+        return { doc, source: "firestore" };
       }
       // Wide enough but STALE → INCREMENTAL refresh: history never changes, so
       // fetch only the days since the last stored bar and append. A 5-year doc
       // costs a ~2-day fetch per day of staleness — old data is never re-pulled.
-      if ((doc.rangeDays ?? 0) >= spec.fetchDays && doc.bars.length > 0) {
+      if ((doc.rangeDays ?? 0) >= fetchDays && doc.bars.length > 0) {
         const fresh = await this.refreshIncremental(
           ticker,
-          spec.resolution,
+          resolution,
           doc,
           ref,
         );
-        return {
-          ticker,
-          tf,
-          bars: this.slice(fresh, spec),
-          source: "vendor",
-          asOf: fresh.createdAt,
-        };
+        return { doc: fresh, source: "vendor" };
       }
       // Too narrow — a wider window was requested than ever stored. This is the
       // one genuine full fetch (backfill), still a single vendor call.
-      const widest = Math.max(spec.fetchDays, doc.rangeDays ?? 0);
-      const fresh = await this.fetchAndStore(
-        ticker,
-        spec.resolution,
-        widest,
-        ref,
-      );
-      return {
-        ticker,
-        tf,
-        bars: this.slice(fresh, spec),
-        source: "vendor",
-        asOf: fresh.createdAt,
-      };
+      const widest = Math.max(fetchDays, doc.rangeDays ?? 0);
+      const fresh = await this.fetchAndStore(ticker, resolution, widest, ref);
+      return { doc: fresh, source: "vendor" };
     }
 
     // 3. Vendor (coalesced) — first-ever request for this ticker+resolution.
-    const fresh = await this.fetchAndStore(
-      ticker,
-      spec.resolution,
-      spec.fetchDays,
-      ref,
-    );
-    return {
-      ticker,
-      tf,
-      bars: this.slice(fresh, spec),
-      source: "vendor",
-      asOf: fresh.createdAt,
-    };
+    const fresh = await this.fetchAndStore(ticker, resolution, fetchDays, ref);
+    return { doc: fresh, source: "vendor" };
   }
 
   /**
