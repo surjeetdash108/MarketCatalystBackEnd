@@ -1,0 +1,129 @@
+<!--
+MarketCatalyst CMS snippets. Copy the blocks you need into the article's bodyHtml.
+Placeholders look like {{THIS}}. Only supported site classes + the scoped CSS below are used.
+Order in a recap body: [1] schema -> content -> [2] style block -> [5] related articles -> [6] disclaimer.
+-->
+
+<!-- ============ [1] ARTICLE SCHEMA (first thing in the body) ============ -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "{{TITLE (same as the CMS title, <=110 chars)}}",
+  "description": "{{DEK (same as the CMS dek)}}",
+  "image": "https://marketcatalyst.ai/og-image.jpg",
+  "author": { "@type": "Organization", "name": "MarketCatalyst" },
+  "publisher": {
+    "@type": "Organization",
+    "name": "MarketCatalyst",
+    "logo": { "@type": "ImageObject", "url": "https://marketcatalyst.ai/logo-mark.webp" }
+  },
+  "datePublished": "{{YYYY-MM-DD at draft; YYYY-MM-DDTHH:MM:00-04:00 after publishing}}",
+  "dateModified": "{{YYYY-MM-DD}}"
+}
+</script>
+<!-- CMS fields to pass alongside the body (not HTML):
+     read  = "Published {{Mon D, YYYY}} · {{h:mm AM/PM ET (after publish)}} · {{N}} min read"
+     kick  = "Recap"     zone = "recap"     template = "simple"     (no author) -->
+
+
+<!-- ============ [2] STYLE BLOCK (place after the content, before the related-articles section) ============ -->
+<style>
+  /* header: date/read-time line sits tight above the separator */
+  .post-doc .meta { margin-bottom: 14px !important; }
+  .post-doc hr.rule { margin: 0 0 22px !important; }
+  /* driver story titles (h3 is unstyled by the site) */
+  .post-doc .article h3 { font-size: 18px; font-weight: 800; line-height: 1.3; margin: 26px 0 6px; }
+  /* red for negative numbers in tables (site has green .pos only) */
+  .post-doc td.dn { color: #C0392B; font-weight: 700; }
+  /* four index tiles in one row; 2x2 on phones. Tile numbers are green when up. */
+  #idx-strip { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+  #idx-strip .stat-box { padding: 16px 10px; }
+  #idx-strip .num { font-size: 26px; color: #0F9D58 !important; }   /* for a down tile add style="color:#C0392B !important" on that .num */
+  #idx-strip .label { font-size: 12px; }
+  @media (max-width: 720px) { #idx-strip { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } }
+  /* sectors: two tinted cards */
+  .mc-bb { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 16px; margin: 16px 0 8px; }
+  .mc-bb .mc-bb-col { border-radius: 16px; padding: 20px 22px 8px; border: 1px solid; }
+  .mc-bb .mc-bb-col.bull { background: #EEF7F1; border-color: #CFE8D9; }
+  .mc-bb .mc-bb-col.bear { background: #FBEFEC; border-color: #F0D3CD; }
+  .mc-bb .mc-bb-title { font-size: 13px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; margin: 0 0 12px; }
+  .mc-bb .bull .mc-bb-title { color: #0F9D58; }
+  .mc-bb .bear .mc-bb-title { color: #C0392B; }
+  .mc-bb .mc-bb-col p { font-size: 15px; line-height: 1.55; margin: 0 0 14px; color: #1A1A1A; }
+  @media (max-width: 720px) { .mc-bb { grid-template-columns: minmax(0, 1fr) !important; } }
+  /* related articles: four compact cards */
+  .mc-ra { margin: 40px 0 8px; padding-top: 24px; border-top: 1px solid var(--border, #E4DFD3); }
+  section.mc-ra h2.mc-ra-title { font-size: 20px; font-weight: 800; letter-spacing: -0.2px; line-height: 1.25; margin: 0 0 14px; color: var(--ink, #1A1A1A); }
+  .mc-ra .mc-ra-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 10px; }
+  .mc-ra .mc-ra-card { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: #F7F5EF; border: 1px solid var(--border, #E4DFD3); border-radius: 12px; text-decoration: none; color: inherit; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
+  .mc-ra .mc-ra-card:hover, .mc-ra .mc-ra-card:focus-visible { transform: translateY(-2px); border-color: var(--blue, #2563EB); box-shadow: 0 6px 16px rgba(37, 99, 235, 0.10); outline: none; }
+  .mc-ra .mc-ra-pill { align-self: flex-start; font-size: 10px; font-weight: 800; letter-spacing: 0.8px; text-transform: uppercase; color: var(--blue, #2563EB); background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 999px; padding: 2px 8px; }
+  .mc-ra .mc-ra-card-title { font-size: 13.5px; font-weight: 800; line-height: 1.35; color: var(--ink, #1A1A1A); margin: 0; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+  .mc-ra .mc-ra-meta { display: flex; justify-content: space-between; align-items: center; margin-top: auto; font-size: 12px; color: var(--gray-text, #5B6472); }
+  .mc-ra .mc-ra-go { font-weight: 800; color: var(--blue, #2563EB); }
+  @media (max-width: 720px) { .mc-ra .mc-ra-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } .mc-ra .mc-ra-card { padding: 10px 11px; } .mc-ra .mc-ra-card-title { font-size: 12.5px; -webkit-line-clamp: 5; } }
+  @media (max-width: 340px) { .mc-ra .mc-ra-grid { grid-template-columns: minmax(0, 1fr) !important; } }
+</style>
+
+
+<!-- ============ [3] INDEX TILES + INDEX TABLE ============ -->
+<div class="stat-strip" id="idx-strip">
+  <div class="stat-box"><div class="num">{{+0.18%}}</div><div class="label">Dow Jones ({{close}}, {{+pts}} pts)</div></div>
+  <div class="stat-box"><div class="num">{{+0.66%}}</div><div class="label">S&amp;P 500 ({{close}}, {{+pts}} pts)</div></div>
+  <div class="stat-box"><div class="num">{{+1.05%}}</div><div class="label">Nasdaq ({{close}}, {{+pts}} pts)</div></div>
+  <div class="stat-box"><div class="num">{{+0.54%}}</div><div class="label">Russell 2000 ({{close}}, {{+pts}} pts)</div></div>
+</div>
+<div class="table-scroll"><div class="post-doc-scroll">
+<table>
+  <thead><tr><th>Index</th><th>Close</th><th>Point Change</th><th>% Change</th><th>Session Read</th></tr></thead>
+  <tbody>
+    <tr><td class="metric">DJIA</td><td>{{close}}</td><td class="pos">{{+pts}}</td><td class="pos">{{+%}}</td><td>{{short read}}</td></tr>
+    <tr><td class="metric">CBOE Volatility ($VIX)</td><td>{{close}}</td><td>{{±pts}}</td><td>{{±%}}</td><td>{{short read}}</td></tr>
+  </tbody>
+</table>
+</div></div>
+<!-- gains: class="pos"   losses: class="dn"   neutral (VIX, yields): no class -->
+
+
+<!-- ============ [4] SECTORS: TWO TINTED CARDS ============ -->
+<div class="mc-bb">
+  <div class="mc-bb-col bull">
+    <div class="mc-bb-title">&#9650; Leading groups</div>
+    <p>{{Group (TICKER +x.xx%), one-line reason}}</p>
+  </div>
+  <div class="mc-bb-col bear">
+    <div class="mc-bb-title">&#9660; Lagging groups</div>
+    <p>{{Group (TICKER -x.xx%), one-line reason}}</p>
+  </div>
+</div>
+
+<!-- driver story title pattern -->
+<h3><strong>1. {{Story title}}</strong></h3>
+<p>{{3-5 sentences}}</p>
+
+<!-- risk boxes (3) and the closing "Worth remembering" box -->
+<div class="warning"><strong>Risk #1: {{Title}}.</strong> {{2-3 specific sentences}}</div>
+<div class="warning"><strong>Worth remembering:</strong> {{balanced note, no trade directives}}</div>
+
+<!-- temperature + takeaway callouts -->
+<div class="callout"><b>Temperature check:</b> call it roughly {{N}} out of 100, <b>{{Phase}}</b>. {{VIX detail}}</div>
+<div class="callout"><b>Key tactical takeaway:</b> {{level / yield / VIX / spread to monitor}}</div>
+
+
+<!-- ============ [5] RELATED ARTICLES (4 cards; verified URLs only) ============ -->
+<section class="mc-ra" aria-labelledby="mc-ra-heading">
+  <h2 class="mc-ra-title" id="mc-ra-heading">Readers also read</h2>
+  <div class="mc-ra-grid">
+    <a class="mc-ra-card" href="https://marketcatalyst.ai/posts/{{verified-slug}}">
+      <span class="mc-ra-pill">{{Recap | Analysis | Educational | News}}</span>
+      <h3 class="mc-ra-card-title">{{Exact article title}}</h3>
+      <div class="mc-ra-meta"><span>{{N}} min</span><span class="mc-ra-go">Read &rarr;</span></div>
+    </a>
+    <!-- repeat for 4 cards -->
+  </div>
+</section>
+
+
+<!-- ============ [6] DISCLAIMER (verbatim) ============ -->
+<div class="disclaimer"><p><a href="https://marketcatalyst.ai/" target="_blank" rel="noopener">MarketCatalyst</a> LLC is not a registered investment advisor and does not manage client assets. Content on this platform is provided for informational and educational purposes only. It is not investment advice, and MarketCatalyst is not a stock-picking or trade-alert service. Trading stocks and options involves risk, including the possible loss of principal. Consider your own goals, time horizon, and risk tolerance, and consult a qualified financial advisor before making any investment decision.</p></div>

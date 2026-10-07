@@ -140,13 +140,22 @@ export class GroqService {
   /** One completion. Returns the assistant text, or null on any failure. */
   async chat(
     messages: ChatMessage[],
-    opts: { model?: string; timeoutMs?: number } = {},
+    opts: { model?: string; timeoutMs?: number; jsonMode?: boolean; maxTokens?: number } = {},
   ): Promise<string | null> {
     if (!this.apiKey) return null;
     const model = opts.model?.trim() || (await this.pickModel());
     if (!model) {
       this.logger.warn("Groq: no usable model for this key");
       return null;
+    }
+    const body: Record<string, unknown> = {
+      model,
+      messages,
+      temperature: 0.3,
+      max_tokens: opts.maxTokens ?? 4000,
+    };
+    if (opts.jsonMode !== false) {
+      body.response_format = { type: "json_object" };
     }
     try {
       const res = await fetchJson<GroqChatResponse>(GROQ_URL, {
@@ -155,15 +164,7 @@ export class GroqService {
           Authorization: `Bearer ${this.apiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          model,
-          messages,
-          temperature: 0.3,
-          max_tokens: 4000,
-          response_format: { type: "json_object" },
-        }),
-        // One attempt. The caller falls back to OpenRouter, so retrying here
-        // only delays that.
+        body: JSON.stringify(body),
         retries: 0,
         timeoutMs: opts.timeoutMs ?? 25_000,
       });
@@ -179,7 +180,12 @@ export class GroqService {
       );
       return null;
     } catch (err) {
-      this.logger.warn(`Groq chat failed (${model}): ${(err as Error).message}`);
+      const msg = (err as Error)?.message ?? String(err);
+      if (opts.jsonMode !== false && /json_validate_failed/i.test(msg)) {
+        this.logger.warn("Groq json_object validation failed; retrying without response_format constraint...");
+        return this.chat(messages, { ...opts, jsonMode: false });
+      }
+      this.logger.warn(`Groq chat failed (${model}): ${msg}`);
       return null;
     }
   }

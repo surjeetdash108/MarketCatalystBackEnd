@@ -70,6 +70,7 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "options-chains", trigger: "scheduler", schedules: ["0 19 * * 1-5"] },
   { name: "recaps", trigger: "scheduler", schedules: ["45 18 * * 1-5"] },
   { name: "recap-blog", trigger: "scheduler", schedules: ["0 19 * * 1-5"], note: "reads the recaps snapshot, so it trails it by 15m; publishes a Draft blog post" },
+  { name: "eod-recap", trigger: "scheduler", schedules: ["15 16 * * 1-5"], note: "EOD Recap blog post: feeds 16 ETFs + indices/commodities/crypto into Claude skill and publishes to blog 15 min after market close at 4:15 PM ET (3:15 PM CT)" },
   { name: "sectors", trigger: "scheduler", schedules: ["0 18 * * 1-5"] },
   { name: "ticker-universe", trigger: "scheduler", schedules: ["0 8 * * 1-5"] },
   { name: "sec-form4", trigger: "scheduler", schedules: ["0 8 * * 6"], note: "moved off the weekday premarket path — insider filings tolerate a weekend cadence" },

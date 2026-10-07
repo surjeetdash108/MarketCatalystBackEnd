@@ -55,6 +55,31 @@ gcloud scheduler jobs "${action}" http "${NAME}" \
   --oidc-token-audience="${SERVICE_URL}" \
   --attempt-deadline="${DEADLINE}"
 
+# ── EOD Recap Blog post (15 min after market close: 16:15 ET / 15:15 CT) ──────
+EOD_NAME="sync-eod-recap"
+EOD_SCHEDULE="15 16 * * 1-5"  # 16:15 ET / 15:15 CT weekdays (15 min post-close)
+EOD_URI="${SERVICE_URL}/sync/eod-recap/run"
+
+echo "→ ${EOD_NAME}  ('${EOD_SCHEDULE}' ${TZ_NAME})  ${EOD_URI}"
+
+if gcloud scheduler jobs describe "${EOD_NAME}" \
+      --project="${PROJECT_ID}" --location="${REGION}" >/dev/null 2>&1; then
+  eod_action=update
+else
+  eod_action=create
+fi
+
+gcloud scheduler jobs "${eod_action}" http "${EOD_NAME}" \
+  --project="${PROJECT_ID}" \
+  --location="${REGION}" \
+  --schedule="${EOD_SCHEDULE}" \
+  --time-zone="${TZ_NAME}" \
+  --uri="${EOD_URI}" \
+  --http-method=POST \
+  --oidc-service-account-email="${INVOKER_SA}" \
+  --oidc-token-audience="${SERVICE_URL}" \
+  --attempt-deadline="900s"
+
 # ── Retire the old per-job schedules ─────────────────────────────────────────
 OLD_JOBS=(
   sec-13f sec-form4 companies stock-history ticker-universe rs-rating

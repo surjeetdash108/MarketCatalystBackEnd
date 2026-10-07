@@ -45,10 +45,10 @@ export class LlmGatewayService {
    */
   async chat(
     messages: ChatMessage[],
-    opts: { timeoutMs?: number } = {},
+    opts: { timeoutMs?: number; jsonMode?: boolean; maxTokens?: number } = {},
   ): Promise<string | null> {
     if (this.groq.enabled) {
-      const out = await this.groq.chat(messages, { timeoutMs: opts.timeoutMs });
+      const out = await this.groq.chat(messages, opts);
       if (out?.trim()) return out;
       this.logger.warn("Groq returned nothing usable — falling back to OpenRouter");
     }

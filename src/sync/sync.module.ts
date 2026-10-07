@@ -47,6 +47,8 @@ import { MacroRegimeJob } from "./macro-regime.job";
 import { SectorsJob } from "./sectors.job";
 import { StockHistoryJob } from "./stock-history.job";
 import { SyncController } from "./sync.controller";
+import { AnthropicModule } from "../vendors/anthropic/anthropic.module";
+import { EodRecapJob } from "./eod-recap.job";
 import { TickerUniverseJob } from "./ticker-universe.job";
 import { PremarketJob } from "./premarket.job";
 import { LiveModule } from "../live/live.module";
@@ -56,6 +58,7 @@ import { LiveModule } from "../live/live.module";
     PolygonModule,
     // The daily recap job writes a blog post and asks an LLM for its prose.
     BlogsModule,
+    AnthropicModule,
     GroqModule,
     OpenRouterModule,
     FredModule,
@@ -107,6 +110,7 @@ import { LiveModule } from "../live/live.module";
     FearGreedJob,
     RecapsJob,
     PremarketJob,
+    EodRecapJob,
   ],
 })
 /**
