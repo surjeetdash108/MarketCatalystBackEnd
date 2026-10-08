@@ -454,6 +454,25 @@ export function computeIndicators(
   // together and a caller cannot mix a fresh base with a stale move.
   const week5BaseClose =
     week5ChangePct == null ? null : (closes[closes.length - 1 - 5] ?? null);
+  // The last 6 closes with their session dates, oldest → newest.
+  //
+  // week5BaseClose is only the right base while the live price is from the
+  // same session as the last stored bar. Once a new session starts, the base
+  // has to move forward one session, because today counts as one of the 5.
+  // With the dates attached, the reader matches the live price's ET date
+  // against the newest entry: same day → [0], newer day → [1]. The newest
+  // entry can be a still-forming bar on the on-demand paths; only its date
+  // is used for the match, never its close as a base.
+  // Null whenever the move is null, and when any of the bars has no date,
+  // since the reader cannot choose a base without one.
+  const week5Window = bars.slice(-6);
+  const week5Closes =
+    week5ChangePct == null || !week5Window.every((b) => b.barDate)
+      ? null
+      : week5Window.map((b) => ({
+          date: b.barDate as string,
+          close: Math.round(b.close * 10000) / 10000,
+        }));
   const latestClose = closes[closes.length - 1];
 
   // 52-week range from the real rolling year of highs/lows.
@@ -517,6 +536,8 @@ export function computeIndicators(
       week5ChangePct == null ? null : Math.round(week5ChangePct * 100) / 100,
     week5BaseClose:
       week5BaseClose == null ? null : Math.round(week5BaseClose * 10000) / 10000,
+    /** Last 6 dated closes, oldest → newest (see week5Closes above). */
+    week5Closes,
 
     /** Rolling RSI(14) line for the RSI pane. */
     rsi14Series: rsiHistory.map((v) => Math.round(v * 10) / 10),
