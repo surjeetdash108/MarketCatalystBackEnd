@@ -294,6 +294,27 @@ export interface FmpPriceTargetRow {
   date: string;
   firm: string | null;
   priceTarget: number | null;
+  /** The post's headline — often states the target it replaced ("lowered to
+   * $80 from $93 at Barclays"), which no structured field carries. */
+  title: string | null;
+}
+
+/** One share split (`/stable/splits`). `ratio` is new shares per old share:
+ * 5 for a 5-for-1 split, 0.1 for a 1-for-10 reverse split. */
+export interface FmpSplitRow {
+  date: string;
+  ratio: number;
+}
+
+/** One rating-news headline (`/stable/grades-news`). Carries no structured
+ * price target, but the headline usually states it ("price target raised to
+ * $350 from $340 at TD Cowen") for firms `price-target-news` never covers. */
+export interface FmpGradeNewsRow {
+  date: string;
+  /** FMP's firm attribution — NOT reliable on its own (BRZE "Citizens"
+   * headlines are tagged "Citigroup"); callers must verify it against `title`. */
+  firm: string | null;
+  title: string;
 }
 
 /** A macro/economic-calendar release (past or scheduled). */
@@ -877,9 +898,58 @@ export class FmpService {
           date: String(o.publishedDate ?? o.date ?? "").slice(0, 10),
           firm: o.analystCompany != null ? String(o.analystCompany) : null,
           priceTarget: num(o.priceTarget ?? o.adjPriceTarget),
+          title: o.newsTitle != null ? String(o.newsTitle) : null,
         };
       })
       .filter((r) => r.firm && r.priceTarget != null);
+  }
+
+  /**
+   * Rating-news headlines (`/stable/grades-news`), newest first. A second
+   * per-firm target source: `price-target-news` omits whole firms (TD Cowen,
+   * Citi, …) or lags months behind, while their PT changes still appear here as
+   * headlines. Same 100-row server ceiling as `price-target-news`.
+   */
+  async getGradeNews(ticker: string, limit = 100): Promise<FmpGradeNewsRow[]> {
+    if (!this.apiKey) return [];
+    const rows = await this.get(
+      `grades-news?symbol=${encodeURIComponent(ticker)}&limit=${limit}`,
+      { retries: 0 },
+    ).catch(() => [] as unknown[]);
+    return rows
+      .map((r) => {
+        const o = r as Record<string, unknown>;
+        return {
+          date: String(o.publishedDate ?? "").slice(0, 10),
+          firm: o.gradingCompany != null ? String(o.gradingCompany) : null,
+          title: o.newsTitle != null ? String(o.newsTitle) : "",
+        };
+      })
+      .filter((r) => r.date && r.title);
+  }
+
+  /**
+   * Share-split history (`/stable/splits`). Analyst targets are quoted on the
+   * share basis of the day they were posted, so a target from before a split
+   * must be rescaled before it can be compared with one from after.
+   */
+  async getSplits(ticker: string): Promise<FmpSplitRow[]> {
+    if (!this.apiKey) return [];
+    const rows = await this.get(
+      `splits?symbol=${encodeURIComponent(ticker)}`,
+      { retries: 0 },
+    ).catch(() => [] as unknown[]);
+    return rows
+      .map((r) => {
+        const o = r as Record<string, unknown>;
+        const numerator = num(o.numerator);
+        const denominator = num(o.denominator);
+        return {
+          date: String(o.date ?? "").slice(0, 10),
+          ratio: numerator && denominator ? numerator / denominator : NaN,
+        };
+      })
+      .filter((r) => r.date && Number.isFinite(r.ratio) && r.ratio > 0 && r.ratio !== 1);
   }
 
   /**
