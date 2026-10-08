@@ -9,6 +9,7 @@ const tile = (over: Partial<TapeItem>): TapeItem => ({
   proxyTicker: "SPY",
   isProxy: false,
   note: null,
+  source: "fmp",
   value: 7722.72,
   change: 0.73,
   pctChange: 0.73,

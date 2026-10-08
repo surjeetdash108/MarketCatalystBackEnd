@@ -107,6 +107,13 @@ function errMessage(err: unknown): string {
   }
 }
 
+/**
+ * The vendor whose number the tile shows. Set by the path that built the tile,
+ * so the UI can badge it truthfully instead of inferring it from the stream's
+ * configured source (an FMP-served VIX was being badged "Polygon").
+ */
+export type TapeSource = "fmp" | "polygon" | "fred";
+
 export interface TapeItem {
   id: string;
   kind: TapeKind;
@@ -116,6 +123,7 @@ export interface TapeItem {
   proxyTicker: string | null;
   isProxy: boolean;
   note: string | null;
+  source: TapeSource;
   /** 'percent' on the rate tile only; absent on price-quoted tiles. */
   unit?: "percent";
   value: number | null;
@@ -364,6 +372,7 @@ export class TapeService implements OnModuleDestroy {
           proxyTicker: s.proxyTicker,
           isProxy: s.isProxy,
           note: s.note,
+          source: "polygon",
           value: r?.price != null ? r.price * mult : null,
           // Price tiles render a PERCENT move, matching what the strip has
           // always shown and what mergePulse feeds the index drawer.
@@ -491,6 +500,7 @@ export class TapeService implements OnModuleDestroy {
         proxyTicker: null,
         isProxy: false,
         note: s.note,
+        source: "polygon", // Polygon's /fed/v1/treasury-yields
         unit: "percent",
         value,
         change,
@@ -553,6 +563,7 @@ export class TapeService implements OnModuleDestroy {
       proxyTicker: null,
       isProxy: false,
       note: s.note,
+      source: "fred",
       value,
       change: pct,
       pctChange: pct,
@@ -614,6 +625,7 @@ export class TapeService implements OnModuleDestroy {
       proxyTicker: s.proxyTicker,
       isProxy: false,
       note: rate ? s.note : FMP_NOTE,
+      source: "fmp" as const,
       ...(rate ? { unit: "percent" as const } : {}),
     };
     if (!q) {

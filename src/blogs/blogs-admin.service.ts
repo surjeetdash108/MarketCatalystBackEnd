@@ -304,6 +304,10 @@ export interface BlogAdminView {
   html: string;
   status: "Published" | "Draft";
   date: string;
+  /** Sortable ISO timestamps behind `date`, which is display-only (no year).
+   *  publishedAt is null for a post that has never been published. */
+  publishedAt: string | null;
+  createdAt: string | null;
   /**
    * The source document the post was published from, when there was one.
    *
@@ -322,6 +326,8 @@ export interface BlogAdminView {
   format: BlogFormat;
   /** Hero image shown above the article. */
   heroImageUrl: string | null;
+  /** True for the one post currently featured as Editor's choice. */
+  editorsChoice: boolean;
   /**
    * The shared blog design, resolved from THEME and returned with every html
    * post.
@@ -378,6 +384,9 @@ export interface BlogAdminBody {
   pdfAspect?: unknown;
   format?: unknown;
   heroImageUrl?: unknown;
+  /** true → make this THE Editor's choice (unmarking any other); false →
+   *  unmark this post; absent → leave the flag alone. */
+  editorsChoice?: unknown;
 }
 
 const MONTHS = [
@@ -496,6 +505,44 @@ export class BlogsAdminService {
   /** The shared design on its own, for the editor's Design row. */
   async theme(): Promise<BlogTheme> {
     return this.loadTheme();
+  }
+
+  /**
+   * Makes `id` THE Editor's choice: sets its `editorsChoice` flag and clears
+   * the flag on whichever post held it.
+   *
+   * One transaction, so "at most one post is featured" holds even when two
+   * admins mark different posts at once — Firestore serialises the query read
+   * against the writes, and the loser retries against the winner's state.
+   * Unmarking needs none of this: it only ever touches the post's own flag.
+   */
+  private async markEditorsChoice(id: string): Promise<void> {
+    const ref = this.col.doc(id);
+    const holders = this.col.where("editorsChoice", "==", true);
+    // Assigned inside the callback, which Firestore may retry; only the final
+    // (committed) attempt's value survives to be logged.
+    let unmarked: string[] = [];
+    await this.firebase.firestore.runTransaction(async (tx) => {
+      const current = await tx.get(holders);
+      unmarked = current.docs.map((d) => d.id).filter((d) => d !== id);
+      for (const doc of current.docs) {
+        if (doc.id !== id) tx.update(doc.ref, { editorsChoice: false });
+      }
+      // update(), not set(): fails if the post was deleted meanwhile, rather
+      // than resurrecting it as a shell holding only the flag.
+      tx.update(ref, { editorsChoice: true });
+    });
+    this.logger.log(
+      `editors choice set id=${id} unmarked=[${unmarked.join(",")}]`,
+    );
+  }
+
+  private validateEditorsChoice(value: unknown): boolean | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "boolean") {
+      throw new BadRequestException("editorsChoice must be a boolean");
+    }
+    return value;
   }
 
   /**
@@ -688,9 +735,8 @@ export class BlogsAdminService {
    * on the following day.
    */
   private formatDate(ts: Timestamp | null | undefined): string {
-    if (!ts) return "";
-    const d = typeof ts.toDate === "function" ? ts.toDate() : new Date(ts as unknown as string);
-    if (Number.isNaN(d.getTime())) return "";
+    const d = this.toDate(ts);
+    if (!d) return "";
     const et = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York",
       month: "short",
@@ -701,6 +747,18 @@ export class BlogsAdminService {
     }).formatToParts(d);
     const at = (t: string) => et.find((p) => p.type === t)?.value ?? "";
     return `${at("month")} ${at("day")} · ${at("hour")}:${at("minute")} ET`;
+  }
+
+  /** A stored timestamp (Firestore Timestamp, or a legacy string) as a Date,
+   *  or null when absent or unparseable. */
+  private toDate(ts: Timestamp | null | undefined): Date | null {
+    if (!ts) return null;
+    const d = typeof ts.toDate === "function" ? ts.toDate() : new Date(ts as unknown as string);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  private toIso(ts: Timestamp | null | undefined): string | null {
+    return this.toDate(ts)?.toISOString() ?? null;
   }
 
   /**
@@ -889,6 +947,8 @@ export class BlogsAdminService {
           : this.markdownToHtml(data.content ?? ""),
       status: data.status === "published" ? "Published" : "Draft",
       date: this.formatDate(data.publishedAt),
+      publishedAt: this.toIso(data.publishedAt),
+      createdAt: this.toIso(data.createdAt),
       pdfUrl: typeof data.pdfUrl === "string" ? data.pdfUrl : null,
       pdfName: typeof data.pdfName === "string" ? data.pdfName : null,
       pdfPages: typeof data.pdfPages === "number" ? data.pdfPages : null,
@@ -907,6 +967,8 @@ export class BlogsAdminService {
       // `content` has always held.
       format: storedFormat,
       heroImageUrl: typeof data.coverImageUrl === "string" ? data.coverImageUrl : null,
+      // Posts written before the field existed have no flag — not featured.
+      editorsChoice: data.editorsChoice === true,
       /* The post's OWN design when it has one, and only then the shared theme.
          The shared theme is last-upload-wins, so preferring it here showed the
          console an article drawn with a different post's stylesheet — exactly
@@ -922,6 +984,7 @@ export class BlogsAdminService {
     const title = this.validateTitle(body.title, true)!;
     const zone = this.validateZone(body.zone, true)!;
     const rank = this.validateRank(body.rank);
+    const editorsChoice = this.validateEditorsChoice(body.editorsChoice);
 
     const type = ZONE_TO_TYPE[zone];
     const kick = typeof body.kick === "string" ? body.kick : "";
@@ -975,6 +1038,9 @@ export class BlogsAdminService {
       status: published ? "published" : "draft",
       type,
       rank: rank ?? 999,
+      // Always written false here; marking goes through markEditorsChoice()
+      // below so the previous holder is cleared in the same transaction.
+      editorsChoice: false,
       authorId: "console-admin",
       editorId: "console-admin",
       categories: kick ? [kick] : [],
@@ -1023,6 +1089,13 @@ export class BlogsAdminService {
       .doc(slug)
       .set({ postId: ref.id });
 
+    this.logger.log(
+      `blog created id=${ref.id} slug=${slug} status=${published ? "published" : "draft"} ` +
+        `format=${resolved.format} editorsChoice=${editorsChoice === true}`,
+    );
+
+    if (editorsChoice) await this.markEditorsChoice(ref.id);
+
     return { id: ref.id };
   }
 
@@ -1036,6 +1109,7 @@ export class BlogsAdminService {
     const title = this.validateTitle(body.title, false);
     const zone = this.validateZone(body.zone, false);
     const rank = this.validateRank(body.rank);
+    const editorsChoice = this.validateEditorsChoice(body.editorsChoice);
 
     const update: Record<string, unknown> = {
       editorId: "console-admin",
@@ -1095,6 +1169,7 @@ export class BlogsAdminService {
     }
     if (body.author !== undefined) update.author = String(body.author ?? "");
     if (body.read !== undefined) update.read = String(body.read ?? "");
+    if (editorsChoice === false) update.editorsChoice = false;
 
     if (body.status !== undefined) {
       const published = String(body.status).toLowerCase() === "published";
@@ -1106,6 +1181,15 @@ export class BlogsAdminService {
     }
 
     await ref.update(update);
+    // Field names only — values can be whole article bodies.
+    const changed = Object.keys(update).filter(
+      (k) => k !== "editorId" && k !== "updatedAt",
+    );
+    this.logger.log(
+      `blog updated id=${id} fields=[${changed.join(",")}] ` +
+        `editorsChoice=${editorsChoice === undefined ? "unchanged" : editorsChoice}`,
+    );
+    if (editorsChoice === true) await this.markEditorsChoice(id);
     return { id };
   }
 
@@ -1116,6 +1200,7 @@ export class BlogsAdminService {
     const slug = snap.data()?.slug as string | undefined;
 
     await ref.delete();
+    this.logger.log(`blog deleted id=${id} slug=${slug ?? "-"}`);
     // Remove this post's uploaded files (best-effort). The source document was
     // previously left behind on delete — a leak worth closing now that a Word
     // upload can be tens of megabytes. `blog-pdfs/` is the pre-rename location

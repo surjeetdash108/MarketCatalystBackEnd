@@ -298,6 +298,17 @@
 > The old per-bar `ohlcv_bars` (≈300k docs) is retired as a client read path
 > (it remains only as the internal substrate the indicator jobs read).
 >
+> **Candle-size requests.** `GET /live/bars?ticker&interval=` (exclusive with
+> `tf`; case-sensitive — `1m` minute vs `1M` month) returns candles of one
+> size for the chart's candle picker and the technical-rating card:
+> `1m`→`_1min`, `5m`→`_5min`, `15m`→`_15min` (new doc, 30 days),
+> `30m`/`1H`/`2H`/`4H`→`_30min` (widened up to 250 days), `1D`/`1W`/`1M`→`_daily`.
+> Intraday candles are **regular session only** (09:30–16:00 ET), and 1H/2H/4H
+> are re-grouped from 30-minute bars anchored at the 09:30 open; weekly/monthly
+> are re-grouped from daily bars on the ET calendar (`bars-aggregate.util.ts`).
+> No size beyond `1M` is offered — the plan's 5-year history leaves too few
+> candles for a quarterly/yearly series.
+>
 > **Usage tracking.** Every on-demand fetch increments **`ticker_usage/{t}`**
 > (batched ≤1 write/min/ticker) — the gradually-built record of which stocks
 > are REALLY used.
