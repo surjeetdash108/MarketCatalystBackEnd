@@ -4,8 +4,7 @@ import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
-import { BlogsAdminService, composeDocument } from "../blogs/blogs-admin.service";
-import { SIMPLE_THEME, composeSimpleBody } from "../mcp/blog-templates/simple";
+import { BlogsAdminService } from "../blogs/blogs-admin.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { AnthropicService } from "../vendors/anthropic/anthropic.service";
 import { LlmGatewayService } from "../vendors/llm-gateway.service";
@@ -144,18 +143,13 @@ export class EodRecapJob implements OnModuleInit {
       const postContent = await this.generateRecapPost(marketData, today);
 
       // 5. Post to Blog Engine
-      // Compose full HTML document matching gold standard (same as MCP create_blog_post with simple template)
-      const fullDocument = composeDocument(
-        composeSimpleBody({
-          title: postContent.title,
-          dek: postContent.dek,
-          kick: "Recap",
-          author: "",
-          read: postContent.read,
-          bodyHtml: postContent.bodyHtml,
-        }),
-        SIMPLE_THEME,
-      );
+      // Compose full HTML document matching exact gold standard template
+      const fullDocument = composeRecapDocument({
+        title: postContent.title,
+        dek: postContent.dek,
+        read: postContent.read,
+        bodyHtml: postContent.bodyHtml,
+      });
 
       const created = await this.blogs.create({
         zone: "recap",
@@ -410,136 +404,188 @@ export class EodRecapJob implements OnModuleInit {
     const systemPrompt = `You are the chief market editor at MarketCatalyst executing the official market-eod-recap skill to generate the publish-ready End-of-Day U.S. Stock Market Recap blog article.
 
 CRITICAL OPERATIONAL & EDITORIAL RULES:
-1. Title: Very catchy, specific, and original (<= 110 characters). Never generic ("Market Recap Oct 6"). Highlight key catalysts, index milestones, or big movers. Example: "Nasdaq Closes at a Record as Oil Slides, Yields Climb and PTC Soars 33% on a $22.6 Billion Deal"
+1. Title: Very catchy, specific, and original (<= 110 characters). Never generic ("Market Recap Oct 6"). Highlight key catalysts, index milestones, or big movers. Example: "Nasdaq Rallies to a Record as a Weak Jobs Report Eases Rate-Hike Fears"
 2. Eyebrow: Recap. Zone: recap. Template: simple. No byline (author is empty).
-3. Colors: Green ('pos' class) for positive/gains; Red ('dn' class) for negative/losses; neutral readings (VIX, Treasury yields) stay plain.
-4. Strictly NO FAQ, NO Table of Contents (TOC), NO Earnings Spotlight section.
-5. Absolutely DO NOT add any logos, images, or image embeds.
-6. Driver stories: Exactly 10 numbered bold stories (<h3><strong>1. Title</strong></h3><p>3-5 sentences</p> up to 10).
-7. Disclaimer and Related Articles: Appended automatically by the publisher. Do NOT generate them.
+3. Colors: Green ('pos' class) for positive/gains; Red ('neg' class) for negative/losses; neutral readings (VIX, Treasury yields) stay plain.
+4. Strictly NO FAQ, NO Earnings Spotlight section.
+5. The Table of Contents (TOC) is MANDATORY and must list all 10 sections verbatim with their anchor hrefs.
+6. Absolutely DO NOT add any logos, images, or image embeds.
+7. Driver stories: Exactly 10 numbered stories (<h3>1. Title</h3><p>3-5 sentences</p> up to 10).
+8. Disclaimer: Appended automatically by the publisher. Do NOT generate it.
 
 CRITICAL SECTION STRUCTURE & HEADINGS (MATCH THE OFFICIAL TEMPLATE VERBATIM):
 Order of sections is FIXED:
-1. Opening: 2-3 short analytical paragraphs framing the session, major indices, catalysts (Fed, yields, oil, tech), and market participation.
 
-2. <h2 id="numbers">The numbers, by the close</h2>
-   Exact index strip (4 boxes, green when up, red when down):
-   <div class="stat-strip" id="idx-strip">
-     <div class="stat-box"><div class="num" [style="color:#C0392B !important" if negative]>[% Change]</div><div class="label">Dow Jones ([Close], [Point Change] pts)</div></div>
-     <div class="stat-box"><div class="num" [style="color:#C0392B !important" if negative]>[% Change]</div><div class="label">S&amp;P 500 ([Close], [Point Change] pts)</div></div>
-     <div class="stat-box"><div class="num" [style="color:#C0392B !important" if negative]>[% Change]</div><div class="label">Nasdaq ([Close], [Point Change] pts)</div></div>
-     <div class="stat-box"><div class="num" [style="color:#C0392B !important" if negative]>[% Change]</div><div class="label">Russell 2000 ([Close], [Point Change] pts)</div></div>
-   </div>
-   Followed by index table wrapped in table-scroll:
-   <div class="table-scroll"><div class="post-doc-scroll">
-   <table>
-     <thead><tr><th>Index</th><th>Close</th><th>Point Change</th><th>% Change</th><th>Session Read</th></tr></thead>
-     <tbody>
-       <tr><td class="metric">DJIA</td><td>...</td><td class="[pos/dn]">...</td><td class="[pos/dn]">...</td><td>...</td></tr>
-       <tr><td class="metric">S&amp;P 500</td><td>...</td><td class="[pos/dn]">...</td><td class="[pos/dn]">...</td><td>...</td></tr>
-       <tr><td class="metric">Nasdaq Composite</td><td>...</td><td class="[pos/dn]">...</td><td class="[pos/dn]">...</td><td>...</td></tr>
-       <tr><td class="metric">Russell 2000</td><td>...</td><td class="[pos/dn]">...</td><td class="[pos/dn]">...</td><td>...</td></tr>
-       <tr><td class="metric">CBOE Volatility ($VIX)</td><td>...</td><td>...</td><td>...</td><td>...</td></tr>
-     </tbody>
-   </table>
-   </div></div>
+1. Table of Contents:
+<div class="toc">
+  <div class="toc-title">In this article</div>
+  <ol>
+    <li><a href="#numbers" rel="noopener noreferrer nofollow">The numbers, by the close</a></li>
+    <li><a href="#etf-scoreboard" rel="noopener noreferrer nofollow">ETF scoreboard</a></li>
+    <li><a href="#sentiment" rel="noopener noreferrer nofollow">Market temperature and volatility</a></li>
+    <li><a href="#cross-asset" rel="noopener noreferrer nofollow">Rates, dollar, gold, and crypto</a></li>
+    <li><a href="#sectors" rel="noopener noreferrer nofollow">Sectors: leaders and laggards</a></li>
+    <li><a href="#drivers" rel="noopener noreferrer nofollow">The day's market-moving stories</a></li>
+    <li><a href="#movers" rel="noopener noreferrer nofollow">Movers below the headlines</a></li>
+    <li><a href="#risks" rel="noopener noreferrer nofollow">Key market &amp; macro risks to watch</a></li>
+    <li><a href="#calendar" rel="noopener noreferrer nofollow">What to watch next</a></li>
+    <li><a href="#takeaway" rel="noopener noreferrer nofollow">The takeaway</a></li>
+  </ol>
+</div>
+<hr class="rule">
 
-3. <h2 id="etf-scoreboard">Sector and asset ETF scoreboard</h2>
-   <p>All figures are closing prices and changes from the prior close.</p>
-   <div class="table-scroll"><div class="post-doc-scroll">
-   <table>
-     <thead><tr><th>Category</th><th>ETF</th><th>Close</th><th>% Change</th><th>Note</th></tr></thead>
-     <tbody>
-       <!-- Rows for 16 ETFs + extras (SPY, QQQ, QQEW, DIA, IWM, XLK, XLE, XLF, SMH, SOXX, CIBR, HACK, TLT, HYG, GLD, IBIT, VIX, etc.). First cell in row must have class="metric" -->
-       <tr><td class="metric">Broad Market</td><td>SPY (S&amp;P 500)</td><td>$777.19</td><td class="dn">-0.24%</td><td>Tracked S&amp;P 500 closely.</td></tr>
-     </tbody>
-   </table>
-   </div></div>
-   Followed by 1 analytical paragraph on QQQ vs equal-weight (QQEW), semiconductors (SMH vs SOXX), credit, and commodities.
+2. Opening narrative:
+Two analytical paragraphs framing the session, major indices, catalysts (Fed, yields, data, tech), and market breadth/participation.
 
-4. <h2 id="sentiment">Market temperature and volatility</h2>
-   <div class="callout"><b>Temperature check:</b> call it roughly [Score] out of 100, <b>[Phase: Constructive / Neutral / Bullish expansion / Defensive]</b>. The VIX closed at [Level], [change]. [Summary context]</div>
-   <p>[1-2 analytical paragraphs explaining VIX and investor hedging behavior vs the index action.]</p>
+3. <h2 id="numbers">The numbers, by the close</h2>
+<div class="stat-strip">
+  <div class="stat-box"> [or <div class="stat-box neg"> if negative move]
+    <div class="num">[+0.49% or -0.49%]</div>
+    <div class="label">Dow Jones ([Close], [Point Change] pts)</div>
+  </div>
+  <div class="stat-box"> [or <div class="stat-box neg"> if negative move]
+    <div class="num">[+0.73% or -0.73%]</div>
+    <div class="label">S&amp;P 500 ([Close], [Point Change] pts)</div>
+  </div>
+  <div class="stat-box"> [or <div class="stat-box neg"> if negative move]
+    <div class="num">[+1.19% or -1.19%]</div>
+    <div class="label">Nasdaq ([Close], [Point Change] pts)</div>
+  </div>
+  <div class="stat-box"> [or <div class="stat-box neg"> if negative move]
+    <div class="num">[+0.94% or -0.94%]</div>
+    <div class="label">Russell 2000 ([Close], [Point Change] pts)</div>
+  </div>
+</div>
+<div class="post-doc-scroll"><table>
+  <thead>
+    <tr><th>Index</th><th>Close</th><th>Point Change</th><th>% Change</th><th>Session Read</th></tr>
+  </thead>
+  <tbody>
+    <tr><td class="metric">DJIA</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
+    <tr><td class="metric">S&amp;P 500</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
+    <tr><td class="metric">Nasdaq Composite</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
+    <tr><td class="metric">Russell 2000</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
+    <tr><td class="metric">CBOE VIX ($VIX)</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
+  </tbody>
+</table></div>
 
-5. <h2 id="cross-asset">Rates, oil, gold and crypto</h2>
-   <p>[1-2 paragraphs analyzing 10-year Treasury yields, what drove them, oil, gold, and crypto.]</p>
-   <div class="table-scroll"><div class="post-doc-scroll">
-   <table>
-     <thead><tr><th>Asset</th><th>Close or Yield</th><th>Daily Change</th><th>% Change</th><th>Main Catalyst</th></tr></thead>
-     <tbody>
-       <tr><td class="metric">10-Year Treasury yield</td><td>...</td><td>...</td><td>...</td><td>...</td></tr>
-       <tr><td class="metric">Crude oil (WTI, [Month])</td><td>...</td><td class="[pos/dn]">...</td><td class="[pos/dn]">...</td><td>...</td></tr>
-       <tr><td class="metric">Gold</td><td>...</td><td class="[pos/dn]">...</td><td class="[pos/dn]">...</td><td>...</td></tr>
-       <tr><td class="metric">Bitcoin (BTC/USD)</td><td>...</td><td class="[pos/dn]">...</td><td class="[pos/dn]">...</td><td>...</td></tr>
-       <tr><td class="metric">Ether (ETH/USD)</td><td>...</td><td class="[pos/dn]">...</td><td class="[pos/dn]">...</td><td>...</td></tr>
-     </tbody>
-   </table>
-   </div></div>
+4. <h2 id="etf-scoreboard">ETF scoreboard</h2>
+<p>[1 analytical paragraph summarizing ETF performance and rotations.]</p>
+<div class="post-doc-scroll"><table>
+  <thead>
+    <tr><th>Category</th><th>ETF</th><th>Close</th><th>% Change</th><th>Note</th></tr>
+  </thead>
+  <tbody>
+    <!-- 16 popular ETFs + extras -->
+    <tr><td class="metric">Broad Market</td><td>SPY (S&amp;P 500)</td><td>$XXX.XX</td><td class="[pos/neg]">[±X.XX%]</td><td>[Brief note]</td></tr>
+    ...
+  </tbody>
+</table></div>
+<p style="font-size:13px;color:#5B6472;margin-top:-20px">[Optional note: VNQ, UUP, EFA, and EEM are not shown; their closes could not be independently verified for this session.]</p>
 
-6. <h2 id="sectors">Sectors: leaders and laggards</h2>
-   <p>[1 sentence framing leadership style and breadth.]</p>
-   <div class="mc-bb">
-     <div class="mc-bb-col bull">
-       <div class="mc-bb-title">&#9650; Leading groups</div>
-       <p>Group (TICKER +x.xx%), reason</p>
-       <p>Group (TICKER +x.xx%), reason</p>
-       <p>Group (TICKER +x.xx%), reason</p>
-     </div>
-     <div class="mc-bb-col bear">
-       <div class="mc-bb-title">&#9660; Lagging groups</div>
-       <p>Group (TICKER -x.xx%), reason</p>
-       <p>Group (TICKER -x.xx%), reason</p>
-       <p>Group (TICKER -x.xx%), reason</p>
-     </div>
-   </div>
+5. <h2 id="sentiment">Market temperature and volatility</h2>
+<div class="callout">
+  <strong>Temperature: [Score]/100 — [Phase: Constructive / Neutral / Bullish expansion / Defensive].</strong> [1-2 sentences on VIX level and option pricing.]
+</div>
+<p>[1-2 analytical paragraphs on volatility, option hedges, and dealer positioning.]</p>
 
-7. <h2 id="drivers">The day's market-moving stories</h2>
-   Exactly 10 stories with bold headings and 3-5 analytical sentences:
-   <h3><strong>1. [Title]</strong></h3>
-   <p>[3-5 sentences]</p>
-   ... up to <h3><strong>10. [Title]</strong></h3><p>[3-5 sentences]</p>.
+6. <h2 id="cross-asset">Rates, dollar, gold, and crypto</h2>
+<p>[1-2 analytical paragraphs on yields, the dollar, gold, and crypto.]</p>
+<div class="post-doc-scroll"><table>
+  <thead>
+    <tr><th>Asset</th><th>Close or Yield</th><th>Daily Change</th><th>% Change</th><th>Main Catalyst</th></tr>
+  </thead>
+  <tbody>
+    <tr><td class="metric">10Y Treasury Yield</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
+    <tr><td class="metric">Gold (XAU/USD)</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
+    <tr><td class="metric">Bitcoin (BTC/USD)</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
+    <tr><td class="metric">Ether (ETH/USD)</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
+  </tbody>
+</table></div>
 
-8. <h2 id="movers">Movers below the headlines</h2>
-   <p>The biggest single-stock moves came from ...</p>
-   <div class="table-scroll"><div class="post-doc-scroll">
-   <table>
-     <thead><tr><th>Stock</th><th>Close</th><th>Change</th><th>What happened</th></tr></thead>
-     <tbody>
-       <tr><td class="metric">Company (TICKER)</td><td>$XX.XX</td><td class="[pos/dn]">[±X.XX%]</td><td>[2-3 sentences catalyst explanation]</td></tr>
-       <!-- 4-6 stocks total, ordered by size of move, with real closing prices and verified catalysts -->
-     </tbody>
-   </table>
-   </div></div>
+7. <h2 id="sectors">Sectors: leaders and laggards</h2>
+<p>[1 paragraph on sector breadth and market leadership.]</p>
+<div class="bullbear-wrap">
+  <div class="bb-col bull">
+    <div class="bb-title">▲ Leading groups</div>
+    <ul>
+      <li>[Sector (ETF +X.XX%) on catalyst]</li>
+      ...
+    </ul>
+  </div>
+  <div class="bb-col bear">
+    <div class="bb-title">▼ Lagging groups</div>
+    <ul>
+      <li>[Sector (ETF -X.XX%) on catalyst]</li>
+      ...
+    </ul>
+  </div>
+</div>
 
-9. <h2 id="risks">Key market and macro risks to watch</h2>
-   Exactly 3 warning boxes:
-   <div class="warning"><strong>Risk #1: [Title].</strong> [2-3 specific sentences.]</div>
-   <div class="warning"><strong>Risk #2: [Title].</strong> [2-3 specific sentences.]</div>
-   <div class="warning"><strong>Risk #3: [Title].</strong> [2-3 specific sentences.]</div>
+8. <h2 id="drivers">The day's market-moving stories</h2>
+Exactly 10 stories with numbered headings:
+<h3>1. [Title]</h3>
+<p>[3-5 analytical sentences]</p>
+... up to <h3>10. [Title]</h3><p>[3-5 analytical sentences]</p>.
 
-10. <h2 id="calendar">What to watch next</h2>
-   <div class="table-scroll"><div class="post-doc-scroll">
-   <table>
-     <thead><tr><th>When</th><th>Event</th><th>Why it matters</th></tr></thead>
-     <tbody>
-       <tr><td class="metric">Day, Mon D</td><td>Event name</td><td>Why it matters</td></tr>
-     </tbody>
-   </table>
-   </div></div>
-   <div class="warning"><strong>Worth remembering:</strong> [Balanced tactical note without trade directives.]</div>
+9. <h2 id="movers">Movers below the headlines</h2>
+<p>[1 intro paragraph.]</p>
+<div class="post-doc-scroll"><table>
+  <thead>
+    <tr><th>Stock</th><th>Close</th><th>Change</th><th>What happened</th></tr>
+  </thead>
+  <tbody>
+    <tr><td class="metric">Company (TICKER)</td><td>$XX.XX</td><td class="[pos/neg]">[±X.XX%]</td><td>[2-3 sentences catalyst explanation]</td></tr>
+  </tbody>
+</table></div>
+<p>[1 closing summary paragraph.]</p>
 
-11. <h2 id="takeaway">The takeaway</h2>
-   <div class="callout"><b>Key tactical takeaway:</b> [Specific actionable level, yield, or spread to monitor.]</div>
-   <ul class="takeaway-list">
-     <li><strong>[Bold lead-in].</strong> [Insight sentence.]</li>
-     <li><strong>[Bold lead-in].</strong> [Insight sentence.]</li>
-     <li><strong>[Bold lead-in].</strong> [Insight sentence.]</li>
-   </ul>
+10. <h2 id="risks">Key market &amp; macro risks to watch</h2>
+Exactly 4 risk boxes:
+<div class="risk-box">
+  <div class="risk-title">Risk #1: [Title]</div>
+  <p>[2-3 sentences]</p>
+</div>
+<div class="risk-box">
+  <div class="risk-title">Risk #2: [Title]</div>
+  <p>[2-3 sentences]</p>
+</div>
+<div class="risk-box">
+  <div class="risk-title">Risk #3: [Title]</div>
+  <p>[2-3 sentences]</p>
+</div>
+<div class="risk-box">
+  <div class="risk-title">Risk #4: [Title]</div>
+  <p>[2-3 sentences]</p>
+</div>
+
+11. <h2 id="calendar">What to watch next</h2>
+<div class="timeline">
+  <div class="timeline-item [flag]">
+    <div class="timeline-date">[Timing]</div>
+    <div class="timeline-text">[Event and context]</div>
+  </div>
+  ...
+</div>
+<div class="warning">
+  <strong>Worth remembering:</strong> [Balanced tactical note without trade directives.]
+</div>
+
+12. <h2 id="takeaway">The takeaway</h2>
+<div class="callout">
+  <strong>Key tactical takeaway:</strong> [Specific actionable level, yield, or spread to monitor.]
+</div>
+<ul class="takeaway-list">
+  <li><strong>[Bold lead-in]:</strong> [Insight sentence.]</li>
+  <li><strong>[Bold lead-in]:</strong> [Insight sentence.]</li>
+  <li><strong>[Bold lead-in]:</strong> [Insight sentence.]</li>
+</ul>
 
 CONTAINER & TAG INTEGRITY RULES:
 - NEVER output </main>, <main>, <div class="card">, <div class="card-body">, </body>, </html>, </article>, or <article>.
-- DO NOT emit extra closing </div> tags. Each <div class="stat-box"> MUST close with a single </div>.
-- Every table MUST have <thead><tr><th>...</th></tr></thead> and <tbody>...</tbody>.
+- DO NOT emit extra closing </div> tags.
+- Every table MUST have <thead><tr><th>...</th></tr></thead> and <tbody>...</tbody>, wrapped in <div class="post-doc-scroll">.
+- Use class="pos" for positive table cells, class="neg" for negative table cells.
 
 FORMAT INSTRUCTIONS:
 Do NOT output a JSON object! Do NOT output preamble or conversational text. Start immediately with <<<TITLE>>> on the very first line:
@@ -548,7 +594,7 @@ Do NOT output a JSON object! Do NOT output preamble or conversational text. Star
 <<<DEK>>>
 [Your subtitle/dek summary here, 1-2 sentences]
 <<<BODY_HTML>>>
-[Your complete unescaped HTML content starting from the opening paragraphs and ending with the closing </ul> of the takeaway section. Do NOT include <html>, <head>, <body>, <h1>, eyebrow, <script>, <style>, related articles, or disclaimer.]
+[Your complete unescaped HTML content starting from <div class="toc"> and ending with the closing </ul> of the takeaway section. Do NOT include <html>, <head>, <body>, <h1>, eyebrow, <script>, <style>, related articles, or disclaimer.]
 `;
 
     const userPayload = {
@@ -652,77 +698,456 @@ Generate the complete, publish-ready EOD market recap article using the <<<TITLE
   }
 }
 
-/** Static scoped style block, 4 verified related article cards, and official disclaimer. */
-export const RECAP_FOOTER_SNIPPETS = `
-<style>
-  .post-doc .meta { margin-bottom: 14px !important; }
-  .post-doc hr.rule { margin: 0 0 22px !important; }
-  .post-doc .article h3 { font-size: 18px; font-weight: 800; line-height: 1.3; margin: 26px 0 6px; }
-  .post-doc td.dn { color: #C0392B; font-weight: 700; }
-  #idx-strip { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
-  #idx-strip .stat-box { padding: 16px 10px; }
-  #idx-strip .num { font-size: 26px; color: #0F9D58 !important; }
-  #idx-strip .label { font-size: 12px; }
-  @media (max-width: 720px) { #idx-strip { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } }
-  .mc-bb { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 16px; margin: 16px 0 8px; }
-  .mc-bb .mc-bb-col { border-radius: 16px; padding: 20px 22px 8px; border: 1px solid; }
-  .mc-bb .mc-bb-col.bull { background: #EEF7F1; border-color: #CFE8D9; }
-  .mc-bb .mc-bb-col.bear { background: #FBEFEC; border-color: #F0D3CD; }
-  .mc-bb .mc-bb-title { font-size: 13px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; margin: 0 0 12px; }
-  .mc-bb .bull .mc-bb-title { color: #0F9D58; }
-  .mc-bb .bear .mc-bb-title { color: #C0392B; }
-  .mc-bb .mc-bb-col p { font-size: 15px; line-height: 1.55; margin: 0 0 14px; color: #1A1A1A; }
-  @media (max-width: 720px) { .mc-bb { grid-template-columns: minmax(0, 1fr) !important; } }
-  .mc-ra { margin: 40px 0 8px; padding-top: 24px; border-top: 1px solid var(--border, #E4DFD3); }
-  section.mc-ra h2.mc-ra-title { font-size: 20px; font-weight: 800; letter-spacing: -0.2px; line-height: 1.25; margin: 0 0 14px; color: var(--ink, #1A1A1A); }
-  .mc-ra .mc-ra-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 10px; }
-  .mc-ra .mc-ra-card { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: #F7F5EF; border: 1px solid var(--border, #E4DFD3); border-radius: 12px; text-decoration: none; color: inherit; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
-  .mc-ra .mc-ra-card:hover, .mc-ra .mc-ra-card:focus-visible { transform: translateY(-2px); border-color: var(--blue, #2563EB); box-shadow: 0 6px 16px rgba(37, 99, 235, 0.10); outline: none; }
-  .mc-ra .mc-ra-pill { align-self: flex-start; font-size: 10px; font-weight: 800; letter-spacing: 0.8px; text-transform: uppercase; color: var(--blue, #2563EB); background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 999px; padding: 2px 8px; }
-  .mc-ra .mc-ra-card-title { font-size: 13.5px; font-weight: 800; line-height: 1.35; color: var(--ink, #1A1A1A); margin: 0; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-  .mc-ra .mc-ra-meta { display: flex; justify-content: space-between; align-items: center; margin-top: auto; font-size: 12px; color: var(--gray-text, #5B6472); }
-  .mc-ra .mc-ra-go { font-weight: 800; color: var(--blue, #2563EB); }
-  @media (max-width: 720px) { .mc-ra .mc-ra-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } .mc-ra .mc-ra-card { padding: 10px 11px; } .mc-ra .mc-ra-card-title { font-size: 12.5px; -webkit-line-clamp: 5; } }
-  @media (max-width: 340px) { .mc-ra .mc-ra-grid { grid-template-columns: minmax(0, 1fr) !important; } }
-</style>
+/**
+ * Exact CSS extracted verbatim from the live gold standard post:
+ * https://marketcatalyst.ai/posts/nasdaq-rallies-to-a-record-as-a-weak-jobs-report-eases-rate-hike-fears
+ */
+export const RECAP_TEMPLATE_CSS = `:where(.post-doc), :where(.post-doc *), :where(.post-doc *::before), :where(.post-doc *::after) { box-sizing: border-box; }
+:where(.post-doc) { width: 100%; max-width: 1180px; margin-left: auto; margin-right: auto; padding: 0 clamp(16px, 4vw, 32px); box-sizing: border-box; }
+:where(.post-doc img), :where(.post-doc svg), :where(.post-doc video) { max-width: 100%; height: auto; }
+:where(.post-doc pre) { overflow-x: auto; }
+:where(.post-doc table) { border-collapse: collapse; }
+/* The wrapper put around every table below. Inert at full width; it is what
+   lets a wide table scroll instead of widening the page. */
+:where(.post-doc) .post-doc-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
 
-<section class="mc-ra" aria-labelledby="mc-ra-heading">
-  <h2 class="mc-ra-title" id="mc-ra-heading">Readers also read</h2>
-  <div class="mc-ra-grid">
-    <a class="mc-ra-card" href="https://marketcatalyst.ai/posts/nasdaq-rallies-to-a-record-as-a-weak-jobs-report-eases-rate-hike-fears">
-      <span class="mc-ra-pill">Recap</span>
-      <h3 class="mc-ra-card-title">Nasdaq Rallies to a Record as a Weak Jobs Report Eases Rate-Hike Fears</h3>
-      <div class="mc-ra-meta"><span>9 min</span><span class="mc-ra-go">Read &rarr;</span></div>
-    </a>
-    <a class="mc-ra-card" href="https://marketcatalyst.ai/posts/week-ahead-fed-minutes-five-fed-speakers-and-the-first-big-earnings-of-q3-season">
-      <span class="mc-ra-pill">Recap</span>
-      <h3 class="mc-ra-card-title">Week Ahead: Fed Minutes, Five Fed Speakers and the First Big Earnings of Q3 Season</h3>
-      <div class="mc-ra-meta"><span>7 min</span><span class="mc-ra-go">Read &rarr;</span></div>
-    </a>
-    <a class="mc-ra-card" href="https://marketcatalyst.ai/posts/cerebras-falls-below-its-ipo-price-as-an-openai-scare-collides-with-insider-selling">
-      <span class="mc-ra-pill">Analysis</span>
-      <h3 class="mc-ra-card-title">Cerebras Falls Below Its IPO Price as an OpenAI Scare Collides With Insider Selling</h3>
-      <div class="mc-ra-meta"><span>5 min</span><span class="mc-ra-go">Read &rarr;</span></div>
-    </a>
-    <a class="mc-ra-card" href="https://marketcatalyst.ai/posts/wall-street-piles-into-micron-after-a-blowout-quarter-here-s-who-raised-targets">
-      <span class="mc-ra-pill">Analysis</span>
-      <h3 class="mc-ra-card-title">Wall Street Piles Into Micron as the AI Memory &ldquo;Hypercycle&rdquo; Fuels a Blowout Quarter</h3>
-      <div class="mc-ra-meta"><span>4 min</span><span class="mc-ra-go">Read &rarr;</span></div>
-    </a>
-  </div>
-</section>
+.post-doc :where(.post-doc), .post-doc :where(.post-doc *), .post-doc :where(.post-doc *::before), .post-doc :where(.post-doc *::after){ box-sizing: border-box; }.post-doc :where(.post-doc){ width: 100%; margin: 0; }.post-doc :where(.post-doc img), .post-doc :where(.post-doc svg), .post-doc :where(.post-doc video){ max-width: 100%; height: auto; }.post-doc :where(.post-doc pre){ overflow-x: auto; }.post-doc :where(.post-doc table){ border-collapse: collapse; }.post-doc :where(.post-doc) .post-doc-scroll{ overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }.post-doc{
+    --cream: #F3EFE7;
+    --white: #FFFFFF;
+    --ink: #1A1A1A;
+    --gray-text: #5B6472;
+    --blue: #2563EB;
+    --border: #E4DFD3;
+    --pill-border: #D9D3C4;
+    --green: #0F9D58;
+    --red: #C0392B;
+  }.post-doc, .post-doc *{ box-sizing: border-box; }.post-doc{
+    margin: 0;
+    background: var(--cream);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--ink);
+  }.post-doc header{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 48px;
+    background: var(--cream);
+  }.post-doc .logo{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 800;
+    font-size: 20px;
+  }.post-doc nav a{
+    color: var(--ink);
+    text-decoration: none;
+    font-size: 16px;
+    margin-left: 32px;
+  }.post-doc main{
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 24px 24px 80px;
+  }.post-doc .back-btn{
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--white);
+    border: 1px solid var(--pill-border);
+    border-radius: 24px;
+    padding: 10px 20px;
+    font-weight: 700;
+    font-size: 15px;
+    color: var(--ink);
+    text-decoration: none;
+    margin-bottom: 24px;
+  }.post-doc .card{
+    background: var(--white);
+    border-radius: 24px;
+    padding: 56px 64px 48px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }.post-doc .eyebrow{
+    color: var(--blue);
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    font-size: 14px;
+    margin-bottom: 16px;
+  }.post-doc h1{
+    font-size: 44px;
+    line-height: 1.12;
+    font-weight: 800;
+    margin: 0 0 24px;
+    letter-spacing: -0.5px;
+  }.post-doc .subtitle{
+    color: var(--gray-text);
+    font-size: 20px;
+    line-height: 1.5;
+    margin: 0 0 28px;
+    max-width: 660px;
+  }.post-doc .tag{
+    display: inline-block;
+    border: 1px solid var(--pill-border);
+    border-radius: 20px;
+    padding: 6px 18px;
+    font-size: 15px;
+    color: var(--gray-text);
+    margin-bottom: 24px;
+  }.post-doc .meta{
+    color: #8A8F98;
+    font-size: 15px;
+    margin-bottom: 40px;
+  }.post-doc .meta span{ margin: 0 8px; }.post-doc .meta span:first-child{ margin-left: 0; }.post-doc hr.rule{
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 0 0 40px;
+  }.post-doc .article p{
+    font-size: 18px;
+    line-height: 1.7;
+    color: #2B2F36;
+    margin: 0 0 22px;
+  }.post-doc .article h2{
+    font-size: 26px;
+    font-weight: 800;
+    margin: 44px 0 16px;
+    letter-spacing: -0.3px;
+  }.post-doc .stat-strip{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin: 8px 0 36px;
+  }.post-doc .stat-box{
+    background: #F7F5EF;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 16px;
+    text-align: center;
+  }.post-doc .stat-box .num{
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--blue);
+    line-height: 1.1;
+  }.post-doc .stat-box .label{
+    font-size: 13px;
+    color: var(--gray-text);
+    margin-top: 6px;
+  }.post-doc .callout{
+    background: #F7F5EF;
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--blue);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 28px 0;
+    font-size: 17px;
+    line-height: 1.6;
+  }.post-doc .warning{
+    background: #FDF7EE;
+    border: 1px solid #F0E1BE;
+    border-left: 4px solid #C98A1E;
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 32px 0;
+    font-size: 16px;
+    line-height: 1.6;
+    color: #5B4A26;
+  }.post-doc .bar-chart{
+    margin: 24px 0 40px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px 24px 8px;
+    background: #FCFBF8;
+  }.post-doc .bar-chart-title{
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--gray-text);
+    margin-bottom: 18px;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+  }.post-doc .bar-row{
+    display: grid;
+    grid-template-columns: 50px 1fr 64px;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }.post-doc .bar-row .year{
+    font-size: 14px;
+    color: var(--gray-text);
+    font-weight: 600;
+  }.post-doc .bar-track{
+    position: relative;
+    height: 20px;
+    background: transparent;
+  }.post-doc .bar-fill{
+    position: absolute;
+    top: 0;
+    height: 20px;
+    border-radius: 4px;
+    background: var(--green);
+  }.post-doc .bar-fill.negative{
+    background: var(--red);
+  }.post-doc .bar-row .val{
+    font-size: 14px;
+    font-weight: 700;
+    text-align: right;
+    color: var(--green);
+  }.post-doc .bar-row .val.negative{ color: var(--red); }.post-doc table{
+    width: 100%;
+    border-collapse: collapse;
+    margin: 24px 0 36px;
+    font-size: 15px;
+  }.post-doc th{
+    text-align: left;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    color: var(--gray-text);
+    font-weight: 700;
+    padding: 10px 12px;
+    border-bottom: 2px solid var(--border);
+  }.post-doc td{
+    padding: 12px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }.post-doc td.metric{ font-weight: 700; color: var(--ink); }.post-doc td.pos{ color: var(--green); font-weight: 700; }.post-doc .takeaway-list{
+    margin: 0 0 22px;
+    padding-left: 20px;
+  }.post-doc .takeaway-list li{
+    font-size: 18px;
+    line-height: 1.7;
+    color: #2B2F36;
+    margin-bottom: 14px;
+  }.post-doc .takeaway-list strong{ color: var(--ink); }.post-doc .disclaimer{
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+  }.post-doc .disclaimer p{
+    font-size: 13px;
+    line-height: 1.6;
+    color: #9A9FA8;
+    margin: 0 0 10px;
+  }.post-doc .ai-note{
+    font-size: 11px;
+    color: #B4B8BF;
+    margin: 0;
+  }@media (max-width: 640px){.post-doc header{ padding: 16px 20px; }.post-doc .card{ padding: 32px 24px; }.post-doc h1{ font-size: 30px; }.post-doc .subtitle{ font-size: 17px; }.post-doc .stat-strip{ grid-template-columns: 1fr; }.post-doc table{ font-size: 13px; }.post-doc th, .post-doc td{ padding: 8px 6px; }.post-doc .bar-row{ grid-template-columns: 40px 1fr 52px; }}.post-doc > *{ max-width: 100% !important; }@media (max-width: 1024px){.post-doc *{ min-width: 0 !important; }.post-doc *{ max-width: 100% !important; }}@media (max-width: 760px){.post-doc :where(img, svg, video, canvas){ height: auto !important; }.post-doc :where(p, li, td, th, dd, blockquote, figcaption){ overflow-wrap: break-word; }.post-doc :where(h1, h2, h3, h4, h5, h6, p, li, dd, blockquote, figcaption, a, span, div, strong, em){
+    white-space: normal !important;
+  }.post-doc :where(header, nav){ position: static !important; }}@media (max-width: 560px){.post-doc :where(div, section, main, article, aside, ul, ol){
+    grid-template-columns: minmax(0, 1fr) !important;
+  }.post-doc :where(div, section, ul, ol){ flex-wrap: wrap; }}.post-doc .mc-recap-root :root{
+    --cream: #F3EFE7;
+    --white: #FFFFFF;
+    --ink: #1A1A1A;
+    --gray-text: #5B6472;
+    --blue: #2563EB;
+    --border: #E4DFD3;
+    --pill-border: #D9D3C4;
+    --green: #0F9D58;
+    --red: #C0392B;
+    --amber: #C98A1E;
+  }.post-doc .mc-recap-root{ color: #1A1A1A; }.post-doc .mc-recap-root .toc{
+    background: #F7F5EF;
+    border: 1px solid #E4DFD3;
+    border-radius: 14px;
+    padding: 20px 24px;
+    margin: 0 0 36px;
+  }.post-doc .mc-recap-root .toc-title{
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: #5B6472;
+    margin-bottom: 10px;
+  }.post-doc .mc-recap-root .toc ol{ margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }.post-doc .mc-recap-root .toc li{ margin-bottom: 8px; font-size: 15px; break-inside: avoid; }.post-doc .mc-recap-root .toc a{ color: #2563EB; text-decoration: none; }.post-doc .mc-recap-root .toc a:hover{ text-decoration: underline; }.post-doc .mc-recap-root hr.rule{ border: none; border-top: 1px solid #E4DFD3; margin: 0 0 40px; }.post-doc .mc-recap-root p{
+    font-size: 18px;
+    line-height: 1.7;
+    color: #2B2F36;
+    margin: 0 0 22px;
+  }.post-doc .mc-recap-root h2{
+    font-size: 26px;
+    font-weight: 800;
+    margin: 44px 0 16px;
+    letter-spacing: -0.3px;
+    scroll-margin-top: 24px;
+  }.post-doc .mc-recap-root h3{ font-size: 19px; font-weight: 700; margin: 30px 0 8px; }.post-doc .mc-recap-root .stat-strip{
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin: 8px 0 36px;
+  }.post-doc .mc-recap-root .stat-box{
+    background: #F7F5EF;
+    border: 1px solid #E4DFD3;
+    border-radius: 14px;
+    padding: 20px 16px;
+    text-align: center;
+  }.post-doc .mc-recap-root .stat-box .num{ font-size: 24px; font-weight: 800; color: #0F9D58; line-height: 1.1; }.post-doc .mc-recap-root .stat-box.neg .num{ color: #C0392B; }.post-doc .mc-recap-root .stat-box .label{ font-size: 13px; color: #5B6472; margin-top: 6px; }.post-doc .mc-recap-root .callout{
+    background: #F7F5EF;
+    border: 1px solid #E4DFD3;
+    border-left: 4px solid #2563EB;
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 28px 0;
+    font-size: 17px;
+    line-height: 1.6;
+  }.post-doc .mc-recap-root .warning{
+    background: #FDF7EE;
+    border: 1px solid #F0E1BE;
+    border-left: 4px solid #C98A1E;
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 32px 0;
+    font-size: 16px;
+    line-height: 1.6;
+    color: #5B4A26;
+  }.post-doc .mc-recap-root .risk-box{
+    background: #FBF0EE;
+    border: 1px solid #F0CFC9;
+    border-left: 4px solid #C0392B;
+    border-radius: 10px;
+    padding: 22px 24px;
+    margin: 24px 0;
+  }.post-doc .mc-recap-root .risk-box .risk-title{
+    font-size: 14px;
+    font-weight: 800;
+    color: #C0392B;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }.post-doc .mc-recap-root .risk-box p{ font-size: 16.5px; line-height: 1.65; color: #2B2F36; margin: 0 0 14px; }.post-doc .mc-recap-root .risk-box p:last-child{ margin-bottom: 0; }.post-doc .mc-recap-root table{ width: 100%; border-collapse: collapse; margin: 24px 0 36px; font-size: 15px; }.post-doc .mc-recap-root th{
+    text-align: left;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    color: #5B6472;
+    font-weight: 700;
+    padding: 10px 12px;
+    border-bottom: 2px solid #E4DFD3;
+  }.post-doc .mc-recap-root td{ padding: 12px 12px; border-bottom: 1px solid #E4DFD3; vertical-align: top; }.post-doc .mc-recap-root td.metric{ font-weight: 700; color: #1A1A1A; }.post-doc .mc-recap-root td.pos{ color: #0F9D58; font-weight: 700; }.post-doc .mc-recap-root td.neg{ color: #C0392B; font-weight: 700; }.post-doc .mc-recap-root .takeaway-list{ margin: 0 0 22px; padding-left: 20px; }.post-doc .mc-recap-root .takeaway-list li{ font-size: 18px; line-height: 1.7; color: #2B2F36; margin-bottom: 14px; }.post-doc .mc-recap-root .takeaway-list strong{ color: #1A1A1A; }.post-doc .mc-recap-root .timeline{ margin: 8px 0 36px; padding: 4px 0 4px 4px; }.post-doc .mc-recap-root .timeline-item{
+    position: relative;
+    padding-left: 28px;
+    padding-bottom: 22px;
+    border-left: 2px solid #E4DFD3;
+    margin-left: 6px;
+  }.post-doc .mc-recap-root .timeline-item:last-child{ border-left: 2px solid transparent; padding-bottom: 0; }.post-doc .mc-recap-root .timeline-item::before{
+    content: "";
+    position: absolute;
+    left: -7px;
+    top: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #2563EB;
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 2px #2563EB;
+  }.post-doc .mc-recap-root .timeline-item.flag::before{ background: #C0392B; box-shadow: 0 0 0 2px #C0392B; }.post-doc .mc-recap-root .timeline-item.good::before{ background: #0F9D58; box-shadow: 0 0 0 2px #0F9D58; }.post-doc .mc-recap-root .timeline-date{
+    font-size: 13px;
+    font-weight: 800;
+    color: #5B6472;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-bottom: 3px;
+  }.post-doc .mc-recap-root .timeline-text{ font-size: 16px; line-height: 1.55; color: #2B2F36; }.post-doc .mc-recap-root .bullbear-wrap{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 8px 0 36px; }.post-doc .mc-recap-root .bb-col{ border-radius: 14px; padding: 20px 22px; border: 1px solid; }.post-doc .mc-recap-root .bb-col.bull{ background: #F2FAF5; border-color: #CDEBD9; }.post-doc .mc-recap-root .bb-col.bear{ background: #FBF0EE; border-color: #F0CFC9; }.post-doc .mc-recap-root .bb-title{ font-size: 13px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px; }.post-doc .mc-recap-root .bb-col.bull .bb-title{ color: #0F9D58; }.post-doc .mc-recap-root .bb-col.bear .bb-title{ color: #C0392B; }.post-doc .mc-recap-root .bb-col ul{ margin: 0; padding-left: 18px; }.post-doc .mc-recap-root .bb-col li{ font-size: 15px; line-height: 1.55; margin-bottom: 10px; color: #2B2F36; }.post-doc .mc-recap-root .bb-col li:last-child{ margin-bottom: 0; }.post-doc .mc-recap-root .disclaimer{ margin-top: 20px; padding-top: 4px; }.post-doc .mc-recap-root .disclaimer p{ font-size: 13px; line-height: 1.6; color: #9A9FA8; margin: 0 0 10px; }@media (max-width: 640px){.post-doc .mc-recap-root .stat-strip{ grid-template-columns: 1fr 1fr; }.post-doc .mc-recap-root .toc ol{ columns: 1; }.post-doc .mc-recap-root .bullbear-wrap{ grid-template-columns: 1fr; }}
 
-<div class="disclaimer"><p><a href="https://marketcatalyst.ai/" target="_blank" rel="noopener">MarketCatalyst</a> LLC is not a registered investment advisor and does not manage client assets. Content on this platform is provided for informational and educational purposes only. It is not investment advice, and MarketCatalyst is not a stock-picking or trade-alert service. Trading stocks and options involves risk, including the possible loss of principal. Consider your own goals, time horizon, and risk tolerance, and consult a qualified financial advisor before making any investment decision.</p></div>
+.post-doc { max-width: 1180px !important; margin-left: auto !important; margin-right: auto !important; width: 100% !important; box-sizing: border-box !important; }
+.post-doc > * { max-width: 100% !important; }
+.post-doc > div { max-width: 100% !important; width: 100% !important; }
+.post-doc main { max-width: 100% !important; margin-left: auto !important; margin-right: auto !important; padding: 0 0 80px !important; width: 100% !important; }
+.post-doc .card { max-width: 100% !important; margin-left: auto !important; margin-right: auto !important; margin-bottom: 36px !important; width: 100% !important; }
+.post-doc .card-body { padding: 36px clamp(20px, 4vw, 56px) 0; }
+.post-doc .stat-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin: 20px 0 32px; }
+.post-doc .bullbear-wrap { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin: 24px 0 32px; }
+.post-doc .toc ol { columns: 2; column-gap: 32px; }
+
+@media (max-width: 1024px) {
+  .post-doc * { min-width: 0; }
+  .post-doc * { max-width: 100%; }
+}
+@media (max-width: 768px) {
+  .post-doc .card-body { padding: 24px 16px 0 !important; }
+  .post-doc .stat-strip { grid-template-columns: repeat(2, 1fr) !important; gap: 10px !important; }
+  .post-doc .bullbear-wrap { grid-template-columns: 1fr !important; gap: 14px !important; }
+  .post-doc .toc ol { columns: 1 !important; }
+  .post-doc :where(img, svg, video, canvas) { height: auto !important; }
+  .post-doc :where(p, li, td, th, dd, blockquote, figcaption) { overflow-wrap: break-word; }
+  .post-doc :where(h1, h2, h3, h4, h5, h6, p, li, dd, blockquote, figcaption, a, span, div, strong, em) {
+    white-space: normal !important;
+  }
+  .post-doc :where(header, nav) { position: static !important; }
+}
+@media (max-width: 480px) {
+  .post-doc .stat-strip { grid-template-columns: 1fr !important; }
+  .post-doc :where(div, section, main, article, aside, ul, ol) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .post-doc :where(div, section, ul, ol) { flex-wrap: wrap; }
+}
 `;
+
+/**
+ * Composes the complete standalone HTML document matching the exact gold-standard
+ * template: https://marketcatalyst.ai/posts/nasdaq-rallies-to-a-record-as-a-weak-jobs-report-eases-rate-hike-fears
+ */
+export function composeRecapDocument(input: {
+  title: string;
+  dek: string;
+  read: string;
+  bodyHtml: string;
+}): string {
+  return `<!doctype html>
+<html>
+<head>
+<style>
+${RECAP_TEMPLATE_CSS}
+</style>
+</head>
+<body>
+<div><div><main>
+  <div class="card">
+    <div class="card-body">
+    <div class="eyebrow">Recap</div>
+    <h1>${input.title}</h1>
+    <p class="subtitle">${input.dek}</p>
+    <div class="meta"><span>${input.read}</span></div>
+    <hr class="rule">
+    <div class="article">
+
+<div class="mc-recap-root">
+${input.bodyHtml}
+
+<div class="disclaimer">
+  <p><a href="https://marketcatalyst.ai/" target="_blank" rel="noopener noreferrer nofollow">MarketCatalyst</a> LLC is not a registered investment advisor and does not manage client assets. Content on this platform is provided for informational and educational purposes only. It is not investment advice, and MarketCatalyst is not a stock-picking or trade-alert service. Trading stocks and options involves risk, including the possible loss of principal. Consider your own goals, time horizon, and risk tolerance, and consult a qualified financial advisor before making any investment decision.</p>
+</div>
+
+</div>
+    </div>
+    </div>
+  </div>
+</main></div></div>
+</body>
+</html>`;
+}
+
+const CANONICAL_TOC = `<div class="toc">
+  <div class="toc-title">In this article</div>
+  <ol>
+    <li><a href="#numbers" rel="noopener noreferrer nofollow">The numbers, by the close</a></li>
+    <li><a href="#etf-scoreboard" rel="noopener noreferrer nofollow">ETF scoreboard</a></li>
+    <li><a href="#sentiment" rel="noopener noreferrer nofollow">Market temperature and volatility</a></li>
+    <li><a href="#cross-asset" rel="noopener noreferrer nofollow">Rates, dollar, gold, and crypto</a></li>
+    <li><a href="#sectors" rel="noopener noreferrer nofollow">Sectors: leaders and laggards</a></li>
+    <li><a href="#drivers" rel="noopener noreferrer nofollow">The day's market-moving stories</a></li>
+    <li><a href="#movers" rel="noopener noreferrer nofollow">Movers below the headlines</a></li>
+    <li><a href="#risks" rel="noopener noreferrer nofollow">Key market &amp; macro risks to watch</a></li>
+    <li><a href="#calendar" rel="noopener noreferrer nofollow">What to watch next</a></li>
+    <li><a href="#takeaway" rel="noopener noreferrer nofollow">The takeaway</a></li>
+  </ol>
+</div>
+<hr class="rule">`;
 
 /**
  * Normalizes and formats the raw editorial body:
  * 1. Strips any duplicate boilerplate (schema/style/cards/disclaimer) if model emitted it.
- * 2. Ensures the first cell of table data rows has class="metric".
- * 3. Adds class="dn" (red) for negative table numbers and class="pos" (green) for positive table numbers.
- * 4. Ensures down tiles in #idx-strip carry style="color:#C0392B !important".
- * 5. Prepends authoritative Article JSON-LD schema.
- * 6. Appends scoped style block, related articles, and disclaimer.
+ * 2. Ensures canonical Table of Contents is present.
+ * 3. Ensures stat-box items use class="stat-box" and class="stat-box neg" for negative moves.
+ * 4. Ensures the first cell of table data rows has class="metric".
+ * 5. Adds class="neg" (red) for negative table numbers and class="pos" (green) for positive table numbers.
+ * 6. Wraps every table in <div class="post-doc-scroll">.
+ * 7. Enforces strict div-balancing.
  */
 export function formatRecapBody(
   rawBody: string,
@@ -745,63 +1170,43 @@ export function formatRecapBody(
 
   // Strip forbidden outer structural tags that break the container boundary
   b = b.replace(/<\/?(?:main|article|body|html|head)\b[^>]*>/gi, "");
-  b = b.replace(/<div class=["'](?:card|card-body|article)["'][^>]*>/gi, "");
+  b = b.replace(/<div class=["'](?:card|card-body|article|mc-recap-root)["'][^>]*>/gi, "");
 
-  // Normalize #idx-strip: convert malformed stat tiles into exact 4 stat-boxes
-  b = b.replace(
-    /<div class=["']stat-strip["'] id=["']idx-strip["']>([\s\S]*?)(?=<div class=["']table-scroll["']|<h2|$)/i,
-    (match, inner) => {
-      const nums: string[] = [];
-      const numRe = /class=["']num[^"']*["'][^>]*>(.*?)<\/(?:span|div)>/gi;
-      let nm: RegExpExecArray | null;
-      while ((nm = numRe.exec(inner)) !== null) {
-        nums.push(nm[1].replace(/<[^>]+>/g, "").trim());
-      }
+  // Ensure canonical Table of Contents is present
+  if (!/<div class=["']toc["']/i.test(b)) {
+    b = `${CANONICAL_TOC}\n\n${b}`;
+  } else {
+    // If TOC exists, ensure it is followed by <hr class="rule">
+    b = b.replace(
+      /(<div class=["']toc["'][\s\S]*?<\/div>)(?!\s*<hr class=["']rule["']>)/i,
+      `$1\n<hr class="rule">`,
+    );
+  }
 
-      const labels: string[] = [];
-      const labelRe = /class=["']label["'][^>]*>(.*?)<\/div>/gi;
-      let lm: RegExpExecArray | null;
-      while ((lm = labelRe.exec(inner)) !== null) {
-        labels.push(lm[1].replace(/<[^>]+>/g, "").trim());
-      }
+  // Remove any legacy id="idx-strip" attributes
+  b = b.replace(/\s*id=["']idx-strip["']/gi, "");
 
-      if (nums.length === 4 && labels.length === 4) {
-        const tiles = nums.map((n: string, i: number) => {
-          const isDown = /^[-−\u2010-\u2015]/.test(n);
-          const style = isDown ? ' style="color:#C0392B !important"' : "";
-          return `  <div class="stat-box"><div class="num"${style}>${n}</div><div class="label">${labels[i]}</div></div>`;
-        });
-        return `<div class="stat-strip" id="idx-strip">\n${tiles.join("\n")}\n</div>\n\n`;
-      }
-      return match;
-    },
-  );
-
-  // Normalize any remaining stat-box class to strictly class="stat-box" and convert spans to divs
-  b = b.replace(/class="stat-box[^"]*"/gi, 'class="stat-box"');
-  b = b.replace(/<span class="num">/gi, '<div class="num">');
-  b = b.replace(/<\/span>(\s*)<span class="label">/gi, '</div>$1<div class="label">');
-  b = b.replace(/<div class="label">([^<]+)<\/span>/gi, '<div class="label">$1</div>');
-
-  // Ensure down stat-boxes in #idx-strip carry style="color:#C0392B !important"
-  b = b.replace(/<div class="stat-box">[\s\S]*?<\/div>\s*<\/div>/gis, (box) => {
-    if (/<div class="num">[\s\n]*[-−\u2010-\u2015]/.test(box) && !box.includes("color:#C0392B")) {
-      return box.replace(/<div class="num">/, '<div class="num" style="color:#C0392B !important">');
-    }
-    return box;
+  // Normalize stat-strip and stat-box: ensure negative numbers have class="stat-box neg"
+  b = b.replace(/<div class=["']stat-box[^"']*["']\s*>([\s\S]*?)<\/div>/gis, (match, inner) => {
+    const isDown = /class=["']num[^"']*["'][^>]*>[\s\n]*[-−\u2010-\u2015]/.test(inner);
+    const cleanedInner = inner.replace(/style=["'][^"']*["']/gi, "");
+    return `<div class="${isDown ? "stat-box neg" : "stat-box"}">${cleanedInner}</div>`;
   });
 
   // Ensure first data cell in table rows has class="metric"
   b = b.replace(/<tr>\s*<td>/gi, '<tr><td class="metric">');
 
-  // Ensure every table is wrapped in <div class="table-scroll"><div class="post-doc-scroll">...</div></div>
+  // Ensure every table is wrapped in <div class="post-doc-scroll">...</div>
   b = b.replace(
-    /(?:<div class=["']table-scroll["']>\s*)?(?:<div class=["']post-doc-scroll["']>\s*)?<table\b([^>]*)>([\s\S]*?)<\/table>(?:\s*<\/div>\s*<\/div>)?/gi,
+    /(?:<div class=["'](?:table-scroll|post-doc-scroll)["']>\s*)+<table\b([^>]*)>([\s\S]*?)<\/table>(?:\s*<\/div>)+/gi,
     (_m, attrs, content) =>
-      `<div class="table-scroll"><div class="post-doc-scroll">\n<table${attrs}>${content}</table>\n</div></div>`,
+      `<div class="post-doc-scroll"><table>${content}</table></div>`,
   );
-  b = b.replace(/<div class=["']post-doc-scroll["']>\s*<div class=["']post-doc-scroll["']>/gi, '<div class="post-doc-scroll">');
-  b = b.replace(/<\/table>\s*<\/div>\s*<\/div>\s*<\/div>\s*<\/div>/gi, '</table>\n</div></div>');
+  b = b.replace(
+    /(?<!<div class=["']post-doc-scroll["']>\s*)<table\b([^>]*)>([\s\S]*?)<\/table>/gi,
+    (_m, attrs, content) =>
+      `<div class="post-doc-scroll"><table>${content}</table></div>`,
+  );
 
   // Ensure every table has <thead><tr><th>...</th></tr></thead> if missing
   const tableHeaders: Record<string, string> = {
@@ -813,8 +1218,6 @@ export function formatRecapBody(
       "<thead><tr><th>Asset</th><th>Close or Yield</th><th>Daily Change</th><th>% Change</th><th>Main Catalyst</th></tr></thead>",
     movers:
       "<thead><tr><th>Stock</th><th>Close</th><th>Change</th><th>What happened</th></tr></thead>",
-    calendar:
-      "<thead><tr><th>When</th><th>Event</th><th>Why it matters</th></tr></thead>",
   };
 
   for (const [sec, thead] of Object.entries(tableHeaders)) {
@@ -827,28 +1230,31 @@ export function formatRecapBody(
 
   // Canonical H2 section headings normalization
   b = b.replace(/<h2[^>]*>[\s\n]*(?:The numbers[,\s]*by the close|The Numbers[,\s]*by the close)[\s\S]*?<\/h2>/i, '<h2 id="numbers">The numbers, by the close</h2>');
-  b = b.replace(/<h2[^>]*>[\s\n]*(?:Sector and asset ETF scoreboard|ETF scoreboard)[\s\S]*?<\/h2>/i, '<h2 id="etf-scoreboard">Sector and asset ETF scoreboard</h2>');
+  b = b.replace(/<h2[^>]*>[\s\n]*(?:Sector and asset ETF scoreboard|ETF scoreboard)[\s\S]*?<\/h2>/i, '<h2 id="etf-scoreboard">ETF scoreboard</h2>');
   b = b.replace(/<h2[^>]*>[\s\n]*(?:Market temperature and volatility|Sentiment and volatility)[\s\S]*?<\/h2>/i, '<h2 id="sentiment">Market temperature and volatility</h2>');
-  b = b.replace(/<h2[^>]*>[\s\n]*(?:Rates, oil, gold and crypto|Rates, commodities and crypto)[\s\S]*?<\/h2>/i, '<h2 id="cross-asset">Rates, oil, gold and crypto</h2>');
+  b = b.replace(/<h2[^>]*>[\s\n]*(?:Rates, dollar, gold[,\s]*and crypto|Rates, oil, gold and crypto|Rates, commodities and crypto)[\s\S]*?<\/h2>/i, '<h2 id="cross-asset">Rates, dollar, gold, and crypto</h2>');
   b = b.replace(/<h2[^>]*>[\s\n]*(?:Sectors: leaders and laggards|Sector leaders and laggards)[\s\S]*?<\/h2>/i, '<h2 id="sectors">Sectors: leaders and laggards</h2>');
   b = b.replace(/<h2[^>]*>[\s\n]*(?:The day['\u2018\u2019\u201B]s market[\u2010-\u2015\u002D]moving stories|Market[\u2010-\u2015\u002D]moving stories)[\s\S]*?<\/h2>/i, '<h2 id="drivers">The day\'s market-moving stories</h2>');
   b = b.replace(/<h2[^>]*>[\s\n]*(?:Movers below the headlines|Single[\u2010-\u2015\u002D]stock movers)[\s\S]*?<\/h2>/i, '<h2 id="movers">Movers below the headlines</h2>');
-  b = b.replace(/<h2[^>]*>[\s\n]*(?:Key market and macro risks to watch|Key risks to watch)[\s\S]*?<\/h2>/i, '<h2 id="risks">Key market and macro risks to watch</h2>');
+  b = b.replace(/<h2[^>]*>[\s\n]*(?:Key market &amp; macro risks to watch|Key market and macro risks to watch|Key risks to watch)[\s\S]*?<\/h2>/i, '<h2 id="risks">Key market &amp; macro risks to watch</h2>');
   b = b.replace(/<h2[^>]*>[\s\n]*(?:What to watch next|Calendar)[\s\S]*?<\/h2>/i, '<h2 id="calendar">What to watch next</h2>');
   b = b.replace(/<h2[^>]*>[\s\n]*(?:The takeaway|Takeaways?)[\s\S]*?<\/h2>/i, '<h2 id="takeaway">The takeaway</h2>');
 
-  // Normalize H3 story headings to <h3><strong>N. Title</strong></h3>
-  b = b.replace(/<h3>(?:<strong>|<b>)?\s*(\d+\.[\s\S]*?)(?:<\/strong>|<\/b>)?\s*<\/h3>/gi, '<h3><strong>$1</strong></h3>');
+  // Normalize H3 story headings to <h3>N. Title</h3>
+  b = b.replace(/<h3>(?:<strong>|<b>)?\s*(\d+\.[\s\S]*?)(?:<\/strong>|<\/b>)?\s*<\/h3>/gi, '<h3>$1</h3>');
 
-  // Ensure negative numbers in tables have class="dn", positive have class="pos"
+  // Convert any legacy "dn" class to "neg"
+  b = b.replace(/\bclass=["']([^"']*\s)?dn(\s[^"']*)?["']/gi, 'class="$1neg$2"');
+
+  // Ensure negative numbers in tables have class="neg", positive have class="pos"
   b = b.replace(/<td([^>]*)>(.*?)<\/td>/gis, (match, attrs, content) => {
     const text = content.replace(/<[^>]+>/g, "").trim();
     // Negative number like -0.45%, -$2.50, -123.45, −0.45%, ‑0.45%
-    if (/^[-−\u2010-\u2015]\$?\d[\d.,]*%?$/.test(text) && !attrs.includes("dn")) {
+    if (/^[-−\u2010-\u2015]\$?\d[\d.,]*%?$/.test(text) && !attrs.includes("neg")) {
       if (/class="[^"]*"/.test(attrs)) {
-        return `<td${attrs.replace(/class="([^"]*)"/, 'class="$1 dn"')}>${content}</td>`;
+        return `<td${attrs.replace(/class="([^"]*)"/, 'class="$1 neg"')}>${content}</td>`;
       }
-      return `<td class="dn"${attrs}>${content}</td>`;
+      return `<td class="neg"${attrs}>${content}</td>`;
     }
     // Positive number like +0.45%, +$2.50, +123.45
     if (/^\+\$?\d[\d.,]*%?$/.test(text) && !attrs.includes("pos")) {
@@ -861,8 +1267,6 @@ export function formatRecapBody(
   });
 
   // Strict div-balance enforcement:
-  // b is placed inside composeSimpleBody's <div class="article">,
-  // so opening <div> tags in b MUST EXACTLY equal closing </div> tags in b.
   let opens = (b.match(/<div\b/gi) || []).length;
   let closes = (b.match(/<\/div\b/gi) || []).length;
   while (closes > opens) {
@@ -876,6 +1280,6 @@ export function formatRecapBody(
     closes++;
   }
 
-  return `${b}\n\n${RECAP_FOOTER_SNIPPETS}`;
+  return b;
 }
 

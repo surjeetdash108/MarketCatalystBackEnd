@@ -1,40 +1,233 @@
+<div id="mc-post-doc" class="post-doc"><style>
+:where(.post-doc), :where(.post-doc *), :where(.post-doc *::before), :where(.post-doc *::after) { box-sizing: border-box; }
+:where(.post-doc) { width: 100%; max-width: 1180px; margin-left: auto; margin-right: auto; padding: 0 clamp(16px, 4vw, 32px); box-sizing: border-box; }
+:where(.post-doc img), :where(.post-doc svg), :where(.post-doc video) { max-width: 100%; height: auto; }
+:where(.post-doc pre) { overflow-x: auto; }
+:where(.post-doc table) { border-collapse: collapse; }
+/* The wrapper put around every table below. Inert at full width; it is what
+   lets a wide table scroll instead of widening the page. */
+:where(.post-doc) .post-doc-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
 
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>U.S. Stocks Soften Post-Labor Day, Extending a Ten-Year Seasonal Trend: Oil, Rates, and a Software Wobble Rattle Stocks | MarketCatalyst</title>
-<meta name="description" content="U.S. stocks fell for a tenth straight post-Labor Day session as Brent crude neared $100, the 10-year yield sat near 4.80%, and enterprise software lagged even as chipmakers and energy held up.">
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "FAQPage",
-  "mainEntity": [
-    {
-      "@type": "Question",
-      "name": "Why did the stock market fall on September 8, 2026?",
-      "acceptedAnswer": { "@type": "Answer", "text": "A combination of rising oil prices tied to the escalating U.S.-Iran conflict, a Treasury yield near 4.80% following a stronger-than-expected August jobs report, and weakness in enterprise software stocks. The Dow fell 1.18% (-628 points) to 52,786.07." }
-    },
-    {
-      "@type": "Question",
-      "name": "Is the Federal Reserve going to raise or cut rates this month?",
-      "acceptedAnswer": { "@type": "Answer", "text": "It's a genuine open question. Following a much stronger than expected August jobs report and rising oil-driven inflation risk, some desks were pricing in real odds of a rate hike rather than a cut at next week's meeting, a reversal from where sentiment stood just weeks earlier. This will hinge heavily on Thursday's PPI and Friday's CPI reports." }
-    },
-    {
-      "@type": "Question",
-      "name": "What's driving oil prices toward $100 a barrel?",
-      "acceptedAnswer": { "@type": "Answer", "text": "An escalation in the Iran conflict over the Labor Day weekend, including reported U.S. strikes on Iranian oil infrastructure and tankers near Kharg Island, Iranian retaliation against shipping, and reported Houthi attacks on Saudi oil facilities. Brent crude approached $100 per barrel before settling in the high-$90s." }
-    },
-    {
-      "@type": "Question",
-      "name": "Which stocks gained despite the broader selloff?",
-      "acceptedAnswer": { "@type": "Answer", "text": "Semiconductor names including Intel and Qualcomm, along with energy stocks broadly, were among the day's gainers. Individual movers included Lumentum and Corning on a Verizon fiber deal, Bloom Energy ahead of its S&P 500 inclusion, Nebius on a Palantir partnership, and Rigetti Computing on a Commerce Department funding agreement." }
-    }
-  ]
-}
-</script>
-<style>
-  :root {
+.post-doc :where(.post-doc), .post-doc :where(.post-doc *), .post-doc :where(.post-doc *::before), .post-doc :where(.post-doc *::after){ box-sizing: border-box; }.post-doc :where(.post-doc){ width: 100%; margin: 0; }.post-doc :where(.post-doc img), .post-doc :where(.post-doc svg), .post-doc :where(.post-doc video){ max-width: 100%; height: auto; }.post-doc :where(.post-doc pre){ overflow-x: auto; }.post-doc :where(.post-doc table){ border-collapse: collapse; }.post-doc :where(.post-doc) .post-doc-scroll{ overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }.post-doc{
+    --cream: #F3EFE7;
+    --white: #FFFFFF;
+    --ink: #1A1A1A;
+    --gray-text: #5B6472;
+    --blue: #2563EB;
+    --border: #E4DFD3;
+    --pill-border: #D9D3C4;
+    --green: #0F9D58;
+    --red: #C0392B;
+  }.post-doc, .post-doc *{ box-sizing: border-box; }.post-doc{
+    margin: 0;
+    background: var(--cream);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--ink);
+  }.post-doc header{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 48px;
+    background: var(--cream);
+  }.post-doc .logo{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 800;
+    font-size: 20px;
+  }.post-doc nav a{
+    color: var(--ink);
+    text-decoration: none;
+    font-size: 16px;
+    margin-left: 32px;
+  }.post-doc main{
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 24px 24px 80px;
+  }.post-doc .back-btn{
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--white);
+    border: 1px solid var(--pill-border);
+    border-radius: 24px;
+    padding: 10px 20px;
+    font-weight: 700;
+    font-size: 15px;
+    color: var(--ink);
+    text-decoration: none;
+    margin-bottom: 24px;
+  }.post-doc .card{
+    background: var(--white);
+    border-radius: 24px;
+    padding: 56px 64px 48px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }.post-doc .eyebrow{
+    color: var(--blue);
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    font-size: 14px;
+    margin-bottom: 16px;
+  }.post-doc h1{
+    font-size: 44px;
+    line-height: 1.12;
+    font-weight: 800;
+    margin: 0 0 24px;
+    letter-spacing: -0.5px;
+  }.post-doc .subtitle{
+    color: var(--gray-text);
+    font-size: 20px;
+    line-height: 1.5;
+    margin: 0 0 28px;
+    max-width: 660px;
+  }.post-doc .tag{
+    display: inline-block;
+    border: 1px solid var(--pill-border);
+    border-radius: 20px;
+    padding: 6px 18px;
+    font-size: 15px;
+    color: var(--gray-text);
+    margin-bottom: 24px;
+  }.post-doc .meta{
+    color: #8A8F98;
+    font-size: 15px;
+    margin-bottom: 40px;
+  }.post-doc .meta span{ margin: 0 8px; }.post-doc .meta span:first-child{ margin-left: 0; }.post-doc hr.rule{
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 0 0 40px;
+  }.post-doc .article p{
+    font-size: 18px;
+    line-height: 1.7;
+    color: #2B2F36;
+    margin: 0 0 22px;
+  }.post-doc .article h2{
+    font-size: 26px;
+    font-weight: 800;
+    margin: 44px 0 16px;
+    letter-spacing: -0.3px;
+  }.post-doc .stat-strip{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin: 8px 0 36px;
+  }.post-doc .stat-box{
+    background: #F7F5EF;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 16px;
+    text-align: center;
+  }.post-doc .stat-box .num{
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--blue);
+    line-height: 1.1;
+  }.post-doc .stat-box .label{
+    font-size: 13px;
+    color: var(--gray-text);
+    margin-top: 6px;
+  }.post-doc .callout{
+    background: #F7F5EF;
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--blue);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 28px 0;
+    font-size: 17px;
+    line-height: 1.6;
+  }.post-doc .warning{
+    background: #FDF7EE;
+    border: 1px solid #F0E1BE;
+    border-left: 4px solid #C98A1E;
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 32px 0;
+    font-size: 16px;
+    line-height: 1.6;
+    color: #5B4A26;
+  }.post-doc .bar-chart{
+    margin: 24px 0 40px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px 24px 8px;
+    background: #FCFBF8;
+  }.post-doc .bar-chart-title{
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--gray-text);
+    margin-bottom: 18px;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+  }.post-doc .bar-row{
+    display: grid;
+    grid-template-columns: 50px 1fr 64px;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }.post-doc .bar-row .year{
+    font-size: 14px;
+    color: var(--gray-text);
+    font-weight: 600;
+  }.post-doc .bar-track{
+    position: relative;
+    height: 20px;
+    background: transparent;
+  }.post-doc .bar-fill{
+    position: absolute;
+    top: 0;
+    height: 20px;
+    border-radius: 4px;
+    background: var(--green);
+  }.post-doc .bar-fill.negative{
+    background: var(--red);
+  }.post-doc .bar-row .val{
+    font-size: 14px;
+    font-weight: 700;
+    text-align: right;
+    color: var(--green);
+  }.post-doc .bar-row .val.negative{ color: var(--red); }.post-doc table{
+    width: 100%;
+    border-collapse: collapse;
+    margin: 24px 0 36px;
+    font-size: 15px;
+  }.post-doc th{
+    text-align: left;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    color: var(--gray-text);
+    font-weight: 700;
+    padding: 10px 12px;
+    border-bottom: 2px solid var(--border);
+  }.post-doc td{
+    padding: 12px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }.post-doc td.metric{ font-weight: 700; color: var(--ink); }.post-doc td.pos{ color: var(--green); font-weight: 700; }.post-doc .takeaway-list{
+    margin: 0 0 22px;
+    padding-left: 20px;
+  }.post-doc .takeaway-list li{
+    font-size: 18px;
+    line-height: 1.7;
+    color: #2B2F36;
+    margin-bottom: 14px;
+  }.post-doc .takeaway-list strong{ color: var(--ink); }.post-doc .disclaimer{
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+  }.post-doc .disclaimer p{
+    font-size: 13px;
+    line-height: 1.6;
+    color: #9A9FA8;
+    margin: 0 0 10px;
+  }.post-doc .ai-note{
+    font-size: 11px;
+    color: #B4B8BF;
+    margin: 0;
+  }@media (max-width: 640px){.post-doc header{ padding: 16px 20px; }.post-doc .card{ padding: 32px 24px; }.post-doc h1{ font-size: 30px; }.post-doc .subtitle{ font-size: 17px; }.post-doc .stat-strip{ grid-template-columns: 1fr; }.post-doc table{ font-size: 13px; }.post-doc th, .post-doc td{ padding: 8px 6px; }.post-doc .bar-row{ grid-template-columns: 40px 1fr 52px; }}.post-doc > *{ max-width: 100% !important; }@media (max-width: 1024px){.post-doc *{ min-width: 0 !important; }.post-doc *{ max-width: 100% !important; }}@media (max-width: 760px){.post-doc :where(img, svg, video, canvas){ height: auto !important; }.post-doc :where(p, li, td, th, dd, blockquote, figcaption){ overflow-wrap: break-word; }.post-doc :where(h1, h2, h3, h4, h5, h6, p, li, dd, blockquote, figcaption, a, span, div, strong, em){
+    white-space: normal !important;
+  }.post-doc :where(header, nav){ position: static !important; }}@media (max-width: 560px){.post-doc :where(div, section, main, article, aside, ul, ol){
+    grid-template-columns: minmax(0, 1fr) !important;
+  }.post-doc :where(div, section, ul, ol){ flex-wrap: wrap; }}.post-doc .mc-recap-root :root{
     --cream: #F3EFE7;
     --white: #FFFFFF;
     --ink: #1A1A1A;
@@ -45,251 +238,89 @@
     --green: #0F9D58;
     --red: #C0392B;
     --amber: #C98A1E;
-  }
-
-  * { box-sizing: border-box; }
-
-  body {
-    margin: 0;
-    background: var(--cream);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    color: var(--ink);
-  }
-
-  main {
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 24px 24px 80px;
-  }
-
-  .card {
-    background: var(--white);
-    border-radius: 24px;
-    padding: 0 0 48px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-    overflow: hidden;
-  }
-
-  .card-body { padding: 40px 64px 0; }
-
-  .hero { width: 100%; display: block; }
-
-  .eyebrow {
-    color: var(--blue);
-    font-weight: 800;
-    letter-spacing: 1.5px;
-    font-size: 14px;
-    margin-bottom: 16px;
-  }
-
-  h1 {
-    font-size: 40px;
-    line-height: 1.16;
-    font-weight: 800;
-    margin: 0 0 24px;
-    letter-spacing: -0.5px;
-  }
-
-  .subtitle {
-    color: var(--gray-text);
-    font-size: 20px;
-    line-height: 1.5;
-    margin: 0 0 28px;
-    max-width: 660px;
-  }
-
-  .tag {
-    display: inline-block;
-    border: 1px solid var(--pill-border);
-    border-radius: 20px;
-    padding: 6px 18px;
-    font-size: 15px;
-    color: var(--gray-text);
-    margin-bottom: 24px;
-  }
-
-  .byline {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 14px 0;
-    margin-bottom: 4px;
-    border-top: 1px solid var(--border);
-    border-bottom: 1px solid var(--border);
-  }
-
-  .byline .avatar {
-    width: 38px;
-    height: 38px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #2563EB, #22C1C3);
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #fff;
-    font-weight: 800;
-    font-size: 14px;
-  }
-
-  .byline .who { font-size: 14px; }
-  .byline .who .name { font-weight: 700; color: var(--ink); }
-  .byline .who .role { color: var(--gray-text); }
-
-  .byline .verified {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    color: var(--green);
-    font-weight: 700;
-  }
-
-  .meta { color: #8A8F98; font-size: 15px; margin: 16px 0 24px; }
-  .meta span { margin: 0 8px; }
-  .meta span:first-child { margin-left: 0; }
-
-  .toc {
+  }.post-doc .mc-recap-root{ color: #1A1A1A; }.post-doc .mc-recap-root .toc{
     background: #F7F5EF;
-    border: 1px solid var(--border);
+    border: 1px solid #E4DFD3;
     border-radius: 14px;
     padding: 20px 24px;
     margin: 0 0 36px;
-  }
-
-  .toc-title {
+  }.post-doc .mc-recap-root .toc-title{
     font-size: 13px;
     font-weight: 800;
     letter-spacing: 0.5px;
     text-transform: uppercase;
-    color: var(--gray-text);
+    color: #5B6472;
     margin-bottom: 10px;
-  }
-
-  .toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
-  .toc li { margin-bottom: 8px; font-size: 15px; break-inside: avoid; }
-  .toc a { color: var(--blue); text-decoration: none; }
-  .toc a:hover { text-decoration: underline; }
-
-  hr.rule { border: none; border-top: 1px solid var(--border); margin: 0 0 40px; }
-
-  .article p {
+  }.post-doc .mc-recap-root .toc ol{ margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }.post-doc .mc-recap-root .toc li{ margin-bottom: 8px; font-size: 15px; break-inside: avoid; }.post-doc .mc-recap-root .toc a{ color: #2563EB; text-decoration: none; }.post-doc .mc-recap-root .toc a:hover{ text-decoration: underline; }.post-doc .mc-recap-root hr.rule{ border: none; border-top: 1px solid #E4DFD3; margin: 0 0 40px; }.post-doc .mc-recap-root p{
     font-size: 18px;
     line-height: 1.7;
     color: #2B2F36;
     margin: 0 0 22px;
-  }
-
-  .article h2 {
+  }.post-doc .mc-recap-root h2{
     font-size: 26px;
     font-weight: 800;
     margin: 44px 0 16px;
     letter-spacing: -0.3px;
     scroll-margin-top: 24px;
-  }
-
-  .article h3 { font-size: 19px; font-weight: 700; margin: 30px 0 8px; }
-
-  .stat-strip {
+  }.post-doc .mc-recap-root h3{ font-size: 19px; font-weight: 700; margin: 30px 0 8px; }.post-doc .mc-recap-root .stat-strip{
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 16px;
     margin: 8px 0 36px;
-  }
-
-  .stat-box {
+  }.post-doc .mc-recap-root .stat-box{
     background: #F7F5EF;
-    border: 1px solid var(--border);
+    border: 1px solid #E4DFD3;
     border-radius: 14px;
     padding: 20px 16px;
     text-align: center;
-    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-  }
-
-  .stat-box:hover {
-    transform: translateY(-2px);
-    border-color: var(--pill-border);
-    box-shadow: 0 6px 16px rgba(0,0,0,0.06);
-  }
-
-  .stat-box .num { font-size: 24px; font-weight: 800; color: var(--green); line-height: 1.1; }
-  .stat-box.neg .num { color: var(--red); }
-  .stat-box .label { font-size: 13px; color: var(--gray-text); margin-top: 6px; }
-
-  .callout {
+  }.post-doc .mc-recap-root .stat-box .num{ font-size: 24px; font-weight: 800; color: #0F9D58; line-height: 1.1; }.post-doc .mc-recap-root .stat-box.neg .num{ color: #C0392B; }.post-doc .mc-recap-root .stat-box .label{ font-size: 13px; color: #5B6472; margin-top: 6px; }.post-doc .mc-recap-root .callout{
     background: #F7F5EF;
-    border: 1px solid var(--border);
-    border-left: 4px solid var(--blue);
+    border: 1px solid #E4DFD3;
+    border-left: 4px solid #2563EB;
     border-radius: 10px;
     padding: 20px 24px;
     margin: 28px 0;
     font-size: 17px;
     line-height: 1.6;
-  }
-
-  .warning {
+  }.post-doc .mc-recap-root .warning{
     background: #FDF7EE;
     border: 1px solid #F0E1BE;
-    border-left: 4px solid var(--amber);
+    border-left: 4px solid #C98A1E;
     border-radius: 10px;
     padding: 20px 24px;
     margin: 32px 0;
     font-size: 16px;
     line-height: 1.6;
     color: #5B4A26;
-  }
-
-  .risk-box {
+  }.post-doc .mc-recap-root .risk-box{
     background: #FBF0EE;
     border: 1px solid #F0CFC9;
-    border-left: 4px solid var(--red);
+    border-left: 4px solid #C0392B;
     border-radius: 10px;
     padding: 22px 24px;
     margin: 24px 0;
-  }
-
-  .risk-box .risk-title {
+  }.post-doc .mc-recap-root .risk-box .risk-title{
     font-size: 14px;
     font-weight: 800;
-    color: var(--red);
+    color: #C0392B;
     letter-spacing: 0.3px;
     text-transform: uppercase;
     margin-bottom: 10px;
-  }
-
-  .risk-box p { font-size: 16.5px; line-height: 1.65; color: #2B2F36; margin: 0 0 14px; }
-  .risk-box p:last-child { margin-bottom: 0; }
-
-  table { width: 100%; border-collapse: collapse; margin: 24px 0 36px; font-size: 15px; }
-  th {
+  }.post-doc .mc-recap-root .risk-box p{ font-size: 16.5px; line-height: 1.65; color: #2B2F36; margin: 0 0 14px; }.post-doc .mc-recap-root .risk-box p:last-child{ margin-bottom: 0; }.post-doc .mc-recap-root table{ width: 100%; border-collapse: collapse; margin: 24px 0 36px; font-size: 15px; }.post-doc .mc-recap-root th{
     text-align: left;
     font-size: 13px;
     letter-spacing: 0.5px;
-    color: var(--gray-text);
+    color: #5B6472;
     font-weight: 700;
     padding: 10px 12px;
-    border-bottom: 2px solid var(--border);
-  }
-  td { padding: 12px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  td.metric { font-weight: 700; color: var(--ink); }
-  td.pos { color: var(--green); font-weight: 700; }
-  td.neg { color: var(--red); font-weight: 700; }
-
-  .takeaway-list { margin: 0 0 22px; padding-left: 20px; }
-  .takeaway-list li { font-size: 18px; line-height: 1.7; color: #2B2F36; margin-bottom: 14px; }
-  .takeaway-list strong { color: var(--ink); }
-
-  .timeline { margin: 8px 0 36px; padding: 4px 0 4px 4px; }
-  .timeline-item {
+    border-bottom: 2px solid #E4DFD3;
+  }.post-doc .mc-recap-root td{ padding: 12px 12px; border-bottom: 1px solid #E4DFD3; vertical-align: top; }.post-doc .mc-recap-root td.metric{ font-weight: 700; color: #1A1A1A; }.post-doc .mc-recap-root td.pos{ color: #0F9D58; font-weight: 700; }.post-doc .mc-recap-root td.neg{ color: #C0392B; font-weight: 700; }.post-doc .mc-recap-root .takeaway-list{ margin: 0 0 22px; padding-left: 20px; }.post-doc .mc-recap-root .takeaway-list li{ font-size: 18px; line-height: 1.7; color: #2B2F36; margin-bottom: 14px; }.post-doc .mc-recap-root .takeaway-list strong{ color: #1A1A1A; }.post-doc .mc-recap-root .timeline{ margin: 8px 0 36px; padding: 4px 0 4px 4px; }.post-doc .mc-recap-root .timeline-item{
     position: relative;
     padding-left: 28px;
     padding-bottom: 22px;
-    border-left: 2px solid var(--border);
+    border-left: 2px solid #E4DFD3;
     margin-left: 6px;
-  }
-  .timeline-item:last-child { border-left: 2px solid transparent; padding-bottom: 0; }
-  .timeline-item::before {
+  }.post-doc .mc-recap-root .timeline-item:last-child{ border-left: 2px solid transparent; padding-bottom: 0; }.post-doc .mc-recap-root .timeline-item::before{
     content: "";
     position: absolute;
     left: -7px;
@@ -297,366 +328,371 @@
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    background: var(--blue);
+    background: #2563EB;
     border: 2px solid #fff;
-    box-shadow: 0 0 0 2px var(--blue);
-  }
-  .timeline-item.flag::before { background: var(--red); box-shadow: 0 0 0 2px var(--red); }
-  .timeline-item.good::before { background: var(--green); box-shadow: 0 0 0 2px var(--green); }
-  .timeline-date {
+    box-shadow: 0 0 0 2px #2563EB;
+  }.post-doc .mc-recap-root .timeline-item.flag::before{ background: #C0392B; box-shadow: 0 0 0 2px #C0392B; }.post-doc .mc-recap-root .timeline-item.good::before{ background: #0F9D58; box-shadow: 0 0 0 2px #0F9D58; }.post-doc .mc-recap-root .timeline-date{
     font-size: 13px;
     font-weight: 800;
-    color: var(--gray-text);
+    color: #5B6472;
     text-transform: uppercase;
     letter-spacing: 0.4px;
     margin-bottom: 3px;
-  }
-  .timeline-text { font-size: 16px; line-height: 1.55; color: #2B2F36; }
+  }.post-doc .mc-recap-root .timeline-text{ font-size: 16px; line-height: 1.55; color: #2B2F36; }.post-doc .mc-recap-root .bullbear-wrap{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 8px 0 36px; }.post-doc .mc-recap-root .bb-col{ border-radius: 14px; padding: 20px 22px; border: 1px solid; }.post-doc .mc-recap-root .bb-col.bull{ background: #F2FAF5; border-color: #CDEBD9; }.post-doc .mc-recap-root .bb-col.bear{ background: #FBF0EE; border-color: #F0CFC9; }.post-doc .mc-recap-root .bb-title{ font-size: 13px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px; }.post-doc .mc-recap-root .bb-col.bull .bb-title{ color: #0F9D58; }.post-doc .mc-recap-root .bb-col.bear .bb-title{ color: #C0392B; }.post-doc .mc-recap-root .bb-col ul{ margin: 0; padding-left: 18px; }.post-doc .mc-recap-root .bb-col li{ font-size: 15px; line-height: 1.55; margin-bottom: 10px; color: #2B2F36; }.post-doc .mc-recap-root .bb-col li:last-child{ margin-bottom: 0; }.post-doc .mc-recap-root .disclaimer{ margin-top: 20px; padding-top: 4px; }.post-doc .mc-recap-root .disclaimer p{ font-size: 13px; line-height: 1.6; color: #9A9FA8; margin: 0 0 10px; }@media (max-width: 640px){.post-doc .mc-recap-root .stat-strip{ grid-template-columns: 1fr 1fr; }.post-doc .mc-recap-root .toc ol{ columns: 1; }.post-doc .mc-recap-root .bullbear-wrap{ grid-template-columns: 1fr; }}
 
-  .bullbear-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 8px 0 36px; }
-  .bb-col { border-radius: 14px; padding: 20px 22px; border: 1px solid; }
-  .bb-col.bull { background: #F2FAF5; border-color: #CDEBD9; }
-  .bb-col.bear { background: #FBF0EE; border-color: #F0CFC9; }
-  .bb-title { font-size: 13px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px; }
-  .bb-col.bull .bb-title { color: var(--green); }
-  .bb-col.bear .bb-title { color: var(--red); }
-  .bb-col ul { margin: 0; padding-left: 18px; }
-  .bb-col li { font-size: 15px; line-height: 1.55; margin-bottom: 10px; color: #2B2F36; }
-  .bb-col li:last-child { margin-bottom: 0; }
+.post-doc { max-width: 1180px !important; margin-left: auto !important; margin-right: auto !important; width: 100% !important; box-sizing: border-box !important; }
+.post-doc > * { max-width: 100% !important; }
+.post-doc > div { max-width: 100% !important; width: 100% !important; }
+.post-doc main { max-width: 100% !important; margin-left: auto !important; margin-right: auto !important; padding: 0 0 80px !important; width: 100% !important; }
+.post-doc .card { max-width: 100% !important; margin-left: auto !important; margin-right: auto !important; margin-bottom: 36px !important; width: 100% !important; }
+.post-doc .card-body { padding: 36px clamp(20px, 4vw, 56px) 0; }
+.post-doc .stat-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin: 20px 0 32px; }
+.post-doc .bullbear-wrap { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin: 24px 0 32px; }
+.post-doc .toc ol { columns: 2; column-gap: 32px; }
 
-  .faq-item { border-bottom: 1px solid var(--border); padding: 10px 0; }
-  .faq-item:first-child { border-top: 1px solid var(--border); }
-  .faq-q { font-size: 17px; font-weight: 700; margin: 0 0 8px; color: var(--ink); }
-  .faq-a { font-size: 16px; line-height: 1.6; color: #2B2F36; margin: 0; }
-
-  .related { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 8px 0 8px; }
-  .related-card {
-    display: block;
-    background: #F7F5EF;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 16px;
-    text-decoration: none;
-    color: inherit;
+@media (max-width: 1024px) {
+  .post-doc * { min-width: 0; }
+  .post-doc * { max-width: 100%; }
+}
+@media (max-width: 768px) {
+  .post-doc .card-body { padding: 24px 16px 0 !important; }
+  .post-doc .stat-strip { grid-template-columns: repeat(2, 1fr) !important; gap: 10px !important; }
+  .post-doc .bullbear-wrap { grid-template-columns: 1fr !important; gap: 14px !important; }
+  .post-doc .toc ol { columns: 1 !important; }
+  .post-doc :where(img, svg, video, canvas) { height: auto !important; }
+  .post-doc :where(p, li, td, th, dd, blockquote, figcaption) { overflow-wrap: break-word; }
+  .post-doc :where(h1, h2, h3, h4, h5, h6, p, li, dd, blockquote, figcaption, a, span, div, strong, em) {
+    white-space: normal !important;
   }
-  .related-card .rc-tag {
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-    color: var(--blue);
-    margin-bottom: 8px;
+  .post-doc :where(header, nav) { position: static !important; }
+}
+@media (max-width: 480px) {
+  .post-doc .stat-strip { grid-template-columns: 1fr !important; }
+  .post-doc :where(div, section, main, article, aside, ul, ol) {
+    grid-template-columns: minmax(0, 1fr) !important;
   }
-  .related-card .rc-title { font-size: 15px; font-weight: 700; color: var(--ink); line-height: 1.4; }
-
-  .share-bar {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin: 36px 0 8px;
-    padding-top: 20px;
-    border-top: 1px solid var(--border);
-  }
-  .share-bar .share-label {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--gray-text);
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-    margin-right: 4px;
-  }
-  .share-btn {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: #F7F5EF;
-    border: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    text-decoration: none;
-    color: var(--ink);
-    font-size: 14px;
-    font-weight: 700;
-  }
-
-  .sources-box { margin-top: 36px; padding-top: 20px; border-top: 1px solid var(--border); }
-  .sources-box .sb-title {
-    font-size: 13px;
-    font-weight: 800;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-    color: var(--gray-text);
-    margin-bottom: 10px;
-  }
-  .sources-box ol { margin: 0; padding-left: 18px; }
-  .sources-box li { font-size: 13px; line-height: 1.6; color: #9A9FA8; margin-bottom: 6px; }
-
-  .disclaimer { margin-top: 20px; padding-top: 4px; }
-  .disclaimer p { font-size: 13px; line-height: 1.6; color: #9A9FA8; margin: 0 0 10px; }
-  .ai-note { font-size: 11px; color: #B4B8BF; margin: 0; }
-
-  @media (max-width: 640px) {
-    h1 { font-size: 27px; }
-    .subtitle { font-size: 17px; }
-    .stat-strip { grid-template-columns: 1fr 1fr; }
-    .card-body { padding: 28px 24px 0; }
-    .toc ol { columns: 1; }
-    .bullbear-wrap { grid-template-columns: 1fr; }
-    .related { grid-template-columns: 1fr; }
-  }
-</style>
-</head>
-<body>
-
-<main>
+  .post-doc :where(div, section, ul, ol) { flex-wrap: wrap; }
+}
+</style><div><div><main>
   <div class="card">
-   
-
     <div class="card-body">
-      <div class="eyebrow">MARKETS &middot; MACRO</div>
-      <h1>U.S. Stocks Soften Post&#8211;Labor Day, Extending a Ten-Year Seasonal Trend</h1>
-      <p class="subtitle">Oil, rates, and a software wobble sent stocks lower for a tenth straight year &mdash; but chipmakers and energy show this selloff wasn't broad-based.</p>
-      <span class="tag">7 min read</span>
+    <div class="eyebrow">Recap</div>
+    <h1>Nasdaq Rallies to a Record as a Weak Jobs Report Eases Rate-Hike Fears</h1>
+    <p class="subtitle">A much weaker than expected September jobs report cooled bets on an October rate hike, lifting the Nasdaq to a record as Nvidia touched a fresh all-time high and semiconductors led a broad rally.</p>
+    <div class="meta"><span>9 min read</span></div>
+    <hr class="rule">
+    <div class="article">
 
-      <div class="byline">
-        <div class="avatar">MC</div>
-        <div class="who">
-          <div class="name">MarketCatalyst Desk</div>
-          <div class="role">Markets &amp; Macro Team</div>
-        </div>
-        <div class="verified">&#10003; Data verified at close</div>
-      </div>
-      <div class="meta">
-        <span>Published Sep 8, 2026</span>
-        <span>&middot;</span>
-        <span>Updated 4:20 PM EDT</span>
-      </div>
 
-      <div class="toc">
-        <div class="toc-title">In this article</div>
-        <ol>
-          <li><a href="#numbers">The numbers, by the close</a></li>
-          <li><a href="#oil">Oil and Middle East tensions lead the session</a></li>
-          <li><a href="#rates">Rates and the jobs report</a></li>
-          <li><a href="#tech">A divided day for technology stocks</a></li>
-          <li><a href="#movers">Movers below the headlines</a></li>
-          <li><a href="#global">The global backdrop</a></li>
-          <li><a href="#seasonality">Why September has a reputation problem</a></li>
-          <li><a href="#risks">Key Market &amp; Macro Risks to Watch</a></li>
-          <li><a href="#calendar">What to watch next</a></li>
-          <li><a href="#faq">Frequently asked questions</a></li>
-        </ol>
-      </div>
-      <hr class="rule">
 
-      <div class="article">
-        <p>Wall Street came back from the long weekend and did what it's done for ten years running: sold off. Tuesday marked the tenth consecutive year that U.S. stocks have closed lower on the first trading day after Labor Day &mdash; and this time, the drop had real teeth. The Dow shed more than 600 points, oil flirted with the $100 mark, and a hot jobs report kept the Federal Reserve's next move front and center.</p>
-        <p>It was a genuine risk-off session: stocks, gold, and crypto all fell together while volatility ticked higher &mdash; the kind of broad-based caution that shows up when several worries hit the tape at once.</p>
+<div class="mc-recap-root">
 
-        <h2 id="numbers">The numbers, by the close</h2>
-        <div class="stat-strip">
-          <div class="stat-box neg">
-            <div class="num">-1.18%</div>
-            <div class="label">Dow Jones (52,786.07, -628 pts)</div>
-          </div>
-          <div class="stat-box neg">
-            <div class="num">-0.58%</div>
-            <div class="label">S&amp;P 500 (7,673.52)</div>
-          </div>
-          <div class="stat-box neg">
-            <div class="num">-0.32%</div>
-            <div class="label">Nasdaq (26,421.41)</div>
-          </div>
-          <div class="stat-box neg">
-            <div class="num">-0.52%</div>
-            <div class="label">Russell 2000 (~2,960)</div>
-          </div>
-        </div>
+<div class="toc">
+  <div class="toc-title">In this article</div>
+  <ol>
+    <li><a href="#numbers" rel="noopener noreferrer nofollow">The numbers, by the close</a></li>
+    <li><a href="#etf-scoreboard" rel="noopener noreferrer nofollow">ETF scoreboard</a></li>
+    <li><a href="#sentiment" rel="noopener noreferrer nofollow">Market temperature and volatility</a></li>
+    <li><a href="#cross-asset" rel="noopener noreferrer nofollow">Rates, dollar, gold, and crypto</a></li>
+    <li><a href="#sectors" rel="noopener noreferrer nofollow">Sectors: leaders and laggards</a></li>
+    <li><a href="#drivers" rel="noopener noreferrer nofollow">The day's market-moving stories</a></li>
+    <li><a href="#movers" rel="noopener noreferrer nofollow">Movers below the headlines</a></li>
+    <li><a href="#risks" rel="noopener noreferrer nofollow">Key market &amp; macro risks to watch</a></li>
+    <li><a href="#calendar" rel="noopener noreferrer nofollow">What to watch next</a></li>
+    <li><a href="#takeaway" rel="noopener noreferrer nofollow">The takeaway</a></li>
+  </ol>
+</div>
+<hr class="rule">
 
-        <h2 id="oil">Oil and Middle East tensions lead the session</h2>
-        <p>The biggest story of the day was crude. Brent pushed toward $100 a barrel before settling in the high-$90s, while U.S. benchmark WTI climbed above $94. The catalyst: an escalation in the Iran conflict over the long weekend, including reported U.S. strikes on Iranian oil infrastructure and tankers near Kharg Island, with Iran retaliating against additional shipping targets. Saudi Arabian oil facilities reportedly came under Houthi missile and drone attack as well.</p>
-        <p>There was a sliver of good news buried in the barrel: Iran signaled it was nearing an arrangement with Oman to help manage traffic through the Strait of Hormuz, the chokepoint that handles roughly a fifth of global oil flows. A durable de-escalation there would do more to calm energy markets than almost anything the Fed can do.</p>
+<p>Stocks rallied Friday after a much weaker than expected September jobs report gave investors what they'd been waiting for: a clear reason to bet the Federal Reserve holds rates steady at its meeting later this month, rather than raising them. The Nasdaq led the major averages to a record close, with Nvidia touching a fresh all-time intraday high along the way.</p>
+<p>The rally was broad rather than narrow. All four major indexes finished higher, the VIX collapsed more than 6.5%, and semiconductors led every other sector by a wide margin. Treasury yields told a more complicated story, tumbling immediately after the jobs data before creeping back up by the close — a reminder that Friday's relief rested on a single data point, not a settled rate outlook.</p>
 
-        <h2 id="rates">Rates and the jobs report</h2>
-        <p>The 10-year Treasury yield sat close to 4.80%, near its highest levels of the year. Two forces are pushing it there: rising oil prices reviving inflation fears, and last Friday's blowout August jobs report, which showed employers added roughly 162,000 jobs &mdash; nearly triple what economists expected. Some desks are now pricing in real odds of a rate <em>hike</em> rather than a cut at next week's Fed meeting, a notable reversal from where sentiment stood just weeks ago.</p>
-        <p>Add in a fresh trade dispute &mdash; Canada's retaliatory tariffs on roughly $20 billion of U.S. goods took effect the same day &mdash; and you have a market trying to price geopolitics, inflation, trade policy, and monetary policy all at once.</p>
+<h2 id="numbers">The numbers, by the close</h2>
+<div class="stat-strip">
+  <div class="stat-box">
+    <div class="num">+0.49%</div>
+    <div class="label">Dow Jones (51,176.96, +250.40 pts)</div>
+  </div>
+  <div class="stat-box">
+    <div class="num">+0.73%</div>
+    <div class="label">S&amp;P 500 (7,722.72, +56.27 pts)</div>
+  </div>
+  <div class="stat-box">
+    <div class="num">+1.19%</div>
+    <div class="label">Nasdaq (27,190.86, +319.27 pts)</div>
+  </div>
+  <div class="stat-box">
+    <div class="num">+0.94%</div>
+    <div class="label">Russell 2000 (2,832.89, +26.27 pts)</div>
+  </div>
+</div>
+<div class="post-doc-scroll"><table>
+  <thead>
+    <tr><th>Index</th><th>Close</th><th>Point Change</th><th>% Change</th><th>Session Read</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="metric">DJIA</td>
+      <td>51,176.96</td>
+      <td class="pos">+250.40</td>
+      <td class="pos">+0.49%</td>
+      <td>Smallest gain of the four majors, still weighed down by financials.</td>
+    </tr>
+    <tr>
+      <td class="metric">S&amp;P 500</td>
+      <td>7,722.72</td>
+      <td class="pos">+56.27</td>
+      <td class="pos">+0.73%</td>
+      <td>Broad advance, helped along by the tech-heavy complex.</td>
+    </tr>
+    <tr>
+      <td class="metric">Nasdaq Composite</td>
+      <td>27,190.86</td>
+      <td class="pos">+319.27</td>
+      <td class="pos">+1.19%</td>
+      <td>Best performer, powered by semiconductors and Nvidia's record high.</td>
+    </tr>
+    <tr>
+      <td class="metric">Russell 2000</td>
+      <td>2,832.89</td>
+      <td class="pos">+26.27</td>
+      <td class="pos">+0.94%</td>
+      <td>Small caps joined the rally as rate-hike odds fell.</td>
+    </tr>
+    <tr>
+      <td class="metric">CBOE VIX ($VIX)</td>
+      <td>15.31</td>
+      <td class="neg">-1.08</td>
+      <td class="neg">-6.59%</td>
+      <td>Sharp vol crush as rate-hike and shutdown anxiety both eased.</td>
+    </tr>
+  </tbody>
+</table></div>
 
-        <div class="callout">
-          <strong>The bottom line so far:</strong> this wasn't a single-cause selloff. Oil, rates, and sector-specific software weakness all leaned the same direction on the same day, which is part of why the drop felt broader than the headline index numbers alone suggest.
-        </div>
+<h2 id="etf-scoreboard">ETF scoreboard</h2>
+<p>Semiconductor and broad-tech funds led the board by a wide margin, while gold, long bonds, and bitcoin's ETF were the only notable decliners — a classic risk-on rotation out of havens and into growth.</p>
+<div class="post-doc-scroll"><table>
+  <thead>
+    <tr><th>Category</th><th>ETF</th><th>Close</th><th>% Change</th><th>Note</th></tr>
+  </thead>
+  <tbody>
+    <tr><td class="metric">Broad Market</td><td>SPY (S&amp;P 500)</td><td>$769.64</td><td class="pos">+0.74%</td><td>Tracked the index's broad advance.</td></tr>
+    <tr><td class="metric">Broad Market</td><td>QQQ (Nasdaq 100)</td><td>$749.58</td><td class="pos">+1.02%</td><td>Outperformed on mega-cap tech and semis strength.</td></tr>
+    <tr><td class="metric">Broad Market</td><td>QQEW (Nasdaq 100 Equal Wt.)</td><td>$163.66</td><td class="pos">+0.24%</td><td>Lagged cap-weighted QQQ — gains stayed concentrated in the largest names.</td></tr>
+    <tr><td class="metric">Broad Market</td><td>DIA (Dow 30)</td><td>$511.10</td><td class="pos">+0.49%</td><td>Held back by softer bank performance.</td></tr>
+    <tr><td class="metric">Broad Market</td><td>IWM (Small Caps)</td><td>$281.52</td><td class="pos">+0.90%</td><td>Rate-sensitive small caps rallied on falling hike odds.</td></tr>
+    <tr><td class="metric">Sectors</td><td>XLK (Technology)</td><td>$199.81</td><td class="pos">+1.01%</td><td>Rode the chip-sector rally higher.</td></tr>
+    <tr><td class="metric">Sectors</td><td>XLE (Energy)</td><td>$62.82</td><td class="pos">+0.19%</td><td>Modest gain, roughly in line with the broader tape.</td></tr>
+    <tr><td class="metric">Sectors</td><td>XLF (Financials)</td><td>$53.49</td><td class="pos">+0.06%</td><td>Weakest sector fund of the day, barely positive.</td></tr>
+    <tr><td class="metric">Sectors</td><td>SMH (Semiconductors)</td><td>$630.60</td><td class="pos">+2.07%</td><td>Nvidia's record high and the broader AI trade drove the gain.</td></tr>
+    <tr><td class="metric">Sectors</td><td>SOXX (Semiconductors)</td><td>$588.90</td><td class="pos">+2.18%</td><td>The session's top-performing fund on the scoreboard.</td></tr>
+    <tr><td class="metric">Sectors</td><td>CIBR (Cybersecurity)</td><td>$104.70</td><td class="pos">+0.89%</td><td>CrowdStrike and Palo Alto Networks both hit highs.</td></tr>
+    <tr><td class="metric">Rates &amp; Credit</td><td>TLT (Long-Term Treasuries)</td><td>$77.48</td><td class="neg">-0.30%</td><td>Slipped as yields reversed higher into the close.</td></tr>
+    <tr><td class="metric">Rates &amp; Credit</td><td>HYG (High Yield Corp Bonds)</td><td>$76.91</td><td class="pos">+0.01%</td><td>Essentially flat; credit stayed calm.</td></tr>
+    <tr><td class="metric">Commodities &amp; Alternatives</td><td>GLD (Gold)</td><td>$380.14</td><td class="neg">-0.68%</td><td>Gave back ground as risk appetite returned.</td></tr>
+    <tr><td class="metric">Commodities &amp; Alternatives</td><td>IBIT (Bitcoin ETF)</td><td>$47.73</td><td class="neg">-0.48%</td><td>Softer even as equities rallied.</td></tr>
+  </tbody>
+</table></div>
+<p style="font-size:13px;color:#5B6472;margin-top:-20px">VNQ, UUP, EFA, and EEM are not shown; their closes could not be independently verified for this session.</p>
 
-        <h2 id="tech">A divided day for technology stocks</h2>
-        <p>Technology didn't move as one block, and that's the more interesting story under the surface. Software and enterprise-services names broadly underperformed &mdash; Salesforce, Intuit, and ServiceNow were among the decliners &mdash; continuing a theme that's dogged the group through 2026: investor anxiety that AI agents could erode the value of traditional SaaS subscriptions, even as those same companies race to bolt AI features onto their platforms.</p>
-        <p>Chips told a different story. Semiconductor names were some of the market's few bright spots, with Intel and Qualcomm among the day's gainers even as the broader tape fell &mdash; a continuation of 2026's defining tech divergence: hardware and AI-infrastructure plays rewarded for direct exposure to compute demand, while software companies face tougher questions about their long-term moats.</p>
+<h2 id="sentiment">Market temperature and volatility</h2>
+<div class="callout">
+  <strong>Temperature: 70/100 — Constructive.</strong> The VIX's 6.59% drop to 15.31 is a meaningful cooldown from earlier in the week, consistent with a market that read the jobs report as reducing near-term policy risk rather than as a sign the economy is in real trouble.
+</div>
+<p>Options markets moved in step with the rate repricing: a sharp, single-session vol crush like this usually reflects dealers and hedgers unwinding protection they'd put on ahead of the jobs print, now that the immediate rate-hike risk has faded. It's a calmer reading than earlier in the week, though still not the kind of rock-bottom complacency that would worry contrarians.</p>
 
-        <h2 id="movers">Movers below the headlines</h2>
-        <p>Away from the index-level story, a handful of single stocks had outsized days for reasons that had nothing to do with oil or the Fed:</p>
-        <table>
-          <thead>
-            <tr><th>Stock</th><th>Close</th><th>Change</th><th>What happened</th></tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td class="metric">Lumentum (LITE)</td>
-              <td>$124.80</td>
-              <td class="pos">+14.6%</td>
-              <td>Jumped double digits after Verizon and Corning announced a multibillion-dollar, multiyear optical-fiber deal spanning 80+ million miles from 2027&ndash;2032.</td>
-            </tr>
-            <tr>
-              <td class="metric">Corning (GLW)</td>
-              <td>$54.20</td>
-              <td class="pos">+6.8%</td>
-              <td>Rode the same Verizon deal higher and picked up an upgrade to Buy from China Renaissance.</td>
-            </tr>
-            <tr>
-              <td class="metric">Bloom Energy (BE)</td>
-              <td>$32.45</td>
-              <td class="pos">+9.3%</td>
-              <td>Gained on confirmation it will join the S&amp;P 500 ahead of the September 21 open, replacing Molson Coors.</td>
-            </tr>
-            <tr>
-              <td class="metric">Nebius (NBIS)</td>
-              <td>$61.10</td>
-              <td class="pos">+7.5%</td>
-              <td>Rose after Palantir named it a preferred sovereign AI infrastructure partner.</td>
-            </tr>
-            <tr>
-              <td class="metric">Enphase Energy (ENPH)</td>
-              <td>$68.90</td>
-              <td class="pos">+5.2%</td>
-              <td>Advanced on news its IQ Solid-State Transformer modules are now being assembled and validated domestically.</td>
-            </tr>
-            <tr>
-              <td class="metric">Rigetti Computing (RGTI)</td>
-              <td>$18.35</td>
-              <td class="pos">+11.7%</td>
-              <td>Rose after signing a ~$100 million funding agreement with the U.S. Commerce Department for quantum R&amp;D.</td>
-            </tr>
-          </tbody>
-        </table>
-        <p>None of these moves were large enough to offset index-level pressure from oil and rates, but they're a reminder that idiosyncratic, deal- and policy-driven stories keep playing out underneath a broadly red tape.</p>
+<h2 id="cross-asset">Rates, dollar, gold, and crypto</h2>
+<p>The 10-year Treasury yield initially tumbled after the jobs report came in soft, but that move partially reversed by the close, with the yield finishing at 5.28%, up modestly on the day. Gold and bitcoin both pulled back as investors rotated out of havens and into equities, while ether fell more sharply.</p>
+<div class="post-doc-scroll"><table>
+  <thead>
+    <tr><th>Asset</th><th>Close or Yield</th><th>Daily Change</th><th>% Change</th><th>Main Catalyst</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="metric">10Y Treasury Yield</td>
+      <td>5.28%</td>
+      <td class="pos">+0.04</td>
+      <td class="pos">+0.76%</td>
+      <td>Tumbled right after the jobs report, then reversed higher into the close.</td>
+    </tr>
+    <tr>
+      <td class="metric">Gold (XAU/USD)</td>
+      <td>$4,172.10</td>
+      <td class="neg">-$30.20</td>
+      <td class="neg">-0.72%</td>
+      <td>Lost its safe-haven bid as risk appetite returned.</td>
+    </tr>
+    <tr>
+      <td class="metric">Bitcoin (BTC/USD)</td>
+      <td>$84,473.76</td>
+      <td class="neg">-$42.52</td>
+      <td class="neg">-0.05%</td>
+      <td>Essentially flat, a quiet session relative to equities.</td>
+    </tr>
+    <tr>
+      <td class="metric">Ether (ETH/USD)</td>
+      <td>$2,663.24</td>
+      <td class="neg">-$41.97</td>
+      <td class="neg">-1.55%</td>
+      <td>Underperformed bitcoin on an otherwise risk-on day.</td>
+    </tr>
+  </tbody>
+</table></div>
 
-        <h2 id="global">The global backdrop</h2>
-        <p>Markets also had to digest news from Asia overnight. China's exports jumped roughly 25% year-over-year in August, accelerating from July's pace and driven by strong demand for autos and high-tech goods, according to the country's customs agency. The data widened China's trade surplus and landed just ahead of a planned meeting between President Trump and Chinese leader Xi Jinping expected later in September, though Beijing has not yet confirmed an exact date.</p>
-        <p>Closer to home, Canada's retaliatory tariffs on roughly $20 billion of U.S. goods took effect Tuesday, adding a second front of trade friction to a session already dominated by the Middle East and the rates outlook.</p>
+<h2 id="sectors">Sectors: leaders and laggards</h2>
+<p>Leadership was unmistakably a semiconductor and broad-tech story. Financials and energy barely participated, while gold and long bonds gave back ground as the rate-hike scare that had been building through the week faded.</p>
+<div class="bullbear-wrap">
+  <div class="bb-col bull">
+    <div class="bb-title">▲ Leading groups</div>
+    <ul>
+      <li>Semiconductors (SOXX +2.18%, SMH +2.07%) on Nvidia's record high and the broader AI trade</li>
+      <li>Technology (XLK +1.01%), riding the same chip-sector strength</li>
+      <li>Small caps (IWM +0.90%) on falling rate-hike odds</li>
+      <li>Cybersecurity (CIBR +0.89%) as CrowdStrike and Palo Alto Networks both hit highs</li>
+    </ul>
+  </div>
+  <div class="bb-col bear">
+    <div class="bb-title">▼ Lagging groups</div>
+    <ul>
+      <li>Bitcoin's ETF (IBIT -0.48%), softer even as equities rallied</li>
+      <li>Gold (GLD -0.68%), losing its safe-haven bid</li>
+      <li>Long-term Treasuries (TLT -0.30%) as yields reversed higher late</li>
+      <li>Financials (XLF +0.06%), the weakest of the sector funds, barely positive</li>
+    </ul>
+  </div>
+</div>
 
-        <h2 id="seasonality">Why September has a reputation problem</h2>
-        <p>It's worth stepping back on a day like this: September's poor reputation isn't just superstition. Going back nearly a century, it's the only calendar month in which the S&amp;P 500 has, on average, posted a negative return &mdash; roughly a 1% average decline since 1928, with the index finishing the month higher only around 45% of the time. Explanations vary: portfolio managers returning from summer and rebalancing, tax-related selling, a seasonal lull in corporate news that leaves room for macro anxiety to dominate the tape. None of that guarantees this September follows the script, but it's the backdrop against which Tuesday's losing streak &mdash; the tenth in a row for the first post&#8211;Labor Day session &mdash; is playing out.</p>
+<h2 id="drivers">The day's market-moving stories</h2>
 
-        <h2 id="risks">Key Market &amp; Macro Risks to Watch</h2>
-        <div class="risk-box">
-          <div class="risk-title">Risk #1: A wider Middle East conflict</div>
-          <p>The exchange of strikes between the U.S. and Iran, plus reported Houthi attacks on Saudi facilities, keeps a real floor under oil prices. A further escalation &mdash; particularly anything touching the Strait of Hormuz directly &mdash; would push energy costs and inflation expectations higher fast.</p>
-        </div>
-        <div class="risk-box">
-          <div class="risk-title">Risk #2: A hawkish surprise from the Fed</div>
-          <p>Markets have spent months expecting rate cuts. A stronger jobs report and rising oil prices have reopened the door to a hike instead, which would be a meaningful repricing for rate-sensitive stocks, especially in software and small caps.</p>
-        </div>
-        <div class="risk-box">
-          <div class="risk-title">Risk #3: Enterprise software's AI-disruption discount</div>
-          <p>Salesforce, Intuit, and ServiceNow's declines aren't a one-day story &mdash; they reflect an ongoing 2026 debate about whether AI agents erode the value of subscription software. Further weak earnings or guidance from names like Oracle later this week could deepen that discount.</p>
-        </div>
-        <div class="risk-box">
-          <div class="risk-title">Risk #4: Trade friction spreading</div>
-          <p>Canada's new tariffs and the run-up to the Trump-Xi meeting are reminders that trade policy remains an active, two-sided risk &mdash; not a settled backdrop &mdash; heading into a data-heavy week.</p>
-        </div>
+<h3>1. A much weaker than expected September jobs report</h3>
+<p>The Bureau of Labor Statistics said U.S. employers added just 29,000 jobs in September, well below the roughly 85,000 economists had expected, and the unemployment rate ticked up to 4.2% from 4.1%. The soft print immediately cut the market's odds of an October Fed rate hike, giving stocks their primary catalyst for the session.</p>
 
-        <h2>Where strength and weakness diverged</h2>
-        <div class="bullbear-wrap">
-          <div class="bb-col bull">
-            <div class="bb-title">&#9650; Holding up</div>
-            <ul>
-              <li>Semiconductors (Intel, Qualcomm) on AI-compute demand</li>
-              <li>Energy stocks, up ~1% on higher crude prices</li>
-              <li>AI-infrastructure and fiber-buildout names (Nebius, Lumentum, Corning)</li>
-              <li>Deal- and policy-driven single stocks (Bloom Energy, Rigetti)</li>
-            </ul>
-          </div>
-          <div class="bb-col bear">
-            <div class="bb-title">&#9660; Under pressure</div>
-            <ul>
-              <li>Enterprise software (Salesforce, Intuit, ServiceNow)</li>
-              <li>Rate-sensitive small caps (Russell 2000)</li>
-              <li>Risk assets broadly &mdash; gold and bitcoin fell alongside stocks</li>
-              <li>Market breadth &mdash; decliners outpaced advancers overall</li>
-            </ul>
-          </div>
-        </div>
+<h3>2. Nvidia touches a fresh all-time high</h3>
+<p>Nvidia hit a new intraday record of $237.88, briefly pushing its market capitalization above $5.7 trillion, before paring gains to close up 1.34% at $233.95. The move built on Monday's $150 billion buyback increase and a Morgan Stanley note reinstating Nvidia as the firm's semiconductor "top pick," with the analyst citing continued strong demand for AI compute.</p>
 
-        <h2 id="calendar">What to watch next</h2>
-        <div class="timeline">
-          <div class="timeline-item good">
-            <div class="timeline-date">Fri, Sep 5</div>
-            <div class="timeline-text">August jobs report lands far above expectations &mdash; ~162,000 jobs added, roughly triple the consensus forecast &mdash; and sends yields higher into the weekend.</div>
-          </div>
-          <div class="timeline-item flag">
-            <div class="timeline-date">Sat&ndash;Mon, Sep 6&ndash;7</div>
-            <div class="timeline-text">U.S.-Iran conflict escalates over the Labor Day weekend while markets are closed for the holiday; oil markets reopen sharply higher.</div>
-          </div>
-          <div class="timeline-item flag">
-            <div class="timeline-date">Tue, Sep 8 (today)</div>
-            <div class="timeline-text">Dow falls 628 points (-1.18%) as oil, rates, and software weakness combine for a broad risk-off session.</div>
-          </div>
-          <div class="timeline-item">
-            <div class="timeline-date">Thu, Sep 10</div>
-            <div class="timeline-text">Producer Price Index (PPI) &mdash; an early read on pipeline inflation pressure.</div>
-          </div>
-          <div class="timeline-item">
-            <div class="timeline-date">Fri, Sep 11</div>
-            <div class="timeline-text">Consumer Price Index (CPI) &mdash; the number most likely to shape Fed expectations heading into next week.</div>
-          </div>
-          <div class="timeline-item">
-            <div class="timeline-date">Week of Sep 14</div>
-            <div class="timeline-text">Federal Reserve policy decision, now a genuine toss-up rather than a formality given the strong jobs data and rising energy costs. Oracle earnings, also due this week, will be watched as a bellwether for enterprise software demand.</div>
-          </div>
-          <div class="timeline-item good">
-            <div class="timeline-date">Mon, Sep 21</div>
-            <div class="timeline-text">Bloom Energy's S&amp;P 500 inclusion becomes effective before the open &mdash; one of several index-rebalance changes taking effect that day.</div>
-          </div>
-        </div>
+<h3>3. Semiconductors lead a broad rally</h3>
+<p>SOXX and SMH both gained more than 2%, the strongest sector funds on the scoreboard. AMD rose 2.95% alongside Nvidia, and Dell Technologies jumped 3.85% as investors continued to reward the AI-server infrastructure trade that's driven much of this year's hardware rally.</p>
 
-        <div class="warning">
-          <strong>Worth remembering:</strong> a single down session, even a tenth-in-a-row one, is not a trend by itself. What makes this week worth watching closely is the concentration of catalysts &mdash; PPI, CPI, and a live Fed decision all landing within eight days &mdash; against a geopolitical backdrop that's still unresolved.
-        </div>
+<h3>4. Cybersecurity names hit records of their own</h3>
+<p>CrowdStrike and Palo Alto Networks both closed near all-time highs Friday, continuing a run that's made the group one of the market's strongest corners this year. CIBR gained 0.89%, with the sector benefiting from the same broad risk-on tone lifting technology generally.</p>
 
-        <h2>The takeaway</h2>
-        <ul class="takeaway-list">
-          <li><strong>This wasn't a broad technology wipeout.</strong> It was a risk-off session with three clear drivers: oil and geopolitical risk out of the Middle East, a rates market recalibrating around a hotter-than-expected labor market, and selective softness in enterprise software.</li>
-          <li><strong>The divergence inside tech is the real story.</strong> Chipmakers and energy stocks showed there's still appetite for the right story; it's software valuations and rate-sensitive assets that are feeling the squeeze.</li>
-          <li><strong>This week's data will matter more than most.</strong> With PPI, CPI, and a live Fed decision all landing within the next eight days, this week is shaping up to determine whether the pullback is a blip or the start of something more sustained.</li>
-        </ul>
+<h3>5. The VIX posts its sharpest drop in weeks</h3>
+<p>The CBOE Volatility Index fell 6.59% to 15.31, a clear sign that options markets had been pricing in real uncertainty around both the jobs report and the ongoing government shutdown heading into Friday. The scale of the drop suggests dealers unwound a meaningful amount of hedging once the jobs data removed one of those two sources of risk.</p>
 
-        <h2 id="faq">Frequently asked questions</h2>
-        <div class="faq-item">
-          <p class="faq-q">Why did the stock market fall on September 8, 2026?</p>
-          <p class="faq-a">A combination of rising oil prices tied to the escalating U.S.-Iran conflict, a Treasury yield near 4.80% following a stronger-than-expected August jobs report, and weakness in enterprise software stocks. The Dow fell 1.18% (-628 points) to 52,786.07.</p>
-        </div>
-        <div class="faq-item">
-          <p class="faq-q">Is the Federal Reserve going to raise or cut rates this month?</p>
-          <p class="faq-a">It's a genuine open question. After a much stronger than expected August jobs report and rising oil-driven inflation risk, some desks were pricing in real odds of a rate hike rather than a cut at next week's meeting &mdash; a reversal from where sentiment stood just weeks earlier. Thursday's PPI and Friday's CPI will weigh heavily on that call.</p>
-        </div>
-        <div class="faq-item">
-          <p class="faq-q">What's driving oil prices toward $100 a barrel?</p>
-          <p class="faq-a">An escalation in the Iran conflict over the Labor Day weekend, including reported U.S. strikes on Iranian oil infrastructure and tankers near Kharg Island, Iranian retaliation against shipping, and reported Houthi attacks on Saudi oil facilities. Brent crude approached $100 per barrel before settling in the high-$90s.</p>
-        </div>
-        <div class="faq-item">
-          <p class="faq-q">Which stocks gained despite the broader selloff?</p>
-          <p class="faq-a">Semiconductor names including Intel and Qualcomm, along with energy stocks broadly, were among the day's gainers. Individual movers included Lumentum and Corning on a Verizon fiber deal, Bloom Energy ahead of its S&amp;P 500 inclusion, Nebius on a Palantir partnership, and Rigetti Computing on a Commerce Department funding agreement.</p>
-        </div>
+<h3>6. Treasury yields whipsaw after the data</h3>
+<p>The 10-year yield initially tumbled on the weak jobs report, consistent with reduced odds of a near-term hike, but it reversed higher as the session wore on, finishing up modestly at 5.28%. The round trip is a reminder that Friday's rally rested on a single data point rather than a fully settled rate outlook.</p>
 
-       
+<h3>7. The government shutdown's second day passes quietly</h3>
+<p>Markets have so far largely shrugged off the federal government shutdown that began this week over a Medicaid funding dispute. Analysts have noted that equities have historically weathered shutdowns reasonably well, and Friday's rally is consistent with that pattern — though the bigger risk, a delay to October's economic data releases, remains unresolved.</p>
 
-        <div class="disclaimer">
-          <p>This platform, including MarketCatalyst LLC, is not a registered investment advisor and doesn't manage client assets. Content here is for informational and educational purposes only &mdash; not investment advice, and not a stock-picking or trade-alert service. Trading stocks and options carries risk, including possible loss of principal. Consider your own goals, time horizon, and risk tolerance, and consult a qualified financial advisor before making any investment decisions.</p>
-          <p class="ai-note">This article may have been generated with the help of AI. Readers are advised to independently verify all figures and conduct their own due diligence before making any investment decisions.</p>
-        </div>
+<h3>8. Breadth stays concentrated in mega-caps and semis</h3>
+<p>Cap-weighted QQQ rose 1.02% versus just 0.24% for the equal-weight QQEW, a meaningful gap that shows Friday's gains were concentrated in the largest technology and semiconductor names rather than broadening evenly across the index.</p>
 
-      
-      </div>
+<h3>9. Havens give back ground as risk appetite returns</h3>
+<p>Gold fell 0.72% and bitcoin's ETF slipped 0.48%, both losing some of the defensive bid they'd picked up earlier in the week. Spot bitcoin itself was little changed, while ether underperformed, down 1.55%.</p>
+
+<h3>10. Factory orders and Fed speak round out the calendar</h3>
+<p>August factory orders data and remarks from Dallas Fed President Lorie Logan were also on Friday's docket, giving investors additional data points to weigh alongside the jobs report as they recalibrate expectations for the Fed's next move.</p>
+
+<h2 id="movers">Movers below the headlines</h2>
+<p>Beyond the index-level story, a handful of single stocks had notable days tied to specific, sector-wide catalysts:</p>
+<div class="post-doc-scroll"><table>
+  <thead>
+    <tr><th>Stock</th><th>Close</th><th>Change</th><th>What happened</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="metric">Nvidia (NVDA)</td>
+      <td>$233.95</td>
+      <td class="pos">+1.34%</td>
+      <td>Touched a fresh intraday all-time high of $237.88 before paring gains, on continued buyback enthusiasm and a Morgan Stanley "top pick" reinstatement.</td>
+    </tr>
+    <tr>
+      <td class="metric">Dell Technologies (DELL)</td>
+      <td>$562.52</td>
+      <td class="pos">+3.85%</td>
+      <td>Led the day's movers as the AI-server infrastructure trade continued to lift hardware suppliers alongside the broader chip rally.</td>
+    </tr>
+    <tr>
+      <td class="metric">AMD</td>
+      <td>$633.91</td>
+      <td class="pos">+2.95%</td>
+      <td>Rose in tandem with Nvidia and the broader semiconductor rally.</td>
+    </tr>
+    <tr>
+      <td class="metric">Palo Alto Networks (PANW)</td>
+      <td>$403.24</td>
+      <td class="pos">+1.76%</td>
+      <td>Closed near an all-time high as cybersecurity names extended their 2026 run.</td>
+    </tr>
+    <tr>
+      <td class="metric">CrowdStrike (CRWD)</td>
+      <td>$270.04</td>
+      <td class="pos">+1.48%</td>
+      <td>Also closed near a record, riding the same cybersecurity strength as Palo Alto Networks.</td>
+    </tr>
+  </tbody>
+</table></div>
+<p>None of these moves were large enough to single-handedly carry the index-level rally, but together they underscore how concentrated Friday's gains were in semiconductors, AI infrastructure, and cybersecurity.</p>
+
+<h2 id="risks">Key market &amp; macro risks to watch</h2>
+<div class="risk-box">
+  <div class="risk-title">Risk #1: A shutdown-driven data blackout</div>
+  <p>If the government shutdown drags on, October's jobs and inflation reports could be delayed or released only in part, leaving both the Fed and markets with less information heading into the next rate decision.</p>
+</div>
+<div class="risk-box">
+  <div class="risk-title">Risk #2: Today's rally rested on one data point</div>
+  <p>Friday's gains were built almost entirely on a single soft jobs report. A hot PPI or CPI print, whenever it's released, could quickly revive rate-hike odds and hit the same rate-sensitive names that rallied today.</p>
+</div>
+<div class="risk-box">
+  <div class="risk-title">Risk #3: Semiconductors are pricing in a lot of good news</div>
+  <p>With Nvidia's market cap briefly topping $5.7 trillion and SOXX up more than 2% again, the sector has little room for disappointment on the next AI-capex headline or earnings print.</p>
+</div>
+<div class="risk-box">
+  <div class="risk-title">Risk #4: Breadth remains narrow</div>
+  <p>Cap-weighted QQQ outpaced equal-weight QQEW by a wide margin again Friday, a sign the rally is still concentrated in a handful of mega-cap and semiconductor names rather than broadening out.</p>
+</div>
+
+<h2 id="calendar">What to watch next</h2>
+<div class="timeline">
+  <div class="timeline-item flag">
+    <div class="timeline-date">Ongoing</div>
+    <div class="timeline-text">The federal government shutdown continues; watch for any signs of a deal in Washington, and for whether it begins to affect the release schedule for October's economic data.</div>
+  </div>
+  <div class="timeline-item">
+    <div class="timeline-date">Week of Oct 5</div>
+    <div class="timeline-text">Additional Fed speakers are likely to weigh in on the jobs report and the path for rates following Dallas Fed President Lorie Logan's remarks Friday.</div>
+  </div>
+  <div class="timeline-item flag">
+    <div class="timeline-date">Later this month</div>
+    <div class="timeline-text">The Fed's next policy decision is due, with Friday's jobs report now a key input into whether officials hold rates steady or revisit a hike.</div>
+  </div>
+  <div class="timeline-item">
+    <div class="timeline-date">Ongoing</div>
+    <div class="timeline-text">Markets continue to watch Nvidia and the broader semiconductor group for signs of whether Friday's record highs can hold.</div>
+  </div>
+</div>
+
+<div class="warning">
+  <strong>Worth remembering:</strong> a single soft jobs report shifted the rate conversation meaningfully in one session, but the 10-year yield's late reversal higher is a reminder that the move isn't fully settled. With a government shutdown also clouding the data calendar, the path to the Fed's next decision is less certain than Friday's rally alone would suggest.
+</div>
+
+<h2 id="takeaway">The takeaway</h2>
+<div class="callout">
+  <strong>Key tactical takeaway:</strong> watch whether the 10-year yield's late-session reversal higher continues into next week — a sustained move back up would complicate the same rate-hold narrative that drove Friday's rally.
+</div>
+<ul class="takeaway-list">
+  <li><strong>This was a rate-repricing rally, not a broad economic all-clear.</strong> A weak jobs report cut hike odds, and stocks, especially rate-sensitive small caps and growth names, responded accordingly.</li>
+  <li><strong>Semiconductors and AI infrastructure did the heavy lifting.</strong> Nvidia's fresh all-time high, alongside gains in AMD, Dell, and the cybersecurity group, accounted for most of the Nasdaq's outperformance.</li>
+  <li><strong>The shutdown is a background risk, not today's story.</strong> Markets shrugged it off Friday, but a prolonged shutdown's effect on the economic data calendar remains an open question heading into the Fed's next meeting.</li>
+</ul>
+
+<div class="disclaimer">
+  <p><a href="https://marketcatalyst.ai/" target="_blank" rel="noopener noreferrer nofollow">MarketCatalyst</a> LLC is not a registered investment advisor and does not manage client assets. Content on this platform is provided for informational and educational purposes only. It is not investment advice, and MarketCatalyst is not a stock-picking or trade-alert service. Trading stocks and options involves risk, including the possible loss of principal. Consider your own goals, time horizon, and risk tolerance, and consult a qualified financial advisor before making any investment decision.</p>
+</div>
+
+</div>
+    </div>
     </div>
   </div>
-</main>
-
-</body>
-</html>
+</main></div></div></div>

@@ -1075,9 +1075,9 @@ export class BlogsAdminService {
       author: typeof body.author === "string" ? body.author : "",
       kicker: kick,
       read: typeof body.read === "string" ? body.read : "",
-      // Source PDF, when the article was published from one.
+      // Source PDF, when the article was published from one (or idempotency key).
       pdfUrl,
-      pdfName: pdfUrl && typeof body.pdfName === "string" ? body.pdfName : null,
+      pdfName: typeof body.pdfName === "string" ? body.pdfName : null,
       pdfPages: pdfUrl && Number.isFinite(Number(body.pdfPages)) ? Number(body.pdfPages) : null,
       pdfAspect: pdfUrl && Number.isFinite(Number(body.pdfAspect)) ? Number(body.pdfAspect) : null,
       sourceKind: source?.kind ?? null,
