@@ -51,6 +51,7 @@ import { AnthropicModule } from "../vendors/anthropic/anthropic.module";
 import { EodRecapJob } from "./eod-recap.job";
 import { TickerUniverseJob } from "./ticker-universe.job";
 import { PremarketJob } from "./premarket.job";
+import { PremarketPostJob } from "./premarket-post.job";
 import { LiveModule } from "../live/live.module";
 
 @Module({
@@ -111,6 +112,7 @@ import { LiveModule } from "../live/live.module";
     RecapsJob,
     PremarketJob,
     EodRecapJob,
+    PremarketPostJob,
   ],
 })
 /**

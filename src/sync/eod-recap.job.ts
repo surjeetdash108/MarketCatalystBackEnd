@@ -6,6 +6,8 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { BlogsAdminService } from "../blogs/blogs-admin.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
+import { FmpService } from "../vendors/fmp/fmp.service";
+import { TAPE_INDICES } from "../live/tape-universe";
 import { AnthropicService } from "../vendors/anthropic/anthropic.service";
 import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { etDate, etWeekday } from "../common/market-calendar.util";
@@ -86,6 +88,7 @@ export class EodRecapJob implements OnModuleInit {
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
     private readonly polygon: PolygonService,
+    private readonly fmp: FmpService,
     private readonly anthropic: AnthropicService,
     private readonly llm: LlmGatewayService,
     private readonly blogs: BlogsAdminService,
@@ -260,8 +263,38 @@ export class EodRecapJob implements OnModuleInit {
         pctChange: typeof data.pctChange === "number" ? data.pctChange : null,
         isProxy: !!data.isProxy,
         proxyTicker: data.proxyTicker ?? null,
+        source: String(data.source ?? "polygon"),
       };
     });
+
+    // FMP fallback: any index / commodity / crypto the primary collection has
+    // no usable row for (doc missing, or value / % change not a number) is
+    // fetched from FMP as the instrument itself (ETHUSD, GCUSD, ^GSPC, ...).
+    for (const sym of TAPE_INDICES) {
+      if (!sym.fmpSymbol) continue;
+      const have = indices.find((i) => i.id === sym.id);
+      if (have && have.value != null && have.pctChange != null) continue;
+      const q = await this.fmp.getQuote(sym.fmpSymbol);
+      if (!q) {
+        this.logger.warn(
+          `No primary data for ${sym.id} and FMP fallback (${sym.fmpSymbol}) returned nothing`,
+        );
+        continue;
+      }
+      const row = {
+        id: sym.id,
+        label: sym.label,
+        value: q.price,
+        change: q.previousClose != null ? q.price - q.previousClose : null,
+        pctChange: q.changePercentage,
+        isProxy: false,
+        proxyTicker: null,
+        source: "fmp",
+      };
+      if (have) Object.assign(have, row);
+      else indices.push(row);
+      this.logger.log(`${sym.id}: primary had no data, served by FMP (${sym.fmpSymbol})`);
+    }
 
     // Format 10Y Yield directly from Polygon Treasury Yields curve
     let yield10Y: { value: number | null; changeBps: number | null } = {
@@ -499,7 +532,7 @@ Two analytical paragraphs framing the session, major indices, catalysts (Fed, yi
     <tr><td class="metric">10Y Treasury Yield</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
     <tr><td class="metric">Gold (XAU/USD)</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
     <tr><td class="metric">Bitcoin (BTC/USD)</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
-    <tr><td class="metric">Ether (ETH/USD)</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
+    <tr><td class="metric">Ethereum (ETH/USD)</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
   </tbody>
 </table></div>
 
@@ -1265,6 +1298,9 @@ export function formatRecapBody(
     }
     return match;
   });
+
+  // Always normalize "Ether" to "Ethereum"
+  b = b.replace(/\bEther\b/g, "Ethereum");
 
   // Strict div-balance enforcement:
   let opens = (b.match(/<div\b/gi) || []).length;

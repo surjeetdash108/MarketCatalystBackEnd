@@ -19,7 +19,9 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "seed:test-user": "ts-node --transpile-only scripts/seed-test-user.ts",
-    "deploy:live": "node deploy/deploy-live.js"
+    "deploy:live": "node deploy/deploy-live.js",
+    "post:premarket": "ts-node --transpile-only scripts/run-premarket-post.ts",
+    "post:eod-recap": "ts-node --transpile-only scripts/run-eod-recap.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

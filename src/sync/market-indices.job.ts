@@ -87,6 +87,13 @@ const INDEX_PROXIES = [
     isProxy: true,
     note: "ETF proxy for spot Bitcoin (iShares Bitcoin Trust)",
   },
+  {
+    symbol: "ETH",
+    label: "Ethereum",
+    proxyTicker: "ETHA",
+    isProxy: true,
+    note: "ETF proxy for spot Ethereum (iShares Ethereum Trust)",
+  },
 ];
 
 @Injectable()
