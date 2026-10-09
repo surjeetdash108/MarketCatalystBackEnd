@@ -52,7 +52,9 @@ import { EodRecapJob } from "./eod-recap.job";
 import { TickerUniverseJob } from "./ticker-universe.job";
 import { PremarketJob } from "./premarket.job";
 import { PremarketPostJob } from "./premarket-post.job";
+import { EtfHoldingsJob } from "./etf-holdings.job";
 import { LiveModule } from "../live/live.module";
+import { MarketDataModule } from "../market-data/market-data.module";
 
 @Module({
   imports: [
@@ -69,6 +71,7 @@ import { LiveModule } from "../live/live.module";
     // For OnDemandService — the premarket warm fills the same cache the
     // on-demand endpoints serve from.
     LiveModule,
+    MarketDataModule,
   ],
   controllers: [SyncController],
   providers: [
@@ -113,6 +116,7 @@ import { LiveModule } from "../live/live.module";
     PremarketJob,
     EodRecapJob,
     PremarketPostJob,
+    EtfHoldingsJob,
   ],
 })
 /**

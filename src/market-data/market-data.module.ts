@@ -21,6 +21,8 @@ import { NewsController } from "./news.controller";
 import { RecapsController } from "./recaps.controller";
 import { SectorsController } from "./sectors.controller";
 import { MoverCatalystsController } from "./mover-catalysts.controller";
+import { EtfHoldingsController } from "./etf-holdings.controller";
+import { EtfHoldingsService } from "./etf-holdings.service";
 
 /**
  * Screen-facing read module for market-wide (non-user-owned) data — Movers,
@@ -61,7 +63,9 @@ import { MoverCatalystsController } from "./mover-catalysts.controller";
     RecapsController,
     MoverCatalystsController,
     AiInfrastructureController,
+    EtfHoldingsController,
   ],
-  providers: [MarketDataService],
+  providers: [MarketDataService, EtfHoldingsService],
+  exports: [EtfHoldingsService],
 })
 export class MarketDataModule {}

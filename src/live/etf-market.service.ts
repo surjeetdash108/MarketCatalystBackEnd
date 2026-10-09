@@ -62,10 +62,17 @@ export class EtfMarketService implements OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
-    // Non-blocking pre-warm on application boot
-    this.refreshCache().catch((err) => {
-      this.logger.warn(`Initial ETF cache pre-warm failed: ${err.message}`);
-    });
+    // Immediate pre-warm from Firestore cache on boot (sub-50ms)
+    try {
+      const cached = await this.readFromFirestore();
+      if (cached) {
+        this.cachedResponse = cached;
+        this.lastFetchedAt = cached.updatedAt || Date.now();
+        this.logger.log(`ETF market cache pre-warmed from Firestore: ${cached.categories?.length} categories`);
+      }
+    } catch (err: any) {
+      this.logger.warn(`Initial Firestore ETF cache read failed: ${err.message}`);
+    }
   }
 
   /**
@@ -79,12 +86,20 @@ export class EtfMarketService implements OnModuleInit {
     if (this.cachedResponse && now - this.lastFetchedAt < this.CACHE_TTL_MS) {
       baseResponse = this.cachedResponse;
     } else {
-      if (!this.refreshPromise) {
-        this.refreshPromise = this.refreshCache().finally(() => {
-          this.refreshPromise = null;
-        });
+      // Check Firestore before triggering an expensive upstream refresh
+      const firestoreDoc = await this.readFromFirestore();
+      if (firestoreDoc && now - (firestoreDoc.updatedAt || 0) < this.CACHE_TTL_MS) {
+        this.cachedResponse = firestoreDoc;
+        this.lastFetchedAt = firestoreDoc.updatedAt || now;
+        baseResponse = firestoreDoc;
+      } else {
+        if (!this.refreshPromise) {
+          this.refreshPromise = this.refreshCache().finally(() => {
+            this.refreshPromise = null;
+          });
+        }
+        baseResponse = await this.refreshPromise;
       }
-      baseResponse = await this.refreshPromise;
     }
 
     if (!limit || limit <= 0) {
@@ -168,6 +183,18 @@ export class EtfMarketService implements OnModuleInit {
         })
         .filter((e) => e.price != null && e.price > 0);
 
+      if (validEtfs.length === 0) {
+        this.logger.warn("No valid ETFs discovered with price data — aborting refresh to protect cache");
+        const fallback = await this.readFromFirestore();
+        if (fallback) {
+          this.cachedResponse = fallback;
+          this.lastFetchedAt = Date.now();
+          return fallback;
+        }
+        if (this.cachedResponse) return this.cachedResponse;
+        throw new Error("ETF data unavailable from upstream");
+      }
+
       // Bucket candidate ETFs per category using the deterministic ETFClassifier
       const candidateBuckets = new Map<ETFCategory, typeof validEtfs>();
       for (const def of CATEGORY_DEFINITIONS) {
@@ -208,6 +235,7 @@ export class EtfMarketService implements OnModuleInit {
 
       // Build normalized ETF representations and sort by AUM descending (fallback to volume DESC)
       const categoryMap = new Map<ETFCategory, NormalizedETF[]>();
+      const MAX_PER_CATEGORY = 150;
 
       for (const def of CATEGORY_DEFINITIONS) {
         const bucket = candidateBuckets.get(def.id) || [];
@@ -249,7 +277,7 @@ export class EtfMarketService implements OnModuleInit {
           return (b.volume || 0) - (a.volume || 0);
         });
 
-        // Deduplicate each category (unlimited funds)
+        // Deduplicate each category and cap to top prominent funds (keeps document size ~500KB)
         const seenSymbols = new Set<string>();
         const fullList: NormalizedETF[] = [];
         for (const etf of normalizedList) {
@@ -259,7 +287,7 @@ export class EtfMarketService implements OnModuleInit {
           }
         }
 
-        categoryMap.set(def.id, fullList);
+        categoryMap.set(def.id, fullList.slice(0, MAX_PER_CATEGORY));
       }
 
       const categories: EtfCategorySection[] = CATEGORY_DEFINITIONS.map(
@@ -413,13 +441,19 @@ export class EtfMarketService implements OnModuleInit {
    */
   private async persistToFirestore(data: EtfMarketResponse): Promise<void> {
     if (!this.firebase) return;
+    const totalFunds = data.categories?.reduce((acc, c) => acc + (c.funds?.length || 0), 0) || 0;
+    if (totalFunds === 0) {
+      this.logger.warn("Refusing to persist empty ETF dataset to Firestore");
+      return;
+    }
     try {
       const ref = this.firebase.firestore
         .collection(this.FIRESTORE_COLLECTION)
         .doc(this.FIRESTORE_DOC);
       await ref.set(data);
+      this.logger.log(`Successfully persisted ${totalFunds} ETFs across ${data.categories.length} categories to Firestore cache`);
     } catch (err: any) {
-      this.logger.debug(`Firestore cache set ignored: ${err.message}`);
+      this.logger.error(`Firestore cache set failed: ${err.message}`);
     }
   }
 
@@ -434,10 +468,15 @@ export class EtfMarketService implements OnModuleInit {
         .doc(this.FIRESTORE_DOC);
       const snap = await ref.get();
       if (snap.exists) {
-        return snap.data() as EtfMarketResponse;
+        const data = snap.data() as EtfMarketResponse;
+        const totalFunds = data?.categories?.reduce((acc, c) => acc + (c.funds?.length || 0), 0) || 0;
+        if (totalFunds > 0) {
+          return data;
+        }
+        this.logger.warn("Firestore etf_corner_cache doc has 0 funds — ignoring poisoned cache document");
       }
     } catch (err: any) {
-      this.logger.debug(`Firestore cache get ignored: ${err.message}`);
+      this.logger.warn(`Firestore cache get failed: ${err.message}`);
     }
     return null;
   }
