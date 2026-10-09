@@ -36,7 +36,6 @@ export class EtfMarketService implements OnModuleInit {
   private readonly logger = new Logger(EtfMarketService.name);
   private readonly apiKey: string;
   private readonly baseUrl: string;
-  private readonly etfCornerLimit: number;
 
   private cachedResponse: EtfMarketResponse | null = null;
   private lastFetchedAt = 0;
@@ -45,10 +44,14 @@ export class EtfMarketService implements OnModuleInit {
   // In-memory cache for shares outstanding to avoid re-fetching unchanged share counts
   private readonly sharesCache = new Map<string, number>();
 
-  // 7-day cache TTL: ETF directory classification changes rarely
+  // 7-day cache TTL for in-memory serving; updated weekly by scheduled job
   private readonly CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
-  private readonly FIRESTORE_COLLECTION = "etf_corner_cache";
-  private readonly FIRESTORE_DOC = "latest";
+
+  // DB collections for current week and previous week fallback
+  private readonly CURRENT_COLLECTION = "etf_market_current";
+  private readonly PREVIOUS_COLLECTION = "etf_market_previous";
+  private readonly LEGACY_COLLECTION = "etf_corner_cache";
+  private readonly LEGACY_DOC = "latest";
 
   constructor(
     private readonly config: ConfigService,
@@ -62,13 +65,16 @@ export class EtfMarketService implements OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
-    // Immediate pre-warm from Firestore cache on boot (sub-50ms)
+    // Immediate pre-warm from Firestore on boot (sub-50ms)
     try {
       const cached = await this.readFromFirestore();
       if (cached) {
         this.cachedResponse = cached;
         this.lastFetchedAt = cached.updatedAt || Date.now();
-        this.logger.log(`ETF market cache pre-warmed from Firestore: ${cached.categories?.length} categories`);
+        const totalFunds = cached.categories?.reduce((acc, c) => acc + (c.funds?.length || 0), 0) || 0;
+        this.logger.log(
+          `ETF market data pre-warmed from Firestore: ${cached.categories?.length} categories, ${totalFunds} total funds visible`,
+        );
       }
     } catch (err: any) {
       this.logger.warn(`Initial Firestore ETF cache read failed: ${err.message}`);
@@ -77,7 +83,7 @@ export class EtfMarketService implements OnModuleInit {
 
   /**
    * Returns categorized, dynamically discovered ETFs across all 10 categories.
-   * If limit is specified and > 0, caps each category to that number; otherwise returns all discovered ETFs.
+   * If limit is specified and > 0, caps each category to that number; otherwise returns ALL discovered ETFs.
    */
   async getCategorizedEtfs(limit?: number): Promise<EtfMarketResponse> {
     const now = Date.now();
@@ -86,12 +92,18 @@ export class EtfMarketService implements OnModuleInit {
     if (this.cachedResponse && now - this.lastFetchedAt < this.CACHE_TTL_MS) {
       baseResponse = this.cachedResponse;
     } else {
-      // Check Firestore before triggering an expensive upstream refresh
-      const firestoreDoc = await this.readFromFirestore();
-      if (firestoreDoc && now - (firestoreDoc.updatedAt || 0) < this.CACHE_TTL_MS) {
-        this.cachedResponse = firestoreDoc;
-        this.lastFetchedAt = firestoreDoc.updatedAt || now;
-        baseResponse = firestoreDoc;
+      // Check Firestore DB before triggering an expensive upstream refresh
+      const firestoreData = await this.readFromFirestore();
+      if (firestoreData && now - (firestoreData.updatedAt || 0) < this.CACHE_TTL_MS) {
+        this.cachedResponse = firestoreData;
+        this.lastFetchedAt = firestoreData.updatedAt || now;
+        baseResponse = firestoreData;
+      } else if (firestoreData) {
+        // Even if older than 7 days, serve DB immediately while scheduling background refresh
+        this.cachedResponse = firestoreData;
+        this.lastFetchedAt = firestoreData.updatedAt || now;
+        baseResponse = firestoreData;
+        this.triggerBackgroundRefresh();
       } else {
         if (!this.refreshPromise) {
           this.refreshPromise = this.refreshCache().finally(() => {
@@ -107,6 +119,26 @@ export class EtfMarketService implements OnModuleInit {
     }
 
     return this.applyLimit(baseResponse, limit);
+  }
+
+  private triggerBackgroundRefresh(): void {
+    if (this.refreshPromise) return;
+    this.refreshPromise = this.refreshCache()
+      .catch((err) => {
+        this.logger.warn(`Background ETF refresh failed: ${err.message}`);
+        return this.cachedResponse!;
+      })
+      .finally(() => {
+        this.refreshPromise = null;
+      });
+  }
+
+  /**
+   * Explicit universe sync and weekly rotation method.
+   * Rotates current week -> previous week, fetches fresh data, and persists to current week.
+   */
+  async syncUniverse(): Promise<EtfMarketResponse> {
+    return this.refreshCache();
   }
 
   private applyLimit(base: EtfMarketResponse, limit: number): EtfMarketResponse {
@@ -152,11 +184,11 @@ export class EtfMarketService implements OnModuleInit {
 
   /**
    * Refreshes the ETF universe and snapshot from Polygon/Massive, runs the
-   * classification engine, sorts by AUM descending, and updates memory and Firestore cache.
+   * classification engine, sorts by AUM descending, rotates DB, and updates memory and DB.
    */
   private async refreshCache(): Promise<EtfMarketResponse> {
     const started = Date.now();
-    this.logger.log("Refreshing ETF Discovery & Classification via Massive API...");
+    this.logger.log("Refreshing ETF Discovery & Classification via Massive API (100% complete universe)...");
 
     try {
       const [universe, snapshotMap] = await Promise.all([
@@ -184,7 +216,7 @@ export class EtfMarketService implements OnModuleInit {
         .filter((e) => e.price != null && e.price > 0);
 
       if (validEtfs.length === 0) {
-        this.logger.warn("No valid ETFs discovered with price data — aborting refresh to protect cache");
+        this.logger.warn("No valid ETFs discovered with price data — aborting refresh to protect DB data");
         const fallback = await this.readFromFirestore();
         if (fallback) {
           this.cachedResponse = fallback;
@@ -219,7 +251,7 @@ export class EtfMarketService implements OnModuleInit {
       const tickersToFetch = new Set<string>();
       for (const def of CATEGORY_DEFINITIONS) {
         const bucket = candidateBuckets.get(def.id) || [];
-        // Sort candidate pool by dollar volume to prioritize prominent funds
+        // Sort candidate pool by dollar volume to prioritize prominent funds for AUM lookup
         bucket.sort((a, b) => b.dollarVol - a.dollarVol);
         const topSlice = bucket.slice(0, 100);
         for (const t of topSlice) {
@@ -235,7 +267,6 @@ export class EtfMarketService implements OnModuleInit {
 
       // Build normalized ETF representations and sort by AUM descending (fallback to volume DESC)
       const categoryMap = new Map<ETFCategory, NormalizedETF[]>();
-      const MAX_PER_CATEGORY = 150;
 
       for (const def of CATEGORY_DEFINITIONS) {
         const bucket = candidateBuckets.get(def.id) || [];
@@ -252,6 +283,7 @@ export class EtfMarketService implements OnModuleInit {
             sic_description: item.sic_description,
           });
 
+          // Compact structure to ensure each item is ~90 bytes for DB storage
           return {
             symbol: item.ticker,
             name: item.name,
@@ -262,12 +294,10 @@ export class EtfMarketService implements OnModuleInit {
             aum,
             badge: fmtAumBadge(aum),
             categories: assignedCategories,
-            provider: "massive-polygon",
-            lastUpdated: new Date().toISOString(),
           };
         });
 
-        // Step 10: Sort by AUM DESC, fallback to volume DESC
+        // Sort by AUM DESC, fallback to volume DESC
         normalizedList.sort((a, b) => {
           if (a.aum != null && b.aum != null) {
             return b.aum - a.aum;
@@ -277,7 +307,7 @@ export class EtfMarketService implements OnModuleInit {
           return (b.volume || 0) - (a.volume || 0);
         });
 
-        // Deduplicate each category and cap to top prominent funds (keeps document size ~500KB)
+        // Deduplicate each category by ticker symbol — keep 100% of discovered funds (NO CAPPING!)
         const seenSymbols = new Set<string>();
         const fullList: NormalizedETF[] = [];
         for (const etf of normalizedList) {
@@ -287,7 +317,7 @@ export class EtfMarketService implements OnModuleInit {
           }
         }
 
-        categoryMap.set(def.id, fullList.slice(0, MAX_PER_CATEGORY));
+        categoryMap.set(def.id, fullList);
       }
 
       const categories: EtfCategorySection[] = CATEGORY_DEFINITIONS.map(
@@ -334,14 +364,14 @@ export class EtfMarketService implements OnModuleInit {
       this.cachedResponse = response;
       this.lastFetchedAt = Date.now();
 
-      this.persistToFirestore(response).catch((err) => {
-        this.logger.warn(`Firestore ETF cache persist failed: ${err.message}`);
-      });
+      // Rotate DB collections and persist full data
+      await this.rotateAndPersistToFirestore(response);
 
+      const totalDiscovered = categories.reduce((sum, c) => sum + c.funds.length, 0);
       this.logger.log(
         `ETF Discovery & Classification refreshed in ${
           Date.now() - started
-        }ms: 10 dynamic categories across ${universe.length} ETF universe`,
+        }ms: 10 dynamic categories across ${totalDiscovered} total funds (100% preserved)`,
       );
 
       return response;
@@ -437,47 +467,214 @@ export class EtfMarketService implements OnModuleInit {
   }
 
   /**
-   * Persists normalized snapshot response to Firestore.
+   * Rotates current week -> previous week, and persists full new data into current week.
+   * Uses per-category documents to ensure each document stays well below Firestore's 1 MB limit.
    */
-  private async persistToFirestore(data: EtfMarketResponse): Promise<void> {
+  private async rotateAndPersistToFirestore(data: EtfMarketResponse): Promise<void> {
     if (!this.firebase) return;
+    const db = this.firebase.firestore;
     const totalFunds = data.categories?.reduce((acc, c) => acc + (c.funds?.length || 0), 0) || 0;
     if (totalFunds === 0) {
       this.logger.warn("Refusing to persist empty ETF dataset to Firestore");
       return;
     }
+
     try {
-      const ref = this.firebase.firestore
-        .collection(this.FIRESTORE_COLLECTION)
-        .doc(this.FIRESTORE_DOC);
-      await ref.set(data);
-      this.logger.log(`Successfully persisted ${totalFunds} ETFs across ${data.categories.length} categories to Firestore cache`);
+      // 1. Check current collection: if it already has valid documents, rotate them to previous
+      const currentSnap = await db.collection(this.CURRENT_COLLECTION).get();
+      let currentTotalFunds = 0;
+      for (const doc of currentSnap.docs) {
+        if (doc.id !== "_metadata" && doc.id !== "meta") {
+          const docData = doc.data();
+          if (Array.isArray(docData?.funds)) {
+            currentTotalFunds += docData.funds.length;
+          }
+        }
+      }
+
+      if (currentTotalFunds > 0) {
+        this.logger.log(
+          `Rotating current week ETF data (${currentTotalFunds} funds across ${currentSnap.size} docs) to ${this.PREVIOUS_COLLECTION}...`,
+        );
+        for (const doc of currentSnap.docs) {
+          await db
+            .collection(this.PREVIOUS_COLLECTION)
+            .doc(doc.id)
+            .set(doc.data());
+        }
+        this.logger.log(`Successfully rotated current week ETF data to ${this.PREVIOUS_COLLECTION}`);
+      }
+
+      // 2. Persist fresh data into CURRENT_COLLECTION document per category
+      this.logger.log(`Writing fresh ETF data (${totalFunds} funds) to ${this.CURRENT_COLLECTION}...`);
+      for (const cat of data.categories) {
+        const catDoc = {
+          id: cat.id,
+          label: cat.label,
+          count: cat.funds.length,
+          updatedAt: data.updatedAt,
+          funds: cat.funds,
+        };
+        await db
+          .collection(this.CURRENT_COLLECTION)
+          .doc(cat.id)
+          .set(catDoc);
+      }
+
+      // 3. Write metadata document
+      const categoryCounts: Record<string, number> = {};
+      for (const cat of data.categories) {
+        categoryCounts[cat.id] = cat.funds.length;
+      }
+
+      const metaDoc = {
+        updatedAt: data.updatedAt,
+        source: data.source,
+        totalCategories: data.categories.length,
+        totalFunds,
+        categoryCounts,
+      };
+      await db
+        .collection(this.CURRENT_COLLECTION)
+        .doc("_metadata")
+        .set(metaDoc);
+
+      this.logger.log(
+        `Successfully saved all ${data.categories.length} categories (${totalFunds} total funds) to ${this.CURRENT_COLLECTION}`,
+      );
     } catch (err: any) {
-      this.logger.error(`Firestore cache set failed: ${err.message}`);
+      this.logger.error(`Firestore ETF market persist failed: ${err.message}`);
     }
   }
 
   /**
-   * Reads fallback response from Firestore.
+   * Reads fallback response from Firestore with multi-tier fallback:
+   * 1. Try CURRENT_COLLECTION (etf_market_current)
+   * 2. If missing/invalid, fallback to PREVIOUS_COLLECTION (etf_market_previous - last week)
+   * 3. If missing/invalid, fallback to legacy collection (etf_corner_cache/latest)
    */
-  private async readFromFirestore(): Promise<EtfMarketResponse | null> {
+  async readFromFirestore(): Promise<EtfMarketResponse | null> {
     if (!this.firebase) return null;
+
+    // Stage 1: Try current week collection
     try {
-      const ref = this.firebase.firestore
-        .collection(this.FIRESTORE_COLLECTION)
-        .doc(this.FIRESTORE_DOC);
-      const snap = await ref.get();
-      if (snap.exists) {
-        const data = snap.data() as EtfMarketResponse;
-        const totalFunds = data?.categories?.reduce((acc, c) => acc + (c.funds?.length || 0), 0) || 0;
-        if (totalFunds > 0) {
-          return data;
+      const current = await this.readCollectionFromFirestore(this.CURRENT_COLLECTION);
+      if (this.isValidEtfResponse(current)) {
+        const total = current!.categories.reduce((acc, c) => acc + c.funds.length, 0);
+        this.logger.log(`Loaded ETF data from ${this.CURRENT_COLLECTION} (${total} total funds)`);
+        return current;
+      }
+      this.logger.warn(`${this.CURRENT_COLLECTION} empty or invalid; attempting fallback to ${this.PREVIOUS_COLLECTION}...`);
+    } catch (err: any) {
+      this.logger.warn(`Failed reading ${this.CURRENT_COLLECTION}: ${err.message}; attempting fallback to ${this.PREVIOUS_COLLECTION}...`);
+    }
+
+    // Stage 2: Fallback to last week's collection
+    try {
+      const previous = await this.readCollectionFromFirestore(this.PREVIOUS_COLLECTION);
+      if (this.isValidEtfResponse(previous)) {
+        const total = previous!.categories.reduce((acc, c) => acc + c.funds.length, 0);
+        this.logger.warn(`Fallback SUCCESS: Loaded ETF data from prior week ${this.PREVIOUS_COLLECTION} (${total} total funds)`);
+        return previous;
+      }
+      this.logger.warn(`${this.PREVIOUS_COLLECTION} was also empty or invalid.`);
+    } catch (err: any) {
+      this.logger.warn(`Failed reading ${this.PREVIOUS_COLLECTION}: ${err.message}`);
+    }
+
+    // Stage 3: Fallback to legacy single-doc cache
+    try {
+      const legacySnap = await this.firebase.firestore
+        .collection(this.LEGACY_COLLECTION)
+        .doc(this.LEGACY_DOC)
+        .get();
+      if (legacySnap.exists) {
+        const legacy = legacySnap.data() as EtfMarketResponse;
+        if (this.isValidEtfResponse(legacy)) {
+          this.logger.log(`Loaded ETF data from legacy ${this.LEGACY_COLLECTION}/${this.LEGACY_DOC}`);
+          return legacy;
         }
-        this.logger.warn("Firestore etf_corner_cache doc has 0 funds — ignoring poisoned cache document");
       }
     } catch (err: any) {
-      this.logger.warn(`Firestore cache get failed: ${err.message}`);
+      this.logger.debug(`Legacy cache read skipped: ${err.message}`);
     }
+
     return null;
+  }
+
+  /**
+   * Helper that assembles a complete EtfMarketResponse from category documents in a given collection.
+   */
+  private async readCollectionFromFirestore(collectionName: string): Promise<EtfMarketResponse | null> {
+    if (!this.firebase) return null;
+    const db = this.firebase.firestore;
+    const snap = await db.collection(collectionName).get();
+    if (snap.empty) return null;
+
+    let updatedAt = 0;
+    let source = "massive-polygon";
+    const categoryMap = new Map<string, NormalizedETF[]>();
+
+    for (const doc of snap.docs) {
+      if (doc.id === "_metadata" || doc.id === "meta") {
+        const meta = doc.data();
+        if (meta?.updatedAt) updatedAt = meta.updatedAt;
+        if (meta?.source) source = meta.source;
+        continue;
+      }
+      const data = doc.data();
+      if (data && Array.isArray(data.funds)) {
+        if (!updatedAt && data.updatedAt) updatedAt = data.updatedAt;
+        categoryMap.set(doc.id, data.funds);
+      }
+    }
+
+    if (categoryMap.size === 0) return null;
+
+    const categories: EtfCategorySection[] = CATEGORY_DEFINITIONS.map((def) => ({
+      id: def.id,
+      label: def.label,
+      funds: categoryMap.get(def.id) || [],
+    }));
+
+    const getFunds = (id: string) => categoryMap.get(id) || [];
+    const largest = getFunds("largest");
+    const equity = getFunds("equity");
+    const bitcoin = getFunds("bitcoin");
+    const ethereum = getFunds("ethereum");
+    const gold = getFunds("gold");
+    const fixedIncome = getFunds("fixedIncome");
+    const realEstate = getFunds("realEstate");
+    const totalMarket = getFunds("totalMarket");
+    const commodities = getFunds("commodities");
+    const leveraged = getFunds("leveraged");
+
+    return {
+      updatedAt: updatedAt || Date.now(),
+      source,
+      categories,
+      largest,
+      equity,
+      bitcoin,
+      ethereum,
+      gold,
+      fixedIncome,
+      "fixed-income": fixedIncome,
+      "fixed_income": fixedIncome,
+      realEstate,
+      "real-estate": realEstate,
+      "real_estate": realEstate,
+      totalMarket,
+      "total-market": totalMarket,
+      "total_market": totalMarket,
+      commodities,
+      leveraged,
+    };
+  }
+
+  private isValidEtfResponse(res: EtfMarketResponse | null): boolean {
+    if (!res || !Array.isArray(res.categories) || res.categories.length === 0) return false;
+    const totalFunds = res.categories.reduce((acc, c) => acc + (c.funds?.length || 0), 0);
+    return totalFunds > 0;
   }
 }

@@ -71,6 +71,7 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "recaps", trigger: "scheduler", schedules: ["45 18 * * 1-5"] },
   { name: "recap-blog", trigger: "scheduler", schedules: ["0 19 * * 1-5"], note: "reads the recaps snapshot, so it trails it by 15m; publishes a Draft blog post" },
   { name: "etf-holdings", trigger: "scheduler", schedules: ["0 19 * * 1-5"], note: "daily holdings snapshot for 16 popular ETFs after market close" },
+  { name: "etf-market", trigger: "scheduler", schedules: ["0 0 * * 0"], note: "weekly full ETF universe sync: rotates current week to previous week, writes all discovered funds across 10 categories" },
   { name: "eod-recap", trigger: "scheduler", schedules: ["15 16 * * 1-5"], note: "EOD Recap blog post: feeds 16 ETFs + indices/commodities/crypto into Claude skill and publishes to blog 15 min after market close at 4:15 PM ET (3:15 PM CT)" },
   { name: "premarket-post", trigger: "scheduler", schedules: ["35 7 * * 1-5"], note: "Pre-Market Intelligence blog post: 7:35 AM CT (8:35 AM ET) 5 min after 7:30 AM CT macro prints; publishes movers, earnings, calendar, analyst calls, and what could happen today to blog" },
   { name: "sectors", trigger: "scheduler", schedules: ["0 18 * * 1-5"] },

@@ -21,7 +21,9 @@
     "seed:test-user": "ts-node --transpile-only scripts/seed-test-user.ts",
     "deploy:live": "node deploy/deploy-live.js",
     "post:premarket": "ts-node --transpile-only scripts/run-premarket-post.ts",
-    "post:eod-recap": "ts-node --transpile-only scripts/run-eod-recap.ts"
+    "post:eod-recap": "ts-node --transpile-only scripts/run-eod-recap.ts",
+    "sync:etf-holdings": "ts-node --transpile-only scripts/sync-etf-holdings.ts",
+    "sync:etf-market": "ts-node --transpile-only scripts/sync-etf-market.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
