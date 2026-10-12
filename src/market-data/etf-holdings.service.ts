@@ -151,6 +151,45 @@ const ETF_METADATA: Record<string, EtfMetaConfig> = {
   },
 };
 
+function inferEtfType(
+  assetClass?: string | null,
+  name?: string | null,
+): "stock" | "bond" | "commodity" | "crypto" {
+  const ac = String(assetClass ?? "").toLowerCase();
+  const nm = String(name ?? "").toLowerCase();
+  if (
+    ac.includes("bond") ||
+    ac.includes("fixed income") ||
+    nm.includes("treasury") ||
+    nm.includes("bond") ||
+    nm.includes("corporate") ||
+    nm.includes("credit")
+  ) {
+    return "bond";
+  }
+  if (
+    ac.includes("commodity") ||
+    ac.includes("commodities") ||
+    nm.includes("gold") ||
+    nm.includes("silver") ||
+    nm.includes("oil") ||
+    nm.includes("natural gas")
+  ) {
+    return "commodity";
+  }
+  if (
+    ac.includes("crypto") ||
+    ac.includes("bitcoin") ||
+    ac.includes("ethereum") ||
+    nm.includes("bitcoin") ||
+    nm.includes("ethereum") ||
+    nm.includes("crypto")
+  ) {
+    return "crypto";
+  }
+  return "stock";
+}
+
 @Injectable()
 export class EtfHoldingsService {
   private readonly logger = new Logger(EtfHoldingsService.name);
@@ -213,9 +252,10 @@ export class EtfHoldingsService {
       }
 
       const info = Array.isArray(infoRes) && infoRes.length > 0 ? infoRes[0] : null;
+      const inferredType = inferEtfType(info?.assetClass, info?.name);
       const meta: EtfMetaConfig = ETF_METADATA[sym] ?? {
         name: info?.name ?? `${sym} ETF`,
-        type: "stock",
+        type: inferredType,
       };
 
       // Sort holdings descending by weightPercentage
@@ -297,7 +337,7 @@ export class EtfHoldingsService {
         weightingNote: meta.weightingNote ?? null,
         sectors: sectors && sectors.length > 0 ? sectors : undefined,
         singleAssetStats,
-        holdings,
+        holdings: holdings.slice(0, 1000),
         updatedAt: new Date().toISOString(),
       };
 
