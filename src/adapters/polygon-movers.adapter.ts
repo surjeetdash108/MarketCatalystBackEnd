@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { splitMovers } from "../common/movers-split.util";
 import {
   diffGroupedDaily,
   isMoverEligible,
@@ -47,12 +48,7 @@ export class PolygonMoversAdapter implements MoversAdapter {
       if (reason) quarantined.push({ mover: m, reason });
       else clean.push(m);
     }
-    const gainers = [...clean]
-      .sort((a, b) => b.pctChange - a.pctChange)
-      .slice(0, topN);
-    const losers = [...clean]
-      .sort((a, b) => a.pctChange - b.pctChange)
-      .slice(0, topN);
+    const { gainers, losers } = splitMovers(clean, (m) => m.pctChange, topN);
     const warnings: AdapterWarning[] = [];
     if (clean.length === 0) {
       warnings.push({
