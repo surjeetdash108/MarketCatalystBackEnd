@@ -147,6 +147,28 @@ export interface CanonicalIncomeStatement {
   dilutedEps: number | null;
 }
 
+/**
+ * One reporting period carrying all three statements (income, balance sheet,
+ * cash flow). Statement maps are keyed by the XBRL-style vocabulary Polygon's
+ * /vX/reference/financials uses (`revenues`, `net_income_loss`,
+ * `net_cash_flow_from_operating_activities`, …) because that is the key set
+ * mapQuarterRow/mapAnnualRow read — other vendors map INTO these keys (see
+ * fmp-financials.adapter.ts) rather than every consumer learning a second set.
+ * Values are USD; a vendor that cannot assert USD nulls or drops the period.
+ */
+export interface CanonicalFinancialStatement {
+  fiscalYear: string | null;
+  /** "Q1".."Q4" for quarterly rows, "FY" for annual. */
+  fiscalPeriod: string | null;
+  endDate: string | null;
+  filingDate: string | null;
+  income: Record<string, number | null>;
+  balanceSheet: Record<string, number | null>;
+  cashFlow: Record<string, number | null>;
+}
+
+export type FinancialsTimeframe = "quarterly" | "annual";
+
 export interface AdapterWarning {
   code:
     | "SUB_REQUEST_FAILED"
@@ -264,6 +286,18 @@ export interface FinancialsAdapter {
     timeframe: string,
     limit: number,
   ): Promise<AdapterResult<CanonicalIncomeStatement[]>>;
+  /**
+   * Newest-first periods with all three statements. `incomeOnly` is a cost hint
+   * for callers that read only the income statement (the annual series): a
+   * vendor that serves each statement from a separate endpoint skips the
+   * balance-sheet/cash-flow calls and returns empty maps for them.
+   */
+  fetchFinancialStatements(
+    ticker: string,
+    timeframe: FinancialsTimeframe,
+    limit: number,
+    opts?: { incomeOnly?: boolean },
+  ): Promise<AdapterResult<CanonicalFinancialStatement[]>>;
 }
 
 export const COMPANY_PROFILE_ADAPTER: unique symbol = Symbol(

@@ -4,9 +4,11 @@ import { FmpService } from "../vendors/fmp/fmp.service";
 import type {
   AdapterResult,
   CanonicalBar,
+  CanonicalFinancialStatement,
   CanonicalIncomeStatement,
   CanonicalTickerRef,
   FinancialsAdapter,
+  FinancialsTimeframe,
   MarketBarsAdapter,
   TickerUniverseAdapter,
 } from "./types";
@@ -15,12 +17,12 @@ import { isoDateFromMs } from "../common/date.util";
 
 /**
  * Seams for the three domains that were hardcoded to PolygonService: daily bars,
- * the ticker universe, and income statements.
+ * the ticker universe, and financial statements.
  *
- * Only Polygon implements these today, so there is deliberately no second
- * implementation — the point is the boundary, not speculative integration
- * against an API we have no key for. Adding a vendor means writing one class and
- * adding one line to the `bySource` map in adapters.module.ts; no job changes.
+ * Bars and the universe are Polygon-only; financials also has an FMP
+ * implementation (fmp-financials.adapter.ts). Adding a vendor means writing one
+ * class and adding one line to the `bySource` map in adapters.module.ts; no job
+ * changes.
  *
  * These adapters also normalize away vendor encoding: Polygon's epoch-millis
  * `t` becomes an ISO date, and its snake_case reference fields become camelCase,
@@ -146,6 +148,12 @@ export class CompositeTickerUniverseAdapter implements TickerUniverseAdapter {
 
 // ── Financials ──────────────────────────────────────────────────────────────
 
+const POLYGON_VX_FINANCIALS_WARNING = {
+  code: "STALE_DATA" as const,
+  message:
+    "Served by /vX/reference/financials — Polygon's EXPERIMENTAL namespace. The replacement (/stocks/financials/v1/*) needs Advanced or the Financials add-on, so this path cannot be upgraded on Starter and may break without deprecation notice.",
+};
+
 export class PolygonFinancialsAdapter implements FinancialsAdapter {
   readonly sourceName = "polygon";
   constructor(private readonly polygon: PolygonService) {}
@@ -162,13 +170,20 @@ export class PolygonFinancialsAdapter implements FinancialsAdapter {
     return {
       data: await this.polygon.getIncomeStatements(ticker, timeframe, limit),
       source: this.sourceName,
-      warnings: [
-        {
-          code: "STALE_DATA",
-          message:
-            "Served by /vX/reference/financials — Polygon's EXPERIMENTAL namespace. The replacement (/stocks/financials/v1/*) needs Advanced or the Financials add-on, so this path cannot be upgraded on Starter and may break without deprecation notice.",
-        },
-      ],
+      warnings: [POLYGON_VX_FINANCIALS_WARNING],
+    };
+  }
+
+  /** One request returns all three statements, so `incomeOnly` saves nothing here. */
+  async fetchFinancialStatements(
+    ticker: string,
+    timeframe: FinancialsTimeframe,
+    limit: number,
+  ): Promise<AdapterResult<CanonicalFinancialStatement[]>> {
+    return {
+      data: await this.polygon.getFinancialStatements(ticker, timeframe, limit),
+      source: this.sourceName,
+      warnings: [POLYGON_VX_FINANCIALS_WARNING],
     };
   }
 }
@@ -212,6 +227,9 @@ export class CompositeFinancialsAdapter implements FinancialsAdapter {
     return this.primary.requestDelayMs;
   }
 
+  // Both methods treat a resolved-but-EMPTY primary as a soft failure: Polygon
+  // answers 200 with zero periods for foreign private issuers (20-F/6-K filers
+  // such as GAUZ), which a throw-only fallback would never route to FMP.
   fetchIncomeStatements(ticker: string, timeframe: string, limit: number) {
     return withFallback(
       `income statements for ${ticker}`,
@@ -219,6 +237,23 @@ export class CompositeFinancialsAdapter implements FinancialsAdapter {
       this.primary,
       this.secondary,
       (a) => a.fetchIncomeStatements(ticker, timeframe, limit),
+      (r) => r.data.length === 0,
+    );
+  }
+
+  fetchFinancialStatements(
+    ticker: string,
+    timeframe: FinancialsTimeframe,
+    limit: number,
+    opts?: { incomeOnly?: boolean },
+  ) {
+    return withFallback(
+      `${timeframe} financial statements for ${ticker}`,
+      this.logger,
+      this.primary,
+      this.secondary,
+      (a) => a.fetchFinancialStatements(ticker, timeframe, limit, opts),
+      (r) => r.data.length === 0,
     );
   }
 }

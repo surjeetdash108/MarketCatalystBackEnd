@@ -133,7 +133,7 @@ env:
   - variable: FINANCIALS_SOURCE
     value: "polygon"
   - variable: FINANCIALS_FALLBACK_SOURCE
-    value: "none"
+    value: "fmp"
 
   # ─── SEC EDGAR ───────────────────────────────────────────────────────────────
   # SEC requires a descriptive User-Agent with a real contact address.

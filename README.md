@@ -71,6 +71,7 @@ for the full list. Essentials:
 | `POLYGON_API_KEY`, `FMP_API_KEY`, `FINNHUB_API_KEY`, `FRED_API_KEY` | Core vendor keys |
 | `SEC_EDGAR_USER_AGENT` | Required contact string for SEC EDGAR |
 | `*_SOURCE` / `*_FALLBACK_SOURCE`, `NEWS_SOURCE` | Adapter vendor routing |
+| `FINANCIALS_SOURCE` / `FINANCIALS_FALLBACK_SOURCE` | Financial statements (`financials` job, `fundamentals-growth`, `/live/financials`): `polygon` (default) / `fmp` (default). The fallback fires when Polygon throws **or returns zero periods** — foreign private issuers (20-F/6-K filers such as GAUZ) are absent from Polygon's financials. Non-USD FMP periods are dropped |
 | `LIVE_QUOTE_SOURCE` / `LIVE_QUOTE_FALLBACK_SOURCE` | Live quote cache (`/live/snapshot`, `/live/quotes`): `polygon` (default) or `fmp`; fallback fills only tickers the primary missed. Separate from `QUOTE_SOURCE` (market-indices adapter, Polygon-only) |
 | `LIVE_STREAM_SOURCE` / `LIVE_STREAM_POLL_MS` | `/live/stream` SSE: `polygon` (default, delayed WebSocket) or `fmp` (ticks from the quote cache above, no socket); poll default 5000ms |
 | `BENZINGA_API_KEY`, `TRADIER_ACCESS_TOKEN`, `UNUSUAL_WHALES_API_KEY`, `SENTRY_DSN` | Optional; jobs degrade gracefully when blank |
