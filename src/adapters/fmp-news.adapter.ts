@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { FmpService } from "../vendors/fmp/fmp.service";
 import { AdapterResult, CanonicalNewsArticle, NewsAdapter } from "./types";
+import { fmpEasternToUtcIso } from "../common/date.util";
 
 /** FMP sentiment may arrive as a label ("Positive"/"Bearish"/…) or a score. */
 function normSentiment(
@@ -91,9 +92,7 @@ export class FmpNewsAdapter implements NewsAdapter {
       sentiment: normSentiment(r.sentiment),
       sentimentReasoning: null,
       keywords: [],
-      publishedAt: r.publishedDate
-        ? new Date(r.publishedDate.replace(" ", "T") + "Z").toISOString()
-        : new Date().toISOString(),
+      publishedAt: fmpEasternToUtcIso(r.publishedDate),
       imageUrl: r.image ?? null,
     };
   }
