@@ -55,6 +55,7 @@ export interface JobManifestEntry {
  * `18`/`21` ones are post-close catch-ups.
  */
 const SCHEDULER: JobManifestEntry[] = [
+  { name: "analyst-actions", trigger: "scheduler", schedules: ["0 8,12,16 * * 1-5"], note: "refreshes 3x daily: 8 AM CST (9 AM ET), 12 PM CST (1 PM ET), and 4 PM CST (5 PM ET)" },
   { name: "company-quotes", trigger: "scheduler", schedules: ["*/15 4-20 * * 1-5"], note: "whole-universe price refresh, pre-market through after-hours" },
   { name: "earnings-actuals", trigger: "scheduler", schedules: ["*/5 6-7,16-17 * * 1-5"], note: "tight cadence around the BMO and AMC reporting windows" },
   { name: "earnings", trigger: "scheduler", schedules: ["0 21 * * 1-5"] },

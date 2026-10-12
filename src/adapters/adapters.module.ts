@@ -36,7 +36,6 @@ import {
   CompositeFinancialsAdapter,
   CompositeMarketBarsAdapter,
   CompositeTickerUniverseAdapter,
-  FmpFinancialsAdapter,
   PolygonFinancialsAdapter,
   PolygonMarketBarsAdapter,
   PolygonTickerUniverseAdapter,

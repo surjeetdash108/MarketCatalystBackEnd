@@ -188,28 +188,6 @@ export class PolygonFinancialsAdapter implements FinancialsAdapter {
   }
 }
 
-export class FmpFinancialsAdapter implements FinancialsAdapter {
-  readonly sourceName = "fmp";
-  constructor(private readonly fmp: FmpService) {}
-
-  get requestDelayMs() {
-    return 50;
-  }
-
-  async fetchIncomeStatements(
-    ticker: string,
-    timeframe: string,
-    limit: number,
-  ): Promise<AdapterResult<CanonicalIncomeStatement[]>> {
-    const data = await this.fmp.getIncomeStatements(ticker, timeframe, limit);
-    return {
-      data,
-      source: this.sourceName,
-      warnings: [],
-    };
-  }
-}
-
 export class CompositeFinancialsAdapter implements FinancialsAdapter {
   private readonly logger = new Logger(CompositeFinancialsAdapter.name);
   readonly sourceName: string;

@@ -87,6 +87,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** One period as returned by FinancialsAdapter.fetchFinancialStatements(). */
 export type FinancialStatementRow = CanonicalFinancialStatement;
+export type PolygonFinancialRow = FinancialStatementRow;
 
 /** One fiscal-year row — actuals only (Polygon annual financials). */
 export interface AnnualFinancials {

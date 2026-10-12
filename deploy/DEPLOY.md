@@ -543,16 +543,16 @@ for JOB in market-quotes movers breadth indices fear-greed; do
 done
 ```
 
-**(c) `sync-analyst-actions-close` — after-close analyst sweep (2026-10-05).**
-18:30 ET weekdays, OIDC POST to `/sync/analyst-actions/run` (same pattern as
-(b)). The 08:00 ET premarket run only sees the rating changes FMP has indexed
-by then, so without this a day's upgrades/downgrades reach the Analyst Actions
-screen the next weekday morning (Friday's on Monday). Idempotent script:
+**(c) `sync-analyst-actions` — 3x daily analyst sweep (8 AM CST, 12 PM CST, 4 PM CST).**
+Runs at 08:00, 12:00, and 16:00 America/Chicago weekdays (`0 8,12,16 * * 1-5`),
+OIDC POST to `/sync/analyst-actions/run` (same pattern as (b)).
+Refreshes pre-market morning notes, mid-day actions, and after-close revisions.
+Idempotent script:
 
 ```bash
 PROJECT_ID=$PROJECT_ID REGION=$REGION SERVICE_URL=$SERVICE_URL INVOKER_SA=$INVOKER_SA \
   ./deploy/create-analyst-close-scheduler.sh
-gcloud scheduler jobs run sync-analyst-actions-close --project="$PROJECT_ID" --location="$REGION"  # verify once
+gcloud scheduler jobs run sync-analyst-actions --project="$PROJECT_ID" --location="$REGION"  # verify once
 ```
 
 > ⚠ `deploy/create-scheduler-jobs.sh` is **stale** — it still creates the retired

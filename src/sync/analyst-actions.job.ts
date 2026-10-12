@@ -31,8 +31,8 @@ export class AnalystActionsJob implements OnModuleInit {
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
       collections: ["analyst_actions"],
-      cronExpression: "0 6 * * *",
-      timeZone: "America/New_York",
+      cronExpression: "0 8,12,16 * * 1-5",
+      timeZone: "America/Chicago",
     });
   }
 
