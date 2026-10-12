@@ -446,6 +446,33 @@ export class OnDemandController {
   }
 
   /**
+   * Quarterly SEC 13F institutional ownership changes for a given stock ticker.
+   */
+  @Get("13f-filings")
+  @UseGuards(FirebaseAuthGuard)
+  @Header(
+    "Cache-Control",
+    "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
+  )
+  async get13FFilings(
+    @Query("ticker") ticker: string | undefined,
+    @Query("year") year: string | undefined,
+    @Query("quarter") quarter: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? "").toUpperCase().trim();
+    if (!TICKER_RE.test(sym))
+      throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+    const doc = await this.ondemand.get13FFilings(
+      sym,
+      year ? Number(year) : undefined,
+      quarter ? Number(quarter) : undefined,
+    );
+    sendWithEtag(req, res, doc);
+  }
+
+  /**
    * One SEC filing rendered as a document instead of EDGAR's raw submission
    * text. See SecEdgarService.getFilingDocument for why the full-index URL
    * cannot be linked directly.

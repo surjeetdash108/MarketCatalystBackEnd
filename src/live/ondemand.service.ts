@@ -2427,4 +2427,191 @@ export class OnDemandService implements OnModuleDestroy {
       return [];
     }
   }
+
+  /**
+   * Quarterly SEC 13F institutional ownership changes for a given stock ticker.
+   */
+  async get13FFilings(ticker: string, reqYear?: number, reqQuarter?: number) {
+    const quartersToProbe: Array<{ year: number; quarter: number; label: string }> = [];
+    const now = new Date();
+    let y = now.getUTCFullYear();
+    let q = Math.floor(now.getUTCMonth() / 3) + 1;
+    for (let i = 0; i < 8; i++) {
+      quartersToProbe.push({ year: y, quarter: q, label: `Q${q} ${y}` });
+      q -= 1;
+      if (q < 1) { q = 4; y -= 1; }
+    }
+
+    let resolvedYear = reqYear;
+    let resolvedQuarter = reqQuarter;
+    let rawRows: any[] = [];
+
+    if (resolvedYear && resolvedQuarter) {
+      const cacheDocId = `${ticker}_${resolvedYear}_Q${resolvedQuarter}`;
+      const cached = await this.firebase.firestore
+        .collection("filings_13f")
+        .doc(cacheDocId)
+        .get()
+        .catch(() => null);
+
+      if (cached && cached.exists) {
+        const data = cached.data();
+        if (data && Array.isArray(data.holders) && data.holders.length > 0) {
+          return {
+            symbol: ticker,
+            selectedQuarter: `Q${resolvedQuarter} ${resolvedYear}`,
+            year: resolvedYear,
+            quarter: resolvedQuarter,
+            availableQuarters: quartersToProbe,
+            holders: data.holders,
+            summary: data.summary,
+          };
+        }
+      }
+
+      rawRows = await this.fmp.get13FExtractAnalytics(ticker, resolvedYear, resolvedQuarter);
+    } else {
+      for (const candidate of quartersToProbe) {
+        const cacheDocId = `${ticker}_${candidate.year}_Q${candidate.quarter}`;
+        const cached = await this.firebase.firestore
+          .collection("filings_13f")
+          .doc(cacheDocId)
+          .get()
+          .catch(() => null);
+
+        if (cached && cached.exists) {
+          const data = cached.data();
+          if (data && Array.isArray(data.holders) && data.holders.length > 0) {
+            return {
+              symbol: ticker,
+              selectedQuarter: candidate.label,
+              year: candidate.year,
+              quarter: candidate.quarter,
+              availableQuarters: quartersToProbe,
+              holders: data.holders,
+              summary: data.summary,
+            };
+          }
+        }
+
+        const rows = await this.fmp.get13FExtractAnalytics(ticker, candidate.year, candidate.quarter);
+        if (rows && rows.length > 0) {
+          resolvedYear = candidate.year;
+          resolvedQuarter = candidate.quarter;
+          rawRows = rows;
+          break;
+        }
+      }
+    }
+
+    if (!resolvedYear || !resolvedQuarter) {
+      resolvedYear = quartersToProbe[1]?.year ?? 2024;
+      resolvedQuarter = quartersToProbe[1]?.quarter ?? 4;
+    }
+
+    const quarterLabel = `Q${resolvedQuarter} ${resolvedYear}`;
+
+    let totalShares = 0;
+    let totalMktVal = 0;
+    let newCount = 0;
+    let incCount = 0;
+    let redCount = 0;
+    let closedCount = 0;
+
+    const holders = rawRows.map((row) => {
+      const cik = String(row.cik ?? "").trim();
+      const investorName = String(row.investorName ?? "Unknown Institution").trim();
+      const sharesNumber = Number(row.sharesNumber) || 0;
+      const lastSharesNumber = Number(row.lastSharesNumber) || 0;
+      const changeInShares = Number(row.changeInSharesNumber) || (sharesNumber - lastSharesNumber);
+      const changeInSharesPct = row.changeInSharesNumberPercentage != null
+        ? Number(row.changeInSharesNumberPercentage)
+        : lastSharesNumber > 0 ? ((changeInShares / lastSharesNumber) * 100) : null;
+      const marketValue = Number(row.marketValue) || null;
+      const ownershipPct = Number(row.ownership) || null;
+      const reportDate = String(row.date ?? "");
+      const filingDate = String(row.filingDate ?? "");
+
+      let activityStatus: "New" | "Increased" | "Reduced" | "Closed Position" | "Maintained" = "Maintained";
+      const isNew = row.isNew === true || (lastSharesNumber === 0 && sharesNumber > 0);
+      const isSoldOut = row.isSoldOut === true || (sharesNumber === 0 && lastSharesNumber > 0);
+
+      if (isNew) {
+        activityStatus = "New";
+        newCount++;
+      } else if (isSoldOut) {
+        activityStatus = "Closed Position";
+        closedCount++;
+      } else if (changeInShares > 0) {
+        activityStatus = "Increased";
+        incCount++;
+      } else if (changeInShares < 0) {
+        activityStatus = "Reduced";
+        redCount++;
+      }
+
+      totalShares += sharesNumber;
+      if (marketValue) totalMktVal += marketValue;
+
+      const secFilingUrl = cik
+        ? `https://www.sec.gov/edgar/browse/?CIK=${encodeURIComponent(cik)}`
+        : `https://www.sec.gov/edgar/searchedgar/companysearch?company=${encodeURIComponent(investorName)}`;
+
+      return {
+        cik,
+        investorName,
+        symbol: ticker,
+        reportingQuarter: quarterLabel,
+        reportDate,
+        filingDate,
+        sharesNumber,
+        lastSharesNumber,
+        changeInShares,
+        changeInSharesPct: changeInSharesPct != null && Number.isFinite(changeInSharesPct) ? changeInSharesPct : null,
+        marketValue,
+        ownershipPct,
+        activityStatus,
+        secFilingUrl,
+      };
+    });
+
+    const summary = {
+      totalHolders: holders.length,
+      newPositions: newCount,
+      increasedPositions: incCount,
+      reducedPositions: redCount,
+      closedPositions: closedCount,
+      totalSharesHeld: totalShares,
+      totalMarketValue: totalMktVal,
+    };
+
+    if (holders.length > 0) {
+      const cacheDocId = `${ticker}_${resolvedYear}_Q${resolvedQuarter}`;
+      this.firebase.firestore
+        .collection("filings_13f")
+        .doc(cacheDocId)
+        .set({
+          symbol: ticker,
+          year: resolvedYear,
+          quarter: resolvedQuarter,
+          quarterLabel,
+          holders,
+          summary,
+          updatedAt: new Date().toISOString(),
+        })
+        .catch((err) => {
+          this.logger.warn(`Failed to cache 13F filings for ${cacheDocId}: ${(err as Error).message}`);
+        });
+    }
+
+    return {
+      symbol: ticker,
+      selectedQuarter: quarterLabel,
+      year: resolvedYear,
+      quarter: resolvedQuarter,
+      availableQuarters: quartersToProbe,
+      holders,
+      summary,
+    };
+  }
 }

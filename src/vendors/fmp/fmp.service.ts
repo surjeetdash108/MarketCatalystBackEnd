@@ -1185,6 +1185,29 @@ export class FmpService {
   }
 
   /**
+   * Granular quarterly 13F institutional holders analytics for a ticker
+   * (`/stable/institutional-ownership/extract-analytics/holder`).
+   */
+  async get13FExtractAnalytics(
+    ticker: string,
+    year: number,
+    quarter: number,
+  ): Promise<any[]> {
+    if (!this.apiKey) return [];
+    try {
+      const rows = await this.get(
+        `institutional-ownership/extract-analytics/holder?symbol=${encodeURIComponent(ticker)}&year=${year}&quarter=${quarter}`,
+      );
+      return Array.isArray(rows) ? rows : [];
+    } catch (err) {
+      this.logger.warn(
+        `13F extract analytics failed for ${ticker} (${year} Q${quarter}): ${(err as Error).message}`,
+      );
+      return [];
+    }
+  }
+
+  /**
    * Normalized income statements matching Polygon's getIncomeStatements shape.
    * Period can be "annual" or "quarterly" (defaults to "annual").
    */
