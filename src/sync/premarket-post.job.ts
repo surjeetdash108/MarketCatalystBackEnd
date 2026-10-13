@@ -373,6 +373,16 @@ export class PremarketPostJob implements OnModuleInit {
         process.env.FORCE_PREMARKET === "true";
 
       if (!force) {
+        // Morning automation toggle (turned off; requires ENABLE_PREMARKET_POST=true to run)
+        const enabled = process.env.ENABLE_PREMARKET_POST === "true";
+        if (!enabled) {
+          this.logger.log(
+            `Morning Pre-Market Post automation is turned off — skipping`,
+          );
+          await this.meta.record(JOB_NAME, { ok: true, count: 0 });
+          return { published: false, reason: "automation-disabled" };
+        }
+
         const weekday = etWeekday();
         if (weekday === 0 || weekday === 6) {
           this.logger.log(
