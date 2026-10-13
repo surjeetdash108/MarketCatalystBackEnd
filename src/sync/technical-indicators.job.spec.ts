@@ -1,4 +1,8 @@
-import { computeIndicators, IndicatorBar } from "./technical-indicators.job";
+import {
+  anchor52wToPrice,
+  computeIndicators,
+  IndicatorBar,
+} from "./technical-indicators.job";
 
 // 60 daily bars with a wobble so RSI/MACD resolve (computeIndicators returns
 // null without them). Dates are consecutive calendar days from 2026-01-01.
@@ -58,5 +62,38 @@ describe("computeIndicators — week5Closes", () => {
     delete bars[bars.length - 7].barDate;
     const ind = computeIndicators(bars, new Map(), NOW)!;
     expect(ind.week5Closes).toHaveLength(6);
+  });
+});
+
+describe("anchor52wToPrice", () => {
+  it("measures distance from the displayed price, not the last bar close", () => {
+    // MSFT 2026-10-12: bars end 10-09 (close 535.06), price is the 10-12 close.
+    const doc = anchor52wToPrice({
+      price: 541.15,
+      high52: 553.72,
+      low52: 349.2,
+      pctFromHigh52: -3.37,
+      pctFromLow52: 53.23,
+    });
+    expect(doc.high52).toBe(553.72);
+    expect(doc.pctFromHigh52).toBe(-2.27);
+    expect(doc.pctFromLow52).toBe(54.97);
+  });
+
+  it("extends the range when price is past a stored extreme", () => {
+    const hi = anchor52wToPrice({ price: 112, high52: 110.13, low52: 60.07 });
+    expect(hi.high52).toBe(112);
+    expect(hi.pctFromHigh52).toBe(0);
+    const lo = anchor52wToPrice({ price: 50, high52: 110.13, low52: 60.07 });
+    expect(lo.low52).toBe(50);
+    expect(lo.pctFromLow52).toBe(0);
+  });
+
+  it("leaves docs without a usable price or range untouched", () => {
+    const noPrice = { price: null, high52: 10, pctFromHigh52: -5 };
+    expect(anchor52wToPrice(noPrice)).toBe(noPrice);
+    const noRange = anchor52wToPrice({ price: 10, high52: null, low52: null });
+    expect(noRange.pctFromHigh52).toBeUndefined();
+    expect(noRange.high52).toBeNull();
   });
 });
