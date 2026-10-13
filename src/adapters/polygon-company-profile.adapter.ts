@@ -222,6 +222,11 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       // Prefer FMP when available, fall back to Polygon (no key, no row, or a
       // vendor miss) rather than leaving the field null.
       description: fmpProfile?.description ?? details.description ?? null,
+      descriptionSource: fmpProfile?.description
+        ? "fmp"
+        : details.description
+          ? "polygon"
+          : null,
       peRatio,
       eps,
       dividendYield,

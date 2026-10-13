@@ -1001,6 +1001,7 @@ export class OnDemandService implements OnModuleDestroy {
         Date.now() - created < COMPANY_TTL_MS &&
         data.price != null &&
         "description" in data &&
+        "descriptionSource" in data &&
         "instOwnershipPct" in data &&
         "epsTtm" in data
       ) {
@@ -1113,6 +1114,16 @@ export class OnDemandService implements OnModuleDestroy {
 
       const fmpProfile =
         fmpProfileRes.status === "fulfilled" ? fmpProfileRes.value : null;
+      const descriptionSource = fmpProfile?.description
+        ? "fmp"
+        : details?.description
+          ? "polygon"
+          : null;
+      if (details) {
+        this.logger.debug(
+          `company ${ticker}: description from ${descriptionSource ?? "none"}`,
+        );
+      }
 
       // FORWARD-ANNUALIZED dividend per share and yield (Polygon sells no yield
       // product). Methodology: (most-recent REGULAR per-payment amount) ×
@@ -1166,7 +1177,12 @@ export class OnDemandService implements OnModuleDestroy {
         // sector/industry/marketCap/exchange on a transient details outage.
         ...(details
           ? {
-              description: details.description ?? null,
+              // FMP's fuller writeup first, Polygon's as fallback — same order
+              // as the companies sync (polygon-company-profile.adapter.ts), so
+              // the two writers no longer flip the text back and forth.
+              description:
+                fmpProfile?.description ?? details.description ?? null,
+              descriptionSource,
               homepageUrl: details.homepage_url ?? null,
               // sic_description is an INDUSTRY ("ELECTRONIC COMPUTERS"), not a
               // sector — deriving the sector from sic_code (null when unmappable)

@@ -17,6 +17,9 @@ export interface CanonicalCompany {
   volume: number | null;
   averageVolume: number | null;
   description: string | null;
+  /** Vendor that supplied `description` — the doc-level `source` names the
+   *  profile adapter, not this field (FMP's text is preferred over Polygon's). */
+  descriptionSource: "fmp" | "polygon" | null;
   peRatio: number | null;
   eps: number | null;
   dividendYield: number | null;
