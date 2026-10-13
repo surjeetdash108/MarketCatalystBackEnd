@@ -37,6 +37,7 @@ import {
   type PolygonFinancialRow,
 } from "../sync/financials.job";
 import {
+  anchor52wToPrice,
   computeIndicators,
   type IndicatorBar,
 } from "../sync/technical-indicators.job";
@@ -1017,11 +1018,15 @@ export class OnDemandService implements OnModuleDestroy {
         Date.now() - created < COMPANY_TTL_MS &&
         data.price != null &&
         "description" in data &&
+        "descriptionSource" in data &&
         "instOwnershipPct" in data &&
         "epsTtm" in data
       ) {
-        this.memCompany.set(ticker, { data, at: Date.now() });
-        return data;
+        // The nightly cron writes the 52w % from the last bar close; re-measure
+        // it from the price this doc carries (see anchor52wToPrice).
+        const anchored = anchor52wToPrice(data);
+        this.memCompany.set(ticker, { data: anchored, at: Date.now() });
+        return anchored;
       }
     }
 
@@ -1129,6 +1134,16 @@ export class OnDemandService implements OnModuleDestroy {
 
       const fmpProfile =
         fmpProfileRes.status === "fulfilled" ? fmpProfileRes.value : null;
+      const descriptionSource = fmpProfile?.description
+        ? "fmp"
+        : details?.description
+          ? "polygon"
+          : null;
+      if (details) {
+        this.logger.debug(
+          `company ${ticker}: description from ${descriptionSource ?? "none"}`,
+        );
+      }
 
       // FORWARD-ANNUALIZED dividend per share and yield (Polygon sells no yield
       // product). Methodology: (most-recent REGULAR per-payment amount) ×
@@ -1182,7 +1197,12 @@ export class OnDemandService implements OnModuleDestroy {
         // sector/industry/marketCap/exchange on a transient details outage.
         ...(details
           ? {
-              description: details.description ?? null,
+              // FMP's fuller writeup first, Polygon's as fallback — same order
+              // as the companies sync (polygon-company-profile.adapter.ts), so
+              // the two writers no longer flip the text back and forth.
+              description:
+                fmpProfile?.description ?? details.description ?? null,
+              descriptionSource,
               homepageUrl: details.homepage_url ?? null,
               // sic_description is an INDUSTRY ("ELECTRONIC COMPUTERS"), not a
               // sector — deriving the sector from sic_code (null when unmappable)
@@ -1257,9 +1277,12 @@ export class OnDemandService implements OnModuleDestroy {
         updatedAt: now,
         source: "polygon-ondemand",
       };
-      await ref.set(doc, { merge: true });
-      this.memCompany.set(ticker, { data: doc, at: Date.now() });
-      return doc;
+      // Stored bars stop at the last premarket run; `price` is the snapshot,
+      // a session or more newer. Measure the 52w figures from `price`.
+      const anchored = anchor52wToPrice(doc);
+      await ref.set(anchored, { merge: true });
+      this.memCompany.set(ticker, { data: anchored, at: Date.now() });
+      return anchored;
     })().finally(() => this.inflight.delete(key));
 
     this.inflight.set(key, p);
@@ -1423,8 +1446,9 @@ export class OnDemandService implements OnModuleDestroy {
       partial: true,
       source: "polygon-summary",
     };
-    this.memCompanySummary.set(ticker, { data: summary, at: Date.now() });
-    return summary;
+    const anchored = anchor52wToPrice(summary);
+    this.memCompanySummary.set(ticker, { data: anchored, at: Date.now() });
+    return anchored;
   }
 
   /**

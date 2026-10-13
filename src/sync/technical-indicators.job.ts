@@ -618,6 +618,44 @@ export function computeIndicators(
   };
 }
 
+/**
+ * Re-anchor the 52-week fields to the price the doc actually displays.
+ *
+ * computeIndicators measures pctFromHigh52/pctFromLow52 from the last STORED
+ * bar's close, but ohlcv_bars only gain a session at the next premarket run,
+ * while `price` is the snapshot — always at least one session newer. MSFT read
+ * -3.37% off its high (from the 10-09 close) beside a 10-12 price that was
+ * really -2.27% off; CIBR read -0.12% beside a price -2.60% off, because its
+ * 10-12 new high was not in the bars either. Folding `price` into the range
+ * and measuring from it makes the figures describe the number next to them.
+ * Docs without a usable price or range pass through unchanged.
+ */
+type Anchored52w = {
+  pctFromHigh52?: number | null;
+  pctFromLow52?: number | null;
+};
+
+export function anchor52wToPrice<T extends Record<string, unknown>>(
+  doc: T,
+): T & Anchored52w {
+  const price = doc.price;
+  if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) {
+    return doc;
+  }
+  const out: Record<string, unknown> = { ...doc };
+  if (typeof doc.high52 === "number" && doc.high52 > 0) {
+    const high52 = Math.max(doc.high52, price);
+    out.high52 = high52;
+    out.pctFromHigh52 = round2(((price - high52) / high52) * 100);
+  }
+  if (typeof doc.low52 === "number" && doc.low52 > 0) {
+    const low52 = Math.min(doc.low52, price);
+    out.low52 = low52;
+    out.pctFromLow52 = round2(((price - low52) / low52) * 100);
+  }
+  return out as T & Anchored52w;
+}
+
 @Injectable()
 export class TechnicalIndicatorsJob implements OnModuleInit {
   private readonly logger = new Logger(TechnicalIndicatorsJob.name);
