@@ -96,6 +96,15 @@ export interface SnapshotQuote {
   earlyTradingChangePct: number | null;
   lateTradingChangePct: number | null;
   regularTradingChangePct: number | null;
+  /**
+   * The latest REGULAR-session close (16:00 ET), as distinct from `price`,
+   * which off-hours is the last extended-hours trade. The after-hours move is
+   * measured from this; without it the client had to reconstruct it from the
+   * vendor's late-trading percentage, which in pre-market still holds the
+   * PREVIOUS evening's figure (GS on 13 Oct: +0.48% from 12 Oct shown beside
+   * a 13 Oct pre-market price). Null from FMP, whose quote has no session split.
+   */
+  regularClose: number | null;
   /** "open" | "closed" | "early_trading" | "late_trading" per the vendor. */
   marketStatus: string | null;
 }
@@ -365,6 +374,7 @@ export class SnapshotCacheService implements OnModuleDestroy {
       earlyTradingChangePct: null,
       lateTradingChangePct: null,
       regularTradingChangePct: null,
+      regularClose: null,
       marketStatus: null,
     };
   }
@@ -417,6 +427,7 @@ export class SnapshotCacheService implements OnModuleDestroy {
       earlyTradingChangePct: num(s.early_trading_change_percent),
       lateTradingChangePct: num(s.late_trading_change_percent),
       regularTradingChangePct: num(s.regular_trading_change_percent),
+      regularClose: num(s.close),
       marketStatus: t.market_status ?? null,
     };
   }
