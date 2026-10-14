@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { createHash } from "crypto";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { DelistedTickersService } from "../common/delisted-tickers.service";
 
 /**
  * Server-side cache of the SHARED, slow-changing Firestore collections that the
@@ -77,7 +78,10 @@ export class CachedCollectionsService {
   private readonly logger = new Logger(CachedCollectionsService.name);
   private readonly cache = new Map<string, { data: unknown[]; at: number }>();
 
-  constructor(private readonly firebase: FirebaseAdminService) {}
+  constructor(
+    private readonly firebase: FirebaseAdminService,
+    private readonly delisted: DelistedTickersService,
+  ) {}
 
   isAllowed(name: string): boolean {
     return ALLOWED.has(name);
@@ -108,6 +112,11 @@ export class CachedCollectionsService {
         }
       }),
     );
+    // Applied on the way OUT, not to the cache, so a delisting takes effect
+    // within the delisted set's own TTL rather than waiting out a 60-min list.
+    for (const name of Object.keys(out)) {
+      out[name] = await this.delisted.filterRows(out[name]);
+    }
     return out;
   }
 

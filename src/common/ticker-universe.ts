@@ -256,6 +256,14 @@ export const TICKER_UNIVERSE: string[] = [
 import type { Firestore } from "firebase-admin/firestore";
 
 export async function activeUniverse(firestore: Firestore): Promise<string[]> {
-  const snap = await firestore.collection("companies").select().get();
-  return snap.docs.map((d) => d.id).sort();
+  // Delisted symbols are excluded even if a `companies` doc survives (the
+  // universe job deletes it, but a stale write can race that): every
+  // per-ticker job iterates this list, and refreshing a delisted symbol is
+  // what kept re-stamping AACB's last close with each new day's date.
+  const [snap, delisted] = await Promise.all([
+    firestore.collection("companies").select().get(),
+    firestore.collection("tickers").where("active", "==", false).select().get(),
+  ]);
+  const gone = new Set(delisted.docs.map((d) => d.id));
+  return snap.docs.map((d) => d.id).filter((id) => !gone.has(id)).sort();
 }

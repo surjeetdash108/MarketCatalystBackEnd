@@ -1,6 +1,8 @@
 import { Global, Module } from "@nestjs/common";
 import { APP_INTERCEPTOR } from "@nestjs/core";
 import { AdminGuard } from "./admin.guard";
+import { DelistedTickersService } from "./delisted-tickers.service";
+import { DelistedTickerGuard } from "./delisted-ticker.guard";
 import { ApiUsageInterceptor } from "./api-usage.interceptor";
 import { ApiUsageService } from "./api-usage.service";
 import { FirebaseAuthGuard } from "./firebase-auth.guard";
@@ -13,6 +15,8 @@ import { SyncRegistry } from "./sync-registry.service";
 @Module({
   providers: [
     AdminGuard,
+    DelistedTickersService,
+    DelistedTickerGuard,
     FirebaseAuthGuard,
     FirebaseAdminService,
     SyncRegistry,
@@ -25,6 +29,8 @@ import { SyncRegistry } from "./sync-registry.service";
   ],
   exports: [
     AdminGuard,
+    DelistedTickersService,
+    DelistedTickerGuard,
     FirebaseAuthGuard,
     FirebaseAdminService,
     SyncRegistry,

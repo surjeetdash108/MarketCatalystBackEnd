@@ -13,6 +13,7 @@ import {
 } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { DelistedTickersService } from "../common/delisted-tickers.service";
 import { classifyFromSic, resolveSicCode } from "../common/sic-tv.util";
 import { SnapshotCacheService } from "./snapshot-cache.service";
 import {
@@ -490,6 +491,7 @@ export class OnDemandService implements OnModuleDestroy {
     // Authoritative free SIC lookup, used ONLY as a fallback when Polygon omits
     // sic_code (foreign private issuers / ADRs) so sector/industry still resolve.
     private readonly secEdgar: SecEdgarService,
+    private readonly delisted: DelistedTickersService,
   ) {}
 
   onModuleDestroy() {
@@ -1008,6 +1010,10 @@ export class OnDemandService implements OnModuleDestroy {
   }
 
   async getCompany(ticker: string): Promise<Record<string, unknown> | null> {
+    // Checked HERE, not only at the endpoint: the premarket warm calls this for
+    // every watchlist/portfolio ticker, and would otherwise rebuild a delisted
+    // symbol's company doc — and so its place in every list — each morning.
+    if (await this.delisted.isDelisted(ticker)) return null;
     this.stats.companyRequests++;
     this.recordUsage(ticker);
 
@@ -1315,6 +1321,7 @@ export class OnDemandService implements OnModuleDestroy {
   async getCompanySummary(
     ticker: string,
   ): Promise<Record<string, unknown> | null> {
+    if (await this.delisted.isDelisted(ticker)) return null;
     // Full doc already built (this instance) → it's a superset; serve it.
     const full = this.memCompany.get(ticker);
     if (full && Date.now() - full.at < 5 * 60_000) return full.data;

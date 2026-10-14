@@ -999,6 +999,7 @@ export class PolygonService {
       name: string;
       exchange: string;
       price: string | null;
+      finalPrice: number | null;
       numberOfShares: number | null;
       totalSharesValue: number | null;
       status: string;
@@ -1027,6 +1028,8 @@ export class PolygonService {
           name: r.issuer_name ?? "",
           exchange: r.primary_exchange ?? "",
           price,
+          finalPrice:
+            typeof r.final_issue_price === "number" ? r.final_issue_price : null,
           numberOfShares: r.max_shares_offered ?? r.shares_outstanding ?? null,
           totalSharesValue: r.total_offer_size ?? null,
           status: r.ipo_status ?? "",
@@ -1036,6 +1039,31 @@ export class PolygonService {
       if (url) await sleep(this.pageDelayMs);
     }
     return out;
+  }
+
+  /**
+   * Polygon's delisting record for a symbol that left the active list: the
+   * most recent `delisted_utc` (YYYY-MM-DD), or null when Polygon holds no
+   * inactive record — the symbol merely went missing from one listing pull,
+   * which is not proof of a delisting. A reused symbol can carry several
+   * inactive records, hence the newest-wins pick.
+   */
+  async getDelisting(
+    ticker: string,
+  ): Promise<{ delistedAt: string | null } | null> {
+    const res = await fetchJson<{
+      results?: Array<{ delisted_utc?: string | null }>;
+    }>(
+      `${this.baseUrl}/v3/reference/tickers?ticker=${encodeURIComponent(ticker)}` +
+        `&active=false&limit=10&apiKey=${this.apiKey}`,
+    );
+    const rows = res.results ?? [];
+    if (rows.length === 0) return null;
+    const dates = rows
+      .map((r) => (r.delisted_utc ? r.delisted_utc.slice(0, 10) : null))
+      .filter((d): d is string => !!d)
+      .sort();
+    return { delistedAt: dates[dates.length - 1] ?? null };
   }
 
   async getAllTickers(active = true): Promise<PolygonTickerRef[]> {

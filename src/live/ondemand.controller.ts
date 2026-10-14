@@ -27,6 +27,8 @@ import { EtfMarketService } from "./etf-market.service";
 import { EarningsTranscriptSummaryService } from "./earnings-transcript-summary.service";
 import { OPTIONS_UNIVERSE } from "../common/options-universe";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
+import { DelistedTickerGuard } from "../common/delisted-ticker.guard";
+import { DelistedTickersService } from "../common/delisted-tickers.service";
 
 /**
  * On-demand data endpoints (see ondemand.service.ts for the caching design).
@@ -68,6 +70,8 @@ function sendWithEtag(req: Request, res: Response, body: unknown): void {
 }
 
 @Controller("live")
+// Every `?ticker=` endpoint here 404s a delisted symbol (see the guard).
+@UseGuards(DelistedTickerGuard)
 export class OnDemandController {
   private readonly logger = new Logger(OnDemandController.name);
 
@@ -83,6 +87,7 @@ export class OnDemandController {
     private readonly secEdgar: SecEdgarService,
     private readonly etfMarketService: EtfMarketService,
     private readonly transcriptSummary: EarningsTranscriptSummaryService,
+    private readonly delisted: DelistedTickersService,
   ) {}
 
   /**
@@ -144,7 +149,9 @@ export class OnDemandController {
     @Res() res: Response,
   ) {
     const n = Math.min(Math.max(parseInt(limit ?? "50", 10) || 50, 1), 200);
-    const rows = await this.tickerAi.recentAnnouncements(n);
+    const rows = await this.delisted.filterRows(
+      await this.tickerAi.recentAnnouncements(n),
+    );
     sendWithEtag(req, res, rows);
   }
 
@@ -316,10 +323,11 @@ export class OnDemandController {
     @Req() req: Request,
     @Res() res: Response,
   ) {
+    const gone = await this.delisted.get();
     const syms = (tickers ?? "")
       .split(",")
       .map((t) => t.toUpperCase().trim())
-      .filter((t) => TICKER_RE.test(t))
+      .filter((t) => TICKER_RE.test(t) && !gone.has(t))
       .slice(0, 250);
     if (syms.length === 0) {
       sendWithEtag(req, res, []);
@@ -594,7 +602,11 @@ export class OnDemandController {
     const query = (q ?? "").trim();
     if (!query) throw new BadRequestException("q is required");
     if (query.length > 40) throw new BadRequestException("q too long");
-    const results = await this.search.search(query);
+    // The search universe is Polygon's active list, reloaded daily; this
+    // closes the gap between a delisting and that reload.
+    const results = await this.delisted.filterRows(
+      await this.search.search(query),
+    );
     sendWithEtag(req, res, { q: query, results });
   }
 
@@ -620,7 +632,10 @@ export class OnDemandController {
     @Res() res: Response,
   ) {
     const n = Math.min(Math.max(parseInt(limit ?? "10", 10) || 10, 1), 50);
-    const results = await this.searchedTickers.mostSearched(n);
+    // Over-fetch so dropping delisted names still fills the requested count.
+    const results = (
+      await this.delisted.filterRows(await this.searchedTickers.mostSearched(n + 20))
+    ).slice(0, n);
     sendWithEtag(req, res, { results });
   }
 
