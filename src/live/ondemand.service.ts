@@ -30,6 +30,8 @@ import {
   mapQuarterRow,
   alignReportedEstimate,
   buildEpsHistory,
+  applyCalendarEstimates,
+  type CalendarEstimate,
   ttmReportedEpsFromRows,
   type SplitEvent,
   type EpsHistoryRow,
@@ -1883,6 +1885,7 @@ export class OnDemandService implements OnModuleDestroy {
       if (epsHistory.length === 0 && Array.isArray(prevEpsHistory)) {
         epsHistory = prevEpsHistory;
       }
+      applyCalendarEstimates(quarters, epsHistory, estimates, splits);
 
       const now = new Date().toISOString();
       const doc: Record<string, unknown> = {
@@ -1959,16 +1962,20 @@ export class OnDemandService implements OnModuleDestroy {
   /** Raw {reportDate, epsEstimate} pairs for one ticker's synced earnings_events. */
   private async earningsEstimatesFor(
     ticker: string,
-  ): Promise<Array<{ date: string; epsEstimate: number }>> {
+  ): Promise<CalendarEstimate[]> {
     const snap = await this.firebase.firestore
       .collection("earnings_events")
       .where("ticker", "==", ticker)
       .get();
-    const out: Array<{ date: string; epsEstimate: number }> = [];
+    const out: CalendarEstimate[] = [];
     for (const d of snap.docs) {
       const data = d.data();
       if (data.epsEstimate != null && data.date)
-        out.push({ date: data.date, epsEstimate: data.epsEstimate });
+        out.push({
+          date: data.date,
+          epsEstimate: data.epsEstimate,
+          periodEnd: data.periodEnd ?? null,
+        });
     }
     return out;
   }

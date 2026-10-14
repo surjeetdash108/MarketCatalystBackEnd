@@ -272,6 +272,86 @@ export function buildEpsHistory(
   });
 }
 
+/** One `earnings_events` row's estimate, as the calendar overlay needs it. */
+export interface CalendarEstimate {
+  date: string;
+  epsEstimate: number;
+  /** Set only on rows built from a filed 10-Q (Polygon); null on FMP rows. */
+  periodEnd?: string | null;
+}
+
+/** FMP's calendar and surprise feeds can disagree on the announce date by a day or two. */
+const CALENDAR_DATE_TOLERANCE_DAYS = 4;
+/** A 10-Q period end vs a statement's endDate (52/53-week years drift a few days). */
+const CALENDAR_PERIOD_TOLERANCE_DAYS = 7;
+
+const dayGap = (a: string, b: string) =>
+  Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86_400_000;
+
+/**
+ * Makes the earnings calendar's EPS estimate the one the chart and tables show.
+ *
+ * The calendar (`earnings_events`, FMP earnings-calendar) and the chart
+ * (`financials`, FMP /stable/earnings) carried DIFFERENT consensus figures for
+ * the same report — JNJ Q3 2026: 2.72 vs 2.52 against an actual of 2.59, so
+ * the calendar said miss (matching the press) while the chart said beat. GS:
+ * 13.87 vs 12.86. The calendar is the single source of truth for estimates;
+ * FMP's surprise estimate stays only where the calendar has no row (quarters
+ * older than its ~180-day window).
+ *
+ * A quarter is matched to a calendar row by period end (10-Q rows), else via
+ * the epsHistory row for the same fiscal quarter and its report date. Mutates
+ * both arrays in place. The estimate is split-rebased like every other
+ * reported estimate so beat/miss survives a split.
+ */
+export function applyCalendarEstimates(
+  quarters: QuarterFinancials[],
+  epsHistory: EpsHistoryRow[],
+  calendar: CalendarEstimate[],
+  splits: SplitEvent[],
+): void {
+  if (calendar.length === 0) return;
+  const forReport = (date: string): CalendarEstimate | null => {
+    let best: { c: CalendarEstimate; gap: number } | null = null;
+    for (const c of calendar) {
+      const gap = dayGap(c.date, date);
+      if (gap <= CALENDAR_DATE_TOLERANCE_DAYS && (!best || gap < best.gap)) {
+        best = { c, gap };
+      }
+    }
+    return best?.c ?? null;
+  };
+
+  const reportDateByFiscal = new Map<string, string>();
+  for (const h of epsHistory) {
+    const c = forReport(h.date);
+    if (c) {
+      h.epsEstimate = alignReportedEstimate(h.date, splits, h.epsActual, c.epsEstimate);
+    }
+    reportDateByFiscal.set(`${h.fiscalYear}_${h.fiscalPeriod}`, h.date);
+  }
+
+  for (const q of quarters) {
+    let c: CalendarEstimate | null = null;
+    if (q.endDate) {
+      c = calendar.find(
+        (x) => x.periodEnd && dayGap(x.periodEnd, q.endDate!) <= CALENDAR_PERIOD_TOLERANCE_DAYS,
+      ) ?? null;
+    }
+    const reportDate = reportDateByFiscal.get(`${Number(q.fiscalYear)}_${q.fiscalPeriod}`);
+    if (!c && reportDate) c = forReport(reportDate);
+    if (!c) continue;
+    const est = alignReportedEstimate(
+      reportDate ?? q.filingDate ?? q.endDate,
+      splits,
+      q.epsActualReported,
+      c.epsEstimate,
+    );
+    q.epsEstimate = est;
+    q.epsEstimateReported = est;
+  }
+}
+
 /** Non-GAAP TTM EPS = sum of the 4 most-recent reported quarters (FMP basis).
  * Used for a NASDAQ/IBD-style P/E (price ÷ this) instead of Polygon GAAP TTM.
  * Works off any rows carrying {date, epsActual} — raw FMP surprises or epsHistory. */
@@ -458,8 +538,11 @@ export class FinancialsJob implements OnModuleInit {
    * synced earnings_events (Polygon) collection — sparse, since Polygon carries
    * no forward EPS estimates, so the estimate line degrades where none exists.
    */
-  private async estimatesFor(tickers: string[]): Promise<Map<string, number>> {
+  private async estimatesFor(
+    tickers: string[],
+  ): Promise<{ byKey: Map<string, number>; byTicker: Map<string, CalendarEstimate[]> }> {
     const out = new Map<string, number>();
+    const byTicker = new Map<string, CalendarEstimate[]>();
 
     // Polygon-derived earnings_events already in Firestore.
     const snaps = await Promise.all(
@@ -475,11 +558,18 @@ export class FinancialsJob implements OnModuleInit {
         const data = d.data();
         if (data.epsEstimate != null && data.ticker && data.date) {
           out.set(`${data.ticker}_${data.date}`, data.epsEstimate);
+          const list = byTicker.get(data.ticker) ?? [];
+          list.push({
+            date: data.date,
+            epsEstimate: data.epsEstimate,
+            periodEnd: data.periodEnd ?? null,
+          });
+          byTicker.set(data.ticker, list);
         }
       }
     }
 
-    return out;
+    return { byKey: out, byTicker };
   }
 
   /** Nearest estimate to a quarter's period-end date, within a ~90-day window. */
@@ -517,7 +607,8 @@ export class FinancialsJob implements OnModuleInit {
         { length: Math.min(BATCH_SIZE, universe.length) },
         (_, i) => universe[(cursor + i) % universe.length],
       );
-      const estimates = await this.estimatesFor(batch);
+      const { byKey: estimates, byTicker: calendarByTicker } =
+        await this.estimatesFor(batch);
 
       // Existing docs for this batch — used to PRESERVE FMP-derived fields when a
       // fetch comes back empty (FMP can silently return empty under load). Without
@@ -679,6 +770,12 @@ export class FinancialsJob implements OnModuleInit {
           ) {
             epsHistory = (prev as { epsHistory?: EpsHistoryRow[] }).epsHistory!;
           }
+          applyCalendarEstimates(
+            quartersContinuous,
+            epsHistory,
+            calendarByTicker.get(ticker) ?? [],
+            splits,
+          );
           docs.push({
             id: ticker,
             data: {

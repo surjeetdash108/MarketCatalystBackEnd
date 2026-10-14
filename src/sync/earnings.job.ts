@@ -205,7 +205,10 @@ export class EarningsJob implements OnModuleInit {
           const m = finPair.get(`${ticker}_${pe}`);
           if (m) {
             if (m.a != null) d.data.epsActual = m.a;
-            if (m.e != null) d.data.epsEstimate = m.e;
+            // Fill only: the calendar's own estimate is the source of truth
+            // the chart now follows (applyCalendarEstimates) — overwriting it
+            // from the chart would just echo FMP's other consensus back.
+            if (m.e != null && d.data.epsEstimate == null) d.data.epsEstimate = m.e;
             if (m.rev != null && d.data.revenueActual == null)
               d.data.revenueActual = m.rev;
           }
