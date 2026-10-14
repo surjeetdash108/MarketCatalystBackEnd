@@ -2,7 +2,11 @@ import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { createHash } from "crypto";
 import { ConfigService } from "@nestjs/config";
 import { fetchJson } from "../common/http.util";
-import { FmpService, type FmpFullQuote } from "../vendors/fmp/fmp.service";
+import {
+  FmpService,
+  type FmpExtendedTrade,
+  type FmpFullQuote,
+} from "../vendors/fmp/fmp.service";
 
 /**
  * O(1)-upstream price cache: one vendor call per refresh interval, regardless
@@ -36,8 +40,10 @@ import { FmpService, type FmpFullQuote } from "../vendors/fmp/fmp.service";
  *     2026-09-28, quotes ~seconds old vs Polygon's ~15 min). If a plan ever
  *     loses batch-quote it degrades to ONE CALL PER TICKER per refresh, paced
  *     through FmpService's shared queue, slowing other FMP callers.
- *   - FMP's quote has no VWAP, last-minute bar, extended-hours session split
- *     or market status; those SnapshotQuote fields are null under `fmp`.
+ *   - FMP's quote has no VWAP or last-minute bar; those fields are null.
+ *   - FMP's quote is regular-session only, so outside regular hours one more
+ *     batch call (`batch-aftermarket-trade`) supplies the pre/post-market
+ *     price, and `mapFmpQuote` lays it out in Polygon's session semantics.
  */
 
 type QuoteSource = "polygon" | "fmp" | "none";
@@ -102,7 +108,8 @@ export interface SnapshotQuote {
    * measured from this; without it the client had to reconstruct it from the
    * vendor's late-trading percentage, which in pre-market still holds the
    * PREVIOUS evening's figure (GS on 13 Oct: +0.48% from 12 Oct shown beside
-   * a 13 Oct pre-market price). Null from FMP, whose quote has no session split.
+   * a 13 Oct pre-market price). From FMP it is the quote's regular-session
+   * price (see mapFmpQuote).
    */
   regularClose: number | null;
   /** "open" | "closed" | "early_trading" | "late_trading" per the vendor. */
@@ -112,6 +119,157 @@ export interface SnapshotQuote {
 interface CacheEntry {
   quote: SnapshotQuote;
   fetchedAt: number;
+}
+
+/** ET calendar date (YYYY-MM-DD), weekday (0=Sun) and minutes since midnight. */
+function etClock(ms: number): {
+  date: string;
+  weekday: number;
+  minutes: number;
+} {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour12: false,
+      weekday: "short",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+      .formatToParts(new Date(ms))
+      .map((x) => [x.type, x.value]),
+  );
+  return {
+    date: `${p.year}-${p.month}-${p.day}`,
+    weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(
+      p.weekday,
+    ),
+    minutes: (Number(p.hour) % 24) * 60 + Number(p.minute),
+  };
+}
+
+const PRE_OPEN = 4 * 60;
+const REG_OPEN = 9 * 60 + 30;
+const REG_CLOSE = 16 * 60;
+const AFTER_END = 20 * 60;
+
+/** The FMP quote's session, in Polygon's `market_status` vocabulary. */
+export type FmpSession = "open" | "early_trading" | "late_trading" | "closed";
+
+/**
+ * Which session an FMP quote is in. Keyed on the quote's own print date as well
+ * as the clock, so a holiday (no print today) never reads as "open".
+ */
+export function fmpSession(q: FmpFullQuote, now: number): FmpSession {
+  const n = etClock(now);
+  const weekday = n.weekday >= 1 && n.weekday <= 5;
+  const printedToday =
+    q.timestamp != null && etClock(q.timestamp * 1000).date === n.date;
+  if (weekday && printedToday && n.minutes >= REG_OPEN && n.minutes < REG_CLOSE)
+    return "open";
+  if (weekday && n.minutes >= PRE_OPEN && n.minutes < REG_OPEN)
+    return "early_trading";
+  if (
+    weekday &&
+    printedToday &&
+    n.minutes >= REG_CLOSE &&
+    n.minutes < AFTER_END
+  )
+    return "late_trading";
+  return "closed";
+}
+
+/**
+ * Lays an FMP quote (+ its latest extended-hours trade) out in the SAME field
+ * semantics as Polygon's snapshot, so the UI's session logic works unchanged
+ * whichever vendor filled the cache:
+ *
+ *   open           the regular quote as-is; regularClose = price.
+ *   early_trading  previousClose = regularClose = the last close (FMP's
+ *                  quote.price before the open); price = today's pre-market
+ *                  trade, change measured from that close. A trade from before
+ *                  04:00 today is last evening's after-hours print and is NOT
+ *                  passed off as pre-market — the price stays at the close.
+ *   late_trading / closed
+ *                  regularClose = the session's close (quote.price),
+ *                  previousClose = the one before; price = an after-hours
+ *                  trade made after that close, if any. change is from
+ *                  previousClose (Polygon's convention); the after-hours move
+ *                  alone is lateTradingChangePct.
+ *
+ * Previously FMP sent no session at all: before the open the cache priced
+ * every ticker at yesterday's close, and during regular hours the UI, finding
+ * no market status, tagged every moving stock "EXT".
+ */
+export function mapFmpQuote(
+  q: FmpFullQuote,
+  trade: FmpExtendedTrade | undefined,
+  now: number,
+): SnapshotQuote {
+  const session = fmpSession(q, now);
+  const base: SnapshotQuote = {
+    ticker: q.symbol,
+    price: q.price,
+    change: q.change,
+    changePct: q.changePercentage,
+    previousClose: q.previousClose,
+    open: q.open,
+    dayHigh: q.dayHigh,
+    dayLow: q.dayLow,
+    dayVolume: q.volume,
+    dayVwap: null,
+    minuteClose: null,
+    minuteAt: null,
+    // FMP quote timestamps are Unix SECONDS (Polygon's are nanoseconds).
+    vendorUpdatedAt: q.timestamp != null ? q.timestamp * 1000 : null,
+    earlyTradingChangePct: null,
+    lateTradingChangePct: null,
+    regularTradingChangePct: q.changePercentage,
+    regularClose: q.price,
+    marketStatus: session,
+  };
+  const pct = (a: number, b: number | null) =>
+    b != null && b !== 0 ? ((a - b) / b) * 100 : null;
+  if (session === "open" || q.price == null) return base;
+
+  if (session === "early_trading") {
+    const close = q.price;
+    const t = trade ? etClock(trade.at) : null;
+    const preTrade =
+      trade && t && t.date === etClock(now).date && t.minutes >= PRE_OPEN
+        ? trade
+        : undefined;
+    const price = preTrade?.price ?? close;
+    return {
+      ...base,
+      price,
+      change: price - close,
+      changePct: pct(price, close),
+      previousClose: close,
+      regularClose: close,
+      earlyTradingChangePct: preTrade ? pct(price, close) : null,
+      // No regular session has run yet today (Polygon reports none either).
+      regularTradingChangePct: null,
+      vendorUpdatedAt: preTrade?.at ?? base.vendorUpdatedAt,
+    };
+  }
+
+  // late_trading / closed: only a trade made after this session's close counts.
+  const closedAt = q.timestamp != null ? q.timestamp * 1000 : null;
+  const afterTrade =
+    trade && closedAt != null && trade.at > closedAt ? trade : undefined;
+  if (!afterTrade) return base;
+  const price = afterTrade.price;
+  return {
+    ...base,
+    price,
+    change: q.previousClose != null ? price - q.previousClose : null,
+    changePct: pct(price, q.previousClose),
+    lateTradingChangePct: pct(price, q.price),
+    vendorUpdatedAt: afterTrade.at,
+  };
 }
 
 @Injectable()
@@ -333,7 +491,20 @@ export class SnapshotCacheService implements OnModuleDestroy {
       const rows = await this.fmp.getQuotes(tickers);
       // Honest accounting: without batch-quote every ticker is its own call.
       this.stats.upstreamCalls += batched ? 1 : tickers.length;
-      return rows.map((q) => this.mapFmp(q));
+      // Outside regular hours the quote is still the close; one batch call
+      // fetches the extended-hours trades that move the price off it.
+      const now = Date.now();
+      const extended = rows
+        .filter((q) => fmpSession(q, now) !== "open")
+        .map((q) => q.symbol);
+      const trades = new Map<string, FmpExtendedTrade>();
+      if (extended.length > 0) {
+        for (const t of await this.fmp.getExtendedTrades(extended)) {
+          trades.set(t.symbol, t);
+        }
+        this.stats.upstreamCalls++;
+      }
+      return rows.map((q) => mapFmpQuote(q, trades.get(q.symbol), now));
     }
     if (source !== "polygon") return [];
 
@@ -348,35 +519,6 @@ export class SnapshotCacheService implements OnModuleDestroy {
     const res = await fetchJson<{ results?: any[] }>(url);
     this.stats.upstreamCalls++;
     return (res.results ?? []).map((t) => this.map(t));
-  }
-
-  /**
-   * FMP's quote carries its own price/change/%change, all mutually consistent,
-   * so they are used as-is. Fields FMP has no equivalent for stay null rather
-   * than being guessed (see the caveats at the top of this file).
-   */
-  private mapFmp(q: FmpFullQuote): SnapshotQuote {
-    return {
-      ticker: q.symbol,
-      price: q.price,
-      change: q.change,
-      changePct: q.changePercentage,
-      previousClose: q.previousClose,
-      open: q.open,
-      dayHigh: q.dayHigh,
-      dayLow: q.dayLow,
-      dayVolume: q.volume,
-      dayVwap: null,
-      minuteClose: null,
-      minuteAt: null,
-      // FMP timestamps are Unix SECONDS (Polygon's are nanoseconds).
-      vendorUpdatedAt: q.timestamp != null ? q.timestamp * 1000 : null,
-      earlyTradingChangePct: null,
-      lateTradingChangePct: null,
-      regularTradingChangePct: null,
-      regularClose: null,
-      marketStatus: null,
-    };
   }
 
   private map(t: any): SnapshotQuote {
