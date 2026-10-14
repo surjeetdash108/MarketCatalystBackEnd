@@ -61,15 +61,19 @@ export class EarningsActualsJob implements OnModuleInit {
    *
    * Never throws: a model failure must not fail an actuals run that already
    * stored the figures correctly.
+   *
+   * `rows` must be the POST-patch values. The query snapshot predates this
+   * run's writes, so reading it here meant every announcement was built with
+   * epsActual/revenueActual null — all 100 stored reads (GS, JPM, C…) said
+   * "EPS actual —" with verdict "unknown", and the Earnings Playbook had no
+   * beat/miss to show.
    */
   private async announce(
     filled: string[],
-    docs: FirebaseFirestore.QueryDocumentSnapshot[],
+    rows: Map<string, Record<string, unknown>>,
     today: string,
   ): Promise<void> {
-    const byTicker = new Map(
-      docs.map((d) => [String((d.data() as { ticker?: string }).ticker ?? "").toUpperCase(), d.data()]),
-    );
+    const byTicker = rows;
     for (const ticker of filled) {
       try {
         const e = byTicker.get(ticker) as {
@@ -152,6 +156,8 @@ export class EarningsActualsJob implements OnModuleInit {
       const batch = this.firebase.firestore.batch();
       let updated = 0;
       const filled: string[] = [];
+      // Each row as stored AFTER this run's patch, for the announcement read.
+      const merged = new Map<string, Record<string, unknown>>();
       for (const d of snap.docs) {
         const cur = d.data() as {
           ticker?: string;
@@ -177,6 +183,7 @@ export class EarningsActualsJob implements OnModuleInit {
         if (!Object.keys(patch).length) continue;
 
         patch.actualsUpdatedAt = new Date().toISOString();
+        merged.set(t, { ...d.data(), ...patch });
         batch.set(d.ref, patch, { merge: true });
         updated++;
         if (cur.epsActual == null && patch.epsActual != null) filled.push(t);
@@ -190,7 +197,7 @@ export class EarningsActualsJob implements OnModuleInit {
         // The result is persisted at this point (batch.commit above), so the
         // announcement analysis is generated from data already stored — same
         // ordering rule as the news pipeline: never analyse before the save.
-        await this.announce(filled, snap.docs, today);
+        await this.announce(filled, merged, today);
       }
       await this.meta.record(JOB_NAME, { ok: true, count: updated });
       return { date: today, reporters: snap.size, updated, filled };
