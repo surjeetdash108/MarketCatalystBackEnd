@@ -422,6 +422,14 @@ export interface FmpFullQuote {
   timestamp: number | null;
 }
 
+/** Latest extended-hours (pre- or post-market) trade for one symbol. */
+export interface FmpExtendedTrade {
+  symbol: string;
+  price: number;
+  /** Epoch ms of the trade. */
+  at: number;
+}
+
 @Injectable()
 export class FmpService {
   private readonly logger = new Logger(FmpService.name);
@@ -710,6 +718,45 @@ export class FmpService {
     const quotes = rows.filter((q): q is FmpFullQuote => !!q);
     this.logLiveFetch("per-symbol quote", symbols, quotes, started);
     return quotes;
+  }
+
+  /**
+   * Latest extended-hours trade per symbol (`/stable/batch-aftermarket-trade`),
+   * one call for all symbols. `/stable/quote` is regular-session only — before
+   * the open its price is still yesterday's 16:00 close — so this is the only
+   * FMP source of a pre- or post-market price. Despite the name it carries
+   * pre-market trades too (verified 2026-10-14 08:57 ET: AAPL $344.48 traded
+   * 08:57 while the quote still read the $341.27 close).
+   *
+   * Best-effort: a failure returns [] so the caller falls back to the close.
+   */
+  async getExtendedTrades(symbols: string[]): Promise<FmpExtendedTrade[]> {
+    if (!this.enabled || symbols.length === 0) return [];
+    try {
+      const rows = await this.get(
+        `batch-aftermarket-trade?symbols=${encodeURIComponent(symbols.join(","))}`,
+      );
+      const out: FmpExtendedTrade[] = [];
+      for (const r of rows) {
+        const o = r as Record<string, unknown>;
+        const price = num(o.price);
+        const at = num(o.timestamp);
+        if (
+          typeof o.symbol === "string" &&
+          price != null &&
+          price > 0 &&
+          at != null
+        ) {
+          out.push({ symbol: o.symbol, price, at });
+        }
+      }
+      return out;
+    } catch (err) {
+      this.logger.warn(
+        `FMP extended-hours trades failed: ${(err as Error)?.message ?? err}`,
+      );
+      return [];
+    }
   }
 
   /**

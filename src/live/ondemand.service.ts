@@ -13,6 +13,7 @@ import {
 } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { DelistedTickersService } from "../common/delisted-tickers.service";
 import { classifyFromSic, resolveSicCode } from "../common/sic-tv.util";
 import { SnapshotCacheService } from "./snapshot-cache.service";
 import {
@@ -30,6 +31,8 @@ import {
   mapQuarterRow,
   alignReportedEstimate,
   buildEpsHistory,
+  applyCalendarEstimates,
+  type CalendarEstimate,
   ttmReportedEpsFromRows,
   type SplitEvent,
   type EpsHistoryRow,
@@ -54,6 +57,7 @@ import {
 import { FmpService } from "../vendors/fmp/fmp.service";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { isoDate } from "../common/date.util";
+import { etDate } from "../common/market-calendar.util";
 import { groupCandles, type CandleGrouping } from "./bars-aggregate.util";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -302,6 +306,14 @@ const FIN_ANNUAL_YEARS = 8;
  * cost a vendor round-trip on every view.
  */
 const EMPTY_FINANCIALS_TTL_MS = 3600_000;
+/** A recent report the stored doc hasn't caught up with (see
+ * pendingReportRetryMs) — refresh, but no more often than the retry gap. */
+const FIN_PENDING_REPORT_DAYS = 7;
+const FIN_PENDING_RETRY_MS = 30 * 60_000;
+/** Past the first week a missing statement is the vendor's slow path (the
+ * 10-Q itself, up to ~40 days out); keep checking, just less often. */
+const FIN_STATEMENT_LAG_DAYS = 45;
+const FIN_STATEMENT_RETRY_MS = 6 * 3600_000;
 
 // news.job.ts's own cron runs every 30 min; this on-demand path only fills the
 // gap for a ticker the bulk sweep hasn't reached recently, so a shorter TTL is
@@ -479,6 +491,7 @@ export class OnDemandService implements OnModuleDestroy {
     // Authoritative free SIC lookup, used ONLY as a fallback when Polygon omits
     // sic_code (foreign private issuers / ADRs) so sector/industry still resolve.
     private readonly secEdgar: SecEdgarService,
+    private readonly delisted: DelistedTickersService,
   ) {}
 
   onModuleDestroy() {
@@ -997,6 +1010,10 @@ export class OnDemandService implements OnModuleDestroy {
   }
 
   async getCompany(ticker: string): Promise<Record<string, unknown> | null> {
+    // Checked HERE, not only at the endpoint: the premarket warm calls this for
+    // every watchlist/portfolio ticker, and would otherwise rebuild a delisted
+    // symbol's company doc — and so its place in every list — each morning.
+    if (await this.delisted.isDelisted(ticker)) return null;
     this.stats.companyRequests++;
     this.recordUsage(ticker);
 
@@ -1304,6 +1321,7 @@ export class OnDemandService implements OnModuleDestroy {
   async getCompanySummary(
     ticker: string,
   ): Promise<Record<string, unknown> | null> {
+    if (await this.delisted.isDelisted(ticker)) return null;
     // Full doc already built (this instance) → it's a superset; serve it.
     const full = this.memCompany.get(ticker);
     if (full && Date.now() - full.at < 5 * 60_000) return full.data;
@@ -1683,7 +1701,12 @@ export class OnDemandService implements OnModuleDestroy {
         Array.isArray(data.quarters) && data.quarters.length > 0
           ? DAILY_TTL_MS
           : EMPTY_FINANCIALS_TTL_MS;
-      if (Number.isFinite(created) && Date.now() - created < ttl) {
+      const age = Date.now() - created;
+      if (
+        Number.isFinite(created) &&
+        age < ttl &&
+        !(age > this.pendingReportRetryMs(data))
+      ) {
         this.memFinancials.set(ticker, { data, at: Date.now() });
         return data;
       }
@@ -1869,6 +1892,7 @@ export class OnDemandService implements OnModuleDestroy {
       if (epsHistory.length === 0 && Array.isArray(prevEpsHistory)) {
         epsHistory = prevEpsHistory;
       }
+      applyCalendarEstimates(quarters, epsHistory, estimates, splits);
 
       const now = new Date().toISOString();
       const doc: Record<string, unknown> = {
@@ -1902,19 +1926,63 @@ export class OnDemandService implements OnModuleDestroy {
     return p;
   }
 
+  /**
+   * How old the stored doc may get before a refresh, when a recent report has
+   * not fully landed in it; Infinity when nothing is outstanding (the normal
+   * daily TTL then applies). Two ways a doc lags a report:
+   *
+   *  - the report's EPS actual is still null — the doc was built before the
+   *    print (GS on 13 Oct: chart and Playbook showed Q3 pending all morning);
+   *  - the EPS actual is in, but `quarters` has no row for that fiscal quarter.
+   *    The announcement (FMP surprises) and the full statements are separate
+   *    vendor feeds, and FMP publishes the statement hours to weeks after the
+   *    print: JNJ and C were rebuilt on 13 Oct before their Q3 statement
+   *    existed, so the EPS/Sales graphs and quarter tables stopped at Q2.
+   *
+   * Without this the 20h TTL kept either state for most of a day.
+   */
+  private pendingReportRetryMs(data: Record<string, unknown>): number {
+    const hist = data.epsHistory as EpsHistoryRow[] | undefined;
+    if (!Array.isArray(hist)) return Infinity;
+    const today = etDate();
+    const daysAgo = (n: number) => etDate(new Date(Date.now() - n * 86_400_000));
+    const quarters = (data.quarters ?? []) as Array<{
+      fiscalYear?: string | number | null;
+      fiscalPeriod?: string | null;
+    }>;
+    const haveQuarter = new Set(
+      quarters.map((q) => `${Number(q.fiscalYear)}_${q.fiscalPeriod}`),
+    );
+    let retry = Infinity;
+    for (const h of hist) {
+      if (h.date > today || h.date < daysAgo(FIN_STATEMENT_LAG_DAYS)) continue;
+      const fresh = h.date >= daysAgo(FIN_PENDING_REPORT_DAYS);
+      if (h.epsActual == null) {
+        if (fresh) retry = Math.min(retry, FIN_PENDING_RETRY_MS);
+      } else if (!haveQuarter.has(`${h.fiscalYear}_${h.fiscalPeriod}`)) {
+        retry = Math.min(retry, fresh ? FIN_PENDING_RETRY_MS : FIN_STATEMENT_RETRY_MS);
+      }
+    }
+    return retry;
+  }
+
   /** Raw {reportDate, epsEstimate} pairs for one ticker's synced earnings_events. */
   private async earningsEstimatesFor(
     ticker: string,
-  ): Promise<Array<{ date: string; epsEstimate: number }>> {
+  ): Promise<CalendarEstimate[]> {
     const snap = await this.firebase.firestore
       .collection("earnings_events")
       .where("ticker", "==", ticker)
       .get();
-    const out: Array<{ date: string; epsEstimate: number }> = [];
+    const out: CalendarEstimate[] = [];
     for (const d of snap.docs) {
       const data = d.data();
       if (data.epsEstimate != null && data.date)
-        out.push({ date: data.date, epsEstimate: data.epsEstimate });
+        out.push({
+          date: data.date,
+          epsEstimate: data.epsEstimate,
+          periodEnd: data.periodEnd ?? null,
+        });
     }
     return out;
   }

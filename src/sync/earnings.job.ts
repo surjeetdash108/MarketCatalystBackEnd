@@ -82,10 +82,25 @@ export class EarningsJob implements OnModuleInit {
     try {
       const to = isoDate(new Date());
       const from = isoDate(addDays(new Date(), -LOOKBACK_DAYS));
-      const rows = await this.polygon.getFinancialsByFilingDate(from, to);
+      // Polygon's /vX/reference/financials is retired (410 Gone). Letting that
+      // throw aborted the WHOLE run, so the FMP forward calendar was never
+      // written either: from 2026-09-25 the collection froze, no October
+      // reporter (GS, 13 Oct) had a row, and earnings-actuals — which only
+      // fills rows dated today — had nothing to fill. The reported leg is now
+      // best-effort; the FMP leg below covers for it.
+      let rows: Awaited<ReturnType<PolygonService["getFinancialsByFilingDate"]>> = [];
+      let reportedLive = true;
+      try {
+        rows = await this.polygon.getFinancialsByFilingDate(from, to);
+      } catch (err) {
+        reportedLive = false;
+        this.logger.warn(
+          `earnings: Polygon reported financials unavailable (${(err as Error).message.slice(0, 160)}) — keeping stored reported rows, FMP calendar covers the lookback`,
+        );
+      }
       // Optional analyst-estimate overlay (FMP). One bulk load for the window;
       // null/no-match leaves the actuals-only behaviour untouched.
-      const est = this.estimates
+      const est = this.estimates && rows.length
         ? await this.estimates.loadWindow(from, to)
         : null;
       let estimateMatches = 0;
@@ -190,7 +205,10 @@ export class EarningsJob implements OnModuleInit {
           const m = finPair.get(`${ticker}_${pe}`);
           if (m) {
             if (m.a != null) d.data.epsActual = m.a;
-            if (m.e != null) d.data.epsEstimate = m.e;
+            // Fill only: the calendar's own estimate is the source of truth
+            // the chart now follows (applyCalendarEstimates) — overwriting it
+            // from the chart would just echo FMP's other consensus back.
+            if (m.e != null && d.data.epsEstimate == null) d.data.epsEstimate = m.e;
             if (m.rev != null && d.data.revenueActual == null)
               d.data.revenueActual = m.rev;
           }
@@ -207,6 +225,24 @@ export class EarningsJob implements OnModuleInit {
         }
       }
 
+      // Reported leg down: the stored Polygon-sourced rows (the only ones with
+      // a periodEnd) are still correct history. Keep them — unrewritten — so
+      // the delete-pass spares them and the FMP rows below dedup against them
+      // instead of duplicating every quarter they already cover.
+      const carried: Array<{ id: string; ticker: string; date: string }> = [];
+      if (!reportedLive) {
+        const snap = await this.firebase.firestore
+          .collection("earnings_events")
+          .where("date", ">=", from)
+          .get();
+        for (const s of snap.docs) {
+          const x = s.data() as { ticker?: string; date?: string; periodEnd?: string | null };
+          if (x.periodEnd && x.ticker && x.date) {
+            carried.push({ id: s.id, ticker: x.ticker, date: x.date });
+          }
+        }
+      }
+
       // Forward calendar (FMP): upcoming reports carry estimates but no actual
       // yet — written as `epsActual: null` rows so the hub shows today's and
       // coming reporters. Reported rows always win on id collision. Skipped
@@ -216,18 +252,25 @@ export class EarningsJob implements OnModuleInit {
         // Pull FMP's calendar from RECENT_REPORTED_DAYS back (just-announced
         // reports carry actuals — filling the gap before their 10-Q files)
         // through the next quarter (upcoming reports carry estimates only).
-        const calFrom = isoDate(addDays(new Date(), -RECENT_REPORTED_DAYS));
+        // With no 10-Q feed nothing ever closes that gap, so FMP's calendar
+        // (which carries actuals) has to span the whole lookback instead.
+        const calFrom = isoDate(
+          addDays(new Date(), -(reportedLive ? RECENT_REPORTED_DAYS : LOOKBACK_DAYS)),
+        );
         const fwdTo = isoDate(endOfNextQuarter(new Date()));
         const upcoming = await this.estimates.getUpcoming(calFrom, fwdTo);
-        const reportedIds = new Set(docs.map((d) => d.id));
+        const reported = [
+          ...docs.map((d) => ({ id: d.id, ticker: d.data.ticker as string, date: d.data.date as string })),
+          ...carried,
+        ];
+        const reportedIds = new Set(reported.map((r) => r.id));
         // Reported dates per ticker, to skip an FMP row whose quarter is already
         // covered by a nearby Polygon 10-Q (same quarter, different date basis).
         const reportedDates = new Map<string, string[]>();
-        for (const d of docs) {
-          const t = d.data.ticker as string;
-          const list = reportedDates.get(t);
-          if (list) list.push(d.data.date as string);
-          else reportedDates.set(t, [d.data.date as string]);
+        for (const r of reported) {
+          const list = reportedDates.get(r.ticker);
+          if (list) list.push(r.date);
+          else reportedDates.set(r.ticker, [r.date]);
         }
         const nameByTicker = await this.loadCompanyNames();
         // FMP's calendar is WORLDWIDE (Shenzhen/HK/EU tickers etc.). Resolve
@@ -299,7 +342,7 @@ export class EarningsJob implements OnModuleInit {
       // quarters + FMP upcoming). Delete any doc not in the new set — including
       // forward rows whose date passed without a filing (they roll out of the
       // upcoming window and are replaced by the reported quarter, or dropped).
-      const keep = new Set(docs.map((d) => d.id));
+      const keep = new Set([...docs.map((d) => d.id), ...carried.map((c) => c.id)]);
       const col = this.firebase.firestore.collection("earnings_events");
       // Data-loss guard: `docs` combines the reported set (Polygon financials)
       // and the forward set (FMP upcoming). If BOTH came back empty the keep-set
@@ -308,7 +351,9 @@ export class EarningsJob implements OnModuleInit {
       // documented silent-empty or a Polygon soft error). Skip the delete and
       // warn; a genuinely-empty upstream is a no-op, never a wipe.
       let stale: FirebaseFirestore.DocumentReference[] = [];
-      if (keep.size === 0) {
+      // Checked on the rows THIS run fetched, not `keep`: carried rows alone
+      // would otherwise let an empty FMP response wipe the forward calendar.
+      if (docs.length === 0) {
         this.logger.warn(
           "earnings: refresh returned 0 rows (reported + forward both empty) — skipping delete-pass to avoid wiping collection earnings_events",
         );

@@ -89,6 +89,8 @@ export interface CanonicalIpoEvent {
   exchange: string;
   /** Raw range string ("18.00-20.00"); parsed into low/high by the job. */
   price: string | null;
+  /** Price the deal actually priced at; null until the IPO prices. */
+  finalPrice?: number | null;
   numberOfShares: number | null;
   totalSharesValue: number | null;
   status: string;

@@ -58,12 +58,14 @@ function harness(vendorBars: PolygonAggBar[]) {
   const svc = new OnDemandService(
     firebase,
     polygon,
-    null as never,
-    null as never,
-    null,
-    null,
-    null as never,
-    null as never,
+    null as never, // snapshots
+    null as never, // news
+    null, // newsFmp
+    null, // estimates
+    null as never, // financials
+    null as never, // fmp
+    null as never, // secEdgar
+    null as never, // delisted — only the company paths consult it
   );
   // Usage counters flush to Firestore on a timer — not under test here.
   jest.spyOn(svc, "recordUsage").mockImplementation(() => undefined);
