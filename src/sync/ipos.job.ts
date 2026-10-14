@@ -36,6 +36,20 @@ function parsePriceRange(price: string) {
     : { low: single, high: single };
 }
 
+/**
+ * The priced deal wins; the range midpoint is only a stand-in until the IPO
+ * prices (TRXB: range 14-16 priced at 14, the midpoint showed 15).
+ */
+export function offerPrice(
+  finalPrice: number | null | undefined,
+  low: number | null,
+  high: number | null,
+): number | null {
+  if (finalPrice != null && finalPrice > 0) return finalPrice;
+  if (low != null && high != null) return (low + high) / 2;
+  return low ?? high;
+}
+
 @Injectable()
 export class IposJob implements OnModuleInit {
   private readonly logger = new Logger(IposJob.name);
@@ -83,8 +97,7 @@ export class IposJob implements OnModuleInit {
       for (const e of events) {
         const { low, high } = parsePriceRange(e.price);
         const id = `${e.date}_${e.symbol || slugify(e.name)}`;
-        const offer =
-          low != null && high != null ? (low + high) / 2 : (low ?? high);
+        const offer = offerPrice(e.finalPrice, low, high);
 
         let currentPrice: number | null = null;
         let day1Close: number | null = null;
