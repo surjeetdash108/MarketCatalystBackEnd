@@ -1,4 +1,5 @@
 import {
+  perTickerWindows,
   routeTicker,
   StockHistoryJob,
   weekdaysBefore,
@@ -223,5 +224,52 @@ describe("StockHistoryJob.syncGrouped", () => {
     );
     expect(r.rejected).toBe(1);
     expect(written("ohlcv_bars")).toHaveLength(0);
+  });
+});
+
+describe("perTickerWindows", () => {
+  const base = {
+    earliestSyncedFrom: "2021-10-15",
+    stranded: false,
+    today: "2026-10-15",
+    floor: "2021-10-15",
+    backfillFrom: "2024-10-15",
+  };
+
+  it("never fetches today: the forward window ends at the last completed session", () => {
+    // A run during market hours used to store today's forming bar (UNH, 15 Sep:
+    // 110,203 shares at 09:49 against a real 4,393,582) and never revisit it.
+    const { windows } = perTickerWindows({ ...base, watermark: "2026-10-12" });
+    expect(windows).toEqual([["2026-10-13", "2026-10-14"]]);
+  });
+
+  it("asks for nothing when the watermark is already the last completed session", () => {
+    const { windows } = perTickerWindows({ ...base, watermark: "2026-10-14" });
+    expect(windows).toEqual([]);
+  });
+
+  it("a never-synced ticker's deep fill also stops before today", () => {
+    const { windows, needsDeepFill } = perTickerWindows({
+      ...base,
+      watermark: null,
+      earliestSyncedFrom: null,
+    });
+    expect(needsDeepFill).toBe(true);
+    for (const [, to] of windows) expect(to < "2026-10-15").toBe(true);
+    expect(windows).toContainEqual(["2021-10-15", "2026-10-14"]);
+  });
+
+  it("a stranded ticker is refilled through the last completed session", () => {
+    const { windows } = perTickerWindows({ ...base, watermark: "2026-10-14", stranded: true });
+    expect(windows).toEqual([["2021-10-15", "2026-10-14"]]);
+  });
+
+  it("the backward window still stops the day before the known edge", () => {
+    const { windows } = perTickerWindows({
+      ...base,
+      watermark: "2026-10-14",
+      earliestSyncedFrom: "2023-01-03",
+    });
+    expect(windows).toEqual([["2021-10-15", "2023-01-02"]]);
   });
 });

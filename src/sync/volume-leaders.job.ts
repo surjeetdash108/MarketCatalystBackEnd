@@ -76,6 +76,23 @@ interface VolumeState {
   lastDate: string;
 }
 
+/**
+ * The RVOL of `lastDate`, stored on every ticker's state doc (not only the
+ * published top 300) so other screens read the SAME figure the leaderboard
+ * ranks on. null until the window holds MIN_SESSIONS prior sessions. Read by
+ * market-movers, which used to recompute RVOL from ohlcv_bars: those were
+ * stale (137 of 200 movers on 14 Oct ended at 1 Sep, outside the tracked
+ * universe) or carried partial-day bars, so the same ticker read differently
+ * on two boards.
+ */
+export interface VolumeStateRvol {
+  rvol: number | null;
+  /** The session's volume, as of this job's run. */
+  volume: number | null;
+  /** Average of the prior sessions the ratio is measured against. */
+  avgVolume: number | null;
+}
+
 export interface VolumeLeader {
   ticker: string;
   volume: number;
@@ -100,7 +117,13 @@ export class VolumeLeadersJob implements OnModuleInit {
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
       collections: [STATE, OUTPUT],
-      cronExpression: "20 18 * * 1-5",
+      // 20:30, after the 16:00-20:00 after-hours session. Polygon's daily
+      // volume includes extended hours, so the old 18:20 run stored every
+      // session short by its after-hours trading while ranking it against
+      // averages of those same short snapshots: HCAI's 14 Oct came out 36.3M
+      // for a 43.3M day, BDRX's 13 Oct 13.9M for 23.0M (-40%). Every stored
+      // window entry was 5-40% low, never high.
+      cronExpression: "30 20 * * 1-5",
       timeZone: "America/New_York",
     });
   }
@@ -210,9 +233,17 @@ export class VolumeLeadersJob implements OnModuleInit {
 
         // The average EXCLUDES today, so the ratio compares this session
         // against its own recent history rather than against itself.
+        let stored: VolumeStateRvol = { rvol: null, volume: null, avgVolume: null };
         if (priorWindow.length >= MIN_SESSIONS) {
           const avg =
             priorWindow.reduce((a, n) => a + n, 0) / priorWindow.length;
+          if (avg > 0) {
+            stored = {
+              rvol: Math.round((b.v / avg) * 100) / 100,
+              volume: Math.round(b.v),
+              avgVolume: Math.round(avg),
+            };
+          }
           if (avg >= MIN_AVG_VOLUME) {
             const changePct =
               typeof b.o === "number" && b.o > 0 && typeof b.c === "number"
@@ -233,7 +264,12 @@ export class VolumeLeadersJob implements OnModuleInit {
         const nextWindow = [...priorWindow, b.v].slice(-WINDOW);
         writes.push({
           id: b.T,
-          data: { window: nextWindow, lastDate: date, updatedAt: new Date().toISOString() },
+          data: {
+            window: nextWindow,
+            lastDate: date,
+            ...stored,
+            updatedAt: new Date().toISOString(),
+          },
         });
       }
 

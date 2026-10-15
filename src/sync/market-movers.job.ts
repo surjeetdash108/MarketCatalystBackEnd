@@ -1,4 +1,3 @@
-import { rvol } from "./technical-indicators.job";
 import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { AllSourcesFailedError } from "../adapters/adapter-error";
 import {
@@ -44,25 +43,40 @@ export class MarketMoversJob implements OnModuleInit {
   async scheduled() {
     await this.registry.get(JOB_NAME)();
   }
-  private async loadRvol(ticker: string): Promise<number | null> {
-    const snap = await this.firebase.firestore
-      .collection("ohlcv_bars")
-      .where("ticker", "==", ticker)
-      .orderBy("barDate", "desc")
-      .limit(21)
-      .get();
-
-    const volumes = snap.docs
-      .map((d) => d.data().volume)
-      .filter(
-        (v): v is number =>
-          typeof v === "number" && Number.isFinite(v),
-      )
-      .reverse();
-
-    const value = rvol(volumes);
-
-    return value == null ? null : Math.round(value * 100) / 100;
+  /**
+   * RVOL for each mover, read from volume-leaders' per-ticker state: the same
+   * figure the Unusual Volume board ranks on, for the whole US market.
+   *
+   * It used to be recomputed here from the last 21 `ohlcv_bars`. Most movers
+   * sit outside the tracked universe, whose bars nothing keeps current: 137 of
+   * the 200 on 14 Oct ended at 1 Sep (CRDU's "4.09x" was 1 Sep's RVOL).
+   * Others carried partial-day bars that sank the average (UNH 3.33x for a
+   * real 1.41x).
+   *
+   * Only a state stamped with the latest session volume-leaders processed is
+   * used; a ticker that did not trade that session, or has too short a
+   * window, gets null rather than an old ratio.
+   */
+  private async loadRvols(tickers: string[]): Promise<Map<string, number | null>> {
+    const out = new Map<string, number | null>(tickers.map((t) => [t, null]));
+    if (tickers.length === 0) return out;
+    const db = this.firebase.firestore;
+    const latest = (await db.collection("volume_leaders").doc("current").get())
+      .data()?.date as string | undefined;
+    if (!latest) return out;
+    const unique = [...new Set(tickers)];
+    for (let i = 0; i < unique.length; i += 300) {
+      const snaps = await db.getAll(
+        ...unique.slice(i, i + 300).map((t) => db.collection("volume_state").doc(t)),
+      );
+      for (const snap of snaps) {
+        const d = snap.data();
+        if (d?.lastDate === latest && typeof d.rvol === "number" && Number.isFinite(d.rvol)) {
+          out.set(snap.id, d.rvol);
+        }
+      }
+    }
+    return out;
   }
 
   async run() {
@@ -117,12 +131,14 @@ export class MarketMoversJob implements OnModuleInit {
           }
         }
         await sleep(DELAY_MS);
-        try {
-          rvolByTicker.set(m.ticker, await this.loadRvol(m.ticker));
-        } catch (err) {
-          this.logger.warn(`RVOL failed for ${m.ticker}: ${err.message}`);
-          rvolByTicker.set(m.ticker, null);
+      }
+      try {
+        for (const [t, v] of await this.loadRvols(topMovers.map((m) => m.ticker))) {
+          rvolByTicker.set(t, v);
         }
+      } catch (err) {
+        // RVOL is an enrichment: a failed read leaves it null, never the run.
+        this.logger.warn(`RVOL read failed: ${(err as Error).message}`);
       }
       const writes: PendingWrite[] = [];
       const col = this.firebase.firestore.collection("market_movers");
