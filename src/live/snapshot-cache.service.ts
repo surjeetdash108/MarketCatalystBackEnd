@@ -57,6 +57,8 @@ function parseSource(
 }
 
 const REFRESH_MS_DEFAULT = 10_000;
+/** Stocks Starter's delay — the same 15 the stream advertises as delayMinutes. */
+const POLYGON_DELAY_MS = 15 * 60_000;
 /** Drop a ticker from the refresh set after this long with no requests. */
 const IDLE_EVICT_MS = 5 * 60_000;
 /** Guard against an unbounded refresh set if callers request wildly. */
@@ -91,7 +93,10 @@ export interface SnapshotQuote {
   /** Last minute-bar close and its timestamp (epoch ms). */
   minuteClose: number | null;
   minuteAt: number | null;
-  /** Vendor's own "updated" clock (epoch ms), converted from nanoseconds. */
+  /**
+   * The time `price` refers to (epoch ms). FMP: the quote / extended trade
+   * time. Polygon: the snapshot's build time less the feed delay (see map()).
+   */
   vendorUpdatedAt: number | null;
   /**
    * Extended-hours moves. The Premarket and After-Hours feeds rendered
@@ -526,8 +531,15 @@ export class SnapshotCacheService implements OnModuleDestroy {
     const min = t.last_minute ?? {};
     // `last_updated` is NANOSECONDS since epoch on this endpoint; dividing by
     // 1e6 yields ms. Treating it as ms would place it ~56,000 years ahead.
+    //
+    // On the delayed plan it is also the time the snapshot was BUILT, not the
+    // time of the data in it: AAPL on 15 Oct came back stamped 07:03:36 ET at
+    // 07:03:35 ET, carrying ~15-min-old prices (the UI showed 345.57 "as of
+    // 6:56" when Nasdaq's 6:56 print was 345.98 and the 6:41 bar closed at
+    // 345.58). Shifted back by the delay, it is the time the price refers to —
+    // what vendorUpdatedAt and the stream's `at` promise.
     const toMs = (v: unknown) =>
-      typeof v === "number" ? Math.round(v / 1e6) : null;
+      typeof v === "number" ? Math.round(v / 1e6) - POLYGON_DELAY_MS : null;
     const num = (v: unknown) => (typeof v === "number" ? v : null);
     // `session.price` is the vendor's own resolved last price; fall back to the
     // last minute bar and then the previous close for a pre-open request.
