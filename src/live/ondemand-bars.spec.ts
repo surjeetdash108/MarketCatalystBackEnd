@@ -66,6 +66,7 @@ function harness(vendorBars: PolygonAggBar[]) {
     null as never, // fmp
     null as never, // secEdgar
     null as never, // delisted — only the company paths consult it
+    null as never, // monthlyBeta — not under test here
   );
   // Usage counters flush to Firestore on a timer — not under test here.
   jest.spyOn(svc, "recordUsage").mockImplementation(() => undefined);

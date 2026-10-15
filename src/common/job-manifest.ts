@@ -98,7 +98,7 @@ const VIA_PREMARKET: string[] = [
   "macro-events", "macro-regime", "earnings", "ipos", "edgar-ipo-pipeline",
   "news", "analyst-actions", "companies", "companies-financials-backfill",
   "stock-history", "edgar-8k", "technical-indicators", "rs-rating", "tech-rating",
-  "financials", "fundamentals-growth", "corporate-actions", "recaps",
+  "financials", "fundamentals-growth", "corporate-actions", "beta", "recaps",
   "institutional-ownership", "dividends", "sec-13f", "sec-form4",
 ];
 

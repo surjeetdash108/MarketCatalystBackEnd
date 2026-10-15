@@ -24,6 +24,7 @@ import { CachedCollectionsController } from "./cached-collections.controller";
 import { CachedCollectionsService } from "./cached-collections.service";
 import { OnDemandController } from "./ondemand.controller";
 import { OnDemandService } from "./ondemand.service";
+import { MonthlyBetaService } from "./monthly-beta.service";
 import { MarketScanService } from "./market-scan.service";
 import { MarketGlanceService } from "./market-glance.service";
 import { TickerSearchService } from "./ticker-search.service";
@@ -73,6 +74,7 @@ import { EarningsTranscriptSummaryService } from "./earnings-transcript-summary.
     LandingTapeService,
     CachedCollectionsService,
     OnDemandService,
+    MonthlyBetaService,
     MarketScanService,
     MarketGlanceService,
     TickerSearchService,
@@ -94,6 +96,7 @@ import { EarningsTranscriptSummaryService } from "./earnings-transcript-summary.
     TapeService,
     CachedCollectionsService,
     OnDemandService,
+    MonthlyBetaService,
     MarketScanService,
     MarketGlanceService,
     TickerSearchService,

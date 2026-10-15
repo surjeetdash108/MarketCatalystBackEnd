@@ -520,7 +520,10 @@ export function computeIndicators(
     rsi14: Math.round(rsiVal * 100) / 100,
     stochK: stochKVal == null ? null : Math.round(stochKVal * 100) / 100,
     adx14: adxVal == null ? null : Math.round(adxVal * 100) / 100,
-    beta: betaVal == null ? null : Math.round(betaVal * 1000) / 1000,
+    // 1-year DAILY beta, kept for short-horizon views. The headline `beta` is
+    // the 5-year monthly one, owned by beta.job — writing it here would
+    // overwrite that every night.
+    beta1yDaily: betaVal == null ? null : Math.round(betaVal * 1000) / 1000,
     macd: Math.round(macdVal.macd * 10000) / 10000,
     macdSignal: Math.round(macdVal.signal * 10000) / 10000,
     macdHistogram: Math.round(macdVal.histogram * 10000) / 10000,

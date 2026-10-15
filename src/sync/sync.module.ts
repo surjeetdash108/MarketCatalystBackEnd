@@ -12,6 +12,7 @@ import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { BlogsModule } from "../blogs/blogs.module";
 import { RecapBlogJob } from "./recap-blog.job";
 import { AnalystActionsJob } from "./analyst-actions.job";
+import { BetaJob } from "./beta.job";
 import { CompaniesJob } from "./companies.job";
 import { DividendsJob } from "./dividends.job";
 import { EarningsJob } from "./earnings.job";
@@ -108,6 +109,7 @@ import { MarketDataModule } from "../market-data/market-data.module";
     CompanyQuotesJob,
     RsRatingJob,
     TechnicalIndicatorsJob,
+    BetaJob,
     TechRatingJob,
     FundamentalsGrowthJob,
     FinancialsJob,
