@@ -81,6 +81,12 @@ const PER_TICKER: string[] = [
   "financials",
   "fundamentals-growth",
   "corporate-actions",
+  // After stock-history (the month-end bars it reads) AND corporate-actions: a
+  // split detected this morning has already cleared the ticker's history range,
+  // which beta reads as "re-backfill pending" and routes to Polygon instead of
+  // a series mixing two adjustment bases. Only recomputes tickers whose beta is
+  // behind the last completed month, so most mornings it writes nothing.
+  "beta",
 ];
 
 const FINAL: string[] = ["recaps"];

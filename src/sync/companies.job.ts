@@ -110,7 +110,7 @@ export class CompaniesJob implements OnModuleInit {
             );
           }
           // The profile adapter carries these as placeholder nulls, but they are
-          // OWNED by other jobs: `beta` by technical-indicators, `volume` by
+          // OWNED by other jobs: `beta` by beta.job, `volume` by
           // market-quotes. Merge-writing them here would clobber the real values
           // those jobs computed back to null between runs. `averageVolume` and
           // `week52Range` are dead placeholders (nothing reads them; the UI uses

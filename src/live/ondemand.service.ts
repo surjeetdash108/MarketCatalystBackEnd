@@ -16,6 +16,8 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { DelistedTickersService } from "../common/delisted-tickers.service";
 import { classifyFromSic, resolveSicCode } from "../common/sic-tv.util";
 import { SnapshotCacheService } from "./snapshot-cache.service";
+import { MonthlyBetaService } from "./monthly-beta.service";
+import { BETA_METHOD } from "../common/monthly-beta.util";
 import {
   forwardAnnualDividend,
   type DivHistItem,
@@ -492,6 +494,7 @@ export class OnDemandService implements OnModuleDestroy {
     // sic_code (foreign private issuers / ADRs) so sector/industry still resolve.
     private readonly secEdgar: SecEdgarService,
     private readonly delisted: DelistedTickersService,
+    private readonly monthlyBeta: MonthlyBetaService,
   ) {}
 
   onModuleDestroy() {
@@ -998,6 +1001,28 @@ export class OnDemandService implements OnModuleDestroy {
             `on-demand rank failed for ${ticker}: ${(e as Error).message}`,
           );
         }
+      }
+
+      // computeIndicators only yields the 1-year daily beta (`beta1yDaily`).
+      // The headline `beta` is the 5-year monthly one beta.job owns; fill it
+      // here too, or a ticker first seen on-demand shows N/A until the next
+      // premarket run. Best-effort, like the ranking above.
+      try {
+        const market = await this.monthlyBeta.loadMarket();
+        const mb = await this.monthlyBeta.computeFor(ticker, market);
+        Object.assign(result, {
+          beta: mb.beta?.beta ?? null,
+          betaMonths: mb.beta?.months ?? 0,
+          betaR2: mb.beta?.r2 ?? null,
+          betaAsOf: mb.asOf,
+          betaMethod: BETA_METHOD,
+          betaSource: mb.source,
+          betaUpdatedAt: new Date().toISOString(),
+        });
+      } catch (e) {
+        this.logger.warn(
+          `on-demand monthly beta failed for ${ticker}: ${(e as Error).message}`,
+        );
       }
 
       return result;
