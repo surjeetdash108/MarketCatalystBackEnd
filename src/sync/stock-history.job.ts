@@ -61,6 +61,66 @@ export function weekdaysBefore(today: string, n: number): string[] {
 }
 
 /**
+ * The date windows the per-ticker path fetches for one ticker. Both END AT THE
+ * LAST COMPLETED SESSION, never today.
+ *
+ * Two windows, because history has to grow in BOTH directions. Forward is the
+ * ordinary daily increment. Backward exists because raising BACKFILL_DAYS does
+ * nothing on its own: a ticker that already has a watermark only ever asks for
+ * `watermark + 1 day`, so the newly available older history would never be
+ * fetched and the 5Y chart would stay synthetic forever. `earliestSyncedFrom`
+ * records how far back we have actually reached; when it is null the deep
+ * backfill has not run for this ticker yet.
+ *
+ * Why not today: a run during market hours got today's still-forming bar from
+ * the vendor and stored it as the session, and the watermark then moved past
+ * it, so it was never fetched again. UNH's 15 Sep bar was written at 09:49 ET
+ * with 110,203 shares against a real 4,393,582; 39 of the 200 movers on
+ * 14 Oct carried such bars, which sank their 20-day averages and inflated RVOL
+ * (UNH 3.33x for a real 1.41x), and fed the same short bars to RS, the 5-day
+ * move and every indicator. The grouped path already excludes today
+ * (weekdaysBefore); this is the same rule for the per-ticker path.
+ */
+export function perTickerWindows(opts: {
+  watermark: string | null;
+  earliestSyncedFrom: string | null;
+  stranded: boolean;
+  /** ET date (YYYY-MM-DD) of the run. */
+  today: string;
+  /** Oldest date the plan sells. */
+  floor: string;
+  /** Forward start for a never-synced ticker. */
+  backfillFrom: string;
+}): { windows: Array<[string, string]>; needsDeepFill: boolean } {
+  const { watermark, earliestSyncedFrom, stranded, today, floor } = opts;
+  const lastClosed = isoDate(addDays(new Date(`${today}T00:00:00Z`), -1));
+  const forwardFrom = watermark
+    ? isoDate(addDays(new Date(`${watermark}T00:00:00Z`), 1))
+    : opts.backfillFrom;
+  // Never ask for more history than the plan sells. Polygon rejects the
+  // WHOLE request with NOT_AUTHORIZED when `from` predates the five-year
+  // edge, so an unclamped date would lose the entire window rather than
+  // just its unavailable head.
+  const windows: Array<[string, string]> = [];
+  const clampedForward = forwardFrom < floor ? floor : forwardFrom;
+  if (clampedForward <= lastClosed) windows.push([clampedForward, lastClosed]);
+
+  const needsDeepFill =
+    earliestSyncedFrom == null || earliestSyncedFrom > floor || stranded;
+  if (needsDeepFill) {
+    // Stop the day before the known edge so the two windows don't overlap;
+    // with no known edge, or a stranded ticker being refilled from scratch,
+    // take the whole plan window at once.
+    const backTo =
+      earliestSyncedFrom == null || stranded
+        ? lastClosed
+        : isoDate(addDays(new Date(`${earliestSyncedFrom}T00:00:00Z`), -1));
+    if (floor <= backTo) windows.push([floor, backTo]);
+  }
+  return { windows, needsDeepFill };
+}
+
+/**
  * Which path brings a ticker current. Grouped-daily only appends recent
  * sessions, so anything needing a deep fill, or whose gap starts before the
  * grouped window, goes per-ticker.
@@ -457,38 +517,14 @@ export class StockHistoryJob implements OnModuleInit {
     const { lastSyncedThrough: watermark, earliestSyncedFrom } = range;
     let rejected = 0;
 
-    // Two windows, because history has to grow in BOTH directions.
-    //
-    // Forward is the ordinary daily increment. Backward exists because
-    // raising BACKFILL_DAYS does nothing on its own: a ticker that already
-    // has a watermark only ever asks for `watermark + 1 day`, so the newly
-    // available older history would never be fetched and the 5Y chart would
-    // stay synthetic forever. `earliestSyncedFrom` records how far back we
-    // have actually reached; when it is null the deep backfill has not run
-    // for this ticker yet.
-    const forwardFrom = watermark
-      ? isoDate(addDays(new Date(watermark), 1))
-      : isoDate(addDays(new Date(), -BACKFILL_DAYS));
-    // Never ask for more history than the plan sells. Polygon rejects the
-    // WHOLE request with NOT_AUTHORIZED when `from` predates the five-year
-    // edge, so an unclamped date would lose the entire window rather than
-    // just its unavailable head.
-    const windows: Array<[string, string]> = [];
-    const clampedForward = forwardFrom < floor ? floor : forwardFrom;
-    if (clampedForward <= today) windows.push([clampedForward, today]);
-
-    const needsDeepFill =
-      earliestSyncedFrom == null || earliestSyncedFrom > floor || stranded;
-    if (needsDeepFill) {
-      // Stop the day before the known edge so the two windows don't
-      // overlap; with no known edge — or a stranded ticker being refilled
-      // from scratch — take the whole plan window at once.
-      const backTo =
-        earliestSyncedFrom == null || stranded
-          ? today
-          : isoDate(addDays(new Date(earliestSyncedFrom), -1));
-      if (floor <= backTo) windows.push([floor, backTo]);
-    }
+    const { windows, needsDeepFill } = perTickerWindows({
+      watermark,
+      earliestSyncedFrom,
+      stranded,
+      today,
+      floor,
+      backfillFrom: isoDate(addDays(new Date(), -BACKFILL_DAYS)),
+    });
 
     if (windows.length === 0) return { barsWritten: 0, rejected };
 
