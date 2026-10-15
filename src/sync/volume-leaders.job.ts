@@ -100,7 +100,13 @@ export class VolumeLeadersJob implements OnModuleInit {
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
       collections: [STATE, OUTPUT],
-      cronExpression: "20 18 * * 1-5",
+      // 20:30, after the 16:00-20:00 after-hours session. Polygon's daily
+      // volume includes extended hours, so the old 18:20 run stored every
+      // session short by its after-hours trading while ranking it against
+      // averages of those same short snapshots: HCAI's 14 Oct came out 36.3M
+      // for a 43.3M day, BDRX's 13 Oct 13.9M for 23.0M (-40%). Every stored
+      // window entry was 5-40% low, never high.
+      cronExpression: "30 20 * * 1-5",
       timeZone: "America/New_York",
     });
   }
