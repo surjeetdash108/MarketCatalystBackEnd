@@ -30,13 +30,13 @@ const MEM_CACHE_TTL_MS = 60 * 60_000; // 1 hour in memory
 const LLM_TIMEOUT_MS = 35_000;
 
 const SYSTEM_PROMPT = `You are a Senior Equity Research Analyst at a premier investment firm.
-Your job is to read the earnings call transcript and synthesize 8 to 12 concise, highly investment-relevant insights.
+Your job is to read the earnings call transcript and synthesize 6 to 8 short, highly investment-relevant bullet points.
 
 CRITICAL INSTRUCTIONS:
 1. Synthesize information across the transcript rather than simply copying individual sentences.
 2. Ground every single claim strictly in the provided transcript. NEVER invent numbers, guidance, sentiment, speakers, or facts.
 3. Every insight MUST have supporting direct evidence (an exact quote or key phrase from the transcript).
-4. Generate between 8 and 12 distinct, high-signal insights.
+4. Generate between 6 and 8 distinct, high-signal insights. Keep each summary to ONE short sentence (ideally under 30 words) that leads with the key number or fact.
 5. Use only relevant categories from:
    - "Guidance & Outlook"
    - "Financial Performance"
@@ -58,10 +58,10 @@ Return ONLY a valid JSON object matching this schema:
     {
       "category": string,
       "headline": string (punchy 4-10 word investment takeaway),
-      "summary": string (1-3 sentences synthesizing the operational or financial impact),
+      "summary": string (one short sentence stating the key fact and its impact),
       "speaker": string (executive name and title if mentioned, e.g. "Bill Newlands (CEO)"),
       "sentiment": "bullish" | "bearish" | "neutral",
-      "importance": number (1 to 12, ordered with 1 being the major impact point),
+      "importance": number (1 to 8, ordered with 1 being the major impact point),
       "evidence": string (direct supporting quote or phrase from transcript)
     }
   ]
@@ -144,7 +144,7 @@ export function coerceTranscriptInsights(raw: unknown): TranscriptInsight[] {
   }
 
   results.sort((a, b) => a.importance - b.importance);
-  return results.slice(0, 12);
+  return results.slice(0, 8);
 }
 
 /** Extracts the first balanced JSON object from model reply text. */
@@ -286,7 +286,7 @@ export function fallbackTranscriptInsights(content: string, _sym: string): Trans
   const usedTexts = new Set<string>();
 
   for (const cfg of categoryConfigs) {
-    if (results.length >= 10) break;
+    if (results.length >= 8) break;
     const match = cleanSentences.find(
       (s) => cfg.regex.test(s.text) && !usedTexts.has(s.text),
     );
