@@ -2,6 +2,7 @@ import {
   anchor52wToPrice,
   computeIndicators,
   IndicatorBar,
+  lastCompletedSession,
 } from "./technical-indicators.job";
 
 // 60 daily bars with a wobble so RSI/MACD resolve (computeIndicators returns
@@ -22,6 +23,9 @@ function makeBars(n = 60): IndicatorBar[] {
 
 // A fixed `now` well after the last bar, so no bar is treated as forming.
 const NOW = new Date("2026-06-01T20:00:00Z");
+
+// SPY closes keyed by date: marks which sessions the market has completed.
+const spy = (...dates: string[]) => new Map(dates.map((d) => [d, 500]));
 
 describe("computeIndicators — week5Closes", () => {
   it("returns the last 6 dated closes, oldest → newest", () => {
@@ -95,5 +99,49 @@ describe("anchor52wToPrice", () => {
     const noRange = anchor52wToPrice({ price: 10, high52: null, low52: null });
     expect(noRange.pctFromHigh52).toBeUndefined();
     expect(noRange.high52).toBeNull();
+  });
+});
+
+describe("computeIndicators — rvol freshness", () => {
+  // makeBars() ends on 2026-03-01.
+  it("publishes rvol when the newest bar is the last completed session", () => {
+    const ind = computeIndicators(makeBars(), spy("2026-02-28", "2026-03-01"), NOW)!;
+    expect(ind.rvol).toEqual(expect.any(Number));
+  });
+
+  it("nulls rvol when the market has completed a newer session than the bars", () => {
+    const ind = computeIndicators(makeBars(), spy("2026-03-01", "2026-03-02"), NOW)!;
+    expect(ind.rvol).toBeNull();
+  });
+
+  it("nulls rvol on a still-forming bar for today", () => {
+    // 10:00 ET on 2026-03-01, the newest bar's own date.
+    const ind = computeIndicators(
+      makeBars(),
+      spy("2026-02-28"),
+      new Date("2026-03-01T15:00:00Z"),
+    )!;
+    expect(ind.rvol).toBeNull();
+  });
+});
+
+describe("lastCompletedSession", () => {
+  it("takes SPY's newest completed session, so holidays need no calendar", () => {
+    // Tue 2026-09-08 09:00 ET, the day after Labor Day: SPY's newest is Fri.
+    expect(
+      lastCompletedSession(spy("2026-09-03", "2026-09-04"), new Date("2026-09-08T13:00:00Z")),
+    ).toBe("2026-09-04");
+  });
+
+  it("ignores SPY's bar for today until the regular session closes", () => {
+    const m = spy("2026-10-15", "2026-10-16");
+    expect(lastCompletedSession(m, new Date("2026-10-16T14:00:00Z"))).toBe("2026-10-15");
+    expect(lastCompletedSession(m, new Date("2026-10-16T20:30:00Z"))).toBe("2026-10-16");
+  });
+
+  it("falls back to the most recent weekday without SPY closes", () => {
+    // Mon 2026-10-19: before the close it is Fri, after it is Mon.
+    expect(lastCompletedSession(new Map(), new Date("2026-10-19T13:00:00Z"))).toBe("2026-10-16");
+    expect(lastCompletedSession(new Map(), new Date("2026-10-19T21:00:00Z"))).toBe("2026-10-19");
   });
 });

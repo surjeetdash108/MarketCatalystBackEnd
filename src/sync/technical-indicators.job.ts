@@ -356,6 +356,38 @@ function marketTimeEt(now: Date): {
 }
 
 /**
+ * The newest session the market has COMPLETED as of `now` — the session a
+ * ticker's RVOL has to describe to be worth publishing.
+ *
+ * SPY's newest stored bar is the reference: SPY trades every session and is
+ * kept current by the same sync that stores every other ticker's bars, so it
+ * knows about holidays without a calendar. A bar for today only counts once the
+ * regular session has closed (same boundary as the pivot basis above). Callers
+ * that pass no SPY closes fall back to the most recent weekday, which is wrong
+ * only on the day after a market holiday — and wrong toward null, never toward
+ * a stale ratio.
+ */
+export function lastCompletedSession(
+  mktByDate: Map<string, number>,
+  now: Date,
+): string {
+  const { etDate, regularSessionClosed } = marketTimeEt(now);
+  const isCompleted = (d: string) =>
+    d < etDate || (d === etDate && regularSessionClosed);
+  let newest = "";
+  for (const d of mktByDate.keys()) {
+    if (isCompleted(d) && d > newest) newest = d;
+  }
+  if (newest) return newest;
+  const cursor = new Date(`${etDate}T00:00:00Z`);
+  if (!regularSessionClosed) cursor.setUTCDate(cursor.getUTCDate() - 1);
+  while (cursor.getUTCDay() === 0 || cursor.getUTCDay() === 6) {
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+  }
+  return cursor.toISOString().slice(0, 10);
+}
+
+/**
  * Annualized N-day realized (historical) volatility, as a percent. Sample
  * standard deviation of daily log returns over the window, scaled by √252.
  * This is what the "30d Vol" column shows — a real volatility measure computed
@@ -525,6 +557,19 @@ export function computeIndicators(
     macdSignal: Math.round(macdVal.signal * 10000) / 10000,
     macdHistogram: Math.round(macdVal.histogram * 10000) / 10000,
     rvol: (() => {
+      // Only for the last completed session. The newest stored bar can be days
+      // old — BMBL's bars ended 13 Oct, so on 15 Oct it published 13 Oct's
+      // 29.12x beside a real 1.37x, and delisted names (WBA, last bar Aug 2025)
+      // kept their final ratio indefinitely. A still-forming bar for today is a
+      // partial volume and no better. null, as market-movers does, rather than
+      // an old ratio presented as today's.
+      if (
+        lastIsCurrentOpenSession ||
+        !latestBar?.barDate ||
+        latestBar.barDate < lastCompletedSession(mktByDate, now)
+      ) {
+        return null;
+      }
       const v = rvol(volumes);
       return v == null ? null : Math.round(v * 100) / 100;
     })(),
