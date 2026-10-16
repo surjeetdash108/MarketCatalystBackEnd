@@ -102,7 +102,10 @@ export class MarketScanService {
 
   private async loadCompanies(): Promise<CompanyRow[]> {
     const snap = await this.firebase.firestore.collection("companies").get();
-    return snap.docs.map((d) => d.data() as CompanyRow);
+    // Soft-deleted (delisted) docs are kept but never ranked.
+    return snap.docs
+      .filter((d) => d.get("delisted") !== true)
+      .map((d) => d.data() as CompanyRow);
   }
 
   /** Group already-ranked rows by sector, preserving both the sector's first

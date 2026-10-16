@@ -58,6 +58,7 @@ export class CompaniesFinancialsBackfillJob implements OnModuleInit {
       const todo = snap.docs
         .filter((d) => {
           const x = d.data();
+          if (x.delisted === true) return false;
           if (typeof x.eps === "number") return false;
           const checked =
             typeof x.epsSyncedAt === "string" ? Date.parse(x.epsSyncedAt) : 0;
@@ -66,7 +67,7 @@ export class CompaniesFinancialsBackfillJob implements OnModuleInit {
         .slice(0, PAGE_SIZE);
 
       const remainingBefore = snap.docs.filter(
-        (d) => typeof d.data().eps !== "number",
+        (d) => d.data().delisted !== true && typeof d.data().eps !== "number",
       ).length;
 
       const docs = [];
