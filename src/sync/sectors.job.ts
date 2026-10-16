@@ -68,7 +68,10 @@ export class SectorsJob implements OnModuleInit {
           sector?: string | null;
           marketCap?: number | null;
           pctChange?: number | null;
+          delisted?: boolean;
         };
+        // A soft-deleted doc keeps its last move forever; it is not a member.
+        if (c.delisted === true) continue;
         const sector = c.sector?.trim();
         // A member needs both a weight and a move; anything else would either
         // skew the average or contribute nothing.

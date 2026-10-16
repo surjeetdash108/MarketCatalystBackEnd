@@ -965,13 +965,15 @@ export class OnDemandService implements OnModuleDestroy {
         try {
           const dist = await this.firebase.firestore
             .collection("companies")
-            .select("rsScore", "techMomentum", "techTrend", "techRsi")
+            .select("rsScore", "techMomentum", "techTrend", "techRsi", "delisted")
             .get();
           const rsScores: number[] = [];
           const techComps: TechComponents[] = [];
           for (const d of dist.docs) {
             if (d.id === ticker) continue;
             const x = d.data();
+            // A soft-deleted doc's scores are frozen at its last trading day.
+            if (x.delisted === true) continue;
             if (typeof x.rsScore === "number") rsScores.push(x.rsScore);
             if (
               typeof x.techMomentum === "number" &&
