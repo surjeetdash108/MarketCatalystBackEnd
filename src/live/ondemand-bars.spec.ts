@@ -108,8 +108,9 @@ describe("OnDemandService.getBarsByInterval", () => {
     const tf = await svc.getBars("NVDA", "1M");
     expect(getAggsRange).toHaveBeenCalledTimes(1);
     expect(tf.source).toBe("memory");
-    // the range path is unchanged: raw stored bars, extended hours included
-    expect(tf.bars).toHaveLength(286);
+    // the range path returns raw stored bars, extended hours included, cut by
+    // TIME (one calendar month) — the 10-weekday fixture fits inside it whole.
+    expect(tf.bars).toHaveLength(10 * 32);
   });
 
   it.each([

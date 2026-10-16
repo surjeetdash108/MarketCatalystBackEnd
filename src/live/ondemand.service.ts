@@ -60,7 +60,12 @@ import { FmpService } from "../vendors/fmp/fmp.service";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { isoDate } from "../common/date.util";
 import { etDate } from "../common/market-calendar.util";
-import { groupCandles, type CandleGrouping } from "./bars-aggregate.util";
+import {
+  groupCandles,
+  sliceRange,
+  type CandleGrouping,
+  type RangeSpan,
+} from "./bars-aggregate.util";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -123,21 +128,23 @@ interface TfSpec {
   resolution: Resolution;
   /** Calendar days to request from the vendor for this resolution family. */
   fetchDays: number;
-  /** Bars to return to the client (newest N). */
-  sliceBars: number;
+  /** History returned to the client, by TIME — never a bar count: intraday
+   *  docs carry extended hours, so counts sized for the regular session
+   *  under-covered (5D showed ~2 sessions, 1M ~9). See sliceRange. */
+  span: RangeSpan;
 }
 
-/** fetchDays covers weekends/holidays so the slice always fills. */
+/** fetchDays covers weekends/holidays so the span always fills. */
 const TF: Record<BarsTf, TfSpec> = {
-  "1H": { resolution: "1min", fetchDays: 5, sliceBars: 60 },
-  "1D": { resolution: "5min", fetchDays: 9, sliceBars: 78 }, // 1 session ≈ 78 5-min bars
-  "5D": { resolution: "5min", fetchDays: 9, sliceBars: 390 }, // 5 sessions (alias for 1W)
-  "1W": { resolution: "5min", fetchDays: 9, sliceBars: 390 }, // 5 sessions
-  "1M": { resolution: "30min", fetchDays: 40, sliceBars: 286 }, // 22 sessions × 13 bars
-  "3M": { resolution: "daily", fetchDays: 95, sliceBars: 64 },
-  "6M": { resolution: "daily", fetchDays: 190, sliceBars: 128 },
-  "1Y": { resolution: "daily", fetchDays: 380, sliceBars: 252 },
-  "5Y": { resolution: "daily", fetchDays: 1830, sliceBars: 1300 },
+  "1H": { resolution: "1min", fetchDays: 5, span: { kind: "minutes", minutes: 60 } },
+  "1D": { resolution: "5min", fetchDays: 9, span: { kind: "sessions", sessions: 1 } },
+  "5D": { resolution: "5min", fetchDays: 9, span: { kind: "sessions", sessions: 5 } }, // alias for 1W
+  "1W": { resolution: "5min", fetchDays: 9, span: { kind: "sessions", sessions: 5 } },
+  "1M": { resolution: "30min", fetchDays: 40, span: { kind: "months", months: 1 } },
+  "3M": { resolution: "daily", fetchDays: 95, span: { kind: "months", months: 3 } },
+  "6M": { resolution: "daily", fetchDays: 190, span: { kind: "months", months: 6 } },
+  "1Y": { resolution: "daily", fetchDays: 380, span: { kind: "months", months: 12 } },
+  "5Y": { resolution: "daily", fetchDays: 1830, span: { kind: "months", months: 60 } },
 };
 
 const RES_PARAMS: Record<
@@ -728,7 +735,7 @@ export class OnDemandService implements OnModuleDestroy {
   }
 
   private slice(doc: BarsDoc, spec: TfSpec): StoredBar[] {
-    return doc.bars.slice(-spec.sliceBars);
+    return sliceRange(doc.bars, spec.span);
   }
 
   private async fetchAndStore(
@@ -2103,9 +2110,9 @@ export class OnDemandService implements OnModuleDestroy {
       const to = new Date();
       const from = new Date(to.getTime() - NEWS_LOOKBACK_DAYS * 86_400_000);
       const isoDate = (d: Date) => d.toISOString().slice(0, 10);
-      // Pull Polygon AND FMP in parallel and merge — Polygon covers large caps
-      // well but is sparse for micro-caps, where FMP usually has the "why it
-      // moved" headline. Each is best-effort: a failure degrades to [].
+      // Pull FMP (primary) AND Polygon (backup) in parallel and merge — FMP
+      // usually has the "why it moved" headline for micro-caps, Polygon fills
+      // gaps on large caps. Each is best-effort: a failure degrades to [].
       const [polyData, fmpData] = await Promise.all([
         this.news
           .fetchNews(ticker, isoDate(from), isoDate(to))
@@ -2118,10 +2125,11 @@ export class OnDemandService implements OnModuleDestroy {
               .catch(() => [] as CanonicalNewsArticle[])
           : Promise.resolve([] as CanonicalNewsArticle[]),
       ]);
-      // Dedupe across vendors by url (fall back to id), newest first.
+      // Dedupe across vendors by url (fall back to id), newest first. FMP is
+      // listed first so its copy of a shared article wins.
       const seenNews = new Set<string>();
       const merged: CanonicalNewsArticle[] = [];
-      for (const a of [...polyData, ...fmpData]) {
+      for (const a of [...fmpData, ...polyData]) {
         const k = (a.url || a.id || "").toLowerCase();
         if (k && seenNews.has(k)) continue;
         if (k) seenNews.add(k);

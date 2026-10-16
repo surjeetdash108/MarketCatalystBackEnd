@@ -236,3 +236,58 @@ export function groupCandles(
       return groupMonthly(bars);
   }
 }
+
+/**
+ * How much history a `/live/bars?tf=` range covers, measured in TIME rather
+ * than bar count. Intraday docs hold extended-hours bars (04:00–20:00 ET, ~2.5×
+ * the regular session's), so a count sized for regular hours covered far less
+ * than the label: 5D showed ~2 sessions and 1M ~9.
+ */
+export type RangeSpan =
+  /** The newest `minutes` of bars. */
+  | { kind: "minutes"; minutes: number }
+  /** The newest `sessions` ET trading days present in the data. */
+  | { kind: "sessions"; sessions: number }
+  /** Calendar months back from the newest bar's ET date. */
+  | { kind: "months"; months: number };
+
+/**
+ * Bars (oldest-first) inside `span`, anchored at the NEWEST bar — not at "now",
+ * so a weekend or holiday still shows a full range ending at the last session.
+ */
+export function sliceRange<T extends Candle>(
+  bars: readonly T[],
+  span: RangeSpan,
+): T[] {
+  if (bars.length === 0) return [];
+  const last = bars[bars.length - 1].t;
+  let cutoff: number;
+  switch (span.kind) {
+    case "minutes":
+      cutoff = last - span.minutes * MIN_MS;
+      return bars.filter((b) => b.t > cutoff);
+    case "sessions": {
+      // Walk back until `sessions` distinct ET days have been seen.
+      const days = new Set<number>();
+      let start = bars.length;
+      for (let i = bars.length - 1; i >= 0; i--) {
+        const day = Math.floor(etWall(bars[i].t) / DAY_MS);
+        if (!days.has(day)) {
+          if (days.size === span.sessions) break;
+          days.add(day);
+        }
+        start = i;
+      }
+      return bars.slice(start);
+    }
+    case "months": {
+      // Same ET calendar day `months` back (clamped by Date for short months);
+      // bars on or after that ET day are in range.
+      const d = new Date(etWall(last));
+      const fromDay = Math.floor(
+        Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - span.months, d.getUTCDate()) / DAY_MS,
+      );
+      return bars.filter((b) => Math.floor(etWall(b.t) / DAY_MS) > fromDay);
+    }
+  }
+}
