@@ -134,8 +134,30 @@ export class DividendsJob implements OnModuleInit {
           },
         })),
       );
+      // Reconcile the window: delete docs in [from, to] this run did not write.
+      // Doc ids carry the vendor's event id, so a vendor switch (Polygon → FMP)
+      // or a cancelled dividend would otherwise leave a stale duplicate row
+      // beside the fresh one. Skipped on an empty answer — that is far more
+      // likely a vendor brownout than every dividend being cancelled.
+      let removed = 0;
+      if (events.length > 0) {
+        const written = new Set(events.map((e) => dividendDocId(e)));
+        const inWindow = await this.firebase.firestore
+          .collection("dividends")
+          .where("exDividendDate", ">=", from)
+          .where("exDividendDate", "<=", toStr)
+          .get();
+        const stale = inWindow.docs.filter((d) => !written.has(d.id));
+        for (let i = 0; i < stale.length; i += 400) {
+          const batch = this.firebase.firestore.batch();
+          for (const d of stale.slice(i, i + 400)) batch.delete(d.ref);
+          await batch.commit();
+        }
+        removed = stale.length;
+        if (removed) this.logger.log(`dividends: removed ${removed} stale doc(s) in ${from}..${toStr}`);
+      }
       await this.meta.record(JOB_NAME, { ok: true, count: events.length });
-      return { count: events.length };
+      return { count: events.length, removed };
     } catch (err) {
       await this.meta.record(JOB_NAME, {
         ok: false,

@@ -325,7 +325,7 @@ export class NewsJob implements OnModuleInit {
       //
       // Only the FETCH changes. Articles are still stored per ticker under
       // `${ticker}_${articleId}`, still carry their own vendor badge, and are
-      // still deduped by URL with Polygon winning — so the feed, its search,
+      // still deduped by URL with FMP winning — so the feed, its search,
       // sector/cap filters and notifications behave exactly as before.
       const collected: CanonicalNewsArticle[] = [];
       let polygonCount = 0;
@@ -403,10 +403,16 @@ export class NewsJob implements OnModuleInit {
       // with no company doc would vanish the moment a user picked a filter.
       const byTicker = new Map<string, CanonicalNewsArticle[]>();
       const seenUrlByTicker = new Map<string, Set<string>>();
-      for (const a of collected) {
+      // FMP is the primary vendor: its copy of an article both vendors carry
+      // wins the URL dedupe below; Polygon/TradingView fill in the rest.
+      const fmpFirst = [
+        ...collected.filter((a) => a.vendor === "fmp"),
+        ...collected.filter((a) => a.vendor !== "fmp"),
+      ];
+      for (const a of fmpFirst) {
         const t = a.ticker;
         if (!t || !tracked.has(t)) continue;
-        // Dedupe by URL within a ticker — Polygon is pushed first, so it wins.
+        // Dedupe by URL within a ticker — FMP is ordered first, so it wins.
         const seen = seenUrlByTicker.get(t) ?? new Set<string>();
         if (a.url && seen.has(a.url)) continue;
         if (a.url) seen.add(a.url);
