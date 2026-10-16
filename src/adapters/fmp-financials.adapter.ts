@@ -43,6 +43,7 @@ const INCOME_KEYS: Record<string, string> = {
   diluted_earnings_per_share: "epsDiluted",
   basic_average_shares: "weightedAverageShsOut",
   diluted_average_shares: "weightedAverageShsOutDil",
+  ebitda: "ebitda",
 };
 
 const BALANCE_SHEET_KEYS: Record<string, string> = {
@@ -54,6 +55,8 @@ const BALANCE_SHEET_KEYS: Record<string, string> = {
   equity: "totalEquity",
   inventory: "inventory",
   long_term_debt: "longTermDebt",
+  total_debt: "totalDebt",
+  cash_and_cash_equivalents: "cashAndCashEquivalents",
 };
 
 const CASH_FLOW_KEYS: Record<string, string> = {
@@ -64,6 +67,8 @@ const CASH_FLOW_KEYS: Record<string, string> = {
     "netCashProvidedByInvestingActivities",
   net_cash_flow_from_financing_activities:
     "netCashProvidedByFinancingActivities",
+  capital_expenditures: "capitalExpenditure",
+  free_cash_flow: "freeCashFlow",
 };
 
 function pick(

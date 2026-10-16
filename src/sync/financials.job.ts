@@ -139,11 +139,16 @@ export interface QuarterFinancials {
   equity: number | null;
   inventory: number | null;
   longTermDebt: number | null;
+  totalDebt?: number | null;
+  cashAndCashEquivalents?: number | null;
 
   netCashFlow: number | null;
   operatingCashFlow: number | null;
   investingCashFlow: number | null;
   financingCashFlow: number | null;
+  freeCashFlow: number | null;
+  capitalExpenditures: number | null;
+  ebitda: number | null;
 
   /** Derived, because every consumer computed them differently or not at all. */
   grossMarginPct: number | null;
@@ -473,11 +478,16 @@ export function mapQuarterRow(
     equity: bs.equity ?? null,
     inventory: bs.inventory ?? null,
     longTermDebt: bs.long_term_debt ?? null,
+    totalDebt: bs.total_debt ?? bs.long_term_debt ?? null,
+    cashAndCashEquivalents: bs.cash_and_cash_equivalents ?? null,
 
     netCashFlow: cf.net_cash_flow ?? null,
     operatingCashFlow: cf.net_cash_flow_from_operating_activities ?? null,
     investingCashFlow: cf.net_cash_flow_from_investing_activities ?? null,
     financingCashFlow: cf.net_cash_flow_from_financing_activities ?? null,
+    freeCashFlow: cf.free_cash_flow ?? null,
+    capitalExpenditures: cf.capital_expenditures ?? null,
+    ebitda: inc.ebitda ?? null,
 
     grossMarginPct: pct(grossProfit),
     operatingMarginPct: pct(operatingIncome),

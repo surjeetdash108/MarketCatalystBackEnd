@@ -31,6 +31,7 @@ const gauzIncome = stmt("2025-06-30", {
   eps: -11.4,
   epsDiluted: -11.4,
   weightedAverageShsOutDil: 936933,
+  ebitda: -11500000,
 });
 const gauzBalance = stmt("2025-06-30", {
   totalAssets: 136806000,
@@ -41,6 +42,8 @@ const gauzBalance = stmt("2025-06-30", {
 const gauzCashFlow = stmt("2025-06-30", {
   netCashProvidedByOperatingActivities: -3307000,
   netChangeInCash: 72000,
+  capitalExpenditure: -250000,
+  freeCashFlow: -3557000,
 });
 
 describe("mapFmpStatements", () => {
@@ -65,8 +68,82 @@ describe("mapFmpStatements", () => {
       equity: 17860000,
       operatingCashFlow: -3307000,
       netCashFlow: 72000,
+      freeCashFlow: -3557000,
+      capitalExpenditures: -250000,
+      ebitda: -11500000,
       grossMarginPct: 21.37,
       currentRatio: 0.66,
+    });
+  });
+
+  it("maps totalDebt and cashAndCashEquivalents from FMP balance sheet", () => {
+    const balWithCashAndDebt = stmt("2025-06-30", {
+      totalAssets: 200000000,
+      totalDebt: 50000000,
+      longTermDebt: 45000000,
+      cashAndCashEquivalents: 30000000,
+    });
+    const { rows } = mapFmpStatements([gauzIncome], [balWithCashAndDebt], [gauzCashFlow]);
+    const q = mapQuarterRow(rows[0], null);
+    expect(q.totalDebt).toBe(50000000);
+    expect(q.longTermDebt).toBe(45000000);
+    expect(q.cashAndCashEquivalents).toBe(30000000);
+  });
+
+  describe("Enterprise Value and EV/EBITDA calculation rules", () => {
+    function calcEvEbitda(
+      mcap: number | null,
+      debt: number | null,
+      cash: number | null,
+      ttmEbitda: number | null,
+    ): { ev: number | null; evEbitda: number | null } {
+      if (mcap == null || debt == null || cash == null) {
+        return { ev: null, evEbitda: null };
+      }
+      const ev = mcap + debt - cash;
+      const evEbitda =
+        ttmEbitda != null && Number.isFinite(ttmEbitda) && ttmEbitda > 0
+          ? ev / ttmEbitda
+          : null;
+      return { ev, evEbitda };
+    }
+
+    it("calculates EV = MarketCap + Debt - Cash with valid inputs", () => {
+      // Mcap = 100B, Debt = 15B, Cash = 20B -> EV = 95B. EBITDA = 10B -> EV/EBITDA = 9.5
+      const { ev, evEbitda } = calcEvEbitda(100e9, 15e9, 20e9, 10e9);
+      expect(ev).toBe(95e9);
+      expect(evEbitda).toBe(9.5);
+    });
+
+    it("returns null for EV and EV/EBITDA when cash is missing (do not assume 0)", () => {
+      const { ev, evEbitda } = calcEvEbitda(100e9, 15e9, null, 10e9);
+      expect(ev).toBeNull();
+      expect(evEbitda).toBeNull();
+    });
+
+    it("returns null for EV and EV/EBITDA when debt is missing", () => {
+      const { ev, evEbitda } = calcEvEbitda(100e9, null, 20e9, 10e9);
+      expect(ev).toBeNull();
+      expect(evEbitda).toBeNull();
+    });
+
+    it("returns null for EV/EBITDA when EBITDA is zero, negative, or non-finite", () => {
+      expect(calcEvEbitda(100e9, 15e9, 20e9, 0).evEbitda).toBeNull();
+      expect(calcEvEbitda(100e9, 15e9, 20e9, -5e9).evEbitda).toBeNull();
+      expect(calcEvEbitda(100e9, 15e9, 20e9, NaN).evEbitda).toBeNull();
+      expect(calcEvEbitda(100e9, 15e9, 20e9, Infinity).evEbitda).toBeNull();
+    });
+
+    it("preserves correct signs when debt exceeds cash or cash exceeds debt", () => {
+      // Net cash position: Cash > Debt
+      const netCash = calcEvEbitda(50e9, 5e9, 20e9, 5e9);
+      expect(netCash.ev).toBe(35e9);
+      expect(netCash.evEbitda).toBe(7.0);
+
+      // Net debt position: Debt > Cash
+      const netDebt = calcEvEbitda(50e9, 25e9, 5e9, 5e9);
+      expect(netDebt.ev).toBe(70e9);
+      expect(netDebt.evEbitda).toBe(14.0);
     });
   });
 

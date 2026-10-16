@@ -1,4 +1,4 @@
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { ENTITLEMENTS, PLAN_DEFINITIONS } from "./plans.registry";
 
@@ -14,20 +14,24 @@ import { ENTITLEMENTS, PLAN_DEFINITIONS } from "./plans.registry";
  * separately, so a type import cannot catch the drift; a string check can.
  */
 
-const UI_ROOT = join(__dirname, "../../../MarketCatalystUI/app/iq");
-
-function readUi(file: string): string {
-  return readFileSync(join(UI_ROOT, file), "utf8");
-}
+const UI_APP_ROOT = join(__dirname, "../../../MarketCatalystUI/app");
+const UI_CATALOG_FILE = existsSync(join(UI_APP_ROOT, "iq/entitlements.tsx"))
+  ? join(UI_APP_ROOT, "iq/entitlements.tsx")
+  : join(UI_APP_ROOT, "admin/entitlement-catalog.ts");
+const UI_GATE_FILE = join(UI_APP_ROOT, "iq/entitlement-gate.tsx");
 
 function catalogKeysInUi(): Set<string> {
-  const src = readUi("entitlements.tsx");
+  const src = readFileSync(UI_CATALOG_FILE, "utf8");
   return new Set([...src.matchAll(/\{ key: "([a-zA-Z]+)"/g)].map((m) => m[1]));
 }
 
 function slugMappings(): Array<{ slug: string; key: string }> {
-  const src = readUi("entitlement-gate.tsx");
+  if (!existsSync(UI_GATE_FILE)) {
+    return [];
+  }
+  const src = readFileSync(UI_GATE_FILE, "utf8");
   const start = src.indexOf("SLUG_ENTITLEMENT");
+  if (start === -1) return [];
   const block = src.slice(start, src.indexOf("};", start));
   return [...block.matchAll(/"?([a-zA-Z-]+)"?: "([a-zA-Z]+)"/g)]
     .map((m) => ({ slug: m[1], key: m[2] }))

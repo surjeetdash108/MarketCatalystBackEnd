@@ -18,6 +18,7 @@ import { OnDemandService, BARS_TFS, BARS_INTERVALS } from "./ondemand.service";
 import { AiAnalysisService } from "./ai-analysis.service";
 import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
 import { WhatMattersNowService } from "./what-matters-now.service";
+import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { MarketScanService } from "./market-scan.service";
 import { MarketGlanceService } from "./market-glance.service";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
@@ -88,6 +89,7 @@ export class OnDemandController {
     private readonly etfMarketService: EtfMarketService,
     private readonly transcriptSummary: EarningsTranscriptSummaryService,
     private readonly delisted: DelistedTickersService,
+    private readonly llmGateway: LlmGatewayService,
   ) {}
 
   /**
@@ -215,6 +217,96 @@ export class OnDemandController {
     }
     const doc = await this.aiAnalysis.getStockTechnical(sym);
     sendWithEtag(req, res, doc);
+  }
+
+  @Post("copilot")
+  @UseGuards(FirebaseAuthGuard)
+  async copilotChat(
+    @Body()
+    body: {
+      ticker?: string;
+      question: string;
+      context?: Record<string, unknown>;
+    },
+  ) {
+    const question = (body?.question ?? "").trim();
+    if (!question) {
+      throw new BadRequestException("question is required");
+    }
+    const ticker = (body?.ticker ?? "").toUpperCase().trim();
+    const ctx = body?.context ?? {};
+
+    if (this.llmGateway.enabled) {
+      const messages = [
+        {
+          role: "system" as const,
+          content: `You are an institutional financial analyst assistant for MarketCatalyst Stock Intelligence.
+You answer questions about ${ticker || "stocks"} using ONLY verified facts, derived calculations, and analyst estimates provided in the context below.
+Strict Rules:
+- Distinguish verified facts (current price, reported revenue, EPS actuals) from derived metrics (P/E, margins, RSI) and analyst consensus estimates.
+- Never invent quotes, financial filings, news, or timestamps.
+- If evidence or data is missing from the context, state explicitly that it is unavailable.
+- Answer in structured, clear markdown bullets with bold key terms.
+- Keep responses factual, quantitative, and concise (under 200 words).
+- Conclude with a brief grounding citation line noting data sources used and timestamp.
+
+Context:
+${JSON.stringify(ctx, null, 2)}`,
+        },
+        {
+          role: "user" as const,
+          content: question,
+        },
+      ];
+
+      try {
+        const reply = await this.llmGateway.chat(messages, { timeoutMs: 20_000 });
+        if (reply?.trim()) {
+          return {
+            reply: reply.trim(),
+            grounded: true,
+            provider: this.llmGateway.primaryName,
+            asOf: new Date().toISOString(),
+          };
+        }
+      } catch (err) {
+        this.logger.warn(`copilot LLM chat failed: ${err}`);
+      }
+    }
+
+    // Deterministic factual fallback grounded strictly in verified context
+    const priceStr =
+      ctx.price != null ? `$${Number(ctx.price).toFixed(2)}` : "Unavailable";
+    const changeStr =
+      ctx.pctChange != null
+        ? `${Number(ctx.pctChange) >= 0 ? "+" : ""}${Number(ctx.pctChange).toFixed(2)}%`
+        : "Unavailable";
+    const peStr =
+      ctx.peRatio != null ? `${Number(ctx.peRatio).toFixed(1)}×` : "N/A";
+    const fpeStr =
+      ctx.forwardPe != null ? `${Number(ctx.forwardPe).toFixed(1)}×` : "N/A";
+    const mcapStr =
+      ctx.marketCap != null
+        ? `$${(Number(ctx.marketCap) / 1e9).toFixed(1)}B`
+        : "N/A";
+
+    let answer = `**${ticker || "Stock"} Intelligence Synthesis:**\n`;
+    answer += `• **Market Price**: ${priceStr} (${changeStr}) | **Market Cap**: ${mcapStr}\n`;
+    answer += `• **Valuation**: Trailing P/E ${peStr} · Forward P/E ${fpeStr}\n`;
+    if (ctx.newsSummary) {
+      answer += `• **Catalysts & News**: ${ctx.newsSummary}\n`;
+    }
+    if (ctx.technicalSummary) {
+      answer += `• **Technical Posture**: ${ctx.technicalSummary}\n`;
+    }
+    answer += `\n*Grounded in verified FMP & Polygon records as of ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC.*`;
+
+    return {
+      reply: answer,
+      grounded: true,
+      provider: "deterministic-synthesis",
+      asOf: new Date().toISOString(),
+    };
   }
 
   @Get("bars")
