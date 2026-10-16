@@ -504,6 +504,33 @@ export class FmpService {
   }
 
   /**
+   * Raw paced `/stable/<path>` JSON request for callers that map FMP rows
+   * themselves (MarketDataService, the FMP-first market-data router). Same
+   * pacing and retries as every other FMP call; [] when the key is absent or
+   * the answer is not an array. Throws on HTTP errors so the caller can fall
+   * back to Polygon.
+   */
+  async request(path: string, opts?: FetchJsonOptions): Promise<unknown[]> {
+    if (!this.apiKey) return [];
+    return this.get(path, opts);
+  }
+
+  /**
+   * Raw paced `/stable/<path>` TEXT request — for FMP's bulk endpoints
+   * (`eod-bulk`), which answer CSV rather than JSON. "" when the key is absent.
+   */
+  async requestText(path: string, timeoutMs = 60_000): Promise<string> {
+    if (!this.apiKey) return "";
+    await this.pace();
+    const sep = path.includes("?") ? "&" : "?";
+    const res = await fetch(`${this.baseUrl}/${path}${sep}apikey=${this.apiKey}`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) throw new Error(`FMP ${path.split("?")[0]} -> ${res.status}`);
+    return res.text();
+  }
+
+  /**
    * Bulk earnings calendar for a date window (`/stable/earnings-calendar`) —
    * ONE request covering every company, carrying the analyst EPS/revenue
    * estimates Polygon lacks. `date` is the report date.
