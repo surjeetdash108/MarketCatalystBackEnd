@@ -251,10 +251,9 @@ function buildComposite(
         buildComposite(
           config,
           "SECTORS",
-          // FMP is selectable here (real aggregates) — SECTORS_SOURCE=fmp or
-          // SECTORS_FALLBACK_SOURCE=fmp. Defaults stay polygon/none.
+          // FMP is primary (real aggregates) with Polygon as fallback
           POLYGON_OR_FMP_SOURCES,
-          { primary: "polygon", fallback: "none" },
+          { primary: "fmp", fallback: "polygon" },
           {
             polygon: () => new PolygonSectorsAdapter(polygon),
             fmp: () => new FmpSectorsAdapter(fmp),
@@ -318,11 +317,9 @@ function buildComposite(
         buildComposite(
           config,
           "FINANCIALS",
-          // FMP is the default fallback: Polygon returns zero periods for
-          // foreign private issuers and its /vX/reference/financials endpoint is
-          // being sunset. Set FINANCIALS_SOURCE=fmp to make FMP primary.
+          // FMP is the primary statements source, with Polygon as fallback
           POLYGON_OR_FMP_SOURCES,
-          { primary: "polygon", fallback: "fmp" },
+          { primary: "fmp", fallback: "polygon" },
           {
             polygon: () => new PolygonFinancialsAdapter(polygon),
             fmp: () => new FmpFinancialsAdapter(fmp),

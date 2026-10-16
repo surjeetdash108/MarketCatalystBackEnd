@@ -76,7 +76,7 @@ export class LiveController {
     const raw = (config.get<string>("LIVE_STREAM_SOURCE") ?? "")
       .trim()
       .toLowerCase();
-    this.source = raw === "fmp" ? "fmp" : "polygon";
+    this.source = raw === "polygon" ? "polygon" : "fmp";
     const poll = Number(config.get<string>("LIVE_STREAM_POLL_MS"));
     this.pollMs = Number.isFinite(poll) && poll > 0 ? poll : CACHE_POLL_MS_DEFAULT;
     this.logger.log(`live stream: source=${this.source}`);

@@ -307,11 +307,11 @@ export class SnapshotCacheService implements OnModuleDestroy {
   ) {
     this.source = parseSource(
       this.config.get<string>("LIVE_QUOTE_SOURCE"),
-      "polygon",
+      "fmp",
     );
     const fb = parseSource(
       this.config.get<string>("LIVE_QUOTE_FALLBACK_SOURCE"),
-      "none",
+      "polygon",
     );
     this.fallbackSource = fb === this.source ? "none" : fb;
     this.logger.log(

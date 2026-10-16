@@ -104,12 +104,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * are built from these docs by bars-aggregate.util.ts — no extra vendor call.
  */
 
-export type BarsTf = "1H" | "1D" | "1W" | "1M" | "3M" | "6M" | "1Y" | "5Y";
+export type BarsTf = "1H" | "1D" | "5D" | "1W" | "1M" | "3M" | "6M" | "1Y" | "5Y";
 type Resolution = "1min" | "5min" | "15min" | "30min" | "daily";
 
 export const BARS_TFS: BarsTf[] = [
   "1H",
   "1D",
+  "5D",
   "1W",
   "1M",
   "3M",
@@ -130,6 +131,7 @@ interface TfSpec {
 const TF: Record<BarsTf, TfSpec> = {
   "1H": { resolution: "1min", fetchDays: 5, sliceBars: 60 },
   "1D": { resolution: "5min", fetchDays: 9, sliceBars: 78 }, // 1 session ≈ 78 5-min bars
+  "5D": { resolution: "5min", fetchDays: 9, sliceBars: 390 }, // 5 sessions (alias for 1W)
   "1W": { resolution: "5min", fetchDays: 9, sliceBars: 390 }, // 5 sessions
   "1M": { resolution: "30min", fetchDays: 40, sliceBars: 286 }, // 22 sessions × 13 bars
   "3M": { resolution: "daily", fetchDays: 95, sliceBars: 64 },
@@ -1094,13 +1096,38 @@ export class OnDemandService implements OnModuleDestroy {
       } catch {
         details = null; // unknown ticker — still try the snapshot
       }
-      const quotes = await this.polygon
-        .getUniversalSnapshot([ticker])
-        .catch(() => []);
-      const q = quotes[0] as Record<string, unknown> | undefined;
-      if (!details && !q) return null;
+      let price: number | null = null;
+      let pctChange: number | null = null;
+      let prevClose: number | null = null;
+      let volume: number | null = null;
+      let q: Record<string, unknown> | undefined;
 
-      const price = (q?.price as number | undefined) ?? null;
+      // FMP real-time quote preferred (seconds fresh); Polygon universal snapshot as backup
+      if (this.fmp.enabled) {
+        try {
+          const fmpQ = await this.fmp.getQuote(ticker);
+          if (fmpQ?.price != null) {
+            price = fmpQ.price;
+            pctChange = fmpQ.changePercentage ?? null;
+            prevClose = fmpQ.previousClose ?? null;
+            volume = fmpQ.volume ?? null;
+          }
+        } catch {
+          // Fall back to Polygon universal snapshot below
+        }
+      }
+
+      if (price == null) {
+        const quotes = await this.polygon
+          .getUniversalSnapshot([ticker])
+          .catch(() => []);
+        q = quotes[0] as Record<string, unknown> | undefined;
+        if (!details && !q) return null;
+        price = (q?.price as number | undefined) ?? null;
+        pctChange = (q?.changePercent as number | undefined) ?? null;
+        prevClose = (q?.previousClose as number | undefined) ?? null;
+        volume = (q?.volume as number | undefined) ?? null;
+      }
 
       // Fundamentals the daily sync job's profile adapter also computes, fetched
       // here so this doc is not missing peRatio/eps/yield/peers until the cron
@@ -1273,9 +1300,9 @@ export class OnDemandService implements OnModuleDestroy {
             }
           : {}),
         price,
-        pctChange: q?.changePercent ?? null,
-        prevClose: q?.previousClose ?? null,
-        volume: q?.volume ?? null,
+        pctChange: pctChange ?? (q?.changePercent as number | undefined) ?? null,
+        prevClose: prevClose ?? (q?.previousClose as number | undefined) ?? null,
+        volume: volume ?? (q?.volume as number | undefined) ?? null,
         peRatio,
         eps,
         epsTtm: epsTtmReported,
@@ -1386,13 +1413,14 @@ export class OnDemandService implements OnModuleDestroy {
     from.setUTCFullYear(from.getUTCFullYear() - 2);
     const iso = (d: Date) => d.toISOString().slice(0, 10);
 
-    const [details, quotes, aggs, epsHist, gaapTtm, divs] = await Promise.all([
+    const [details, fmpQuote, quotes, aggs, epsHist, gaapTtm, divs] = await Promise.all([
       within(
         this.polygon.getTickerDetails(ticker) as Promise<Record<
           string,
           unknown
         > | null>,
       ),
+      within(this.fmp.getQuote(ticker)),
       within(this.polygon.getUniversalSnapshot([ticker])),
       within(this.polygon.getAggsRange(ticker, iso(from), iso(to))),
       within(
@@ -1405,8 +1433,8 @@ export class OnDemandService implements OnModuleDestroy {
     ]);
 
     const q = quotes?.[0] as Record<string, unknown> | undefined;
-    if (!details && !q) return null;
-    const price = (q?.price as number | undefined) ?? null;
+    if (!details && !q && !fmpQuote) return null;
+    const price = fmpQuote?.price ?? (q?.price as number | undefined) ?? null;
 
     // EPS / P/E — non-GAAP TTM preferred, GAAP fallback (same as full doc).
     const epsRows = epsHist ?? [];
@@ -1461,11 +1489,11 @@ export class OnDemandService implements OnModuleDestroy {
 
     const summary: Record<string, unknown> = {
       ticker,
-      name: details?.name ?? q?.name ?? ticker,
+      name: details?.name ?? fmpQuote?.name ?? q?.name ?? ticker,
       price,
-      pctChange: q?.changePercent ?? null,
-      prevClose: q?.previousClose ?? null,
-      volume: q?.volume ?? null,
+      pctChange: fmpQuote?.changePercentage ?? q?.changePercent ?? null,
+      prevClose: fmpQuote?.previousClose ?? q?.previousClose ?? null,
+      volume: fmpQuote?.volume ?? q?.volume ?? null,
       marketCap: details
         ? reconcileMarketCap(
             details.market_cap,

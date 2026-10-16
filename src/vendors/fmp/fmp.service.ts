@@ -400,9 +400,11 @@ export interface FmpInstitutionalOwnershipRow {
 /** One row of `/stable/quote` — only the fields callers read. */
 export interface FmpQuote {
   symbol: string;
+  name?: string | null;
   price: number;
   changePercentage: number;
   previousClose: number | null;
+  volume?: number | null;
   /** Unix seconds of the last print. */
   timestamp: number;
 }
@@ -656,11 +658,14 @@ export class FmpService {
       const ts = Number(r?.timestamp);
       if (!Number.isFinite(price) || !Number.isFinite(pct) || !Number.isFinite(ts)) return null;
       const prev = Number(r?.previousClose);
+      const vol = Number(r?.volume);
       return {
         symbol: String(r.symbol ?? symbol),
+        name: r?.name ? String(r.name) : null,
         price,
         changePercentage: pct,
         previousClose: Number.isFinite(prev) ? prev : null,
+        volume: Number.isFinite(vol) ? vol : null,
         timestamp: ts,
       };
     } catch (err) {

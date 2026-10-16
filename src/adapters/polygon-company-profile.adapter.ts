@@ -56,20 +56,33 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
     //            price is the number a vendor would sell back (see the helpers
     //            below and the matching logic in live/ondemand.service.ts).
     const warnings: AdapterWarning[] = [];
-    let price = null;
-    let pctChange = null;
-    // Prefer the universal snapshot — the SAME source the on-demand path uses —
-    // so a swept doc and a viewed doc derive price/pctChange identically, instead
-    // of the sweep writing a stale daily-bar close over the live snapshot value.
-    const snap = (
-      (await this.polygon.getUniversalSnapshot([ticker]).catch(() => [])) as Array<{
-        price?: number | null;
-        changePercent?: number | null;
-      }>
-    )[0];
-    if (snap?.price != null) {
-      price = snap.price;
-      pctChange = snap.changePercent ?? null;
+    let price: number | null = null;
+    let pctChange: number | null = null;
+
+    // FMP real-time quote preferred (seconds fresh); Polygon snapshot as backup
+    if (this.fmp.enabled) {
+      try {
+        const fmpQ = await this.fmp.getQuote(ticker);
+        if (fmpQ?.price != null) {
+          price = fmpQ.price;
+          pctChange = fmpQ.changePercentage ?? null;
+        }
+      } catch {
+        // Fall back to Polygon universal snapshot below
+      }
+    }
+
+    if (price == null) {
+      const snap = (
+        (await this.polygon.getUniversalSnapshot([ticker]).catch(() => [])) as Array<{
+          price?: number | null;
+          changePercent?: number | null;
+        }>
+      )[0];
+      if (snap?.price != null) {
+        price = snap.price;
+        pctChange = snap.changePercent ?? null;
+      }
     }
     // Daily-bar close as a coverage fallback for thin names the snapshot misses.
     if (price == null) try {
