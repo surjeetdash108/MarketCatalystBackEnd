@@ -60,9 +60,27 @@ env:
     value: "0"
 
   # ─── Vendor routing (src/adapters/adapters.module.ts) ────────────────────────
-  # Every domain is single-sourced on Polygon/Massive; FALLBACK "none" keeps the
-  # other adapters registered so a vendor can be switched later without a code
-  # change. Mirrors deploy/env.production.yaml.
+  # FMP is the primary market-data vendor and Polygon/Massive the backup (see
+  # MARKET_DATA_PRIMARY below); FALLBACK "none" keeps the other adapters
+  # registered so a vendor can be switched later without a code change.
+  # Mirrors deploy/env.production.yaml.
+  # ─── Market data: FMP primary, Polygon backup ──────────────────────────────────
+  # MARKET_DATA_PRIMARY=fmp routes every PolygonService call (bars, quotes,
+  # snapshot, profile, peers, dividends, splits, IPOs, treasury, market clock)
+  # through MarketDataService: FMP first, Polygon on an FMP error/empty answer
+  # (src/vendors/market-data/market-data.service.ts). The *_SOURCE="polygon"
+  # adapters below therefore read FMP-first underneath. Options chains, the
+  # typed ticker universe and delisting records stay Polygon (no FMP equivalent).
+  # Set to "polygon" to roll everything back to Polygon-only with no deploy of code.
+  - variable: MARKET_DATA_PRIMARY
+    value: "fmp"
+  # Live quote cache (every on-screen price) + SSE stream: FMP, Polygon fills gaps.
+  - variable: LIVE_QUOTE_SOURCE
+    value: "fmp"
+  - variable: LIVE_QUOTE_FALLBACK_SOURCE
+    value: "polygon"
+  - variable: LIVE_STREAM_SOURCE
+    value: "fmp"
   - variable: COMPANY_PROFILE_SOURCE
     value: "polygon"
   - variable: COMPANY_PROFILE_FALLBACK_SOURCE
@@ -87,13 +105,12 @@ env:
     value: "polygon"
   - variable: IPOS_FALLBACK_SOURCE
     value: "none"
+  # FMP's sector labels were verified 2026-10-16 to match the ETF-proxy labels
+  # the UI keys on exactly (all 11), so FMP is primary.
   - variable: SECTORS_SOURCE
-    value: "polygon"
-  # FMP only as a fallback here: its GICS sector labels differ from the ETF-proxy
-  # labels the UI matches on (in-sector rank), so it must NOT be primary until
-  # that mapping is verified. See Doc/FMP-INTEGRATION.md (Tier 2A caveat).
-  - variable: SECTORS_FALLBACK_SOURCE
     value: "fmp"
+  - variable: SECTORS_FALLBACK_SOURCE
+    value: "polygon"
 
   # ── FMP-backed gap-fillers (supplementary vendor; Doc/FMP-INTEGRATION.md) ──
   # These fill features Polygon has no feed for, so FMP is the primary source.
@@ -131,9 +148,9 @@ env:
   - variable: TICKER_UNIVERSE_FALLBACK_SOURCE
     value: "none"
   - variable: FINANCIALS_SOURCE
-    value: "polygon"
-  - variable: FINANCIALS_FALLBACK_SOURCE
     value: "fmp"
+  - variable: FINANCIALS_FALLBACK_SOURCE
+    value: "polygon"
 
   # ─── SEC EDGAR ───────────────────────────────────────────────────────────────
   # SEC requires a descriptive User-Agent with a real contact address.
