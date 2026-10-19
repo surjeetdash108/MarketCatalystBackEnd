@@ -257,7 +257,7 @@ export class MarketDataService extends PolygonService {
           .filter((s) => s !== ticker.toUpperCase());
       },
       () => super.getRelatedCompanies(ticker),
-      (v) => v == null || v.length < MIN_FMP_PEERS,
+      (v) => v == null || v.length === 0,
     );
   }
 
@@ -298,6 +298,7 @@ export class MarketDataService extends PolygonService {
           description: p.description ?? null,
           homepage_url: p.website ?? null,
           phone_number: p.phone ?? null,
+          ceo: p.ceo ?? null,
           total_employees: num(p.fullTimeEmployees),
           list_date: p.ipoDate ?? null,
           address: { address1: p.address ?? null, city: p.city ?? null, state: p.state ?? null, postal_code: p.zip ?? null },

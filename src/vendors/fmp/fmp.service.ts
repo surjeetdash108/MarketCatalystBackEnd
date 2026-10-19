@@ -92,6 +92,9 @@ export interface FmpCompanyProfileRow {
   sector: string | null;
   industry: string | null;
   description: string | null;
+  ceo?: string | null;
+  fullTimeEmployees?: number | null;
+  ipoDate?: string | null;
 }
 
 /** One row of FMP /stable/income-statement. */
@@ -645,6 +648,9 @@ export class FmpService {
       sector: str(o.sector),
       industry: str(o.industry),
       description: str(o.description),
+      ceo: str(o.ceo),
+      fullTimeEmployees: num(o.fullTimeEmployees),
+      ipoDate: str(o.ipoDate),
     };
   }
 
@@ -1115,6 +1121,78 @@ export class FmpService {
     return (await this.get(
       `insider-trading/search?symbol=${encodeURIComponent(ticker)}&page=${page}&limit=${limit}`,
     )) as Record<string, unknown>[];
+  }
+
+  /**
+   * Market-wide latest insider transactions from `/stable/insider-trading/latest`.
+   */
+  async getLatestInsiderTrading(
+    page = 0,
+    limit = 100,
+  ): Promise<Record<string, unknown>[]> {
+    if (!this.apiKey) return [];
+    try {
+      return (await this.get(
+        `insider-trading/latest?page=${page}&limit=${limit}`,
+      )) as Record<string, unknown>[];
+    } catch {
+      return (await this.get(
+        `insider-trading?page=${page}&limit=${limit}`,
+      ).catch(() => [])) as Record<string, unknown>[];
+    }
+  }
+
+  /**
+   * Market-wide latest rating upgrades/downgrades from `/stable/grades-latest-news`.
+   */
+  async getLatestGrades(
+    page = 0,
+    limit = 100,
+  ): Promise<Record<string, unknown>[]> {
+    if (!this.apiKey) return [];
+    return (await this.get(
+      `grades-latest-news?page=${page}&limit=${limit}`,
+    ).catch(() => [])) as Record<string, unknown>[];
+  }
+
+  /**
+   * Market-wide latest analyst price target revisions from `/stable/price-target-latest-news`.
+   */
+  async getLatestPriceTargets(
+    page = 0,
+    limit = 100,
+  ): Promise<Record<string, unknown>[]> {
+    if (!this.apiKey) return [];
+    return (await this.get(
+      `price-target-latest-news?page=${page}&limit=${limit}`,
+    ).catch(() => [])) as Record<string, unknown>[];
+  }
+
+  /**
+   * TTM financial ratios from `/stable/ratios-ttm?symbol=SYM` (e.g. grossProfitMarginTTM).
+   */
+  async getCompanyRatiosTtm(
+    ticker: string,
+  ): Promise<Record<string, unknown> | null> {
+    if (!this.apiKey) return null;
+    const rows = (await this.get(
+      `ratios-ttm?symbol=${encodeURIComponent(ticker)}`,
+    ).catch(() => [])) as Record<string, unknown>[];
+    return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+  }
+
+  /**
+   * Financial statements growth metrics from `/stable/income-statement-growth?symbol=SYM`.
+   */
+  async getIncomeStatementGrowth(
+    ticker: string,
+    limit = 1,
+  ): Promise<Record<string, unknown>[] | null> {
+    if (!this.apiKey) return null;
+    const rows = (await this.get(
+      `income-statement-growth?symbol=${encodeURIComponent(ticker)}&limit=${limit}`,
+    ).catch(() => [])) as Record<string, unknown>[];
+    return Array.isArray(rows) ? rows : null;
   }
 
   /**

@@ -128,6 +128,26 @@ export class StockDetailsService {
     return ((doc?.rows as InsiderRow[] | undefined) ?? []).map((r) => ({ ...r }));
   }
 
+  /**
+   * Market-wide latest insider transactions from FMP's insider-trading/latest feed,
+   * cached for 10 minutes.
+   */
+  async getMarketWideInsiderTransactions(): Promise<InsiderRow[]> {
+    const doc = await this.cached("market_wide_insider", "latest", 10 * 60_000, async () => {
+      let rows: InsiderRow[] = [];
+      try {
+        const raw = await this.fmp.getLatestInsiderTrading(0, 100);
+        if (Array.isArray(raw) && raw.length > 0) {
+          rows = fmpInsiderRows("", raw);
+        }
+      } catch (err) {
+        this.logger.warn(`market-wide insider FMP failed (${errMessage(err)})`);
+      }
+      return { rows, updatedAt: new Date().toISOString() };
+    });
+    return ((doc?.rows as InsiderRow[] | undefined) ?? []).map((r) => ({ ...r }));
+  }
+
   private async fmpInsiderHistory(ticker: string): Promise<InsiderRow[]> {
     if (!this.fmp.enabled) return [];
     const symbol = toFmpSymbol(ticker);
@@ -211,6 +231,81 @@ export class StockDetailsService {
         updatedAt: new Date().toISOString(),
       };
     });
+  }
+
+  private marketWideAnalystCache: { expires: number; data: Doc[] } | null = null;
+
+  async getMarketWideAnalystActions(baseDocs: Doc[]): Promise<Doc[]> {
+    const now = Date.now();
+    if (this.marketWideAnalystCache && this.marketWideAnalystCache.expires > now) {
+      return this.marketWideAnalystCache.data;
+    }
+    if (!this.fmp?.enabled) return baseDocs;
+    try {
+      const [latestGrades, latestPts] = await Promise.all([
+        this.fmp.getLatestGrades(0, 50).catch(() => []),
+        this.fmp.getLatestPriceTargets(0, 50).catch(() => []),
+      ]);
+
+      const docMap = new Map<string, Doc>();
+      for (const d of baseDocs) {
+        if (d.ticker) docMap.set(String(d.ticker).toUpperCase().trim(), { ...d });
+      }
+
+      const ptBySym = new Map<string, number>();
+      for (const pt of latestPts) {
+        if (pt.symbol && pt.priceTarget != null && !ptBySym.has(pt.symbol.toUpperCase())) {
+          ptBySym.set(pt.symbol.toUpperCase(), pt.priceTarget);
+        }
+      }
+
+      for (const g of latestGrades) {
+        if (!g.symbol) continue;
+        const sym = g.symbol.toUpperCase().trim();
+        const actionItem = {
+          date: g.date ?? new Date().toISOString().slice(0, 10),
+          firm: g.gradingCompany ?? null,
+          previousGrade: g.previousGrade ?? null,
+          newGrade: g.newGrade ?? null,
+          action: g.action ?? null,
+          priceTarget: g.priceTarget ?? ptBySym.get(sym) ?? null,
+        };
+
+        const existing = docMap.get(sym);
+        if (existing) {
+          const grades = Array.isArray(existing.recentGrades) ? [...existing.recentGrades] : [];
+          const dup = grades.some(
+            (rg: any) => rg.firm === actionItem.firm && rg.date === actionItem.date,
+          );
+          if (!dup) {
+            grades.unshift(actionItem);
+            existing.recentGrades = grades.slice(0, 20);
+          }
+        } else {
+          docMap.set(sym, {
+            id: sym,
+            ticker: sym,
+            consensus: g.newGrade ?? "Hold",
+            strongBuy: 0,
+            buy: /buy|overweight|outperform/i.test(g.newGrade ?? "") ? 1 : 0,
+            hold: /hold|neutral|equal-weight/i.test(g.newGrade ?? "") ? 1 : 0,
+            sell: /sell|underweight|underperform/i.test(g.newGrade ?? "") ? 1 : 0,
+            strongSell: 0,
+            priceTargetConsensus: ptBySym.get(sym) ?? g.priceTarget ?? null,
+            recentGrades: [actionItem],
+            source: "fmp",
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+
+      const merged = Array.from(docMap.values());
+      this.marketWideAnalystCache = { expires: now + 300_000, data: merged };
+      return merged;
+    } catch (err) {
+      this.logger.warn(`marketWideAnalystActions failed: ${errMessage(err)}`);
+      return baseDocs;
+    }
   }
 
   // ── Ownership: institutional (FMP) + short interest (Polygon) ───────────

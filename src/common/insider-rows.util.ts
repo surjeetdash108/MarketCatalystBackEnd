@@ -65,8 +65,8 @@ export function fmpInsiderRows(ticker: string, rows: Record<string, unknown>[]):
     out.push({
       // Stable across refreshes for the same filing line.
       id: `fmp_${r.reportingCik ?? "x"}_${filingDate ?? "x"}_${date}_${code}_${shares}_${i}`,
-      ticker,
-      issuerName: null,
+      ticker: String(r.symbol ?? ticker).toUpperCase(),
+      issuerName: r.companyName ? String(r.companyName) : null,
       ownerName: r.reportingName ? String(r.reportingName) : null,
       isOfficer: /officer/i.test(typeOfOwner),
       officerTitle: roleFromFmpOwnerType(typeOfOwner),

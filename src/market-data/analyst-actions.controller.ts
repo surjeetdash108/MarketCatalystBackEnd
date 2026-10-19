@@ -52,6 +52,8 @@ export class AnalystActionsController {
     // 4h TTL ensures fresh consensus across 8 AM, 12 PM, and 4 PM CST windows
     await this.marketData.ensureFresh("analyst-actions", 4 * 3600_000);
     const { analyst_actions } = await this.cached.get(["analyst_actions"]);
-    return analyst_actions;
+    return this.stockDetails.getMarketWideAnalystActions(
+      analyst_actions as Record<string, unknown>[],
+    );
   }
 }

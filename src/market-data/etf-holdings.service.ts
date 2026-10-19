@@ -45,6 +45,9 @@ export interface EtfHoldingsDoc {
   aum?: number | null;
   expenseRatio?: number | null;
   nav?: number | null;
+  inceptionDate?: string | null;
+  issuer?: string | null;
+  assetClass?: string | null;
   weightingNote?: string | null;
   sectors?: Array<{ sector: string; weight: number }>;
   singleAssetStats?: {
@@ -334,6 +337,9 @@ export class EtfHoldingsService {
         aum: typeof info?.assetsUnderManagement === "number" ? info.assetsUnderManagement : null,
         expenseRatio: typeof info?.expenseRatio === "number" ? info.expenseRatio : null,
         nav: typeof info?.nav === "number" ? info.nav : null,
+        inceptionDate: info?.inceptionDate ? String(info.inceptionDate) : null,
+        issuer: info?.etfCompany ? String(info.etfCompany) : null,
+        assetClass: info?.assetClass ? String(info.assetClass) : null,
         weightingNote: meta.weightingNote ?? null,
         sectors: sectors && sectors.length > 0 ? sectors : undefined,
         singleAssetStats,

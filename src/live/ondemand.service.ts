@@ -1266,6 +1266,39 @@ export class OnDemandService implements OnModuleDestroy {
       const prevCo = snap.exists
         ? (snap.data() as Record<string, unknown>)
         : {};
+
+      let grossMargin = (prevCo.grossMargin as number | null | undefined) ?? null;
+      let revenueGrowthYoY = (prevCo.revenueGrowthYoY as number | null | undefined) ?? null;
+      let epsGrowthYoY = (prevCo.epsGrowthYoY as number | null | undefined) ?? null;
+
+      if ((grossMargin == null || revenueGrowthYoY == null || epsGrowthYoY == null) && this.fmp.enabled) {
+        try {
+          const [ratiosTtm, growthRows] = await Promise.all([
+            grossMargin == null ? this.fmp.getCompanyRatiosTtm(ticker) : Promise.resolve(null),
+            (revenueGrowthYoY == null || epsGrowthYoY == null) ? this.fmp.getIncomeStatementGrowth(ticker, 1) : Promise.resolve(null),
+          ]);
+          if (grossMargin == null && ratiosTtm) {
+            const gm = Number(ratiosTtm.grossProfitMarginTTM ?? ratiosTtm.grossProfitMargin);
+            if (Number.isFinite(gm) && gm > 0) {
+              grossMargin = Math.round(gm * 10000) / 10000;
+            }
+          }
+          if (Array.isArray(growthRows) && growthRows.length > 0) {
+            const g = growthRows[0];
+            if (revenueGrowthYoY == null) {
+              const rg = Number(g.growthRevenue);
+              if (Number.isFinite(rg)) revenueGrowthYoY = Math.round(rg * 10000) / 10000;
+            }
+            if (epsGrowthYoY == null) {
+              const eg = Number(g.growthEPS);
+              if (Number.isFinite(eg)) epsGrowthYoY = Math.round(eg * 10000) / 10000;
+            }
+          }
+        } catch {
+          // Keep whatever values were present
+        }
+      }
+
       const doc: Record<string, unknown> = {
         ticker,
         // getTickerDetails failed (null) but the snapshot succeeded → keep the
@@ -1284,16 +1317,6 @@ export class OnDemandService implements OnModuleDestroy {
                 fmpProfile?.description ?? details.description ?? null,
               descriptionSource,
               homepageUrl: details.homepage_url ?? null,
-              // sic_description is an INDUSTRY ("ELECTRONIC COMPUTERS"), not a
-              // sector — deriving the sector from sic_code (null when unmappable)
-              // matches the sync job so sectorRank grouping and the `sectors`
-              // join stay correct.
-              // Sector AND industry from the SAME SIC classification. The
-              // industry used to come from FMP (GICS, e.g. "Consumer
-              // Electronics") or Polygon's raw sic_description ("ELECTRONIC
-              // COMPUTERS") — neither is the TradingView vocabulary the app
-              // standardises on, so a ticker first seen through search landed
-              // with a TradingView sector next to a GICS industry.
               sector: sicClass.sector,
               industry: sicClass.industry,
               sicCode: resolvedSic == null ? null : String(resolvedSic),
@@ -1306,6 +1329,9 @@ export class OnDemandService implements OnModuleDestroy {
                 details.weighted_shares_outstanding,
               ),
               exchange: details.primary_exchange ?? null,
+              employees: (details as any).total_employees ?? fmpProfile?.fullTimeEmployees ?? null,
+              listingDate: (details as any).list_date ?? fmpProfile?.ipoDate ?? null,
+              ceo: (details as any).ceo ?? fmpProfile?.ceo ?? null,
             }
           : {}),
         price,
@@ -1315,11 +1341,9 @@ export class OnDemandService implements OnModuleDestroy {
         peRatio,
         eps,
         epsTtm: epsTtmReported,
-        // Carried from the nightly fundamentals-growth write (non-GAAP basis).
-        epsGrowthYoY: (prevCo.epsGrowthYoY as number | null | undefined) ?? null,
-        revenueGrowthYoY:
-          (prevCo.revenueGrowthYoY as number | null | undefined) ?? null,
-        grossMargin: (prevCo.grossMargin as number | null | undefined) ?? null,
+        epsGrowthYoY,
+        revenueGrowthYoY,
+        grossMargin,
         dividendYield,
         dividendPerShare,
         peers,
@@ -1338,11 +1362,9 @@ export class OnDemandService implements OnModuleDestroy {
             : null,
         // Carry the cron's universe-wide RS / tech RANK forward when this rebuild
         // didn't recompute it (hadRating → computeFirstSyncTechnicals skipped the
-        // ranking, so `technicals` has no rsRating/techRating). merge:true already
-        // keeps Firestore's value, but the RETURNED doc — the stock detail's
-        // source — must keep it too, else the page shows rs=null on a rebuild even
-        // though the ticker IS ranked. When the rebuild DID rank a brand-new
-        // ticker, `...technicals` below overrides these with the fresh values.
+        // expensive scan, so it returned no rsRating/sectorRank/techRank).
+        // Preserves the nightly job's ranks on on-demand refreshes.
+        // Tickers never swept keep null (honestly unranked).
         rsRating: (prevCo.rsRating as number | null | undefined) ?? null,
         rsRatingUpdatedAt:
           (prevCo.rsRatingUpdatedAt as string | null | undefined) ?? null,
@@ -1355,7 +1377,7 @@ export class OnDemandService implements OnModuleDestroy {
         ...technicals,
         createdAt: now,
         updatedAt: now,
-        source: "polygon-ondemand",
+        source: "fmp-ondemand",
       };
       // Stored bars stop at the last premarket run; `price` is the snapshot,
       // a session or more newer. Measure the 52w figures from `price`.

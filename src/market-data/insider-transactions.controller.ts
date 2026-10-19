@@ -48,6 +48,10 @@ export class InsiderTransactionsController {
       }
       return this.stockDetails.getInsiderTransactions(sym);
     }
+    const latest = await this.stockDetails.getMarketWideInsiderTransactions();
+    if (latest && latest.length > 0) {
+      return latest;
+    }
     await this.marketData.ensureFresh("sec-form4");
     const { insider_transactions } = await this.cached.get([
       "insider_transactions",
