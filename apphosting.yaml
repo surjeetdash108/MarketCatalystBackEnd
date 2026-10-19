@@ -118,6 +118,9 @@ env:
     value: "fmp"
   - variable: ANALYST_SOURCE
     value: "fmp"
+  # FMP news is the primary feed, merged FMP-first with Polygon news.
+  - variable: NEWS_FMP_SOURCE
+    value: "fmp"
   # Economic calendar: FMP adds the forward US release schedule + estimates FRED
   # lacks. "none" reverts the macro-events job to FRED-only.
   - variable: ECON_CALENDAR_SOURCE

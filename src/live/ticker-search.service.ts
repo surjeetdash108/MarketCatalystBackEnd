@@ -9,7 +9,8 @@ import {
  *
  * Replaces the Firestore `tickers` collection sync (10k docs written daily,
  * read per keystroke by every user). The reference list is loaded ONCE per
- * instance from Polygon `/v3/reference/tickers`, kept in memory (~2 MB), and
+ * instance via getAllTickers — FMP's screener first, Polygon's
+ * `/v3/reference/tickers` filling the gaps — kept in memory (~2 MB), and
  * refreshed every 24 h. Search costs ZERO Firestore reads and zero writes.
  *
  * Substring matching included (Firestore could only do prefix ranges), so

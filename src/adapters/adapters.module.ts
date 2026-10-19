@@ -60,8 +60,10 @@ import {
   ANALYST_RATINGS_ADAPTER,
 } from "./types";
 
-// Every composite is Polygon-only. The list is where a second vendor becomes
-// selectable again — add its name here and one entry to the bySource map.
+// These composites name only "polygon", but under MARKET_DATA_PRIMARY=fmp (the
+// default) every PolygonService call they make is answered FMP-first, Polygon
+// as backup (vendors/market-data/market-data.service.ts). The list is where a
+// second vendor becomes selectable — add its name here and to the bySource map.
 const POLYGON_ONLY_SOURCES = ["polygon", "none"];
 /** Domains where FMP is a selectable primary/fallback (has an adapter here). */
 const POLYGON_OR_FMP_SOURCES = ["polygon", "fmp", "none"];
@@ -198,12 +200,12 @@ function buildComposite(
         new CompositeNewsAdapter(new PolygonNewsAdapter(polygon), null),
     },
     {
-      // Optional FMP news, merged with Polygon by news.job. Defaults to "none";
-      // set NEWS_FMP_SOURCE=fmp (and FMP_API_KEY) to enable the second feed.
+      // FMP news — the primary feed, merged FMP-first with Polygon by news.job and
+      // on-demand news. Defaults to "fmp"; NEWS_FMP_SOURCE=none turns it off.
       provide: NEWS_FMP_ADAPTER,
       inject: [ConfigService, FmpService],
       useFactory: (config: ConfigService, fmp: FmpService) => {
-        const source = parseSource(config, "NEWS_FMP_SOURCE", ["fmp", "none"], "none");
+        const source = parseSource(config, "NEWS_FMP_SOURCE", ["fmp", "none"], "fmp");
         return source === "fmp" ? new FmpNewsAdapter(fmp) : null;
       },
     },
@@ -329,8 +331,8 @@ function buildComposite(
         ),
     },
     {
-      // Opt-in estimates seam. Defaults to "none" → null, so the earnings job is
-      // untouched until EARNINGS_ESTIMATES_SOURCE=fmp (and FMP_API_KEY) are set.
+      // Earnings estimates (FMP — Polygon has no estimates feed). Defaults to
+      // "fmp"; EARNINGS_ESTIMATES_SOURCE=none drops the seam to null.
       provide: EARNINGS_ESTIMATES_ADAPTER,
       inject: [ConfigService, FmpService],
       useFactory: (config: ConfigService, fmp: FmpService) => {
@@ -338,14 +340,14 @@ function buildComposite(
           config,
           "EARNINGS_ESTIMATES_SOURCE",
           ["fmp", "none"],
-          "none",
+          "fmp",
         );
         return source === "fmp" ? new FmpEarningsEstimatesAdapter(fmp) : null;
       },
     },
     {
-      // Opt-in analyst-ratings seam. Defaults to "none" → null, so the
-      // analyst-actions job stays a no-op until ANALYST_SOURCE=fmp.
+      // Analyst ratings (FMP — Polygon has no ratings feed). Defaults to "fmp";
+      // ANALYST_SOURCE=none makes the analyst-actions job a no-op.
       provide: ANALYST_RATINGS_ADAPTER,
       inject: [ConfigService, FmpService],
       useFactory: (config: ConfigService, fmp: FmpService) => {
@@ -353,7 +355,7 @@ function buildComposite(
           config,
           "ANALYST_SOURCE",
           ["fmp", "none"],
-          "none",
+          "fmp",
         );
         return source === "fmp" ? new FmpAnalystRatingsAdapter(fmp) : null;
       },

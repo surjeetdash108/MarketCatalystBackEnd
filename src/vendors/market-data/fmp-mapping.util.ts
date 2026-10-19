@@ -89,6 +89,9 @@ export const fromFmpSymbol = (symbol: string): string => symbol.replace(/-([A-Z]
  */
 export const isUsSymbol = (symbol: string): boolean => /^[A-Z]{1,5}(-[A-Z]{1,2})?$/.test(symbol);
 
+/** US listing venues as FMP's company-screener names them, one call each for a full list. */
+export const FMP_US_EXCHANGES = ["NASDAQ", "NYSE", "AMEX", "CBOE"];
+
 /** Polygon's integer dividend frequency (payments/year; 0 = one-time). */
 export function frequencyToNumber(freq: unknown): number | null {
   switch (String(freq ?? "").toLowerCase()) {
@@ -155,6 +158,21 @@ export function exchangeToMic(exchange: unknown): string | null {
   if (e === "BATS" || e === "CBOE") return "BATS";
   if (e.startsWith("OTC") || e === "PNK") return "OTC";
   return e;
+}
+
+/**
+ * MIC from FMP's full exchange name, falling back to the short code. The full
+ * name is what separates NYSE Arca (ARCX) from NYSE American: the short code
+ * reports both as "AMEX".
+ */
+export function micFromFmpExchange(exchange: unknown, shortName?: unknown): string | null {
+  const e = String(exchange ?? "");
+  if (/arca/i.test(e)) return "ARCX";
+  if (/nasdaq/i.test(e)) return "XNAS";
+  if (/american|amex|nyse ?mkt/i.test(e)) return "XASE";
+  if (/new york stock exchange|^nyse/i.test(e)) return "XNYS";
+  if (/cboe|bats/i.test(e)) return "BATS";
+  return exchangeToMic(shortName ?? exchange);
 }
 
 export interface CsvBar {

@@ -54,6 +54,9 @@ export interface QuarterlyEstimatesLookup {
    * (non-GAAP) figure, so beat/miss vs `epsEstimateFor` is apples-to-apples.
    * Prefer this over Polygon's GAAP diluted EPS for surprise math. */
   epsActualFor(periodEnd: string | null): number | null;
+  /** Consensus revenue estimate for that quarter (raw dollars), from the same
+   * FMP report row — drives the quarterly sales %surp. */
+  revenueEstimateFor(periodEnd: string | null): number | null;
 }
 
 export interface EarningsEstimatesAdapter {
@@ -84,6 +87,7 @@ const QUARTER_MATCH_DAYS = 90;
 const EMPTY_QUARTERLY: QuarterlyEstimatesLookup = {
   epsEstimateFor: () => null,
   epsActualFor: () => null,
+  revenueEstimateFor: () => null,
 };
 
 /** How far a reported filing date may sit from FMP's earnings date and still match. */
@@ -276,8 +280,8 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
     // which yields spurious huge beats/misses for names with heavy SBC or
     // one-off tax items (PANW being a textbook case).
     const points = rows
-      .filter((r) => r.date && (r.estimatedEarning != null || r.actualEarningResult != null))
-      .map((r) => ({ date: r.date, eps: r.estimatedEarning, actual: r.actualEarningResult }));
+      .filter((r) => r.date && (r.estimatedEarning != null || r.actualEarningResult != null || r.revenueEstimated != null))
+      .map((r) => ({ date: r.date, eps: r.estimatedEarning, actual: r.actualEarningResult, revenueEst: r.revenueEstimated ?? null }));
     if (points.length === 0) return EMPTY_QUARTERLY;
     const nearest = (periodEnd: string | null) => {
       if (!periodEnd) return null;
@@ -291,6 +295,7 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
     return {
       epsEstimateFor: (periodEnd) => nearest(periodEnd)?.eps ?? null,
       epsActualFor: (periodEnd) => nearest(periodEnd)?.actual ?? null,
+      revenueEstimateFor: (periodEnd) => nearest(periodEnd)?.revenueEst ?? null,
     };
   }
 

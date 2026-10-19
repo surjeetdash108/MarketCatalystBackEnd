@@ -30,6 +30,7 @@ import { OPTIONS_UNIVERSE } from "../common/options-universe";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 import { DelistedTickerGuard } from "../common/delisted-ticker.guard";
 import { DelistedTickersService } from "../common/delisted-tickers.service";
+import { StockDetailsService } from "./stock-details.service";
 
 /**
  * On-demand data endpoints (see ondemand.service.ts for the caching design).
@@ -90,6 +91,7 @@ export class OnDemandController {
     private readonly transcriptSummary: EarningsTranscriptSummaryService,
     private readonly delisted: DelistedTickersService,
     private readonly llmGateway: LlmGatewayService,
+    private readonly stockDetails: StockDetailsService,
   ) {}
 
   /**
@@ -494,6 +496,29 @@ ${JSON.stringify(ctx, null, 2)}`,
     if (!TICKER_RE.test(sym))
       throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
     const doc = await this.ondemand.getSplits(sym);
+    if (!doc) throw new NotFoundException(`No data for ${sym}`);
+    sendWithEtag(req, res, doc);
+  }
+
+  /**
+   * Institutional ownership + top 13F holders (FMP, newest quarter past its
+   * filing deadline) and FINRA short interest (Polygon — FMP has none).
+   */
+  @Get("ownership")
+  @UseGuards(FirebaseAuthGuard)
+  @Header(
+    "Cache-Control",
+    "public, max-age=900, s-maxage=3600, stale-while-revalidate=3600",
+  )
+  async ownership(
+    @Query("ticker") ticker: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? "").toUpperCase().trim();
+    if (!TICKER_RE.test(sym))
+      throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+    const doc = await this.stockDetails.getOwnership(sym);
     if (!doc) throw new NotFoundException(`No data for ${sym}`);
     sendWithEtag(req, res, doc);
   }

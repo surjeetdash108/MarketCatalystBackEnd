@@ -2,19 +2,21 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { FmpService } from "../fmp/fmp.service";
 import { SecEdgarService } from "../sec-edgar/sec-edgar.service";
-import { PolygonService, type PolygonAggBar } from "../polygon/polygon.service";
+import { PolygonService, type PolygonAggBar, type PolygonTickerRef } from "../polygon/polygon.service";
 import {
   dividendTypeFor,
   etMidnightMs,
   etParts,
   etWallToEpochMs,
   exchangeToMic,
+  FMP_US_EXCHANGES,
   frequencyToLabel,
   frequencyToNumber,
   fromFmpSymbol,
   ipoStatusFor,
   isPolygonOnlyTicker,
   isUsSymbol,
+  micFromFmpExchange,
   normalizePriceRange,
   parseEodBulkCsv,
   sessionPhase,
@@ -42,6 +44,13 @@ const MAX_INTRADAY_PAGES = 60;
 const MIN_FMP_PEERS = 3;
 /** dividends-calendar silently caps a response at 4000 rows (global feed). */
 const FMP_CALENDAR_CAP = 4000;
+/** company-screener row cap per request; an answer this size may be truncated. */
+const FMP_SCREENER_LIMIT = 10_000;
+/** delisted-companies is newest-first, 100 rows a page (~2-3 weeks of delistings). */
+const FMP_DELISTED_MAX_PAGES = 40;
+const FMP_DELISTED_TTL_MS = 6 * 3_600_000;
+/** Exchanges whose delistings count — the venues Polygon's stock universe covers (no OTC). */
+const US_LISTING_VENUE = /^(NASDAQ|NYSE|AMEX|BATS|CBOE)/i;
 
 const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const addDays = (date: string, days: number) => isoDay(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000);
@@ -55,10 +64,15 @@ const addDays = (date: string, days: number) => isoDay(Date.parse(`${date}T00:00
  *   1. asks FMP and maps the answer into Polygon's exact shape;
  *   2. on an FMP error, an empty answer, or a ticker FMP cannot serve, calls
  *      `super` — the original Polygon implementation.
- * Methods NOT overridden stay Polygon: FMP has no equivalent for options
- * chains, the full typed ticker reference (type/FIGI) used by the universe and
- * search, per-symbol delisting records, or Polygon's news (the FMP news feed is
- * a separate adapter, merged FMP-first by news.job / on-demand news).
+ * The ticker universe is FMP-first too, but MERGED: FMP's screener lists ~3k
+ * fewer symbols than Polygon (ETFs, preferreds, warrants, units), so Polygon
+ * fills the symbols FMP lacks and the type/FIGI fields FMP has no equivalent
+ * for, rather than only standing by for an outage.
+ *
+ * Methods NOT overridden stay Polygon: FMP has no options chains, and Polygon's
+ * news is a separate adapter merged FMP-first by news.job / on-demand news.
+ * Polygon's financials endpoints are retired; PolygonService already serves
+ * those from FMP.
  *
  * MARKET_DATA_PRIMARY=polygon restores plain PolygonService everywhere.
  */
@@ -313,6 +327,125 @@ export class MarketDataService extends PolygonService {
       },
       () => super.getBrandingImage(ticker),
     );
+  }
+
+  /**
+   * Active US listings: FMP's company screener first, Polygon's reference list
+   * merged in. FMP wins the name for every symbol it lists; Polygon adds the
+   * symbols FMP does not carry plus the type/CIK/FIGI fields FMP lacks, and
+   * keeps the venue — FMP labels NYSE American listings "NYSE Arca" (IMO, BTG).
+   * Either vendor alone still yields a universe, so one outage degrades
+   * coverage instead of failing the load. Inactive listings stay Polygon-only.
+   */
+  async getAllTickers(active = true): Promise<PolygonTickerRef[]> {
+    if (!active || !this.fmpApi.enabled) return super.getAllTickers(active);
+    const [fmp, polygon] = await Promise.allSettled([
+      this.fmpTickerUniverse(),
+      super.getAllTickers(active),
+    ]);
+    if (fmp.status === "rejected") {
+      this.routeLogger.warn(`ticker universe: FMP failed (${(fmp.reason as Error)?.message ?? fmp.reason}) — Polygon only`);
+    }
+    if (polygon.status === "rejected") {
+      if (fmp.status === "rejected" || fmp.value.length === 0) throw polygon.reason;
+      this.routeLogger.warn(`ticker universe: Polygon gap-fill failed (${(polygon.reason as Error)?.message ?? polygon.reason}) — FMP only`);
+    }
+    const fromFmp = fmp.status === "fulfilled" ? fmp.value : [];
+    const fromPolygon = polygon.status === "fulfilled" ? polygon.value : [];
+    const polygonBy = new Map(fromPolygon.map((t) => [t.ticker, t] as const));
+    const out: PolygonTickerRef[] = [];
+    const seen = new Set<string>();
+    for (const f of fromFmp) {
+      const p = polygonBy.get(f.ticker);
+      // With Polygon's list in hand, add only FMP-only symbols of 1–4 letters:
+      // dotted forms (MER.PK, AAC.UN) are share classes Polygon spells
+      // differently (MERpK, AAC.U), and 5-letter ones are warrants, rights,
+      // mutual funds or NASDAQ test symbols (BBBYW, FPCRX, ZXZZT) the
+      // screener reports as plain stock.
+      if (!p && fromPolygon.length > 0 && !/^[A-Z]{1,4}$/.test(f.ticker)) continue;
+      out.push(p ? { ...p, name: f.name || p.name } : f);
+      seen.add(f.ticker);
+    }
+    for (const p of fromPolygon) if (!seen.has(p.ticker)) out.push(p);
+    return out;
+  }
+
+  private async fmpTickerUniverse(): Promise<PolygonTickerRef[]> {
+    const out: PolygonTickerRef[] = [];
+    for (const exchange of FMP_US_EXCHANGES) {
+      // isFund=false drops mutual funds (Polygon's stock market has none); ETFs
+      // are flagged isEtf, never isFund, so they stay in.
+      const rows = (await this.fmpApi.request(
+        `company-screener?exchange=${exchange}&isActivelyTrading=true&isFund=false&limit=${FMP_SCREENER_LIMIT}`,
+      )) as Row[];
+      if (rows.length >= FMP_SCREENER_LIMIT) {
+        throw new Error(`company-screener ${exchange} hit the ${FMP_SCREENER_LIMIT}-row cap — list may be truncated`);
+      }
+      for (const r of rows) {
+        const symbol = String(r.symbol ?? "");
+        if (!isUsSymbol(symbol) || !r.companyName) continue;
+        out.push({
+          ticker: fromFmpSymbol(symbol),
+          name: String(r.companyName),
+          market: "stocks",
+          locale: "us",
+          primary_exchange: micFromFmpExchange(r.exchange, r.exchangeShortName) ?? undefined,
+          type: r.isEtf ? "ETF" : "CS",
+          active: true,
+          currency_name: "usd",
+        });
+      }
+    }
+    return out;
+  }
+
+  private delistedIndex: { at: number; bySymbol: Map<string, string> } | null = null;
+  private delistedLoading: Promise<Map<string, string>> | null = null;
+
+  /**
+   * FMP's delisting record for a symbol first; Polygon's inactive record when
+   * FMP holds none (null either way when neither vendor has one — a symbol
+   * that merely went missing from one listing pull is not proof of delisting).
+   */
+  async getDelisting(ticker: string): Promise<{ delistedAt: string | null } | null> {
+    return this.fmpFirst(
+      `delisting ${ticker}`,
+      async () => {
+        const delistedAt = (await this.fmpDelistedIndex()).get(ticker.toUpperCase());
+        return delistedAt ? { delistedAt } : null;
+      },
+      () => super.getDelisting(ticker),
+    );
+  }
+
+  /** US symbol → newest FMP delisting date, built once per TTL and shared by concurrent lookups. */
+  private async fmpDelistedIndex(): Promise<Map<string, string>> {
+    if (this.delistedIndex && Date.now() - this.delistedIndex.at < FMP_DELISTED_TTL_MS) {
+      return this.delistedIndex.bySymbol;
+    }
+    this.delistedLoading ??= (async () => {
+      const today = etParts(Date.now()).date;
+      const bySymbol = new Map<string, string>();
+      for (let page = 0; page < FMP_DELISTED_MAX_PAGES; page++) {
+        const rows = (await this.fmpApi.request(`delisted-companies?page=${page}&limit=100`)) as Row[];
+        if (rows.length === 0) break;
+        for (const r of rows) {
+          const symbol = String(r.symbol ?? "");
+          const date = String(r.delistedDate ?? "").slice(0, 10);
+          // The feed is global and lists scheduled (future) delistings too.
+          if (!isUsSymbol(symbol) || !US_LISTING_VENUE.test(String(r.exchange ?? ""))) continue;
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) continue;
+          const ticker = fromFmpSymbol(symbol);
+          const prev = bySymbol.get(ticker);
+          if (!prev || date > prev) bySymbol.set(ticker, date);
+        }
+      }
+      this.delistedIndex = { at: Date.now(), bySymbol };
+      return bySymbol;
+    })().finally(() => {
+      this.delistedLoading = null;
+    });
+    return this.delistedLoading;
   }
 
   // ── Corporate actions & calendars ─────────────────────────────────────────

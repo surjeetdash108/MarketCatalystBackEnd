@@ -121,6 +121,9 @@ export interface QuarterFinancials {
    * pairs these two (identical basis) — never `epsActualReported` against the
    * patchwork `epsEstimate`, whose old rows can be on a pre-split basis. */
   epsEstimateReported: number | null;
+  /** FMP consensus revenue estimate from the quarter's report (raw dollars) —
+   * pairs with `revenue` for the sales %surp. Null when FMP has none. */
+  revenueEstimateReported?: number | null;
 
   // ── Fields below come from the SAME vendor response that already served the
   // income statement. The balance-sheet and cash-flow panels were fabricated
@@ -433,6 +436,7 @@ export function mapQuarterRow(
   epsEstimate: number | null,
   epsActualReported: number | null = null,
   epsEstimateReported: number | null = null,
+  revenueEstimateReported: number | null = null,
 ): QuarterFinancials {
   const inc = r.income;
   const bs = r.balanceSheet;
@@ -462,6 +466,7 @@ export function mapQuarterRow(
     epsEstimate,
     epsActualReported,
     epsEstimateReported,
+    revenueEstimateReported,
 
     costOfRevenue: inc.cost_of_revenue ?? null,
     operatingExpenses: inc.operating_expenses ?? null,
@@ -703,6 +708,7 @@ export class FinancialsJob implements OnModuleInit {
                 (fmpActual == null
                   ? (prevEstReportedByEnd.get(r.endDate) ?? null)
                   : null),
+              fmpQ?.revenueEstimateFor(r.endDate) ?? null,
             );
           });
           // Cut the series at the first implausible gap: anything beyond it is a

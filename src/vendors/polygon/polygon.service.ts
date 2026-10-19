@@ -1048,6 +1048,37 @@ export class PolygonService {
    * which is not proof of a delisting. A reused symbol can carry several
    * inactive records, hence the newest-wins pick.
    */
+  /**
+   * Latest FINRA short interest (twice-monthly settlement) — `/stocks/v1/short-interest`.
+   * FMP has no short-interest feed, so this is the only source. Null when none.
+   */
+  async getShortInterest(ticker: string): Promise<{
+    settlementDate: string;
+    shortInterest: number;
+    avgDailyVolume: number | null;
+    daysToCover: number | null;
+  } | null> {
+    const res = await fetchJson<{
+      results?: Array<{
+        settlement_date?: string;
+        short_interest?: number;
+        avg_daily_volume?: number;
+        days_to_cover?: number;
+      }>;
+    }>(
+      `${this.baseUrl}/stocks/v1/short-interest?ticker=${encodeURIComponent(ticker)}` +
+        `&limit=1&sort=settlement_date.desc&apiKey=${this.apiKey}`,
+    );
+    const r = res.results?.[0];
+    if (!r?.settlement_date || typeof r.short_interest !== "number") return null;
+    return {
+      settlementDate: r.settlement_date,
+      shortInterest: r.short_interest,
+      avgDailyVolume: typeof r.avg_daily_volume === "number" ? r.avg_daily_volume : null,
+      daysToCover: typeof r.days_to_cover === "number" ? r.days_to_cover : null,
+    };
+  }
+
   async getDelisting(
     ticker: string,
   ): Promise<{ delistedAt: string | null } | null> {

@@ -258,6 +258,9 @@ export interface FmpEarningsSurpriseRow {
   symbol: string;
   actualEarningResult: number | null;
   estimatedEarning: number | null;
+  /** Revenue actual + consensus estimate from the same report (raw dollars). */
+  revenueActual: number | null;
+  revenueEstimated: number | null;
 }
 
 export type FmpStatementKind =
@@ -927,6 +930,8 @@ export class FmpService {
         symbol: String(o.symbol ?? ticker),
         actualEarningResult: num(o.epsActual ?? o.actualEarningResult),
         estimatedEarning: num(o.epsEstimated ?? o.estimatedEarning),
+        revenueActual: num(o.revenueActual),
+        revenueEstimated: num(o.revenueEstimated),
       };
     });
     // Bound memory across a full-universe sweep: purge expired entries on growth.
@@ -1097,6 +1102,22 @@ export class FmpService {
   }
 
   /**
+   * One page (newest first) of a ticker's insider transactions — Form 3/4/5 rows
+   * from `/stable/insider-trading/search`. Throws on HTTP errors so the caller
+   * can fall back to SEC EDGAR; [] past the last page or with no key.
+   */
+  async getInsiderTrades(
+    ticker: string,
+    page: number,
+    limit = 100,
+  ): Promise<Record<string, unknown>[]> {
+    if (!this.apiKey) return [];
+    return (await this.get(
+      `insider-trading/search?symbol=${encodeURIComponent(ticker)}&page=${page}&limit=${limit}`,
+    )) as Record<string, unknown>[];
+  }
+
+  /**
    * Economic calendar (`/stable/economic-calendar`) — scheduled + released macro
    * events (CPI, PPI, jobs, FOMC…) with date, estimate, previous and actual. This
    * is the forward release schedule FRED cannot provide (FRED has only past
@@ -1254,7 +1275,7 @@ export class FmpService {
     ticker: string,
   ): Promise<FmpInstitutionalOwnershipRow | null> {
     if (!this.apiKey) return null;
-    for (const { year, quarter } of recentQuarters(5)) {
+    for (const { year, quarter } of filedThirteenFQuarters(5)) {
       const row = await this.getInstitutionalOwnership(ticker, year, quarter).catch(
         () => null,
       );
@@ -1265,20 +1286,36 @@ export class FmpService {
 
   /**
    * Granular quarterly 13F institutional holders analytics for a ticker
-   * (`/stable/institutional-ownership/extract-analytics/holder`).
+   * (`/stable/institutional-ownership/extract-analytics/holder`), largest
+   * holders first. FMP serves 100 a page (10 when no limit is sent), so this
+   * pages up to `maxRows`; a partial answer is kept if a later page fails.
    */
   async get13FExtractAnalytics(
     ticker: string,
     year: number,
     quarter: number,
+    maxRows = 100,
   ): Promise<any[]> {
     if (!this.apiKey) return [];
+    const PAGE = 100;
+    const PARALLEL = 5;
+    const pages = Math.max(1, Math.ceil(maxRows / PAGE));
+    const out: any[] = [];
     try {
-      const rows = await this.get(
-        `institutional-ownership/extract-analytics/holder?symbol=${encodeURIComponent(ticker)}&year=${year}&quarter=${quarter}`,
-      );
-      return Array.isArray(rows) ? rows : [];
+      for (let start = 0; start < pages; start += PARALLEL) {
+        const batch = await Promise.all(
+          Array.from({ length: Math.min(PARALLEL, pages - start) }, (_, i) =>
+            this.get(
+              `institutional-ownership/extract-analytics/holder?symbol=${encodeURIComponent(ticker)}&year=${year}&quarter=${quarter}&page=${start + i}&limit=${PAGE}`,
+            ),
+          ),
+        );
+        for (const rows of batch) out.push(...rows);
+        if (batch.some((rows) => rows.length < PAGE)) break;
+      }
+      return out.slice(0, maxRows);
     } catch (err) {
+      if (out.length > 0) return out.slice(0, maxRows);
       this.logger.warn(
         `13F extract analytics failed for ${ticker} (${year} Q${quarter}): ${(err as Error).message}`,
       );
@@ -1484,6 +1521,33 @@ function quarterNum(v: unknown): number | null {
 }
 
 /** The last `count` calendar quarters, most recent first, from a fixed clock. */
+/** 13F-HR is due 45 days after quarter end; until then FMP's rollup is partial. */
+const THIRTEEN_F_DEADLINE_DAYS = 45;
+
+/**
+ * Newest-first quarters whose 13F filing deadline has passed. Before the
+ * deadline FMP already answers for the quarter with whatever few filers are in
+ * (STRL Q3 2026 on Oct 19: 87 of ~913 filers, 0.87% "ownership" vs 86.8%), so
+ * the newest non-empty quarter is not a usable "latest" — the complete one is.
+ */
+export function filedThirteenFQuarters(
+  count: number,
+  now = new Date(),
+): Array<{ year: number; quarter: number }> {
+  const out: Array<{ year: number; quarter: number }> = [];
+  let year = now.getUTCFullYear();
+  let quarter = Math.floor(now.getUTCMonth() / 3) + 1;
+  while (out.length < count) {
+    const quarterEnd = Date.UTC(year, quarter * 3, 0); // last day of the quarter
+    if (now.getTime() >= quarterEnd + THIRTEEN_F_DEADLINE_DAYS * 86_400_000) {
+      out.push({ year, quarter });
+    }
+    quarter -= 1;
+    if (quarter < 1) { quarter = 4; year -= 1; }
+  }
+  return out;
+}
+
 function recentQuarters(count: number): Array<{ year: number; quarter: number }> {
   const now = new Date();
   let year = now.getUTCFullYear();

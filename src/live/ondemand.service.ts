@@ -56,7 +56,7 @@ import {
   PolygonService,
   PolygonAggBar,
 } from "../vendors/polygon/polygon.service";
-import { FmpService } from "../vendors/fmp/fmp.service";
+import { FmpService, filedThirteenFQuarters } from "../vendors/fmp/fmp.service";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { isoDate } from "../common/date.util";
 import { etDate } from "../common/market-calendar.util";
@@ -330,6 +330,8 @@ const FIN_STATEMENT_RETRY_MS = 6 * 3600_000;
 // gap for a ticker the bulk sweep hasn't reached recently, so a shorter TTL is
 // fine — articles that age out just mean the next request re-checks the vendor.
 const NEWS_TTL_MS = 15 * 60_000;
+/** 13F tab holder list: FMP pages of 100, largest holders first (~10 calls). */
+const MAX_13F_HOLDERS = 1_000;
 const NEWS_LOOKBACK_DAYS = 7;
 const NEWS_ARTICLE_CAP = 5;
 
@@ -1746,7 +1748,7 @@ export class OnDemandService implements OnModuleDestroy {
   /**
    * Per-ticker quarterly+annual financials, cache-aside on `financials/{ticker}`
    * (same shape financials.job.ts's bulk cursor sweep writes). Statements come
-   * from FINANCIALS_ADAPTER (Polygon → FMP fallback); EPS estimates from the
+   * from FINANCIALS_ADAPTER (FMP primary, Polygon fallback); EPS estimates from the
    * FMP estimates adapter, with synced `earnings_events` as the fallback.
    */
   async getFinancials(ticker: string): Promise<Record<string, unknown> | null> {
@@ -1806,7 +1808,7 @@ export class OnDemandService implements OnModuleDestroy {
         (prev?.quarters ?? []).map((q) => [q.endDate, q.epsEstimateReported ?? null]),
       );
 
-      // Fetch quarterly financial statements (via Polygon with automatic FMP fallback).
+      // Fetch quarterly financial statements (FMP primary, automatic Polygon fallback).
       let rows: PolygonFinancialRow[] = [];
       try {
         rows = await this.polygon.getFinancialStatements(
@@ -1914,6 +1916,7 @@ export class OnDemandService implements OnModuleDestroy {
             (fmpActual == null
               ? (prevEstReportedByEnd.get(r.endDate) ?? null)
               : null),
+          fmpQ?.revenueEstimateFor(r.endDate) ?? null,
         );
       });
       // Keep the stored quarters when every source came back empty this time,
@@ -2596,6 +2599,18 @@ export class OnDemandService implements OnModuleDestroy {
       q -= 1;
       if (q < 1) { q = 4; y -= 1; }
     }
+    // A quarter still inside its 13F filing window (45 days after quarter end)
+    // has only the early filers — STRL Q3 2026 on Oct 19: 87 of ~913. It stays
+    // selectable, but is never the default and its cache is only trusted for a
+    // day, so a partial snapshot cannot be served as final.
+    const filed = new Set(filedThirteenFQuarters(8).map((f) => `${f.year}_${f.quarter}`));
+    const isFiled = (year: number, quarter: number) => filed.has(`${year}_${quarter}`);
+    const usableCache = (data: Record<string, any> | undefined, year: number, quarter: number) =>
+      !!data &&
+      Array.isArray(data.holders) &&
+      data.holders.length > 0 &&
+      (isFiled(year, quarter) ||
+        Date.now() - Date.parse(String(data.updatedAt ?? "")) < 86_400_000);
 
     let resolvedYear = reqYear;
     let resolvedQuarter = reqQuarter;
@@ -2611,7 +2626,7 @@ export class OnDemandService implements OnModuleDestroy {
 
       if (cached && cached.exists) {
         const data = cached.data();
-        if (data && Array.isArray(data.holders) && data.holders.length > 0) {
+        if (usableCache(data, resolvedYear, resolvedQuarter)) {
           return {
             symbol: ticker,
             selectedQuarter: `Q${resolvedQuarter} ${resolvedYear}`,
@@ -2624,9 +2639,9 @@ export class OnDemandService implements OnModuleDestroy {
         }
       }
 
-      rawRows = await this.fmp.get13FExtractAnalytics(ticker, resolvedYear, resolvedQuarter);
+      rawRows = await this.fmp.get13FExtractAnalytics(ticker, resolvedYear, resolvedQuarter, MAX_13F_HOLDERS);
     } else {
-      for (const candidate of quartersToProbe) {
+      for (const candidate of quartersToProbe.filter((c) => isFiled(c.year, c.quarter))) {
         const cacheDocId = `${ticker}_${candidate.year}_Q${candidate.quarter}`;
         const cached = await this.firebase.firestore
           .collection("filings_13f")
@@ -2636,7 +2651,7 @@ export class OnDemandService implements OnModuleDestroy {
 
         if (cached && cached.exists) {
           const data = cached.data();
-          if (data && Array.isArray(data.holders) && data.holders.length > 0) {
+          if (usableCache(data, candidate.year, candidate.quarter)) {
             return {
               symbol: ticker,
               selectedQuarter: candidate.label,
@@ -2649,7 +2664,7 @@ export class OnDemandService implements OnModuleDestroy {
           }
         }
 
-        const rows = await this.fmp.get13FExtractAnalytics(ticker, candidate.year, candidate.quarter);
+        const rows = await this.fmp.get13FExtractAnalytics(ticker, candidate.year, candidate.quarter, MAX_13F_HOLDERS);
         if (rows && rows.length > 0) {
           resolvedYear = candidate.year;
           resolvedQuarter = candidate.quarter;
@@ -2730,14 +2745,29 @@ export class OnDemandService implements OnModuleDestroy {
       };
     });
 
+    // Counts over EVERY filer come from FMP's quarter rollup; the holder list
+    // above is capped (MAX_13F_HOLDERS), so tallying it undercounts — STRL
+    // showed 10 holders (FMP's default page) against 913 actual. The row
+    // tallies stay as the fallback when the rollup is unavailable.
+    const rollup = holders.length
+      ? ((await this.fmp
+          .request(
+            `institutional-ownership/symbol-positions-summary?symbol=${encodeURIComponent(ticker)}&year=${resolvedYear}&quarter=${resolvedQuarter}`,
+          )
+          .catch(() => [])) as Array<Record<string, unknown>>)[0]
+      : undefined;
+    const fromRollup = (k: string, fallback: number) => {
+      const v = Number(rollup?.[k]);
+      return Number.isFinite(v) && v >= 0 ? v : fallback;
+    };
     const summary = {
-      totalHolders: holders.length,
-      newPositions: newCount,
-      increasedPositions: incCount,
-      reducedPositions: redCount,
-      closedPositions: closedCount,
-      totalSharesHeld: totalShares,
-      totalMarketValue: totalMktVal,
+      totalHolders: fromRollup("investorsHolding", holders.length),
+      newPositions: fromRollup("newPositions", newCount),
+      increasedPositions: fromRollup("increasedPositions", incCount),
+      reducedPositions: fromRollup("reducedPositions", redCount),
+      closedPositions: fromRollup("closedPositions", closedCount),
+      totalSharesHeld: fromRollup("numberOf13Fshares", totalShares),
+      totalMarketValue: fromRollup("totalInvested", totalMktVal),
     };
 
     if (holders.length > 0) {

@@ -625,7 +625,7 @@ Do NOT output a JSON object! Do NOT output preamble or conversational text. Star
 <<<TITLE>>>
 [Your catchy, specific title here, <= 110 characters]
 <<<DEK>>>
-[Your subtitle/dek summary here, 1-2 sentences]
+[Your concise subtitle/dek summary here: strictly 1 complete sentence, under 110 characters, never cut in the middle]
 <<<BODY_HTML>>>
 [Your complete unescaped HTML content starting from <div class="toc"> and ending with the closing </ul> of the takeaway section. Do NOT include <html>, <head>, <body>, <h1>, eyebrow, <script>, <style>, related articles, or disclaimer.]
 `;
@@ -721,9 +721,22 @@ Generate the complete, publish-ready EOD market recap article using the <<<TITLE
 
     const formattedBodyHtml = formatRecapBody(bodyHtml, title, dek, today);
 
+    const cleanDek = (raw: string, max = 119) => {
+      const c = raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+      if (c.length <= max) return c;
+      const sMatches = c.match(/[^.!?]+[.!?]+(?:\s+|$)/g);
+      if (sMatches && sMatches[0] && sMatches[0].trim().length <= max && sMatches[0].trim().length >= 30) {
+        return sMatches[0].trim();
+      }
+      const slice = c.slice(0, max - 3);
+      const lastSpace = slice.lastIndexOf(" ");
+      const wordSafe = lastSpace > 25 ? slice.slice(0, lastSpace) : slice;
+      return `${wordSafe.replace(/[,;:\-\s]+$/, "")}...`;
+    };
+
     return {
       title: title.slice(0, 110).trim(),
-      dek: dek.slice(0, 200).trim(),
+      dek: cleanDek(dek, 119),
       read: readLine,
       bodyHtml: formattedBodyHtml,
       tags: ["Daily Recap", "Markets", "EOD"],

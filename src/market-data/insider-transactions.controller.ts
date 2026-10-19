@@ -1,14 +1,27 @@
-import { Controller, Get, Header, UseGuards } from "@nestjs/common";
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Header,
+  Query,
+  UseGuards,
+} from "@nestjs/common";
 import { CachedCollectionsService } from "../live/cached-collections.service";
+import { StockDetailsService } from "../live/stock-details.service";
 import { MarketDataService } from "./market-data.service";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
+const TICKER_RE = /^[A-Z0-9.-]{1,10}$/;
+
 /**
- * GET /market-data/insider-transactions — backs the Insider & Institutional
- * screen's live transaction feed (the `InsiderTxDoc` shape, sourced from SEC
- * Form 4 filings). Triggers the `sec-form4` sync job on demand when
- * stale/empty per decision #3a. The CUSIP/13F drill-down (`fund_holdings`) is
- * a separate, later phase — not served here.
+ * GET /market-data/insider-transactions — the `InsiderTxDoc` feed.
+ *
+ *  - `?ticker=SYM` (the stock page): EVERY transaction for that ticker over the
+ *    lookback window, FMP first with SEC Form 4 as backup, fetched on demand
+ *    and cached per ticker — so any stock has data, not just the ones the
+ *    nightly job sweeps.
+ *  - no ticker (the Insider screen's market-wide feed): the `insider_transactions`
+ *    collection, refreshed by the `sec-form4` job when stale per decision #3a.
  */
 @Controller("market-data")
 // Market data is the product. These read surfaces answered anonymous
@@ -19,6 +32,7 @@ export class InsiderTransactionsController {
   constructor(
     private readonly marketData: MarketDataService,
     private readonly cached: CachedCollectionsService,
+    private readonly stockDetails: StockDetailsService,
   ) {}
 
   @Get("insider-transactions")
@@ -26,7 +40,14 @@ export class InsiderTransactionsController {
     "Cache-Control",
     "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
   )
-  async insiderTransactions() {
+  async insiderTransactions(@Query("ticker") ticker?: string) {
+    if (ticker !== undefined) {
+      const sym = ticker.toUpperCase().trim();
+      if (!TICKER_RE.test(sym)) {
+        throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+      }
+      return this.stockDetails.getInsiderTransactions(sym);
+    }
     await this.marketData.ensureFresh("sec-form4");
     const { insider_transactions } = await this.cached.get([
       "insider_transactions",

@@ -2,6 +2,13 @@ import { Injectable, Logger, OnModuleInit, Optional } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { fetchJson } from "../common/http.util";
+import { FmpService } from "../vendors/fmp/fmp.service";
+import {
+  FMP_US_EXCHANGES,
+  fromFmpSymbol,
+  isUsSymbol,
+  toFmpSymbol,
+} from "../vendors/market-data/fmp-mapping.util";
 import { ETFClassifier } from "./etf-classifier";
 import {
   ETFCategory,
@@ -31,6 +38,18 @@ function fmtAumBadge(aum: number | null | undefined): string {
   return `$${aum.toLocaleString()}`;
 }
 
+type EtfQuote = { price: number | null; change: number | null; changePct: number | null; volume: number | null };
+type EtfRef = { ticker: string; name: string; type?: string; sic_description?: string };
+type FmpRow = Record<string, unknown>;
+
+const errMessage = (err: unknown): string =>
+  err instanceof Error ? err.message : String(err);
+
+const finite = (v: unknown): number | null => {
+  const n = typeof v === "number" ? v : v == null || v === "" ? NaN : Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
 @Injectable()
 export class EtfMarketService implements OnModuleInit {
   private readonly logger = new Logger(EtfMarketService.name);
@@ -43,6 +62,8 @@ export class EtfMarketService implements OnModuleInit {
 
   // In-memory cache for shares outstanding to avoid re-fetching unchanged share counts
   private readonly sharesCache = new Map<string, number>();
+  // FMP's reported AUM (etf/info) for the ranking candidates, rebuilt every refresh
+  private readonly fmpAum = new Map<string, number>();
 
   // 7-day cache TTL for in-memory serving; updated weekly by scheduled job
   private readonly CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -57,6 +78,7 @@ export class EtfMarketService implements OnModuleInit {
     private readonly config: ConfigService,
     private readonly classifier: ETFClassifier,
     @Optional() private readonly firebase?: FirebaseAdminService,
+    @Optional() private readonly fmp?: FmpService,
   ) {
     this.apiKey = this.config.get<string>("POLYGON_API_KEY", "");
     this.baseUrl = this.config
@@ -188,13 +210,14 @@ export class EtfMarketService implements OnModuleInit {
    */
   private async refreshCache(): Promise<EtfMarketResponse> {
     const started = Date.now();
-    this.logger.log("Refreshing ETF Discovery & Classification via Massive API (100% complete universe)...");
+    this.logger.log("Refreshing ETF Discovery & Classification (FMP primary, Massive/Polygon backup)...");
 
     try {
-      const [universe, snapshotMap] = await Promise.all([
-        this.fetchMassiveUniverse(),
-        this.fetchMassiveSnapshot(),
-      ]);
+      const { universe, sources } = await this.fetchUniverse();
+      const snapshotMap = await this.fetchSnapshot(
+        universe.map((u) => u.ticker),
+        sources,
+      );
 
       // Filter to active traded instruments with positive pricing
       const validEtfs = universe
@@ -247,22 +270,22 @@ export class EtfMarketService implements OnModuleInit {
         }
       }
 
-      // Identify top candidate tickers in each category to fetch shares outstanding / AUM
-      const tickersToFetch = new Set<string>();
+      // Identify top candidate tickers in each category to fetch AUM for
+      const candidates = new Set<string>();
       for (const def of CATEGORY_DEFINITIONS) {
         const bucket = candidateBuckets.get(def.id) || [];
         // Sort candidate pool by dollar volume to prioritize prominent funds for AUM lookup
         bucket.sort((a, b) => b.dollarVol - a.dollarVol);
-        const topSlice = bucket.slice(0, 100);
-        for (const t of topSlice) {
-          if (!this.sharesCache.has(t.ticker)) {
-            tickersToFetch.add(t.ticker);
-          }
-        }
+        for (const t of bucket.slice(0, 100)) candidates.add(t.ticker);
       }
 
-      if (tickersToFetch.size > 0) {
-        await this.fetchMissingSharesOutstanding([...tickersToFetch]);
+      // FMP's reported AUM first; Polygon share counts (× price) for the rest.
+      await this.fetchFmpAum([...candidates]);
+      const tickersToFetch = [...candidates].filter(
+        (t) => !this.fmpAum.has(t) && !this.sharesCache.has(t),
+      );
+      if (tickersToFetch.length > 0) {
+        await this.fetchMissingSharesOutstanding(tickersToFetch);
       }
 
       // Build normalized ETF representations and sort by AUM descending (fallback to volume DESC)
@@ -274,7 +297,8 @@ export class EtfMarketService implements OnModuleInit {
         const normalizedList: NormalizedETF[] = bucket.map((item) => {
           const shares = this.sharesCache.get(item.ticker) ?? null;
           const aum =
-            shares != null && item.price != null ? shares * item.price : null;
+            this.fmpAum.get(item.ticker) ??
+            (shares != null && item.price != null ? shares * item.price : null);
 
           const assignedCategories = this.classifier.classify({
             symbol: item.ticker,
@@ -341,7 +365,7 @@ export class EtfMarketService implements OnModuleInit {
 
       const response: EtfMarketResponse = {
         updatedAt: Date.now(),
-        source: "massive-polygon",
+        source: [...sources].join("+"),
         categories,
         largest,
         equity,
@@ -376,7 +400,7 @@ export class EtfMarketService implements OnModuleInit {
 
       return response;
     } catch (err: any) {
-      this.logger.error(`Failed to refresh ETF cache from Massive: ${err.message}`);
+      this.logger.error(`Failed to refresh ETF cache: ${err.message}`);
 
       // Try reading fallback from Firestore if network or upstream error occurs
       const fallback = await this.readFromFirestore();
@@ -392,6 +416,155 @@ export class EtfMarketService implements OnModuleInit {
 
       throw err;
     }
+  }
+
+  /**
+   * Active US ETFs: FMP's screener first, Massive/Polygon's ETF + ETV reference
+   * merged in. FMP wins the name; Polygon adds the funds FMP does not list
+   * and the ETF-vs-ETV type the classifier uses to tell
+   * a physical commodity trust from an equity fund. Either vendor alone still
+   * yields a universe; both failing throws so the caller keeps the DB copy.
+   */
+  private async fetchUniverse(): Promise<{ universe: EtfRef[]; sources: Set<string> }> {
+    const [fmp, polygon] = await Promise.allSettled([
+      this.fetchFmpUniverse(),
+      this.fetchMassiveUniverse(),
+    ]);
+    if (fmp.status === "rejected") {
+      this.logger.warn(`FMP ETF universe failed (${errMessage(fmp.reason)}) — Polygon only`);
+    }
+    if (polygon.status === "rejected") {
+      this.logger.warn(`Polygon ETF universe failed (${errMessage(polygon.reason)})`);
+    }
+    const fromFmp = fmp.status === "fulfilled" ? fmp.value : [];
+    const fromPolygon = (polygon.status === "fulfilled" ? polygon.value : []) as EtfRef[];
+    if (fromFmp.length === 0 && polygon.status === "rejected") throw polygon.reason;
+
+    const sources = new Set<string>();
+    if (fromFmp.length) sources.add("fmp");
+    const polygonBy = new Map(fromPolygon.map((p) => [p.ticker, p] as const));
+    const universe: EtfRef[] = [];
+    const seen = new Set<string>();
+    for (const f of fromFmp) {
+      const p = polygonBy.get(f.ticker);
+      universe.push({ ...p, ...f, type: p?.type ?? f.type });
+      seen.add(f.ticker);
+    }
+    for (const p of fromPolygon) {
+      if (seen.has(p.ticker)) continue;
+      universe.push(p);
+      sources.add("massive-polygon");
+    }
+    return { universe, sources };
+  }
+
+  /** FMP screener ETFs on every US venue. */
+  private async fetchFmpUniverse(): Promise<EtfRef[]> {
+    if (!this.fmp?.enabled) return [];
+    const out: EtfRef[] = [];
+    const seen = new Set<string>();
+    for (const exchange of FMP_US_EXCHANGES) {
+      const rows = (await this.fmp.request(
+        `company-screener?exchange=${exchange}&isEtf=true&isActivelyTrading=true&limit=10000`,
+      )) as FmpRow[];
+      if (rows.length >= 10_000) {
+        throw new Error(`company-screener ${exchange} hit the 10000-row cap — ETF list may be truncated`);
+      }
+      for (const r of rows) {
+        const symbol = String(r.symbol ?? "");
+        if (!isUsSymbol(symbol) || !r.companyName) continue;
+        const ticker = fromFmpSymbol(symbol);
+        if (seen.has(ticker)) continue;
+        seen.add(ticker);
+        out.push({ ticker, name: String(r.companyName), type: "ETF" });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Reported AUM from FMP's `etf/info`, for the funds whose size decides the
+   * ranking. Not the screener's `marketCap`: for ETFs that field is unreliable
+   * (BMOP: $416B vs a $1.6B fund). Refreshed every run — AUM moves with price.
+   */
+  private async fetchFmpAum(tickers: string[]): Promise<void> {
+    this.fmpAum.clear();
+    if (!this.fmp?.enabled) return;
+    const fmp = this.fmp;
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < tickers.length; i += BATCH_SIZE) {
+      await Promise.all(
+        tickers.slice(i, i + BATCH_SIZE).map(async (sym) => {
+          try {
+            const [info] = (await fmp.request(
+              `etf/info?symbol=${encodeURIComponent(toFmpSymbol(sym))}`,
+              { retries: 0 },
+            )) as FmpRow[];
+            const aum = finite(info?.assetsUnderManagement);
+            if (aum != null && aum > 0) this.fmpAum.set(sym, aum);
+          } catch (err) {
+            this.logger.debug(`FMP AUM unavailable for ${sym}: ${errMessage(err)}`);
+          }
+        }),
+      );
+    }
+  }
+
+  /**
+   * Price / change / volume for the universe: FMP's ETF quote batch first, the
+   * Massive full-market snapshot only for tickers FMP did not price.
+   */
+  private async fetchSnapshot(
+    tickers: string[],
+    sources: Set<string>,
+  ): Promise<Map<string, EtfQuote>> {
+    const map = new Map<string, EtfQuote>();
+    if (this.fmp?.enabled) {
+      try {
+        const rows = (await this.fmp.request("batch-etf-quotes?short=true", {
+          timeoutMs: 30_000,
+        })) as FmpRow[];
+        for (const r of rows) {
+          const symbol = String(r.symbol ?? "");
+          const price = finite(r.price);
+          if (!isUsSymbol(symbol) || price == null || price <= 0) continue;
+          const change = finite(r.change);
+          const volume = finite(r.volume);
+          const prevClose = change != null ? price - change : null;
+          map.set(fromFmpSymbol(symbol), {
+            price,
+            change,
+            changePct:
+              change != null && prevClose
+                ? Math.round((change / prevClose) * 1e6) / 1e4
+                : null,
+            volume: volume != null ? Math.round(volume) : null,
+          });
+        }
+        if (map.size) sources.add("fmp");
+      } catch (err) {
+        this.logger.warn(`FMP ETF quotes failed (${errMessage(err)}) — Polygon snapshot fallback`);
+      }
+    }
+    if (tickers.some((t) => !map.has(t))) {
+      try {
+        const polygon = await this.fetchMassiveSnapshot();
+        let filled = 0;
+        for (const t of tickers) {
+          const q = polygon.get(t);
+          if (!map.has(t) && q) {
+            map.set(t, q);
+            filled++;
+          }
+        }
+        if (filled) sources.add("massive-polygon");
+      } catch (err) {
+        // FMP-priced funds still render; only the gap goes unpriced.
+        if (map.size === 0) throw err;
+        this.logger.warn(`Polygon snapshot gap-fill failed: ${errMessage(err)}`);
+      }
+    }
+    return map;
   }
 
   /**

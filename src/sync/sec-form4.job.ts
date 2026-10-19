@@ -1,4 +1,5 @@
 import { getTickerToCik } from "../common/sec-cik-map.util";
+import { form4InsiderRows } from "../common/insider-rows.util";
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { chunkedBatchSet } from "../common/firestore-batch.util";
@@ -10,12 +11,6 @@ import { SyncRegistry } from "../common/sync-registry.service";
 const JOB_NAME = "sec-form4";
 const BATCH_SIZE = 20;
 const FILINGS_PER_COMPANY = 3;
-// Form 4 price fields occasionally carry a garbage per-share value (a footnote
-// artifact, or a total dollar amount landing in the price field) — e.g. a
-// $2,110,482/sh row that fabricates a multi-billion-dollar transaction. No US
-// equity trades near this: the priciest (BRK.A) is well under $1M/sh, so any
-// per-share price above the ceiling is discarded (null) rather than stored.
-const MAX_PLAUSIBLE_SHARE_PRICE = 1_000_000;
 
 
 @Injectable()
@@ -72,51 +67,19 @@ export class SecForm4Job implements OnModuleInit {
               .doc(`${filing.accessionNumber}_0`)
               .get();
             if (marker.exists) continue;
-            const { issuer, owner, transactions } =
-              await this.secEdgar.getForm4Transactions(
-                cik,
-                filing.accessionNumber,
-              );
-            transactions.forEach((t, i) => {
-              const shares =
-                Number(t.transactionAmounts?.transactionShares?.value) || 0;
-              const rawPrice = Number(
-                t.transactionAmounts?.transactionPricePerShare?.value,
-              );
-              // Keep only a positive, plausible per-share price; anything else
-              // (0, blank, NaN, or an implausibly huge garbage value) → null so
-              // no fabricated dollar value is derived downstream.
-              const price =
-                Number.isFinite(rawPrice) &&
-                rawPrice > 0 &&
-                rawPrice <= MAX_PLAUSIBLE_SHARE_PRICE
-                  ? rawPrice
-                  : null;
-              docs.push({
-                id: `${filing.accessionNumber}_${i}`,
-                data: {
-                  ticker: issuer?.ticker ?? ticker,
-                  issuerName: issuer?.name ?? null,
-                  ownerName: owner?.name ?? null,
-                  isOfficer: owner?.isOfficer ?? false,
-                  officerTitle: owner?.officerTitle ?? null,
-                  transactionDate: t.transactionDate?.value,
-                  transactionCode: t.transactionCoding?.transactionCode,
-                  acquiredOrDisposed:
-                    t.transactionAmounts?.transactionAcquiredDisposedCode
-                      ?.value,
-                  shares,
-                  pricePerShare: price,
-                  sharesOwnedAfter:
-                    Number(
-                      t.postTransactionAmounts?.sharesOwnedFollowingTransaction
-                        ?.value,
-                    ) || null,
-                  filingDate: filing.filingDate,
-                  updatedAt: new Date().toISOString(),
-                },
-              });
-            });
+            const parsed = await this.secEdgar.getForm4Transactions(
+              cik,
+              filing.accessionNumber,
+            );
+            const updatedAt = new Date().toISOString();
+            for (const { id, ...row } of form4InsiderRows(
+              ticker,
+              filing.accessionNumber,
+              filing.filingDate,
+              parsed,
+            )) {
+              docs.push({ id, data: { ...row, updatedAt } });
+            }
           }
         } catch (err) {
           this.logger.error(

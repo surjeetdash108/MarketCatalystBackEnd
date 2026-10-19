@@ -116,4 +116,110 @@ describe("MarketDataService (FMP primary, Polygon fallback)", () => {
     expect(request).not.toHaveBeenCalled();
     expect(poly).toHaveBeenCalled();
   });
+
+  describe("ticker universe (FMP primary, Polygon gap-fill)", () => {
+    const polygonRef = (ticker: string, extra: Record<string, unknown> = {}) => ({
+      ticker, name: `${ticker} (polygon)`, market: "stocks", locale: "us", active: true,
+      type: "CS", primary_exchange: "XNYS", cik: "0001", composite_figi: "BBG", ...extra,
+    });
+    const screener = (rows: Record<string, unknown>[]) =>
+      jest.fn((path: string) => Promise.resolve(path.includes("exchange=NASDAQ") ? rows : []));
+
+    it("lets FMP win the name, keeps Polygon's venue/type/FIGI, and adds Polygon-only symbols", async () => {
+      jest.spyOn(PolygonService.prototype, "getAllTickers").mockResolvedValue([
+        polygonRef("AAPL"), polygonRef("BRK.B"), polygonRef("ABRpD", { type: "PFD" }),
+      ]);
+      const request = screener([
+        { symbol: "AAPL", companyName: "Apple Inc.", exchange: "NASDAQ Global Select", isEtf: false },
+        { symbol: "BRK-B", companyName: "Berkshire Hathaway Inc.", exchange: "New York Stock Exchange" },
+        { symbol: "QQQ", companyName: "Invesco QQQ Trust", exchange: "NASDAQ Global Market", isEtf: true },
+        { symbol: "BBBYW", companyName: "warrant", exchange: "NASDAQ Capital Market" },
+        { symbol: "MER-PK", companyName: "Merrill pref", exchange: "New York Stock Exchange" },
+        { symbol: "600000.SS", companyName: "foreign", exchange: "SHH" },
+      ]);
+      const rows = await make(request).getAllTickers(true);
+      const by = new Map(rows.map((r) => [r.ticker, r]));
+      expect(request.mock.calls.map((c) => c[0])).toEqual(
+        ["NASDAQ", "NYSE", "AMEX", "CBOE"].map((ex) => expect.stringContaining(`company-screener?exchange=${ex}&isActivelyTrading=true&isFund=false`)),
+      );
+      // Venue stays Polygon's: FMP mislabels NYSE American listings as Arca.
+      expect(by.get("AAPL")).toMatchObject({ name: "Apple Inc.", primary_exchange: "XNYS", type: "CS", cik: "0001", composite_figi: "BBG" });
+      expect(by.get("BRK.B")?.name).toBe("Berkshire Hathaway Inc.");
+      expect(by.get("QQQ")).toMatchObject({ type: "ETF", primary_exchange: "XNAS", active: true });
+      expect(by.get("ABRpD")?.type).toBe("PFD"); // Polygon-only symbol kept
+      expect(by.has("MER.PK")).toBe(false); // FMP spelling of a Polygon share class
+      expect(by.has("BBBYW")).toBe(false); // 5-letter FMP-only: warrant/right/fund
+      expect(by.has("600000.SS")).toBe(false);
+      expect(rows).toHaveLength(4);
+    });
+
+    it("serves FMP alone when Polygon fails, and Polygon alone when FMP fails", async () => {
+      const poly = jest.spyOn(PolygonService.prototype, "getAllTickers").mockRejectedValueOnce(new Error("429"));
+      const fmpRows = [{ symbol: "MER-PK", companyName: "Merrill pref", exchange: "New York Stock Exchange" }];
+      await expect(make(screener(fmpRows)).getAllTickers(true)).resolves.toEqual([
+        expect.objectContaining({ ticker: "MER.PK", type: "CS", primary_exchange: "XNYS" }),
+      ]);
+
+      poly.mockResolvedValueOnce([polygonRef("AAPL")]);
+      await expect(make(jest.fn().mockRejectedValue(new Error("503"))).getAllTickers(true)).resolves.toEqual([polygonRef("AAPL")]);
+    });
+
+    it("throws when both vendors fail, and refuses a screener answer at the row cap", async () => {
+      jest.spyOn(PolygonService.prototype, "getAllTickers").mockRejectedValue(new Error("polygon down"));
+      await expect(make(jest.fn().mockRejectedValue(new Error("fmp down"))).getAllTickers(true)).rejects.toThrow("polygon down");
+      const capped = jest.fn().mockResolvedValue(Array.from({ length: 10_000 }, (_, i) => ({ symbol: `A${i}`, companyName: "x" })));
+      await expect(make(capped).getAllTickers(true)).rejects.toThrow("polygon down");
+    });
+
+    it("leaves inactive listings to Polygon", async () => {
+      const poly = jest.spyOn(PolygonService.prototype, "getAllTickers").mockResolvedValue([]);
+      const request = jest.fn();
+      await make(request).getAllTickers(false);
+      expect(request).not.toHaveBeenCalled();
+      expect(poly).toHaveBeenCalledWith(false);
+    });
+  });
+
+  describe("delistings (FMP primary, Polygon backup)", () => {
+    const pages = (...p: Record<string, unknown>[][]) => {
+      const fn = jest.fn();
+      for (const page of p) fn.mockResolvedValueOnce(page);
+      return fn.mockResolvedValue([]);
+    };
+
+    it("answers from FMP's US delisting records, newest date wins, without calling Polygon", async () => {
+      const poly = jest.spyOn(PolygonService.prototype, "getDelisting");
+      const request = pages(
+        [
+          { symbol: "AACB", exchange: "NASDAQ", delistedDate: "2026-08-20" },
+          { symbol: "BRK-B", exchange: "NYSE", delistedDate: "2026-07-01" },
+          { symbol: "NB2.F", exchange: "FSX", delistedDate: "2026-08-01" },
+        ],
+        [{ symbol: "AACB", exchange: "NASDAQ", delistedDate: "2019-01-02" }],
+      );
+      const svc = make(request);
+      await expect(svc.getDelisting("AACB")).resolves.toEqual({ delistedAt: "2026-08-20" });
+      await expect(svc.getDelisting("BRK.B")).resolves.toEqual({ delistedAt: "2026-07-01" });
+      expect(poly).not.toHaveBeenCalled();
+      // One index build (2 pages + the empty terminator) serves every lookup.
+      expect(request).toHaveBeenCalledTimes(3);
+    });
+
+    it("ignores foreign and future-dated rows, and asks Polygon when FMP has no record", async () => {
+      const poly = jest.spyOn(PolygonService.prototype, "getDelisting").mockResolvedValue({ delistedAt: "2026-01-05" });
+      const svc = make(pages([
+        { symbol: "UUU", exchange: "AMEX", delistedDate: "2999-01-01" },
+        { symbol: "VOD", exchange: "LSE", delistedDate: "2026-01-01" },
+      ]));
+      await expect(svc.getDelisting("UUU")).resolves.toEqual({ delistedAt: "2026-01-05" });
+      await expect(svc.getDelisting("VOD")).resolves.toEqual({ delistedAt: "2026-01-05" });
+      expect(poly).toHaveBeenCalledTimes(2);
+    });
+
+    it("falls back to Polygon when FMP's delisting feed errors", async () => {
+      const poly = jest.spyOn(PolygonService.prototype, "getDelisting").mockResolvedValue(null);
+      await expect(make(jest.fn().mockRejectedValue(new Error("503"))).getDelisting("AACB")).resolves.toBeNull();
+      expect(poly).toHaveBeenCalledWith("AACB");
+    });
+  });
 });

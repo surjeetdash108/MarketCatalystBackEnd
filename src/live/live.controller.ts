@@ -37,9 +37,9 @@ import {
  * The browser sends only a ticker symbol. It never sees a vendor key.
  *
  * SOURCE (LIVE_STREAM_SOURCE)
- *   polygon (default) — Polygon's delayed WebSocket (polygon-live.service.ts).
+ *   polygon           — Polygon's delayed WebSocket (polygon-live.service.ts).
  *                       One socket per API key, ~15 min delayed.
- *   fmp               — ticks read from the shared quote cache
+ *   fmp (default)     — ticks read from the shared quote cache
  *                       (snapshot-cache.service.ts, filled by FMP when
  *                       LIVE_QUOTE_SOURCE=fmp). No socket is opened; upstream
  *                       cost is the cache's one batch call per refresh no

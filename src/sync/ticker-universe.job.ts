@@ -30,7 +30,7 @@ const MAX_DELISTINGS_PER_RUN = 200;
  */
 const LAST_PULL_WINDOW_MS = 60 * 60_000;
 /**
- * Polygon lookups per run for the backlog, oldest first. At ~300ms a call and
+ * Delisting lookups per run for the backlog, oldest first. At ~300ms a call and
  * LOOKUP_CONCURRENCY in flight this stays well inside the scheduler's 300s
  * deadline; anything left over is picked up by the next run.
  */
@@ -97,9 +97,11 @@ export class TickerUniverseJob implements OnModuleInit {
           type: t.type,
           active: t.active,
           currencyName: t.currencyName,
-          cik: t.cik,
-          compositeFigi: t.compositeFigi,
-          shareClassFigi: t.shareClassFigi,
+          // FMP-sourced rows carry no CIK/FIGI; omitting the null keeps the
+          // value an earlier Polygon pull stored (the batch write merges).
+          ...(t.cik ? { cik: t.cik } : {}),
+          ...(t.compositeFigi ? { compositeFigi: t.compositeFigi } : {}),
+          ...(t.shareClassFigi ? { shareClassFigi: t.shareClassFigi } : {}),
           source: result.source,
           updatedAt: new Date().toISOString(),
         },
@@ -147,10 +149,10 @@ export class TickerUniverseJob implements OnModuleInit {
    * and per-ticker job reads. AACB (delisted 2026-08-20) was still on screen
    * with its last close re-stamped daily, like 14 others.
    *
-   * Each drop-out is confirmed against Polygon's inactive record before it is
-   * marked; one that merely went missing from this pull is left alone. Marking
-   * sets `active: false` + `delistedAt` (hidden everywhere via
-   * DelistedTickersService, and dropped from activeUniverse so the per-ticker
+   * Each drop-out is confirmed against a vendor delisting record (FMP first,
+   * Polygon as backup) before it is marked; one that merely went missing from
+   * this pull is left alone. Marking sets `active: false` + `delistedAt`
+   * (hidden everywhere via DelistedTickersService, and dropped from activeUniverse so the per-ticker
    * jobs stop) and soft-deletes the `companies` doc: it is kept, stamped
    * `delisted: true` + `delistedAt`, never removed. A symbol that relists comes
    * back through the upsert as `active: true` and restoreRelisted lifts the
@@ -158,7 +160,7 @@ export class TickerUniverseJob implements OnModuleInit {
    *
    * The short-pull guards judge only symbols in last run's pull (see
    * LAST_PULL_WINDOW_MS). Older stale symbols — the backlog — are checked
-   * oldest first, a bounded number per run; each still needs Polygon's record.
+   * oldest first, a bounded number per run; each still needs a delisting record.
    */
   private async markDelisted(
     prevActive: Array<{ id: string; updatedAt: string | null }>,
@@ -258,7 +260,7 @@ export class TickerUniverseJob implements OnModuleInit {
     const unconfirmed = toCheck.length - confirmed.length;
     if (unconfirmed) {
       this.logger.warn(
-        `ticker-universe: ${unconfirmed} dropped symbol(s) had no Polygon delisting record — left active`,
+        `ticker-universe: ${unconfirmed} dropped symbol(s) had no FMP or Polygon delisting record — left active`,
       );
     }
     return confirmed;

@@ -166,22 +166,34 @@ export class MoverCatalystService {
       }
     }
 
-    // ── Tier 2: Polygon + FMP News + LLM Synthesis ─────────────────────────
-    const articles: CanonicalNewsArticle[] = [];
+    // ── Tier 2: FMP (primary) + Polygon (backup) News + LLM Synthesis ──────
+    const fmpArticles: CanonicalNewsArticle[] = [];
+    if (this.fmpAdapter) {
+      try {
+        const fmpRes = await this.fmpAdapter.fetchNews(ticker, fromIso, toIso);
+        if (fmpRes.data) fmpArticles.push(...fmpRes.data);
+      } catch (err) {
+        this.logger.warn(`FMP news fetch failed for ${ticker}: ${(err as Error).message}`);
+      }
+    }
+
+    const polygonArticles: CanonicalNewsArticle[] = [];
     try {
       const polyRes = await this.polygonAdapter.fetchNews(ticker, fromIso, toIso);
-      if (polyRes.data) articles.push(...polyRes.data);
+      if (polyRes.data) polygonArticles.push(...polyRes.data);
     } catch (err) {
       this.logger.warn(`Polygon news fetch failed for ${ticker}: ${(err as Error).message}`);
     }
 
-    if (this.fmpAdapter) {
-      try {
-        const fmpRes = await this.fmpAdapter.fetchNews(ticker, fromIso, toIso);
-        if (fmpRes.data) articles.push(...fmpRes.data);
-      } catch {
-        // Ignore optional FMP news errors
-      }
+    // Dedupe by url (falling back to id) with FMP listed first, so FMP's copy
+    // of a story both vendors carry is the one kept — same rule as news.job.
+    const articles: CanonicalNewsArticle[] = [];
+    const seenNews = new Set<string>();
+    for (const a of [...fmpArticles, ...polygonArticles]) {
+      const k = (a.url || a.id || "").toLowerCase();
+      if (k && seenNews.has(k)) continue;
+      if (k) seenNews.add(k);
+      articles.push(a);
     }
 
     // Sort newest first
@@ -290,7 +302,7 @@ Do NOT include any markdown code fences or other text outside the JSON object.`;
         summary: first.summary,
         bulletPoints: fallbackBullets.length > 0 ? fallbackBullets : [first.headline],
         source: "news_headline",
-        vendor: (first.vendor as any) || "polygon",
+        vendor: (first.vendor as any) || "fmp",
         newsUrl: first.url || null,
         publishedAt: first.publishedAt || now.toISOString(),
         updatedAt: now.toISOString(),
@@ -312,7 +324,7 @@ Do NOT include any markdown code fences or other text outside the JSON object.`;
         `Movement is likely driven by broader market sentiment, sector rotation, or trading liquidity.`,
       ],
       source: "news_headline",
-      vendor: "polygon",
+      vendor: "fmp",
       newsUrl: null,
       publishedAt: null,
       updatedAt: now.toISOString(),

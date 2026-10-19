@@ -8,6 +8,7 @@ import {
   fromFmpSymbol,
   ipoStatusFor,
   isUsSymbol,
+  micFromFmpExchange,
   normalizePriceRange,
   parseEodBulkCsv,
   sessionPhase,
@@ -64,6 +65,17 @@ describe("fmp-mapping.util", () => {
     expect(exchangeToMic("NYSE")).toBe("XNYS");
     expect(exchangeToMic("AMEX")).toBe("XASE");
     expect(exchangeToMic("NYSE Arca")).toBe("ARCX");
+  });
+
+  it("maps FMP's full exchange names to MICs, separating NYSE Arca from NYSE American", () => {
+    // Screener short codes call both Arca and American "AMEX"; the full name decides.
+    expect(micFromFmpExchange("New York Stock Exchange Arca", "AMEX")).toBe("ARCX");
+    expect(micFromFmpExchange("NYSE American", "AMEX")).toBe("XASE");
+    expect(micFromFmpExchange("New York Stock Exchange", "NYSE")).toBe("XNYS");
+    expect(micFromFmpExchange("NASDAQ Global Select", "NASDAQ")).toBe("XNAS");
+    expect(micFromFmpExchange("CBOE BZX", "CBOE")).toBe("BATS");
+    expect(micFromFmpExchange("", "NASDAQ")).toBe("XNAS");
+    expect(micFromFmpExchange(null)).toBeNull();
   });
 
   it("parses the eod-bulk CSV", () => {

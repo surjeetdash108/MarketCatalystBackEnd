@@ -30,9 +30,9 @@ import {
  * 900s — under 2% worse, for ~1% of the infrastructure.
  *
  * VENDOR SWITCH (LIVE_QUOTE_SOURCE / LIVE_QUOTE_FALLBACK_SOURCE)
- * `LIVE_QUOTE_SOURCE=polygon` (default) or `fmp` picks who fills this cache;
+ * `LIVE_QUOTE_SOURCE=fmp` (default) or `polygon` picks who fills this cache;
  * revert is an env change, no code. `LIVE_QUOTE_FALLBACK_SOURCE` (default
- * `none`) fills only the tickers the primary failed to price. Deliberately NOT
+ * `polygon`) fills only the tickers the primary failed to price. Deliberately NOT
  * `QUOTE_SOURCE` — that one belongs to QUOTE_ADAPTER (market-indices job) in
  * adapters.module.ts, which is Polygon-only and throws on `fmp` at boot.
  * Caveats of `fmp`:
