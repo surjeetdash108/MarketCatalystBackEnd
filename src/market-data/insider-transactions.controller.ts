@@ -40,7 +40,10 @@ export class InsiderTransactionsController {
     "Cache-Control",
     "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
   )
-  async insiderTransactions(@Query("ticker") ticker?: string) {
+  async insiderTransactions(
+    @Query("ticker") ticker?: string,
+    @Query("limit") limitParam?: string,
+  ) {
     if (ticker !== undefined) {
       const sym = ticker.toUpperCase().trim();
       if (!TICKER_RE.test(sym)) {
@@ -48,14 +51,21 @@ export class InsiderTransactionsController {
       }
       return this.stockDetails.getInsiderTransactions(sym);
     }
+    // `limit` = newest N only (the dashboard mini-list), not the full feed.
+    const limit = Number(limitParam);
+    const cap = <T>(rows: T[]) =>
+      Number.isInteger(limit) && limit > 0 ? rows.slice(0, limit) : rows;
+    // Market-wide open-market buys/sells from FMP; the SEC Form 4 collection
+    // (nightly job) only when FMP has nothing.
     const latest = await this.stockDetails.getMarketWideInsiderTransactions();
-    if (latest && latest.length > 0) {
-      return latest;
-    }
+    if (latest.length > 0) return cap(latest);
     await this.marketData.ensureFresh("sec-form4");
     const { insider_transactions } = await this.cached.get([
       "insider_transactions",
     ]);
-    return insider_transactions;
+    const secRows = [...(insider_transactions as Array<{ transactionDate?: string }>)].sort(
+      (a, b) => String(b.transactionDate ?? "").localeCompare(String(a.transactionDate ?? "")),
+    );
+    return cap(secRows);
   }
 }

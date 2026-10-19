@@ -11,7 +11,7 @@ import { ANALYST_RATINGS_ADAPTER } from "../adapters/types";
 import { FmpService, filedThirteenFQuarters } from "../vendors/fmp/fmp.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
-import { toFmpSymbol } from "../vendors/market-data/fmp-mapping.util";
+import { fromFmpSymbol, isUsSymbol, toFmpSymbol } from "../vendors/market-data/fmp-mapping.util";
 
 /**
  * How far back a stock's insider history reaches, and the most rows kept. The
@@ -25,6 +25,20 @@ const INSIDER_PAGE_SIZE = 100;
 const INSIDER_PAGE_CONCURRENCY = 4;
 /** SEC fallback reads one filing per request (rate-limited), so it stays shallow. */
 const SEC_FALLBACK_FILINGS = 40;
+/** Market-wide feed windows: purchases are the signal and rare; sales are ~10× as frequent. */
+const MARKET_BUY_DAYS = 90;
+const MARKET_SELL_DAYS = 30;
+/** Page cap per transaction type (100 rows a page; ~40 pages ≈ 90 days of purchases). */
+const MARKET_INSIDER_MAX_PAGES = 48;
+const MARKET_INSIDER_TTL_MS = 30 * 60_000;
+/** Pages of FMP's market-wide latest rating changes (100 each) merged into the feed. */
+const MARKET_GRADES_PAGES = 3;
+/** Most untracked stocks given a real FMP consensus per refresh (each cached 12h). */
+const MARKET_UNTRACKED_MAX = 60;
+/** Fewest analysts behind an untracked stock's consensus — one rating is not a consensus. */
+const MIN_CONSENSUS_ANALYSTS = 2;
+/** Foreign OTC lines (ADRs "…Y", foreign ordinaries "…F") — not covered elsewhere in the app. */
+const FOREIGN_OTC = /^[A-Z]{4}[FY]$/;
 const INSIDER_TTL_MS = 12 * 3600_000;
 const ANALYST_TTL_MS = 12 * 3600_000;
 const OWNERSHIP_TTL_MS = 24 * 3600_000;
@@ -128,24 +142,89 @@ export class StockDetailsService {
     return ((doc?.rows as InsiderRow[] | undefined) ?? []).map((r) => ({ ...r }));
   }
 
+  private marketInsider: { at: number; rows: InsiderRow[] } | null = null;
+  private marketInsiderLoading: Promise<InsiderRow[]> | null = null;
+
   /**
-   * Market-wide latest insider transactions from FMP's insider-trading/latest feed,
-   * cached for 10 minutes.
+   * Recent open-market insider trades across every US listing, newest first:
+   * FMP purchases (code P) over MARKET_BUY_DAYS and sales (code S) over
+   * MARKET_SELL_DAYS. Sales are ~10× as frequent, so their window is shorter
+   * to keep the feed small; awards, tax withholding and gifts are left out —
+   * the Insider screen and dashboard rank open-market buying and selling.
+   *
+   * Cached per instance for MARKET_INSIDER_TTL_MS; a stale copy is served while
+   * a refresh runs, so only a cold start waits on FMP. Empty when FMP is off
+   * or fails cold — the caller then falls back to the SEC Form 4 collection.
    */
   async getMarketWideInsiderTransactions(): Promise<InsiderRow[]> {
-    const doc = await this.cached("market_wide_insider", "latest", 10 * 60_000, async () => {
-      let rows: InsiderRow[] = [];
-      try {
-        const raw = await this.fmp.getLatestInsiderTrading(0, 100);
-        if (Array.isArray(raw) && raw.length > 0) {
-          rows = fmpInsiderRows("", raw);
+    const cached = this.marketInsider;
+    if (cached && Date.now() - cached.at < MARKET_INSIDER_TTL_MS) return cached.rows;
+    if (!this.fmp.enabled) return cached?.rows ?? [];
+    this.marketInsiderLoading ??= this.loadMarketInsiderTrades()
+      .then((rows) => {
+        // Never replace a good feed with an empty one from a vendor hiccup.
+        if (rows.length > 0 || !this.marketInsider) this.marketInsider = { at: Date.now(), rows };
+        return rows;
+      })
+      .finally(() => {
+        this.marketInsiderLoading = null;
+      });
+    if (cached) {
+      this.marketInsiderLoading.catch((err) =>
+        this.logger.warn(`market insider refresh failed: ${errMessage(err)}`),
+      );
+      return cached.rows;
+    }
+    try {
+      return await this.marketInsiderLoading;
+    } catch (err) {
+      this.logger.warn(`market-wide insider feed: FMP failed (${errMessage(err)}) — SEC fallback`);
+      return [];
+    }
+  }
+
+  private async loadMarketInsiderTrades(): Promise<InsiderRow[]> {
+    const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+    const walk = async (type: string, days: number): Promise<Record<string, unknown>[]> => {
+      const cutoff = daysAgo(days);
+      const out: Record<string, unknown>[] = [];
+      for (let start = 0; start < MARKET_INSIDER_MAX_PAGES; start += INSIDER_PAGE_CONCURRENCY) {
+        const pages = await Promise.all(
+          Array.from({ length: INSIDER_PAGE_CONCURRENCY }, (_, i) =>
+            this.fmp.getMarketInsiderTrades(type, start + i, INSIDER_PAGE_SIZE),
+          ),
+        );
+        let done = false;
+        for (const page of pages) {
+          out.push(...page);
+          const oldest = String(page[page.length - 1]?.filingDate ?? "");
+          if (page.length < INSIDER_PAGE_SIZE || (oldest && oldest < cutoff)) done = true;
         }
-      } catch (err) {
-        this.logger.warn(`market-wide insider FMP failed (${errMessage(err)})`);
+        if (done) break;
       }
-      return { rows, updatedAt: new Date().toISOString() };
-    });
-    return ((doc?.rows as InsiderRow[] | undefined) ?? []).map((r) => ({ ...r }));
+      // Late or amended filings can carry years-old trades; keep the window by
+      // trade date as well as filing date.
+      return out.filter(
+        (r) => String(r.filingDate ?? "") >= cutoff && String(r.transactionDate ?? "") >= cutoff,
+      );
+    };
+    const [buys, sells] = await Promise.all([
+      walk("P-Purchase", MARKET_BUY_DAYS),
+      walk("S-Sale", MARKET_SELL_DAYS),
+    ]);
+    const rows: InsiderRow[] = [];
+    for (const r of [...buys, ...sells]) {
+      const symbol = String(r.symbol ?? "").toUpperCase();
+      if (!isUsSymbol(symbol)) continue;
+      const [row] = fmpInsiderRows(fromFmpSymbol(symbol), [r]);
+      // Ranked by dollars, so only priced trades. Short id and no filing link
+      // keep ~9k rows light for the browser; per-stock feeds carry the links.
+      if (row && row.pricePerShare != null) {
+        const { url: _url, ...lean } = row;
+        rows.push({ ...lean, id: `m${rows.length}` });
+      }
+    }
+    return rows.sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
   }
 
   private async fmpInsiderHistory(ticker: string): Promise<InsiderRow[]> {
@@ -235,6 +314,17 @@ export class StockDetailsService {
 
   private marketWideAnalystCache: { expires: number; data: Doc[] } | null = null;
 
+  /**
+   * The Analyst Actions feed: the swept `analyst_actions` docs plus FMP's
+   * market-wide latest rating changes (`grades-latest-news`), so a call on a
+   * stock outside the sweep still appears.
+   *
+   * Accuracy rules: each change keeps FMP's own publish date; a price target is
+   * attached only from the SAME firm's target post on the same day; and a
+   * stock not already tracked gets its REAL consensus from FMP (cached 12h in
+   * `analyst_actions`) — never one firm's rating presented as a consensus. A
+   * stock FMP has no consensus for is left out. US listings only.
+   */
   async getMarketWideAnalystActions(baseDocs: Doc[]): Promise<Doc[]> {
     const now = Date.now();
     if (this.marketWideAnalystCache && this.marketWideAnalystCache.expires > now) {
@@ -242,65 +332,83 @@ export class StockDetailsService {
     }
     if (!this.fmp?.enabled) return baseDocs;
     try {
-      const [latestGrades, latestPts] = await Promise.all([
-        this.fmp.getLatestGrades(0, 50).catch(() => []),
-        this.fmp.getLatestPriceTargets(0, 50).catch(() => []),
-      ]);
+      const pages = await Promise.all(
+        Array.from({ length: MARKET_GRADES_PAGES }, (_, i) => this.fmp.getLatestGrades(i, 100).catch(() => [])),
+      );
+      const ptPages = await Promise.all(
+        Array.from({ length: MARKET_GRADES_PAGES }, (_, i) => this.fmp.getLatestPriceTargets(i, 100).catch(() => [])),
+      );
+      const day = (v: unknown) => String(v ?? "").slice(0, 10);
+      const firmKey = (v: unknown) => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      // Same-firm, same-day price targets: "Jefferies" ↔ "Jefferies".
+      const ptByKey = new Map<string, number>();
+      for (const pt of ptPages.flat()) {
+        const sym = String(pt.symbol ?? "").toUpperCase();
+        const target = Number(pt.priceTarget);
+        if (!isUsSymbol(sym) || !Number.isFinite(target) || target <= 0) continue;
+        const key = `${sym}|${firmKey(pt.analystCompany)}|${day(pt.publishedDate)}`;
+        if (!ptByKey.has(key)) ptByKey.set(key, target);
+      }
 
       const docMap = new Map<string, Doc>();
       for (const d of baseDocs) {
         if (d.ticker) docMap.set(String(d.ticker).toUpperCase().trim(), { ...d });
       }
 
-      const ptBySym = new Map<string, number>();
-      for (const pt of latestPts) {
-        if (pt.symbol && pt.priceTarget != null && !ptBySym.has(pt.symbol.toUpperCase())) {
-          ptBySym.set(pt.symbol.toUpperCase(), pt.priceTarget);
-        }
-      }
-
-      for (const g of latestGrades) {
-        if (!g.symbol) continue;
-        const sym = g.symbol.toUpperCase().trim();
-        const actionItem = {
-          date: g.date ?? new Date().toISOString().slice(0, 10),
-          firm: g.gradingCompany ?? null,
+      const changesBySym = new Map<string, Array<Record<string, unknown>>>();
+      for (const g of pages.flat()) {
+        const raw = String(g.symbol ?? "").toUpperCase().trim();
+        const date = day(g.publishedDate);
+        if (!isUsSymbol(raw) || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !g.gradingCompany) continue;
+        const sym = fromFmpSymbol(raw);
+        const item = {
+          date,
+          firm: String(g.gradingCompany),
           previousGrade: g.previousGrade ?? null,
           newGrade: g.newGrade ?? null,
           action: g.action ?? null,
-          priceTarget: g.priceTarget ?? ptBySym.get(sym) ?? null,
+          priceTarget: ptByKey.get(`${raw}|${firmKey(g.gradingCompany)}|${date}`) ?? null,
         };
+        const list = changesBySym.get(sym) ?? [];
+        list.push(item);
+        changesBySym.set(sym, list);
+      }
 
-        const existing = docMap.get(sym);
-        if (existing) {
-          const grades = Array.isArray(existing.recentGrades) ? [...existing.recentGrades] : [];
-          const dup = grades.some(
-            (rg: any) => rg.firm === actionItem.firm && rg.date === actionItem.date,
-          );
-          if (!dup) {
-            grades.unshift(actionItem);
-            existing.recentGrades = grades.slice(0, 20);
-          }
-        } else {
-          docMap.set(sym, {
-            id: sym,
-            ticker: sym,
-            consensus: g.newGrade ?? "Hold",
-            strongBuy: 0,
-            buy: /buy|overweight|outperform/i.test(g.newGrade ?? "") ? 1 : 0,
-            hold: /hold|neutral|equal-weight/i.test(g.newGrade ?? "") ? 1 : 0,
-            sell: /sell|underweight|underperform/i.test(g.newGrade ?? "") ? 1 : 0,
-            strongSell: 0,
-            priceTargetConsensus: ptBySym.get(sym) ?? g.priceTarget ?? null,
-            recentGrades: [actionItem],
-            source: "fmp",
-            updatedAt: new Date().toISOString(),
-          });
+      const mergeInto = (doc: Doc, items: Array<Record<string, unknown>>) => {
+        const grades = Array.isArray(doc.recentGrades) ? [...(doc.recentGrades as Array<Record<string, unknown>>)] : [];
+        for (const it of items) {
+          if (!grades.some((rg) => rg.firm === it.firm && rg.date === it.date)) grades.push(it);
         }
+        grades.sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")));
+        doc.recentGrades = grades.slice(0, 20);
+      };
+
+      const untracked: string[] = [];
+      for (const [sym, items] of changesBySym) {
+        const existing = docMap.get(sym);
+        if (existing) mergeInto(existing, items);
+        else if (!FOREIGN_OTC.test(sym)) untracked.push(sym);
+      }
+      // Real FMP consensus for stocks outside the sweep (bounded per refresh;
+      // each is cached 12h, so later refreshes are cheap).
+      const toFetch = untracked.slice(0, MARKET_UNTRACKED_MAX);
+      for (let i = 0; i < toFetch.length; i += 4) {
+        const docs = await Promise.all(
+          toFetch.slice(i, i + 4).map((sym) => this.getAnalystConsensus(sym).catch(() => null)),
+        );
+        docs.forEach((doc, j) => {
+          const sym = toFetch[i + j];
+          if (!doc || !doc.consensus) return;
+          const analysts = ["strongBuy", "buy", "hold", "sell", "strongSell"].reduce((n, k) => n + (Number(doc[k]) || 0), 0);
+          if (analysts < MIN_CONSENSUS_ANALYSTS) return;
+          const copy: Doc = { id: sym, ...doc, ticker: sym };
+          mergeInto(copy, changesBySym.get(sym) ?? []);
+          docMap.set(sym, copy);
+        });
       }
 
       const merged = Array.from(docMap.values());
-      this.marketWideAnalystCache = { expires: now + 300_000, data: merged };
+      this.marketWideAnalystCache = { expires: now + 5 * 60_000, data: merged };
       return merged;
     } catch (err) {
       this.logger.warn(`marketWideAnalystActions failed: ${errMessage(err)}`);
@@ -370,6 +478,14 @@ export class StockDetailsService {
           holders: summary.investorsHolding,
           holdersChange: summary.investorsHoldingChange,
           shares: summary.numberOf13Fshares,
+          sharesChangePct:
+            summary.numberOf13Fshares != null && summary.lastNumberOf13Fshares
+              ? Math.round(((summary.numberOf13Fshares - summary.lastNumberOf13Fshares) / summary.lastNumberOf13Fshares) * 1000) / 10
+              : null,
+          newPositions: summary.newPositions,
+          increasedPositions: summary.increasedPositions,
+          reducedPositions: summary.reducedPositions,
+          closedPositions: summary.closedPositions,
         },
         holders,
       };

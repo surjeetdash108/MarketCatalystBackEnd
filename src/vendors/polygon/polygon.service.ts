@@ -437,6 +437,8 @@ export class PolygonService {
       yield5Year: number | null;
       yield10Year: number | null;
       yield30Year: number | null;
+      /** Vendor that served this row; absent means Polygon (this method). */
+      source?: "fmp" | "polygon";
     }>
   > {
     const res = await fetchJson<any>(
@@ -476,6 +478,8 @@ export class PolygonService {
       previousClose: number | null;
       volume: number | null;
       vwap: number | null;
+      /** Vendor that served this row; absent means Polygon (this method). */
+      source?: "fmp" | "polygon";
     }>
   > {
     if (tickers.length === 0) return [];

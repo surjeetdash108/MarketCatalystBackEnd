@@ -36,6 +36,12 @@ describe("insider rows", () => {
     });
   });
 
+  it("keeps the caller's ticker, else converts FMP's class-share symbol (BRK-B → BRK.B)", () => {
+    expect(fmpInsiderRows("BRK.B", [fmpRow({ symbol: "BRK-B" })])[0].ticker).toBe("BRK.B");
+    expect(fmpInsiderRows("", [fmpRow({ symbol: "BRK-B" })])[0].ticker).toBe("BRK.B");
+    expect(fmpInsiderRows("", [fmpRow({ symbol: "aapl" })])[0].ticker).toBe("AAPL");
+  });
+
   it("labels non-officer roles and drops Form 3 holding statements", () => {
     const rows = fmpInsiderRows("STRL", [
       fmpRow({ typeOfOwner: "director", transactionType: "A-Award", acquisitionOrDisposition: "A", price: 0 }),

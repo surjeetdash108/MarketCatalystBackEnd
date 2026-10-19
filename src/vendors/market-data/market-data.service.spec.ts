@@ -117,6 +117,28 @@ describe("MarketDataService (FMP primary, Polygon fallback)", () => {
     expect(poly).toHaveBeenCalled();
   });
 
+  describe("peers (FMP when it has enough US names, else the longer list)", () => {
+    const peers = (...syms: string[]) => syms.map((symbol) => ({ symbol }));
+
+    it("uses FMP when it has 3+ US peers, without asking Polygon", async () => {
+      const poly = jest.spyOn(PolygonService.prototype, "getRelatedCompanies");
+      const svc = make(jest.fn().mockResolvedValue(peers("MSFT", "GOOGL", "BRK-B", "SAP.DE", "AAPL")));
+      await expect(svc.getRelatedCompanies("AAPL")).resolves.toEqual(["MSFT", "GOOGL", "BRK.B"]);
+      expect(poly).not.toHaveBeenCalled();
+    });
+
+    it("prefers Polygon's longer list when FMP's US list is thin (AAPL → only SONY)", async () => {
+      jest.spyOn(PolygonService.prototype, "getRelatedCompanies").mockResolvedValue(["MSFT", "AMZN", "GOOGL", "NVDA"]);
+      const svc = make(jest.fn().mockResolvedValue(peers("002241.SZ", "PCRFF", "SONY", "SSNLF", "XIACF")));
+      await expect(svc.getRelatedCompanies("AAPL")).resolves.toEqual(["MSFT", "AMZN", "GOOGL", "NVDA"]);
+    });
+
+    it("keeps FMP's short list when Polygon has none", async () => {
+      jest.spyOn(PolygonService.prototype, "getRelatedCompanies").mockResolvedValue([]);
+      await expect(make(jest.fn().mockResolvedValue(peers("ELMD"))).getRelatedCompanies("GAUZ")).resolves.toEqual(["ELMD"]);
+    });
+  });
+
   describe("ticker universe (FMP primary, Polygon gap-fill)", () => {
     const polygonRef = (ticker: string, extra: Record<string, unknown> = {}) => ({
       ticker, name: `${ticker} (polygon)`, market: "stocks", locale: "us", active: true,

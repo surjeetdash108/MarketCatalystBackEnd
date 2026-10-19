@@ -1,3 +1,5 @@
+import { fromFmpSymbol } from "../vendors/market-data/fmp-mapping.util";
+
 /**
  * Insider-transaction rows in the `insider_transactions` shape the UI reads
  * (`InsiderTxDoc`), built from either vendor: FMP's insider-trading feed
@@ -65,7 +67,10 @@ export function fmpInsiderRows(ticker: string, rows: Record<string, unknown>[]):
     out.push({
       // Stable across refreshes for the same filing line.
       id: `fmp_${r.reportingCik ?? "x"}_${filingDate ?? "x"}_${date}_${code}_${shares}_${i}`,
-      ticker: String(r.symbol ?? ticker).toUpperCase(),
+      // The caller's ticker when given (per-stock feeds, already in app form,
+      // e.g. "BRK.B"); otherwise the row's own symbol converted from FMP's
+      // class-share spelling ("BRK-B" → "BRK.B") so it matches the rest of the app.
+      ticker: ticker || fromFmpSymbol(String(r.symbol ?? "").toUpperCase()),
       issuerName: r.companyName ? String(r.companyName) : null,
       ownerName: r.reportingName ? String(r.reportingName) : null,
       isOfficer: /officer/i.test(typeOfOwner),

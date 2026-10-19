@@ -12,6 +12,7 @@ import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { BlogsModule } from "../blogs/blogs.module";
 import { RecapBlogJob } from "./recap-blog.job";
 import { AnalystActionsJob } from "./analyst-actions.job";
+import { AnalystFirmStatsJob } from "./analyst-firm-stats.job";
 import { BetaJob } from "./beta.job";
 import { CompaniesJob } from "./companies.job";
 import { DividendsJob } from "./dividends.job";
@@ -89,6 +90,7 @@ import { MarketDataModule } from "../market-data/market-data.module";
     EarningsJob,
     SectorsJob,
     AnalystActionsJob,
+    AnalystFirmStatsJob,
     MarketIndicesJob,
     NewsJob,
     Sec13FJob,

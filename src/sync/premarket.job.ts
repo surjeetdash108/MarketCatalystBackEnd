@@ -87,6 +87,9 @@ const PER_TICKER: string[] = [
   // a series mixing two adjustment bases. Only recomputes tickers whose beta is
   // behind the last completed month, so most mornings it writes nothing.
   "beta",
+  // Real analyst-firm track records (hit rate, move after calls) from FMP
+  // grades/targets + prices; cursor over the universe, ~12 runs a cycle.
+  "analyst-firm-stats",
 ];
 
 const FINAL: string[] = ["recaps"];

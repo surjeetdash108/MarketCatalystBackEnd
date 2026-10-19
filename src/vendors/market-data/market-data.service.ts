@@ -239,26 +239,32 @@ export class MarketDataService extends PolygonService {
 
   // ── Reference ─────────────────────────────────────────────────────────────
 
+  /**
+   * Peers: FMP's list when it has at least MIN_FMP_PEERS US names. FMP peers
+   * are global and lean on foreign OTC lines — for AAPL it answers 002241.SZ,
+   * PCRFF, SONY, SSNLF, XIACF, i.e. just SONY once filtered, where Polygon
+   * answers MSFT, AMZN, GOOGL, NVDA — so a short FMP list yields to a longer
+   * Polygon one, but is still used when Polygon has none (GAUZ).
+   */
   async getRelatedCompanies(ticker: string): Promise<string[]> {
-    return this.fmpFirst(
-      `peers ${ticker}`,
-      async () => {
+    let fromFmp: string[] = [];
+    if (this.fmpApi.enabled) {
+      try {
         const rows = (await this.fmpApi.request(
           `stock-peers?symbol=${encodeURIComponent(toFmpSymbol(ticker))}`,
         )) as Row[];
-        // FMP peers are global and lean on foreign OTC lines: for AAPL it
-        // answered 002241.SZ, PCRFF, SONY, SSNLF, XIACF where Polygon answers
-        // MSFT, AMZN, GOOGL, NVDA. Keep US symbols, drop 5-letter OTC foreign
-        // ordinaries/ADRs (…F / …Y), and only trust FMP with ≥ MIN_FMP_PEERS left.
-        return rows
+        fromFmp = rows
           .map((r) => String(r.symbol ?? ""))
           .filter((s) => isUsSymbol(s) && !/^[A-Z]{4}[FY]$/.test(s))
           .map(fromFmpSymbol)
           .filter((s) => s !== ticker.toUpperCase());
-      },
-      () => super.getRelatedCompanies(ticker),
-      (v) => v == null || v.length === 0,
-    );
+      } catch (err) {
+        this.routeLogger.warn(`peers ${ticker}: FMP failed (${(err as Error)?.message ?? err}) — Polygon fallback`);
+      }
+    }
+    if (fromFmp.length >= MIN_FMP_PEERS) return fromFmp;
+    const fromPolygon = await super.getRelatedCompanies(ticker).catch(() => [] as string[]);
+    return fromPolygon.length > fromFmp.length ? fromPolygon : fromFmp;
   }
 
   /**
@@ -677,6 +683,7 @@ export class MarketDataService extends PolygonService {
             yield5Year: num(r.year5),
             yield10Year: num(r.year10),
             yield30Year: num(r.year30),
+            source: "fmp" as const,
           }));
       },
       () => super.getTreasuryYields(limit),
@@ -751,6 +758,7 @@ export class MarketDataService extends PolygonService {
           previousClose: num(q.previousClose),
           volume: num(q.volume),
           vwap: null,
+          source: "fmp" as const,
         };
       });
   }

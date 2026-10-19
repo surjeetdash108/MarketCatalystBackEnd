@@ -56,4 +56,19 @@ export class AnalystActionsController {
       analyst_actions as Record<string, unknown>[],
     );
   }
+
+  /**
+   * GET /market-data/analyst-firm-stats — measured track record per analyst
+   * firm (analyst-firm-stats job: FMP grades + price targets scored against
+   * FMP prices). A figure is null when the firm has fewer than 10 samples.
+   */
+  @Get("analyst-firm-stats")
+  @Header(
+    "Cache-Control",
+    "public, max-age=300, s-maxage=3600, stale-while-revalidate=3600",
+  )
+  async analystFirmStats() {
+    const { analyst_firm_stats } = await this.cached.get(["analyst_firm_stats"]);
+    return analyst_firm_stats;
+  }
 }

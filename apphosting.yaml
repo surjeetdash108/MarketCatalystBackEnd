@@ -131,13 +131,12 @@ env:
   # full-universe sweep each run — no batch/cursor.)
   - variable: FINANCIALS_BATCH_SIZE
     value: "150"
-  # Tickers per run for institutional-ownership.job. Steady state is 25 (one FMP
-  # call per ticker — the current quarter; earlier quarters are already stored
-  # and are not refetched). Raise it temporarily only to backfill history for a
-  # widened universe: at 120 the whole universe is covered in two runs, which is
-  # how the initial 4-quarter backfill was done on 2026-08-21.
+  # Tickers per run for institutional-ownership.job, which sweeps the whole active
+  # company universe (~1.2k), not the fixed 241 list. Steady state is one FMP call
+  # per ticker (earlier quarters are stored), so 150 covers the universe in ~8
+  # runs inside the 900s timeout; a first-seen ticker backfills 4 quarters.
   - variable: INSTITUTIONAL_BATCH_SIZE
-    value: "25"
+    value: "150"
   - variable: QUOTE_SOURCE
     value: "polygon"
   - variable: QUOTE_FALLBACK_SOURCE

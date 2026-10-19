@@ -4,7 +4,7 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { readGuidance } from "../common/guidance.util";
 import { chunkedBatchSet } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
-import { TICKER_UNIVERSE } from "../common/ticker-universe";
+import { TICKER_UNIVERSE, activeUniverse } from "../common/ticker-universe";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { addDays, isoDate } from "../common/date.util";
@@ -325,9 +325,12 @@ export class Edgar8KJob implements OnModuleInit {
        * report has no earnings 8-K to find.
        */
       const recent = await this.reportersNeedingGuidance();
+      // Round-robin over the live company universe, not the fixed 241 list.
+      const live = await activeUniverse(this.firebase.firestore).catch(() => [] as string[]);
+      const universe = live.length > 0 ? live : TICKER_UNIVERSE;
       const roundRobin = Array.from(
-        { length: BATCH_SIZE },
-        (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
+        { length: Math.min(BATCH_SIZE, universe.length) },
+        (_, i) => universe[(cursor + i) % universe.length],
       );
       // Reporters first, then the round-robin, de-duplicated so a company that
       // is in both is not fetched twice in one run.
@@ -449,7 +452,7 @@ export class Edgar8KJob implements OnModuleInit {
       );
       await this.meta.setCursor(
         JOB_NAME,
-        (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length,
+        (cursor + roundRobin.length) % universe.length,
       );
       await this.meta.record(JOB_NAME, { ok: true, count: wireDocs.length });
       this.logger.log(

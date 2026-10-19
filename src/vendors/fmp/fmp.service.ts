@@ -401,6 +401,11 @@ export interface FmpInstitutionalOwnershipRow {
   ownershipPercent: number | null;
   /** Aggregate put/call ratio across holders (sentiment tilt). */
   putCallRatio: number | null;
+  /** Filer counts behind the QoQ change: opened, added to, trimmed, sold out. */
+  newPositions: number | null;
+  increasedPositions: number | null;
+  reducedPositions: number | null;
+  closedPositions: number | null;
 }
 
 /** One row of `/stable/quote` — only the fields callers read. */
@@ -1124,22 +1129,19 @@ export class FmpService {
   }
 
   /**
-   * Market-wide latest insider transactions from `/stable/insider-trading/latest`.
+   * One page (newest filing first) of insider trades of one transaction type
+   * across ALL companies (`/stable/insider-trading/search?transactionType=`,
+   * e.g. "P-Purchase", "S-Sale"). Throws on HTTP errors; [] past the end.
    */
-  async getLatestInsiderTrading(
-    page = 0,
+  async getMarketInsiderTrades(
+    transactionType: string,
+    page: number,
     limit = 100,
   ): Promise<Record<string, unknown>[]> {
     if (!this.apiKey) return [];
-    try {
-      return (await this.get(
-        `insider-trading/latest?page=${page}&limit=${limit}`,
-      )) as Record<string, unknown>[];
-    } catch {
-      return (await this.get(
-        `insider-trading?page=${page}&limit=${limit}`,
-      ).catch(() => [])) as Record<string, unknown>[];
-    }
+    return (await this.get(
+      `insider-trading/search?transactionType=${encodeURIComponent(transactionType)}&page=${page}&limit=${limit}`,
+    )) as Record<string, unknown>[];
   }
 
   /**
@@ -1169,14 +1171,14 @@ export class FmpService {
   }
 
   /**
-   * TTM financial ratios from `/stable/ratios-ttm?symbol=SYM` (e.g. grossProfitMarginTTM).
+   * Latest fiscal-year ratios from `/stable/ratios?symbol=SYM&limit=1`
+   * (e.g. grossProfitMargin as a fraction) — the same annual basis the
+   * fundamentals-growth job computes from statements.
    */
-  async getCompanyRatiosTtm(
-    ticker: string,
-  ): Promise<Record<string, unknown> | null> {
+  async getCompanyRatios(ticker: string): Promise<Record<string, unknown> | null> {
     if (!this.apiKey) return null;
     const rows = (await this.get(
-      `ratios-ttm?symbol=${encodeURIComponent(ticker)}`,
+      `ratios?symbol=${encodeURIComponent(ticker)}&limit=1`,
     ).catch(() => [])) as Record<string, unknown>[];
     return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
   }
@@ -1339,6 +1341,10 @@ export class FmpService {
       totalInvested: num(o.totalInvested),
       ownershipPercent: num(o.ownershipPercent),
       putCallRatio: num(o.putCallRatio),
+      newPositions: num(o.newPositions),
+      increasedPositions: num(o.increasedPositions),
+      reducedPositions: num(o.reducedPositions),
+      closedPositions: num(o.closedPositions),
     };
   }
 

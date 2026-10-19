@@ -188,6 +188,7 @@ export class TapeService implements OnModuleDestroy {
     value: number;
     prevValue: number | null;
     at: number;
+    source: TapeSource;
   } | null = null;
 
   // FRED-backed tiles (WTI / Gold / Bitcoin), cached per series id.
@@ -372,7 +373,7 @@ export class TapeService implements OnModuleDestroy {
           proxyTicker: s.proxyTicker,
           isProxy: s.isProxy,
           note: s.note,
-          source: "polygon",
+          source: r?.source ?? "polygon",
           value: r?.price != null ? r.price * mult : null,
           // Price tiles render a PERCENT move, matching what the strip has
           // always shown and what mergePulse feeds the index drawer.
@@ -476,6 +477,7 @@ export class TapeService implements OnModuleDestroy {
             value: latest,
             prevValue: curve[1]?.yield10Year ?? null,
             at: now,
+            source: curve[0]?.source ?? "polygon",
           };
         }
       } catch (err) {
@@ -500,7 +502,7 @@ export class TapeService implements OnModuleDestroy {
         proxyTicker: null,
         isProxy: false,
         note: s.note,
-        source: "polygon", // Polygon's /fed/v1/treasury-yields
+        source: t?.source ?? "polygon", // FMP treasury-rates first, Polygon /fed/v1 backup
         unit: "percent",
         value,
         change,

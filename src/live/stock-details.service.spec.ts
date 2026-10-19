@@ -121,6 +121,85 @@ describe("StockDetailsService", () => {
     });
   });
 
+  describe("market-wide insider feed (FMP open-market buys/sells, US only)", () => {
+    const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+    const row = (symbol: string, type: string, filed: string, traded: string, price: number | null = 25) => ({
+      symbol, transactionType: type, filingDate: filed, transactionDate: traded,
+      reportingCik: "1", reportingName: "Insider", typeOfOwner: "director",
+      acquisitionOrDisposition: type.startsWith("P") ? "A" : "D", securitiesTransacted: 1000, price,
+    });
+
+    it("keeps US, priced, in-window trades with app-form tickers, newest first", async () => {
+      const getMarketInsiderTrades = jest.fn(async (type: string, page: number) => {
+        if (page > 0) return [];
+        return type === "P-Purchase"
+          ? [
+              row("BRK-B", "P-Purchase", daysAgo(1), daysAgo(2)),
+              row("SAP.DE", "P-Purchase", daysAgo(1), daysAgo(1)), // foreign
+              row("AAPL", "P-Purchase", daysAgo(3), "2020-03-05"), // late filing of an old trade
+              row("MSFT", "P-Purchase", daysAgo(1), daysAgo(1), null), // unpriced
+            ]
+          : [row("NVDA", "S-Sale", daysAgo(0), daysAgo(0)), row("TSLA", "S-Sale", daysAgo(40), daysAgo(40))]; // past 30d
+      });
+      const { svc } = make({ fmp: { getMarketInsiderTrades } });
+      const rows = await svc.getMarketWideInsiderTransactions();
+      expect(rows.map((r) => [r.ticker, r.transactionCode])).toEqual([["NVDA", "S"], ["BRK.B", "P"]]);
+      expect(rows.every((r) => !("url" in r))).toBe(true);
+
+      // Cached: a second call makes no vendor requests.
+      getMarketInsiderTrades.mockClear();
+      await svc.getMarketWideInsiderTransactions();
+      expect(getMarketInsiderTrades).not.toHaveBeenCalled();
+    });
+
+    it("returns [] when FMP fails cold, so the controller falls back to SEC", async () => {
+      const { svc } = make({ fmp: { getMarketInsiderTrades: jest.fn().mockRejectedValue(new Error("503")) } });
+      await expect(svc.getMarketWideInsiderTransactions()).resolves.toEqual([]);
+    });
+  });
+
+  describe("market-wide analyst merge", () => {
+    const consensus = {
+      consensus: "Buy", strongBuy: 1, buy: 10, hold: 3, sell: 0, strongSell: 0,
+      priceTargetConsensus: 150, priceTargetHigh: 200, priceTargetLow: 100, priceTargetMedian: 150,
+      ptAvgLastMonth: null, ptAvgLastQuarter: null, ptAvgLastYear: null, recentGrades: [],
+    };
+
+    it("uses FMP's publish date, same-firm targets, and REAL consensus for untracked stocks", async () => {
+      const getLatestGrades = jest.fn(async (page: number) => page > 0 ? [] : [
+        { symbol: "AAPL", publishedDate: "2026-10-18T13:00:00.000Z", gradingCompany: "Jefferies", previousGrade: "Hold", newGrade: "Buy", action: "upgrade" },
+        { symbol: "CRWV", publishedDate: "2026-10-19T20:51:41.000Z", gradingCompany: "Exane BNP Paribas", previousGrade: "Outperform", newGrade: "Outperform", action: "hold" },
+        { symbol: "NOCOV", publishedDate: "2026-10-19T10:00:00.000Z", gradingCompany: "Citi", newGrade: "Buy", action: "upgrade" },
+        { symbol: "NRDXF.F", publishedDate: "2026-10-19T10:00:00.000Z", gradingCompany: "Citi", newGrade: "Buy", action: "upgrade" },
+        { symbol: "ESLOY", publishedDate: "2026-10-19T10:00:00.000Z", gradingCompany: "Citi", newGrade: "Buy", action: "upgrade" },
+        { symbol: "ONEAN", publishedDate: "2026-10-19T10:00:00.000Z", gradingCompany: "Citi", newGrade: "Buy", action: "upgrade" },
+      ]);
+      const getLatestPriceTargets = jest.fn(async (page: number) => page > 0 ? [] : [
+        { symbol: "AAPL", publishedDate: "2026-10-18T13:05:00.000Z", analystCompany: "Jefferies", priceTarget: 300 },
+        { symbol: "AAPL", publishedDate: "2026-10-18T09:00:00.000Z", analystCompany: "Morgan Stanley", priceTarget: 999 },
+      ]);
+      const ratings = { sourceName: "fmp", getConsensus: jest.fn(async (sym: string) =>
+        sym === "CRWV" ? consensus : sym === "ONEAN" ? { ...consensus, strongBuy: 0, buy: 1, hold: 0 } : null) };
+      const { svc } = make({ fmp: { getLatestGrades, getLatestPriceTargets }, ratings });
+      const base = [{ id: "AAPL", ticker: "AAPL", consensus: "Buy", recentGrades: [{ date: "2026-10-01", firm: "UBS", action: "maintain" }] }];
+      const out = await svc.getMarketWideAnalystActions(base);
+      const by = new Map(out.map((d) => [d.ticker, d]));
+
+      const aapl = by.get("AAPL") as { recentGrades: Array<Record<string, unknown>> };
+      expect(aapl.recentGrades[0]).toMatchObject({ date: "2026-10-18", firm: "Jefferies", priceTarget: 300 });
+      expect(aapl.recentGrades).toHaveLength(2);
+      // Untracked with an FMP consensus: the REAL counts, not one firm's rating.
+      expect(by.get("CRWV")).toMatchObject({ consensus: "Buy", buy: 10, hold: 3, priceTargetConsensus: 150 });
+      // No FMP consensus → left out; foreign symbol → never considered.
+      expect(by.has("NOCOV")).toBe(false);
+      expect([...by.keys()].some((k) => String(k).includes("NRDXF"))).toBe(false);
+      expect(ratings.getConsensus).not.toHaveBeenCalledWith(expect.stringContaining("NRDXF"));
+      // A one-analyst "consensus" is not shown; foreign OTC lines are not looked up.
+      expect(by.has("ONEAN")).toBe(false);
+      expect(ratings.getConsensus).not.toHaveBeenCalledWith("ESLOY");
+    });
+  });
+
   describe("analyst consensus", () => {
     const consensus = {
       consensus: "Buy", strongBuy: 0, buy: 8, hold: 2, sell: 0, strongSell: 0,

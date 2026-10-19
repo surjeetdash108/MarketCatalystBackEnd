@@ -1,3 +1,4 @@
+import { filedThirteenFQuarters } from "../vendors/fmp/fmp.service";
 import { Controller, Get, Header, UseGuards } from "@nestjs/common";
 import { CachedCollectionsService } from "../live/cached-collections.service";
 import { MarketDataService } from "./market-data.service";
@@ -32,6 +33,13 @@ export class InstitutionalOwnershipController {
     const { institutional_ownership } = await this.cached.get([
       "institutional_ownership",
     ]);
-    return institutional_ownership;
+    // Only quarters whose 13F deadline (45 days after quarter end) has passed:
+    // before it FMP has just the early filers (AAPL 2026 Q3 on Oct 19: 862
+    // holders, 0.56% "ownership"), so such a doc is not a real rollup. It is
+    // replaced as the job reaches the ticker again.
+    const filed = new Set(filedThirteenFQuarters(8).map((q) => `${q.year}Q${q.quarter}`));
+    return (institutional_ownership as Array<{ year?: number; quarter?: number }>).filter(
+      (d) => d.year != null && d.quarter != null && filed.has(`${d.year}Q${d.quarter}`),
+    );
   }
 }

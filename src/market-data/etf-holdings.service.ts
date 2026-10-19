@@ -3,6 +3,9 @@ import { ConfigService } from "@nestjs/config";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { fetchJson } from "../common/http.util";
 
+/** Holdings and fund facts change slowly; refresh any ETF at least weekly. */
+const HOLDINGS_TTL_MS = 7 * 86_400_000;
+
 export const POPULAR_16_ETFS = [
   "CIBR",
   "DIA",
@@ -206,7 +209,11 @@ export class EtfHoldingsService {
   }
 
   /**
-   * Retrieves ETF holdings doc from Firestore, syncing on-demand if missing.
+   * Retrieves ETF holdings doc from Firestore, syncing on-demand if missing or
+   * stale. Only the popular 16 are refreshed nightly; any other ETF used to be
+   * served from its first-ever sync forever, so it is re-synced after
+   * HOLDINGS_TTL_MS (or when it predates the issuer/inception fields). A failed
+   * re-sync serves the stored copy rather than nothing.
    */
   async getHoldings(symbol: string): Promise<EtfHoldingsDoc | null> {
     const sym = symbol.toUpperCase().trim();
@@ -215,7 +222,11 @@ export class EtfHoldingsService {
     const snap = await docRef.get();
 
     if (snap.exists) {
-      return snap.data() as EtfHoldingsDoc;
+      const stored = snap.data() as EtfHoldingsDoc;
+      const age = Date.now() - Date.parse(stored.updatedAt ?? "");
+      const fresh = Number.isFinite(age) && age < HOLDINGS_TTL_MS && "issuer" in stored;
+      if (fresh) return stored;
+      return (await this.syncEtf(sym).catch(() => null)) ?? stored;
     }
 
     // Sync on-demand

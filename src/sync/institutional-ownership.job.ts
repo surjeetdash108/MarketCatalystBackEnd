@@ -3,7 +3,7 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { chunkedBatchSet } from "../common/firestore-batch.util";
 import { TickerAiAnalysisService } from "../live/ticker-ai-analysis.service";
 import { SyncMetaService } from "../common/sync-meta.service";
-import { TICKER_UNIVERSE } from "../common/ticker-universe";
+import { TICKER_UNIVERSE, activeUniverse } from "../common/ticker-universe";
 import { FmpService } from "../vendors/fmp/fmp.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 
@@ -11,7 +11,7 @@ const JOB_NAME = "institutional-ownership";
 // Tickers per run. Env-overridable (same pattern as FINANCIALS_BATCH_SIZE) so a
 // one-off history backfill can be widened without a rebuild — raise it, let two
 // runs cover the universe, then put it back to 25 for steady state.
-const BATCH_SIZE = Number(process.env.INSTITUTIONAL_BATCH_SIZE) || 25;
+const BATCH_SIZE = Number(process.env.INSTITUTIONAL_BATCH_SIZE) || 150;
 // Large caps always have 13F holders — used only to discover the most recent
 // published reporting quarter once per run (rollups lag the quarter by ~45d).
 const REFERENCE_TICKERS = ["AAPL", "MSFT", "NVDA"];
@@ -53,7 +53,7 @@ const periodKey = (p: { year: number; quarter: number }) =>
  * table from them. FMP publishes that rollup directly.
  *
  * FMP is the only vendor wired for this; when FMP is off (no key) the run is a
- * no-op. Cursor-batched over TICKER_UNIVERSE like the SEC sweeps, so the
+ * no-op. Cursor-batched over the active company universe, so the
  * collection fills incrementally rather than in one giant fan-out. The latest
  * reporting quarter is resolved ONCE per run (against a large-cap reference)
  * and reused for every ticker in the batch — one FMP call per ticker.
@@ -263,9 +263,13 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
       }
 
       const cursor = await this.meta.getCursor(JOB_NAME);
+      // The live company universe (every ticker the app shows), not the fixed
+      // 241-name list; falls back to the static list if the read is empty.
+      const live = await activeUniverse(this.firebase.firestore).catch(() => [] as string[]);
+      const universe = live.length > 0 ? live : TICKER_UNIVERSE;
       const batch = Array.from(
-        { length: BATCH_SIZE },
-        (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
+        { length: Math.min(BATCH_SIZE, universe.length) },
+        (_, i) => universe[(cursor + i) % universe.length],
       );
 
       // Existing docs for this batch, so history is EXTENDED rather than
@@ -384,6 +388,10 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
               totalInvested: row.totalInvested,
               ownershipPercent: row.ownershipPercent,
               putCallRatio: row.putCallRatio,
+              newPositions: row.newPositions,
+              increasedPositions: row.increasedPositions,
+              reducedPositions: row.reducedPositions,
+              closedPositions: row.closedPositions,
               /** Newest-first filer/ownership series, HISTORY_QUARTERS long. */
               history,
               source: "fmp",
@@ -414,13 +422,13 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
       if (pending.length) await this.announce13F(pending);
       await this.meta.setCursor(
         JOB_NAME,
-        (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length,
+        (cursor + batch.length) % universe.length,
       );
       await this.meta.record(JOB_NAME, { ok: true, count: docs.length });
       return {
         count: docs.length,
         period,
-        cursorAdvancedTo: (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length,
+        cursorAdvancedTo: (cursor + batch.length) % universe.length,
       };
     } catch (err) {
       await this.meta.record(JOB_NAME, { ok: false, error: (err as Error).message });

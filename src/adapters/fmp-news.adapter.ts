@@ -4,7 +4,7 @@ import { AdapterResult, CanonicalNewsArticle, NewsAdapter } from "./types";
 import { fmpEasternToUtcIso } from "../common/date.util";
 
 /** FMP sentiment may arrive as a label ("Positive"/"Bearish"/…) or a score. */
-function normSentiment(
+export function normSentiment(
   s: string | null,
 ): "positive" | "negative" | "neutral" | null {
   if (!s) return null;
@@ -18,7 +18,7 @@ function normSentiment(
 }
 
 /** Stable id from the article URL so re-runs update in place and dedup. */
-function idFromUrl(url: string): string {
+export function idFromUrl(url: string): string {
   let h = 0;
   for (let i = 0; i < url.length; i++) h = (Math.imul(31, h) + url.charCodeAt(i)) | 0;
   return `fmp_${(h >>> 0).toString(36)}`;

@@ -34,6 +34,7 @@ const ALLOWED = new Set<string>([
   "market_sentiment_history",
   "earnings_events",
   "analyst_actions",
+  "analyst_firm_stats",
   "ipos",
   "macro_events",
   "recaps",

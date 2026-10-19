@@ -40,7 +40,9 @@ import {
   type EpsHistoryRow,
   type QuarterFinancials,
   type PolygonFinancialRow,
+  latestAnnualEpsGrowth,
 } from "../sync/financials.job";
+import { toFmpSymbol } from "../vendors/market-data/fmp-mapping.util";
 import {
   anchor52wToPrice,
   computeIndicators,
@@ -1111,11 +1113,14 @@ export class OnDemandService implements OnModuleDestroy {
       let volume: number | null = null;
       let q: Record<string, unknown> | undefined;
 
+      // Which vendor served the price — the stock page labels the quote with it.
+      let priceSource: "fmp" | "polygon" = "polygon";
       // FMP real-time quote preferred (seconds fresh); Polygon universal snapshot as backup
       if (this.fmp.enabled) {
         try {
           const fmpQ = await this.fmp.getQuote(ticker);
           if (fmpQ?.price != null) {
+            priceSource = "fmp";
             price = fmpQ.price;
             pctChange = fmpQ.changePercentage ?? null;
             prevClose = fmpQ.previousClose ?? null;
@@ -1133,6 +1138,7 @@ export class OnDemandService implements OnModuleDestroy {
         q = quotes[0] as Record<string, unknown> | undefined;
         if (!details && !q) return null;
         price = (q?.price as number | undefined) ?? null;
+        if (q?.source === "fmp") priceSource = "fmp";
         pctChange = (q?.changePercent as number | undefined) ?? null;
         prevClose = (q?.previousClose as number | undefined) ?? null;
         volume = (q?.volume as number | undefined) ?? null;
@@ -1267,35 +1273,37 @@ export class OnDemandService implements OnModuleDestroy {
         ? (snap.data() as Record<string, unknown>)
         : {};
 
+      // FMP primary on every rebuild, on the SAME basis as the nightly
+      // fundamentals-growth job (latest complete fiscal year), so the two
+      // writers agree and the value is current rather than whatever the job
+      // last reached: gross margin and revenue growth from FMP's annual
+      // ratios / income-statement growth. EPS growth keeps the job's non-GAAP
+      // basis (FMP reported EPS, summed per fiscal year) and, like the job,
+      // falls back to GAAP diluted EPS growth only without that history.
       let grossMargin = (prevCo.grossMargin as number | null | undefined) ?? null;
       let revenueGrowthYoY = (prevCo.revenueGrowthYoY as number | null | undefined) ?? null;
       let epsGrowthYoY = (prevCo.epsGrowthYoY as number | null | undefined) ?? null;
-
-      if ((grossMargin == null || revenueGrowthYoY == null || epsGrowthYoY == null) && this.fmp.enabled) {
-        try {
-          const [ratiosTtm, growthRows] = await Promise.all([
-            grossMargin == null ? this.fmp.getCompanyRatiosTtm(ticker) : Promise.resolve(null),
-            (revenueGrowthYoY == null || epsGrowthYoY == null) ? this.fmp.getIncomeStatementGrowth(ticker, 1) : Promise.resolve(null),
-          ]);
-          if (grossMargin == null && ratiosTtm) {
-            const gm = Number(ratiosTtm.grossProfitMarginTTM ?? ratiosTtm.grossProfitMargin);
-            if (Number.isFinite(gm) && gm > 0) {
-              grossMargin = Math.round(gm * 10000) / 10000;
-            }
-          }
-          if (Array.isArray(growthRows) && growthRows.length > 0) {
-            const g = growthRows[0];
-            if (revenueGrowthYoY == null) {
-              const rg = Number(g.growthRevenue);
-              if (Number.isFinite(rg)) revenueGrowthYoY = Math.round(rg * 10000) / 10000;
-            }
-            if (epsGrowthYoY == null) {
-              const eg = Number(g.growthEPS);
-              if (Number.isFinite(eg)) epsGrowthYoY = Math.round(eg * 10000) / 10000;
-            }
-          }
-        } catch {
-          // Keep whatever values were present
+      if (this.fmp.enabled) {
+        const fmpSym = toFmpSymbol(ticker);
+        const [ratios, growth, finSnap] = await Promise.all([
+          this.fmp.getCompanyRatios(fmpSym).catch(() => null),
+          this.fmp.getIncomeStatementGrowth(fmpSym, 1).catch(() => null),
+          this.firebase.firestore.collection("financials").doc(ticker).get().catch(() => null),
+        ]);
+        const round4 = (v: number) => Math.round(v * 10000) / 10000;
+        const gm = Number(ratios?.grossProfitMargin);
+        if (Number.isFinite(gm) && gm > 0) grossMargin = round4(gm);
+        const g = growth?.[0];
+        const rg = Number(g?.growthRevenue);
+        if (Number.isFinite(rg)) revenueGrowthYoY = round4(rg);
+        const hist = (finSnap?.data()?.epsHistory ?? []) as EpsHistoryRow[];
+        const nonGaap = latestAnnualEpsGrowth(hist);
+        if (nonGaap != null) {
+          epsGrowthYoY = nonGaap;
+        } else if (epsGrowthYoY == null) {
+          const eg = Number(g?.growthEPSDiluted ?? g?.growthEPS);
+          // Same magnitude cap as the job: a near-zero base is not a growth rate.
+          if (Number.isFinite(eg) && Math.abs(eg) <= 10) epsGrowthYoY = round4(eg);
         }
       }
 
@@ -1313,25 +1321,28 @@ export class OnDemandService implements OnModuleDestroy {
               // FMP's fuller writeup first, Polygon's as fallback — same order
               // as the companies sync (polygon-company-profile.adapter.ts), so
               // the two writers no longer flip the text back and forth.
+              // A source with no value for a field (Polygon has no description or
+              // market cap for ETFs) keeps the stored one instead of nulling it.
               description:
-                fmpProfile?.description ?? details.description ?? null,
+                fmpProfile?.description ?? details.description ?? (prevCo.description as string | undefined) ?? null,
               descriptionSource,
-              homepageUrl: details.homepage_url ?? null,
+              homepageUrl: details.homepage_url ?? (prevCo.homepageUrl as string | undefined) ?? null,
               sector: sicClass.sector,
               industry: sicClass.industry,
               sicCode: resolvedSic == null ? null : String(resolvedSic),
               sicDescription: details.sic_description ?? null,
               // Correct a grossly-stale Polygon market_cap with price × shares
               // (see reconcileMarketCap); consistent values are left untouched.
-              marketCap: reconcileMarketCap(
-                details.market_cap,
-                price,
-                details.weighted_shares_outstanding,
-              ),
-              exchange: details.primary_exchange ?? null,
-              employees: (details as any).total_employees ?? fmpProfile?.fullTimeEmployees ?? null,
-              listingDate: (details as any).list_date ?? fmpProfile?.ipoDate ?? null,
-              ceo: (details as any).ceo ?? fmpProfile?.ceo ?? null,
+              marketCap:
+                reconcileMarketCap(
+                  details.market_cap,
+                  price,
+                  details.weighted_shares_outstanding,
+                ) ?? (prevCo.marketCap as number | undefined) ?? null,
+              exchange: details.primary_exchange ?? (prevCo.exchange as string | undefined) ?? null,
+              employees: (details as any).total_employees ?? fmpProfile?.fullTimeEmployees ?? (prevCo.employees as number | undefined) ?? null,
+              listingDate: (details as any).list_date ?? fmpProfile?.ipoDate ?? (prevCo.listingDate as string | undefined) ?? null,
+              ceo: (details as any).ceo ?? fmpProfile?.ceo ?? (prevCo.ceo as string | undefined) ?? null,
             }
           : {}),
         price,
@@ -1377,7 +1388,7 @@ export class OnDemandService implements OnModuleDestroy {
         ...technicals,
         createdAt: now,
         updatedAt: now,
-        source: "fmp-ondemand",
+        source: `${priceSource}-ondemand`,
       };
       // Stored bars stop at the last premarket run; `price` is the snapshot,
       // a session or more newer. Measure the 52w figures from `price`.

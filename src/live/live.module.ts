@@ -34,6 +34,8 @@ import { ETFClassifier } from "./etf-classifier";
 import { EtfMarketService } from "./etf-market.service";
 import { EarningsTranscriptSummaryService } from "./earnings-transcript-summary.service";
 import { StockDetailsService } from "./stock-details.service";
+import { NewsWireService } from "./news-wire.service";
+import { NewsWireController } from "./news-wire.controller";
 
 /**
  * Live (delayed) price streaming for the Search screen and the header tape.
@@ -62,6 +64,7 @@ import { StockDetailsService } from "./stock-details.service";
     LandingTapeController,
     CachedCollectionsController,
     OnDemandController,
+    NewsWireController,
   ],
   providers: [
     WhatMattersNowService,
@@ -86,6 +89,7 @@ import { StockDetailsService } from "./stock-details.service";
     EtfMarketService,
     EarningsTranscriptSummaryService,
     StockDetailsService,
+    NewsWireService,
   ],
   exports: [
     WhatMattersNowService,
