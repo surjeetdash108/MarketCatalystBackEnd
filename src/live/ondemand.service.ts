@@ -398,6 +398,12 @@ export class OnDemandService implements OnModuleDestroy {
     string,
     { data: Record<string, unknown>; at: number }
   >();
+  /** Universe raw RS scores (nightly job) for ranking peers on demand; 1h. */
+  private rsDistribution: { scores: Map<string, number>; at: number } | null = null;
+  /** On-demand RS rating per `ticker|last completed ET session`. */
+  private readonly memRsRating = new Map<string, { rating: number | null; at: number }>();
+  /** Close 30 calendar days back per `ticker|ET date` (peers' monthly change). */
+  private readonly memMonthBase = new Map<string, { close: number | null; at: number }>();
   private readonly memCompanySummary = new Map<
     string,
     { data: Record<string, unknown>; at: number }
@@ -1485,7 +1491,7 @@ export class OnDemandService implements OnModuleDestroy {
     const peRatio =
       eps != null && eps > 0 && price != null
         ? Math.round((price / eps) * 100) / 100
-        : null;
+        : (fmpQuote?.pe ?? null);
 
     // Next ER — FMP lists scheduled quarters with no actual yet.
     const today = iso(new Date());
@@ -1542,7 +1548,7 @@ export class OnDemandService implements OnModuleDestroy {
             price,
             details.weighted_shares_outstanding,
           )
-        : null,
+        : (fmpQuote?.marketCap ?? null),
       exchange: details?.primary_exchange ?? null,
       sector: sicClass?.sector ?? null,
       industry: sicClass?.industry ?? null,
@@ -1557,6 +1563,10 @@ export class OnDemandService implements OnModuleDestroy {
       pctFromHigh52: ind?.pctFromHigh52 ?? null,
       pctFromLow52: ind?.pctFromLow52 ?? null,
       avgVolume20: ind?.avgVolume20 ?? null,
+      week5ChangePct: ind?.week5ChangePct ?? null,
+      monthChangePct: ind?.monthChangePct ?? null,
+      weeklyChange: ind?.week5ChangePct ?? null,
+      monthlyChange: ind?.monthChangePct ?? null,
       // Lets the frontend tell this apart from the full company doc.
       partial: true,
       source: "polygon-summary",
@@ -1605,6 +1615,264 @@ export class OnDemandService implements OnModuleDestroy {
       price: q.price ?? null,
       pctChange: q.changePct ?? null,
     }));
+  }
+
+  /**
+   * Enriched peer summaries (name, price, pctChange, marketCap, peRatio, rsRating, weeklyChange, monthlyChange).
+   * Fast resolution path: checks memory caches (memCompany, memCompanySummary), Firestore companies collection,
+   * and on-demand summaries / FMP quotes for any missing peer tickers.
+   */
+  async getPeersSummary(tickers: string[]): Promise<
+    Array<{
+      ticker: string;
+      name: string | null;
+      price: number | null;
+      pctChange: number | null;
+      marketCap: number | null;
+      peRatio: number | null;
+      rsRating: number | null;
+      weeklyChange: number | null;
+      monthlyChange: number | null;
+    }>
+  > {
+    const syms = [
+      ...new Set(tickers.map((t) => t.toUpperCase().trim()).filter(Boolean)),
+    ].slice(0, 50);
+    if (syms.length === 0) return [];
+
+    const results = new Map<string, {
+      ticker: string;
+      name: string | null;
+      price: number | null;
+      pctChange: number | null;
+      marketCap: number | null;
+      peRatio: number | null;
+      rsRating: number | null;
+      weeklyChange: number | null;
+      monthlyChange: number | null;
+    }>();
+
+    const missing: string[] = [];
+    for (const sym of syms) {
+      const full = this.memCompany.get(sym);
+      if (full && Date.now() - full.at < 5 * 60_000) {
+        const d = full.data;
+        results.set(sym, {
+          ticker: sym,
+          name: (d.name as string) ?? sym,
+          price: (d.price as number) ?? null,
+          pctChange: (d.pctChange as number) ?? null,
+          marketCap: (d.marketCap as number) ?? null,
+          peRatio: (d.peRatio as number) ?? null,
+          rsRating: (d.rsRating as number) ?? null,
+          weeklyChange: (d.week5ChangePct as number) ?? null,
+          monthlyChange: (d.monthChangePct as number) ?? null,
+        });
+        continue;
+      }
+      const sum = this.memCompanySummary.get(sym);
+      if (sum && Date.now() - sum.at < COMPANY_SUMMARY_TTL_MS) {
+        const d = sum.data;
+        results.set(sym, {
+          ticker: sym,
+          name: (d.name as string) ?? sym,
+          price: (d.price as number) ?? null,
+          pctChange: (d.pctChange as number) ?? null,
+          marketCap: (d.marketCap as number) ?? null,
+          peRatio: (d.peRatio as number) ?? null,
+          rsRating: (d.rsRating as number) ?? null,
+          weeklyChange: (d.week5ChangePct as number) ?? (d.weeklyChange as number) ?? null,
+          monthlyChange: (d.monthChangePct as number) ?? (d.monthlyChange as number) ?? null,
+        });
+        continue;
+      }
+      missing.push(sym);
+    }
+
+    if (missing.length === 0) {
+      return this.withRsRating(await this.withLiveMonthChange(syms.map((s) => results.get(s)!).filter(Boolean)));
+    }
+
+    try {
+      const snaps = await Promise.all(
+        missing.map((s) =>
+          this.firebase.firestore.collection("companies").doc(s).get().catch(() => null),
+        ),
+      );
+      const stillMissing: string[] = [];
+      snaps.forEach((snap, idx) => {
+        const s = missing[idx];
+        if (snap && snap.exists) {
+          const d = snap.data() || {};
+          results.set(s, {
+            ticker: s,
+            name: (d.name as string) ?? s,
+            price: (d.price as number) ?? null,
+            pctChange: (d.pctChange as number) ?? null,
+            marketCap: (d.marketCap as number) ?? null,
+            peRatio: (d.peRatio as number) ?? null,
+            rsRating: (d.rsRating as number) ?? null,
+            weeklyChange: (d.week5ChangePct as number) ?? null,
+            monthlyChange: (d.monthChangePct as number) ?? null,
+          });
+        } else {
+          stillMissing.push(s);
+        }
+      });
+
+      if (stillMissing.length > 0) {
+        const [fmpQuotes, snapshotMap] = await Promise.all([
+          this.fmp.getQuotes(stillMissing).catch(() => []),
+          this.snapshots.get(stillMissing).catch(() => ({ quotes: [] })),
+        ]);
+
+        const fmpMap = new Map((fmpQuotes || []).map((q) => [q.symbol, q]));
+        const snapQuotesMap = new Map<string, { name?: string | null; price?: number | null; changePct?: number | null }>(((snapshotMap as any)?.quotes || []).map((q: any) => [q.ticker, q]));
+
+        await Promise.all(
+          stillMissing.map(async (s) => {
+            const sumDoc = await this.getCompanySummary(s).catch(() => null);
+            const fmpQ = fmpMap.get(s);
+            const snapQ = snapQuotesMap.get(s);
+
+            const name = (sumDoc?.name as string) ?? fmpQ?.name ?? snapQ?.name ?? s;
+            const price = (sumDoc?.price as number) ?? fmpQ?.price ?? snapQ?.price ?? null;
+            const pctChange = (sumDoc?.pctChange as number) ?? fmpQ?.changePercentage ?? snapQ?.changePct ?? null;
+            const marketCap = (sumDoc?.marketCap as number) ?? fmpQ?.marketCap ?? null;
+            const peRatio = (sumDoc?.peRatio as number) ?? fmpQ?.pe ?? null;
+            const rsRating = (sumDoc?.rsRating as number) ?? null;
+            const weeklyChange = (sumDoc?.week5ChangePct as number) ?? (sumDoc?.weeklyChange as number) ?? null;
+            const monthlyChange = (sumDoc?.monthChangePct as number) ?? (sumDoc?.monthlyChange as number) ?? null;
+
+            results.set(s, {
+              ticker: s,
+              name,
+              price,
+              pctChange,
+              marketCap,
+              peRatio,
+              rsRating,
+              weeklyChange,
+              monthlyChange,
+            });
+          }),
+        );
+      }
+    } catch (err) {
+      this.logger.warn(`getPeersSummary error: ${(err as Error)?.message ?? err}`);
+    }
+
+    return this.withRsRating(await this.withLiveMonthChange(syms.map((s) => results.get(s)!).filter(Boolean)));
+  }
+
+  /**
+   * RS rating for peers that have none stored (outside the tracked universe),
+   * computed EXACTLY like the nightly rs-rating job: computeRsScore over the
+   * last 260 completed daily closes (weighted trailing quarterly returns,
+   * 40/20/20/20; needs 65+ sessions), then rsPercentile against the universe's
+   * stored raw scores. Too little history (a recent IPO) stays null.
+   */
+  private async withRsRating<T extends { ticker: string; rsRating: number | null }>(rows: T[]): Promise<T[]> {
+    const need = rows.filter((r) => r.rsRating == null);
+    if (need.length === 0) return rows;
+    const etIso = (ms: number) =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ms));
+    const now = Date.now();
+    // Completed sessions only, like the nightly sweep's stored bars.
+    const to = etIso(now - 86_400_000);
+    const from = etIso(now - 400 * 86_400_000);
+
+    if (!this.rsDistribution || now - this.rsDistribution.at > 3_600_000) {
+      const dist = await this.firebase.firestore
+        .collection("companies")
+        .select("rsScore", "delisted")
+        .get()
+        .catch(() => null);
+      if (dist) {
+        const scores = new Map<string, number>();
+        for (const d of dist.docs) {
+          const x = d.data();
+          if (x.delisted !== true && typeof x.rsScore === "number") scores.set(d.id, x.rsScore);
+        }
+        this.rsDistribution = { scores, at: now };
+      }
+    }
+    const dist = this.rsDistribution?.scores;
+    if (!dist || dist.size < 20) return rows; // too thin to rank (same floor as the first-view path)
+
+    for (let i = 0; i < need.length; i += 5) {
+      await Promise.all(
+        need.slice(i, i + 5).map(async (r) => {
+          const key = `${r.ticker}|${to}`;
+          let hit = this.memRsRating.get(key);
+          if (!hit) {
+            const bars = await this.polygon.getAggsRange(r.ticker, from, to).catch(() => [] as PolygonAggBar[]);
+            const closes = bars
+              .filter((b) => b.c != null && b.c > 0)
+              .sort((a, b) => a.t - b.t)
+              .map((b) => b.c as number)
+              .slice(-260);
+            const score = computeRsScore(closes);
+            const others = [...dist].filter(([t]) => t !== r.ticker).map(([, v]) => v);
+            hit = { rating: score == null ? null : rsPercentile(score, others), at: now };
+            this.memRsRating.set(key, hit);
+          }
+          r.rsRating = hit.rating;
+        }),
+      );
+    }
+    return rows;
+  }
+
+  /**
+   * Monthly change = live price now vs the close 30 calendar days ago (the last
+   * session on or before that ET date, for weekends/holidays), computed from
+   * daily bars for every peer. Replaces the stored 21-session figure, which ends
+   * at the last stored bar; keeps it only when the bars cannot be had.
+   */
+  private async withLiveMonthChange<T extends { ticker: string; price: number | null; monthlyChange: number | null }>(
+    rows: T[],
+  ): Promise<T[]> {
+    if (rows.length === 0) return rows;
+    const etIso = (ms: number) =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ms));
+    const now = Date.now();
+    const target = etIso(now - 30 * 86_400_000);
+    const from = etIso(now - 40 * 86_400_000);
+    const { quotes } = await this.snapshots
+      .get(rows.map((r) => r.ticker))
+      .catch(() => ({ quotes: [] as Array<{ ticker: string; price: number | null }> }));
+    const live = new Map<string, number | null>(
+      quotes.map((q: { ticker: string; price: number | null }) => [q.ticker, q.price ?? null] as [string, number | null]),
+    );
+
+    const baseClose = async (sym: string): Promise<number | null> => {
+      const key = `${sym}|${target}`;
+      const hit = this.memMonthBase.get(key);
+      if (hit && now - hit.at < 6 * 3_600_000) return hit.close;
+      const bars = await this.polygon.getAggsRange(sym, from, target).catch(() => [] as PolygonAggBar[]);
+      // Bars are stamped at ET midnight; the last one dated on/before `target`.
+      const base = bars
+        .filter((b) => b.c != null && b.c > 0 && etIso(b.t) <= target)
+        .sort((a, b) => a.t - b.t)
+        .at(-1);
+      const close = base?.c ?? null;
+      this.memMonthBase.set(key, { close, at: now });
+      return close;
+    };
+
+    for (let i = 0; i < rows.length; i += 5) {
+      await Promise.all(
+        rows.slice(i, i + 5).map(async (r) => {
+          const price = live.get(r.ticker) ?? r.price;
+          const base = await baseClose(r.ticker);
+          if (price != null && price > 0 && base != null) {
+            r.monthlyChange = Math.round(((price - base) / base) * 10_000) / 100;
+          }
+        }),
+      );
+    }
+    return rows;
   }
 
   // ── Company logo (Polygon branding, proxied) ────────────────────────────

@@ -40,14 +40,17 @@ const toFullQuote = (r: any): FmpFullQuote | null => {
   if (!r?.symbol || price == null) return null;
   return {
     symbol: String(r.symbol).toUpperCase(),
+    name: (r?.name && String(r.name).trim()) || null,
     price,
     change: num(r.change),
-    changePercentage: num(r.changePercentage),
+    changePercentage: num(r.changePercentage ?? r.changesPercentage),
     previousClose: num(r.previousClose),
     open: num(r.open),
     dayHigh: num(r.dayHigh),
     dayLow: num(r.dayLow),
     volume: num(r.volume),
+    marketCap: num(r.marketCap),
+    pe: num(r.pe),
     timestamp: num(r.timestamp),
   };
 };
@@ -416,6 +419,8 @@ export interface FmpQuote {
   changePercentage: number;
   previousClose: number | null;
   volume?: number | null;
+  marketCap?: number | null;
+  pe?: number | null;
   /** Unix seconds of the last print. */
   timestamp: number;
 }
@@ -423,6 +428,7 @@ export interface FmpQuote {
 /** A full `/stable/quote` (or `/stable/batch-quote`) row, for the live quote cache. */
 export interface FmpFullQuote {
   symbol: string;
+  name?: string | null;
   price: number | null;
   change: number | null;
   changePercentage: number | null;
@@ -431,6 +437,8 @@ export interface FmpFullQuote {
   dayHigh: number | null;
   dayLow: number | null;
   volume: number | null;
+  marketCap?: number | null;
+  pe?: number | null;
   /** Unix seconds of the last print. */
   timestamp: number | null;
 }
@@ -700,6 +708,8 @@ export class FmpService {
       if (!Number.isFinite(price) || !Number.isFinite(pct) || !Number.isFinite(ts)) return null;
       const prev = Number(r?.previousClose);
       const vol = Number(r?.volume);
+      const mcap = Number(r?.marketCap);
+      const pe = Number(r?.pe);
       return {
         symbol: String(r.symbol ?? symbol),
         name: r?.name ? String(r.name) : null,
@@ -707,6 +717,8 @@ export class FmpService {
         changePercentage: pct,
         previousClose: Number.isFinite(prev) ? prev : null,
         volume: Number.isFinite(vol) ? vol : null,
+        marketCap: Number.isFinite(mcap) ? mcap : null,
+        pe: Number.isFinite(pe) ? pe : null,
         timestamp: ts,
       };
     } catch (err) {

@@ -431,6 +431,27 @@ ${JSON.stringify(ctx, null, 2)}`,
     sendWithEtag(req, res, data);
   }
 
+  @Get("peers-summary")
+  @UseGuards(FirebaseAuthGuard)
+  @Header("Cache-Control", "public, max-age=30, s-maxage=60")
+  async peersSummary(
+    @Query("tickers") tickers: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const syms = (tickers ?? "")
+      .split(",")
+      .map((t) => t.toUpperCase().trim())
+      .filter((t) => TICKER_RE.test(t))
+      .slice(0, 50);
+    if (syms.length === 0) {
+      sendWithEtag(req, res, []);
+      return;
+    }
+    const data = await this.ondemand.getPeersSummary(syms);
+    sendWithEtag(req, res, data);
+  }
+
   /** Company logo bytes proxied from Polygon branding (key stays server-side). */
   // Deliberately unauthenticated: this is loaded as an <img src>, and an
   // image request cannot carry an Authorization header. It proxies the

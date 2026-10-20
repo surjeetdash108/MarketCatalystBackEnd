@@ -476,6 +476,7 @@ export function computeIndicators(
   const sma50 = sma(closes, 50);
   const sma200 = sma(closes, 200);
   const week5ChangePct = changeOverSessions(closes, 5);
+  const monthChangePct = changeOverSessions(closes, 21);
   // The close the 5-day move is measured FROM, stored alongside the move itself.
   //
   // week5ChangePct ends at the last stored bar, which can be days old — DAIC
@@ -582,6 +583,8 @@ export function computeIndicators(
     aboveSma200: sma200 == null ? null : latestClose >= sma200,
     week5ChangePct:
       week5ChangePct == null ? null : Math.round(week5ChangePct * 100) / 100,
+    monthChangePct:
+      monthChangePct == null ? null : Math.round(monthChangePct * 100) / 100,
     week5BaseClose:
       week5BaseClose == null ? null : Math.round(week5BaseClose * 10000) / 10000,
     /** Last 6 dated closes, oldest → newest (see week5Closes above). */
