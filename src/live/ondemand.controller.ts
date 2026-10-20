@@ -431,6 +431,20 @@ ${JSON.stringify(ctx, null, 2)}`,
     sendWithEtag(req, res, data);
   }
 
+  @Get("estimates")
+  @UseGuards(FirebaseAuthGuard)
+  @Header("Cache-Control", "private, max-age=600")
+  async estimates(
+    @Query("ticker") ticker: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? "").toUpperCase().trim();
+    if (!TICKER_RE.test(sym))
+      throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+    sendWithEtag(req, res, { ticker: sym, quarterly: await this.ondemand.getQuarterlyEstimates(sym) });
+  }
+
   @Get("peers-summary")
   @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "public, max-age=30, s-maxage=60")

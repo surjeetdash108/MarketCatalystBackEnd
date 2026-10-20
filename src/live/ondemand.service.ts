@@ -388,6 +388,15 @@ function isFresh(
 // this on-view path and the nightly profile-adapter sweep share ONE definition
 // and can never drift the derived yield apart.
 
+export interface QuarterlyEstimate {
+  /** Fiscal quarter end (FMP's date). */
+  date: string;
+  epsAvg: number | null;
+  revenueAvg: number | null;
+  numAnalystsEps: number | null;
+  numAnalystsRevenue: number | null;
+}
+
 @Injectable()
 export class OnDemandService implements OnModuleDestroy {
   private readonly logger = new Logger(OnDemandService.name);
@@ -398,6 +407,8 @@ export class OnDemandService implements OnModuleDestroy {
     string,
     { data: Record<string, unknown>; at: number }
   >();
+  /** FMP quarterly analyst estimates per ticker; 12h. */
+  private readonly memQuarterlyEstimates = new Map<string, { data: QuarterlyEstimate[]; at: number }>();
   /** Universe raw RS scores (nightly job) for ranking peers on demand; 1h. */
   private rsDistribution: { scores: Map<string, number>; at: number } | null = null;
   /** On-demand RS rating per `ticker|last completed ET session`. */
@@ -1822,6 +1833,34 @@ export class OnDemandService implements OnModuleDestroy {
       );
     }
     return rows;
+  }
+
+  /**
+   * Quarterly analyst consensus (FMP `analyst-estimates`, period=quarter):
+   * EPS and revenue averages per fiscal quarter end, oldest first. Drives the
+   * Earnings tab's forward (estimate) quarters. Cached 12h; [] when FMP has none.
+   */
+  async getQuarterlyEstimates(ticker: string): Promise<QuarterlyEstimate[]> {
+    const sym = ticker.toUpperCase().trim();
+    const hit = this.memQuarterlyEstimates.get(sym);
+    if (hit && Date.now() - hit.at < 12 * 3_600_000) return hit.data;
+    const rows = (await this.fmp
+      .request(`analyst-estimates?symbol=${encodeURIComponent(toFmpSymbol(sym))}&period=quarter&page=0&limit=60`)
+      .catch(() => null)) as Array<Record<string, unknown>> | null;
+    if (rows == null) return hit?.data ?? [];
+    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    const data = rows
+      .map((r) => ({
+        date: String(r.date ?? "").slice(0, 10),
+        epsAvg: num(r.epsAvg),
+        revenueAvg: num(r.revenueAvg),
+        numAnalystsEps: num(r.numAnalystsEps),
+        numAnalystsRevenue: num(r.numAnalystsRevenue),
+      }))
+      .filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.date) && (r.epsAvg != null || r.revenueAvg != null))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    this.memQuarterlyEstimates.set(sym, { data, at: Date.now() });
+    return data;
   }
 
   /**
