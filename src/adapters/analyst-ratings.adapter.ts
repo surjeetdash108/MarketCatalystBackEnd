@@ -411,10 +411,16 @@ export function resolveFirmTarget(
     }
   }
   if (!best) return null;
+  // A target carried forward from an earlier post is the firm's STANDING
+  // target — unchanged at this call — so it has no "previous" to report.
+  // Reporting the old post's prior value made a plain reiteration read as a
+  // target change on the wrong date (STRL Cantor: Aug 5's $482 → $742 shown
+  // again on Sep 30 and Oct 14, where Cantor only reiterated).
+  const sameCall = Math.abs(bestTime - gradeTime) <= TARGET_POST_GRACE_DAYS * DAY_MS;
   return {
     priceTarget: best.priceTarget,
     date: best.date,
-    previousPriceTarget: previousFirmTarget(posts, best, bestTime),
+    previousPriceTarget: sameCall ? previousFirmTarget(posts, best, bestTime) : null,
   };
 }
 

@@ -114,12 +114,15 @@ describe("resolveFirmTarget", () => {
     { date: "2026-05-01", priceTarget: 244 },
     { date: "2026-08-05", priceTarget: 275 },
   ];
-  it("carries the standing target forward onto a later reiteration (AME/Baird, 61 days)", () => {
+  it("carries the standing target forward onto a later reiteration (AME/Baird, 61 days) — with no 'previous', since the target did not change at this call", () => {
     expect(resolveFirmTarget(posts, "2026-10-05", "maintain")).toEqual({
       priceTarget: 275,
       date: "2026-08-05",
-      previousPriceTarget: 244,
+      previousPriceTarget: null,
     });
+  });
+  it("reports the previous target only for the call the post was made with (within the news-lag grace)", () => {
+    expect(resolveFirmTarget(posts, "2026-08-06", "maintain")?.previousPriceTarget).toBe(244);
   });
   it("never pins a target the firm posted AFTER the grade", () => {
     // Old rule picked the nearest (2026-05-01, a month later); the standing one is Feb's.
@@ -292,7 +295,9 @@ describe("FmpAnalystRatingsAdapter previous targets", () => {
     const out = await new FmpAnalystRatingsAdapter(
       fmp({
         getGrades: async () => [
-          { date: "2026-06-01", gradingCompany: "Barclays", previousGrade: "Overweight", newGrade: "Overweight", action: "maintain" },
+          // The call the target was posted with (a later reiteration carries the
+          // standing $95 with no "previous" — see resolveFirmTarget).
+          { date: "2026-04-30", gradingCompany: "Barclays", previousGrade: "Overweight", newGrade: "Overweight", action: "maintain" },
         ],
         getPriceTargets: async () => [
           { date: "2026-04-30", firm: "Barclays", priceTarget: 475, title: "Carvana price target raised to $475 from $430 at Barclays" },
