@@ -80,6 +80,27 @@ gcloud scheduler jobs "${eod_action}" http "${EOD_NAME}" \
   --oidc-token-audience="${SERVICE_URL}" \
   --attempt-deadline="900s"
 
+# ── Strategy Lab ─────────────────────────────────────────────────────────────
+# Daily: after the close, append the session to every stock's bar pack (one FMP
+# bulk EOD call) and precompute the daily library strategies across the
+# universe. First run also backfills 11 years per stock (~2.5 min).
+# Intraday: every 5 minutes in the session, refresh the 5-min packs (15-min every
+# third run) — one FMP call per stock — and rerun the intraday library
+# strategies. The job holds a Firestore lease, so overlapping hits are no-ops.
+upsert_lab_job() {
+  local name="$1" schedule="$2" uri="$3" deadline="$4" action=create
+  echo "→ ${name}  ('${schedule}' ${TZ_NAME})  ${uri}"
+  if gcloud scheduler jobs describe "${name}" --project="${PROJECT_ID}" --location="${REGION}" >/dev/null 2>&1; then action=update; fi
+  gcloud scheduler jobs "${action}" http "${name}" \
+    --project="${PROJECT_ID}" --location="${REGION}" \
+    --schedule="${schedule}" --time-zone="${TZ_NAME}" \
+    --uri="${uri}" --http-method=POST \
+    --oidc-service-account-email="${INVOKER_SA}" --oidc-token-audience="${SERVICE_URL}" \
+    --attempt-deadline="${deadline}"
+}
+upsert_lab_job "sync-strategy-lab-daily" "30 17 * * 1-5" "${SERVICE_URL}/sync/strategy-lab-daily/run" "900s"
+upsert_lab_job "sync-strategy-lab-intraday" "*/5 9-16 * * 1-5" "${SERVICE_URL}/sync/strategy-lab-intraday/run" "600s"
+
 # ── Retire the old per-job schedules ─────────────────────────────────────────
 OLD_JOBS=(
   sec-13f sec-form4 companies stock-history ticker-universe rs-rating

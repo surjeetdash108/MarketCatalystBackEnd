@@ -36,6 +36,10 @@ import { EarningsTranscriptSummaryService } from "./earnings-transcript-summary.
 import { StockDetailsService } from "./stock-details.service";
 import { NewsWireService } from "./news-wire.service";
 import { NewsWireController } from "./news-wire.controller";
+import { StrategyLabService } from "./strategy-lab.service";
+import { StrategyLabController } from "./strategy-lab.controller";
+import { LabStoreService } from "./strategy-lab/lab-store.service";
+import { LabResultsService } from "./strategy-lab/lab-results.service";
 
 /**
  * Live (delayed) price streaming for the Search screen and the header tape.
@@ -65,6 +69,7 @@ import { NewsWireController } from "./news-wire.controller";
     CachedCollectionsController,
     OnDemandController,
     NewsWireController,
+    StrategyLabController,
   ],
   providers: [
     WhatMattersNowService,
@@ -90,6 +95,9 @@ import { NewsWireController } from "./news-wire.controller";
     EarningsTranscriptSummaryService,
     StockDetailsService,
     NewsWireService,
+    StrategyLabService,
+    LabStoreService,
+    LabResultsService,
   ],
   exports: [
     WhatMattersNowService,
@@ -113,6 +121,9 @@ import { NewsWireController } from "./news-wire.controller";
     EtfMarketService,
     EarningsTranscriptSummaryService,
     StockDetailsService,
+    StrategyLabService,
+    LabStoreService,
+    LabResultsService,
   ],
 })
 export class LiveModule {}

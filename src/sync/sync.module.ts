@@ -1,3 +1,5 @@
+import { StrategyLabDailyJob } from "./strategy-lab-daily.job";
+import { StrategyLabIntradayJob } from "./strategy-lab-intraday.job";
 import { Logger, Module, type OnApplicationBootstrap } from "@nestjs/common";
 import { manifestDrift } from "../common/job-manifest";
 import { SyncRegistry } from "../common/sync-registry.service";
@@ -79,6 +81,8 @@ import { MarketDataModule } from "../market-data/market-data.module";
   controllers: [SyncController],
   providers: [
     LlmGatewayService,
+    StrategyLabDailyJob,
+    StrategyLabIntradayJob,
     RecapBlogJob,
     EarningsActualsJob,
     TickerPeriodAnalysisJob,
