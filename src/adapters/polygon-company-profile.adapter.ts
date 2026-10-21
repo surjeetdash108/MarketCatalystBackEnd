@@ -41,7 +41,7 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
     // Canonical classification: SEC EDGAR regulatory filing SIC primary, Polygon fallback.
     const secSic = await this.secEdgar.getSicByTicker(ticker);
     const resolvedSic = resolveSicCode(secSic, details.sic_code);
-    const sicClass = classifyFromSic(resolvedSic);
+    const sicClass = classifyFromSic(resolvedSic, ticker);
     // Kicked off in parallel with the price/eps/peers/dividend fetches below so
     // it adds max(), not sum(), to latency. Null on any failure → SIC fallback.
     const fmpProfilePromise = this.fmp.enabled

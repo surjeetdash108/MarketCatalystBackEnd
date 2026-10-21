@@ -391,7 +391,7 @@ export const AI_INFRASTRUCTURE_THEMES: AiInfrastructureTheme[] = [
 function normalizedIndustry(c: Record<string, unknown>): string | null {
   const industry = c.industry;
   if (typeof industry === "string" && isTvIndustry(industry)) return industry;
-  return classifyFromSic(c.sicCode as string | number | null | undefined)
+  return classifyFromSic(c.sicCode as string | number | null | undefined, c.ticker as string | undefined)
     .industry;
 }
 

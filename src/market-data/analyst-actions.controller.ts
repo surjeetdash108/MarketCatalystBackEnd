@@ -71,4 +71,34 @@ export class AnalystActionsController {
     const { analyst_firm_stats } = await this.cached.get(["analyst_firm_stats"]);
     return analyst_firm_stats;
   }
+
+  /** GET /market-data/analyst-history?ticker=SYM — every rating change on
+   *  record for one stock (FMP grades), newest first. */
+  @Get("analyst-history")
+  @Header(
+    "Cache-Control",
+    "public, max-age=300, s-maxage=3600, stale-while-revalidate=3600",
+  )
+  async analystHistory(@Query("ticker") ticker?: string) {
+    const sym = (ticker ?? "").toUpperCase().trim();
+    if (!TICKER_RE.test(sym)) {
+      throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+    }
+    return this.stockDetails.getAnalystHistory(sym);
+  }
+
+  /** GET /market-data/analyst-firm-calls?firm=Name — every stored call by one
+   *  firm across all measured stocks, newest first. */
+  @Get("analyst-firm-calls")
+  @Header(
+    "Cache-Control",
+    "public, max-age=300, s-maxage=1800, stale-while-revalidate=1800",
+  )
+  async analystFirmCalls(@Query("firm") firm?: string) {
+    const name = (firm ?? "").trim();
+    if (!name || name.length > 120) {
+      throw new BadRequestException("firm is required (max 120 chars)");
+    }
+    return this.stockDetails.getFirmCalls(name);
+  }
 }

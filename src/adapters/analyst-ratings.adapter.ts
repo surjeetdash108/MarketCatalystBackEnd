@@ -60,6 +60,8 @@ export interface AnalystRatingsAdapter {
   /** Consensus + price target + recent grades for one ticker, or null when the
    * vendor has no coverage. */
   getConsensus(ticker: string): Promise<AnalystConsensus | null>;
+  /** Every rating change on record for one ticker, newest first. */
+  getGradeHistory?(ticker: string): Promise<AnalystRatingChange[]>;
 }
 
 /**
@@ -101,6 +103,10 @@ const GRADES_SCAN = 200;
 const GRADES_EVENTS = 14;
 /** Hard cap on stored rows per ticker — keeps the doc small. */
 const GRADES_TOTAL = 20;
+/** Upper bound on a stock's full rating history (FMP returns it all in one call). */
+const GRADES_HISTORY_MAX = 2000;
+
+type TargetLookup = (g: { gradingCompany: string | null; date: string; action: string | null }) => ReturnType<typeof resolveFirmTarget>;
 
 /**
  * FMP's `grades` feed never labels a coverage initiation: across 8,546 stored
@@ -482,14 +488,67 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
     // Enrich a covered ticker with price target + recent grades. Each is
     // independent and best-effort: a miss degrades that field to null/[] rather
     // than dropping the whole (already-valid) consensus row.
-    const [pt, summary, grades, targets, gradeNews, splits] = await Promise.all([
+    const [pt, summary, grades, targetFor] = await Promise.all([
       this.fmp.getPriceTargetConsensus(ticker).catch(() => null),
       this.fmp.getPriceTargetSummary(ticker).catch(() => null),
       this.fmp.getGrades(ticker, GRADES_SCAN).catch(() => []),
+      this.targetIndex(ticker),
+    ]);
+
+    return {
+      strongBuy: n(row.strongBuy),
+      buy: n(row.buy),
+      hold: n(row.hold),
+      sell: n(row.sell),
+      strongSell: n(row.strongSell),
+      consensus: row.consensus ?? null,
+      priceTargetConsensus: pt?.targetConsensus ?? null,
+      priceTargetHigh: pt?.targetHigh ?? null,
+      priceTargetLow: pt?.targetLow ?? null,
+      priceTargetMedian: pt?.targetMedian ?? null,
+      ptAvgLastMonth: summary?.lastMonthAvg ?? null,
+      ptAvgLastQuarter: summary?.lastQuarterAvg ?? null,
+      ptAvgLastYear: summary?.lastYearAvg ?? null,
+      recentGrades: selectGrades(grades).map((g) => this.toChange(g, targetFor)),
+    };
+  }
+
+  /** Full rating history for one ticker (every FMP grade row, newest first),
+   *  each with its firm's own standing price target. */
+  async getGradeHistory(ticker: string): Promise<AnalystRatingChange[]> {
+    const [grades, targetFor] = await Promise.all([
+      this.fmp.getGrades(ticker, GRADES_HISTORY_MAX).catch(() => []),
+      this.targetIndex(ticker),
+    ]);
+    return grades.filter((g) => g.date).map((g) => this.toChange(g, targetFor));
+  }
+
+  private toChange(
+    g: { date: string; gradingCompany: string | null; previousGrade: string | null; newGrade: string | null; action: string | null },
+    targetFor: TargetLookup,
+  ): AnalystRatingChange {
+    const target = targetFor(g);
+    return {
+      date: g.date,
+      firm: g.gradingCompany,
+      previousGrade: g.previousGrade,
+      newGrade: g.newGrade,
+      action: normaliseGradeAction(g.action, g.previousGrade, g.newGrade),
+      priceTarget: target?.priceTarget ?? null,
+      priceTargetDate: target?.date ?? null,
+      previousPriceTarget: target?.previousPriceTarget ?? null,
+    };
+  }
+
+  /** Each covering firm's posted targets, as a lookup from a grade row to the
+   *  target that firm had standing on that day. */
+  private async targetIndex(ticker: string): Promise<TargetLookup> {
+    const [targets, gradeNews, splits] = await Promise.all([
       this.fmp.getPriceTargets(ticker).catch(() => []),
       this.fmp.getGradeNews(ticker).catch(() => []),
       this.fmp.getSplits(ticker).catch(() => []),
     ]);
+
 
     // Index each firm's posted targets so a grade can pick up its OWN firm's
     // target. Match on an EXACT canonicalFirm() key: canonicalization folds
@@ -539,36 +598,7 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
       if (value != null && headlineNamesFirm(h.title, key))
         addTarget(key, h.date, value, headlinePreviousTarget(h.title));
     }
-    const targetFor = (g: { gradingCompany: string | null; date: string; action: string | null }) =>
+    return (g: { gradingCompany: string | null; date: string; action: string | null }) =>
       resolveFirmTarget(ptByFirm.get(canonicalFirm(g.gradingCompany)) ?? [], g.date, g.action);
-
-    return {
-      strongBuy: n(row.strongBuy),
-      buy: n(row.buy),
-      hold: n(row.hold),
-      sell: n(row.sell),
-      strongSell: n(row.strongSell),
-      consensus: row.consensus ?? null,
-      priceTargetConsensus: pt?.targetConsensus ?? null,
-      priceTargetHigh: pt?.targetHigh ?? null,
-      priceTargetLow: pt?.targetLow ?? null,
-      priceTargetMedian: pt?.targetMedian ?? null,
-      ptAvgLastMonth: summary?.lastMonthAvg ?? null,
-      ptAvgLastQuarter: summary?.lastQuarterAvg ?? null,
-      ptAvgLastYear: summary?.lastYearAvg ?? null,
-      recentGrades: selectGrades(grades).map((g) => {
-        const target = targetFor(g);
-        return {
-          date: g.date,
-          firm: g.gradingCompany,
-          previousGrade: g.previousGrade,
-          newGrade: g.newGrade,
-          action: normaliseGradeAction(g.action, g.previousGrade, g.newGrade),
-          priceTarget: target?.priceTarget ?? null,
-          priceTargetDate: target?.date ?? null,
-          previousPriceTarget: target?.previousPriceTarget ?? null,
-        };
-      }),
-    };
   }
 }

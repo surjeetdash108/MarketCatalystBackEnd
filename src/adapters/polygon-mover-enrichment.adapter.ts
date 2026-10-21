@@ -33,7 +33,7 @@ export class PolygonMoverEnrichmentAdapter implements MoverEnrichmentAdapter {
 
     const secSic = await this.secEdgar.getSicByTicker(ticker);
     const resolvedSic = resolveSicCode(secSic, details.sic_code);
-    const sicClass = classifyFromSic(resolvedSic);
+    const sicClass = classifyFromSic(resolvedSic, ticker);
 
     const data: MoverEnrichment = {
       name: details.name ?? null,

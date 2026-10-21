@@ -140,6 +140,7 @@ export class IposJob implements OnModuleInit {
             ]);
             sector = classifyFromSic(
               details?.sic_code as string | number | undefined,
+              e.symbol,
             ).sector;
           } catch {
             // Best-effort; leave null if the reference lookup fails.

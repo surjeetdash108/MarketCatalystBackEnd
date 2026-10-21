@@ -3,6 +3,7 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { CachedCollectionsService } from "../live/cached-collections.service";
 import { MarketDataService } from "./market-data.service";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
+import { withTickerOverride } from "../common/sic-tv.util";
 
 /**
  * GET /market-data/movers — backs the Movers screen and the Dashboard/shell
@@ -61,7 +62,7 @@ export class MarketMoversController {
       const sym = String(m.ticker ?? "").trim().toUpperCase();
       const comp = companyByTicker.get(sym);
       if (comp) {
-        return {
+        return withTickerOverride({
           ...m,
           sector: comp.sector,
           ...(comp.industry ? { industry: comp.industry } : {}),
@@ -69,9 +70,9 @@ export class MarketMoversController {
           ...(typeof comp.marketCap === "number" && comp.marketCap > 0 && !m.marketCap
             ? { marketCap: comp.marketCap }
             : {}),
-        };
+        });
       }
-      return m;
+      return withTickerOverride(m);
     });
   }
 

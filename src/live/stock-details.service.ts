@@ -41,6 +41,9 @@ const MIN_CONSENSUS_ANALYSTS = 2;
 const FOREIGN_OTC = /^[A-Z]{4}[FY]$/;
 const INSIDER_TTL_MS = 12 * 3600_000;
 const ANALYST_TTL_MS = 12 * 3600_000;
+/** Same firm key as the analyst-firm-stats job ("J.P. Morgan" → "jpmorgan"). */
+const firmCallKey = (name: unknown) =>
+  String(name ?? "").toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]/g, "");
 const OWNERSHIP_TTL_MS = 24 * 3600_000;
 const MEM_TTL_MS = 5 * 60_000;
 const TOP_HOLDERS = 25;
@@ -310,6 +313,62 @@ export class StockDetailsService {
         updatedAt: new Date().toISOString(),
       };
     });
+  }
+
+  private readonly gradeHistoryCache = new Map<string, { expires: number; data: Doc[] }>();
+
+  /**
+   * Every rating change FMP has on record for one ticker (its `grades` feed
+   * returns the full history in one call), newest first, each with the firm's
+   * own standing price target. Cached in memory for an hour per ticker.
+   */
+  async getAnalystHistory(ticker: string): Promise<Doc[]> {
+    const hit = this.gradeHistoryCache.get(ticker);
+    if (hit && hit.expires > Date.now()) return hit.data;
+    if (!this.ratings?.getGradeHistory) return [];
+    const rows = (await this.ratings.getGradeHistory(toFmpSymbol(ticker))) as unknown as Doc[];
+    this.gradeHistoryCache.set(ticker, { expires: Date.now() + 3600_000, data: rows });
+    return rows;
+  }
+
+  private firmCallIndex: { expires: number; byFirm: Map<string, Doc[]> } | null = null;
+
+  /**
+   * Every stored call by one analyst firm across all measured tickers
+   * (`analyst_calls`, written by the analyst-firm-stats job): its rating
+   * changes over the last 3 years and its resolved 12-month price targets.
+   * Newest first. The index is rebuilt at most every 30 minutes.
+   */
+  async getFirmCalls(firm: string): Promise<Doc[]> {
+    const key = firmCallKey(firm);
+    if (!key) return [];
+    if (!this.firmCallIndex || this.firmCallIndex.expires <= Date.now()) {
+      const snap = await this.firebase.firestore.collection("analyst_calls").get();
+      const byFirm = new Map<string, Doc[]>();
+      const push = (name: unknown, row: Doc) => {
+        const k = firmCallKey(name);
+        if (!k) return;
+        const list = byFirm.get(k) ?? [];
+        list.push(row);
+        byFirm.set(k, list);
+      };
+      for (const d of snap.docs) {
+        const x = d.data() as {
+          ticker?: string;
+          ratingCalls?: Array<{ firm: string; date: string; dir: number; move: number; bullish: boolean }>;
+          targetCalls?: Array<{ firm: string; date: string; hit: boolean; ticker?: string; target: number; posted: number }>;
+        };
+        const ticker = x.ticker ?? d.id;
+        for (const c of x.ratingCalls ?? [])
+          push(c.firm, { kind: "rating", ticker, date: c.date, dir: c.dir, move: c.move, bullish: c.bullish });
+        for (const t of x.targetCalls ?? [])
+          push(t.firm, { kind: "target", ticker: t.ticker ?? ticker, date: t.date, dir: t.target >= t.posted ? 1 : -1, target: t.target, priceWhenPosted: t.posted, hit: t.hit });
+      }
+      for (const list of byFirm.values())
+        list.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      this.firmCallIndex = { expires: Date.now() + 30 * 60_000, byFirm };
+    }
+    return this.firmCallIndex.byFirm.get(key) ?? [];
   }
 
   private marketWideAnalystCache: { expires: number; data: Doc[] } | null = null;

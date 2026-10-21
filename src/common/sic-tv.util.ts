@@ -26,6 +26,34 @@ export interface TvClassification {
 
 const NONE: TvClassification = { sector: null, industry: null };
 
+/**
+ * Bitcoin-mining / AI-compute data-centre operators. The SEC files most of
+ * them under SIC 6199 "Finance Services", which made IREN, MARA, RIOT … show
+ * as Finance. They run data centres that sell compute, so they are classified
+ * as Technology Services / Data Processing Services regardless of SIC.
+ * Financial firms that merely touch crypto (brokers, exchanges, treasuries,
+ * ETFs) are deliberately absent.
+ */
+export const COMPUTE_INFRA_TICKERS: readonly string[] = [
+  "IREN", "HUT", "MARA", "RIOT", "CLSK", "CIFR", "HIVE", "ABTC", "BITF",
+  "WULF", "CORZ", "BTBT", "BTDR", "SDIG", "APLD", "CANG", "SOS", "BTCM",
+  "GREE", "ARBK", "SLNH", "DGHI", "MIGI", "SATO",
+];
+const TICKER_OVERRIDES: Record<string, TvClassification> = Object.fromEntries(
+  COMPUTE_INFRA_TICKERS.map((t) => [t, { sector: "Technology Services", industry: "Data Processing Services" }]),
+);
+
+/**
+ * Applies the ticker overrides to an already-stored doc (companies / movers
+ * written before the override existed), leaving every other doc untouched.
+ */
+export function withTickerOverride<T extends Record<string, unknown>>(doc: T): T {
+  const o = TICKER_OVERRIDES[String(doc.ticker ?? "").trim().toUpperCase()];
+  return o && (doc.sector !== o.sector || doc.industry !== o.industry)
+    ? { ...doc, sector: o.sector, industry: o.industry }
+    : doc;
+}
+
 /** Exact 4-digit SIC -> industry. Sector is derived from the industry, so the
  *  two can never disagree. */
 const EXACT_INDUSTRY: Record<number, string> = {
@@ -336,7 +364,10 @@ const MAJOR_GROUP_INDUSTRY: Record<number, string> = {
  */
 export function classifyFromSic(
   sicCode: string | number | null | undefined,
+  ticker?: string | null,
 ): TvClassification {
+  const override = ticker ? TICKER_OVERRIDES[ticker.trim().toUpperCase()] : undefined;
+  if (override) return override;
   const code =
     typeof sicCode === "number" ? sicCode : parseInt(String(sicCode ?? ""), 10);
   if (!Number.isFinite(code) || code <= 0) return NONE;

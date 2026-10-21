@@ -2,6 +2,7 @@ import { Controller, Get, Header, UseGuards } from "@nestjs/common";
 import { CachedCollectionsService } from "../live/cached-collections.service";
 import { MarketDataService } from "./market-data.service";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
+import { withTickerOverride } from "../common/sic-tv.util";
 
 /**
  * GET /market-data/companies — the bulk `companies` collection (per-ticker
@@ -66,6 +67,7 @@ export class CompaniesController {
     // Reconcile any stale company classifications with fresh mover enrichment.
     return (companies as Array<Record<string, unknown>>)
       .filter((c) => c.delisted !== true)
+      .map(withTickerOverride)
       .map((c) => {
         const sym = String(c.ticker ?? "").trim().toUpperCase();
         const mover = moverClassificationByTicker.get(sym);

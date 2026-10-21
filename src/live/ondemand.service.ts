@@ -1281,7 +1281,7 @@ export class OnDemandService implements OnModuleDestroy {
       // Canonical classification: SEC EDGAR regulatory filing SIC primary, Polygon fallback.
       const secSic = details ? await this.secEdgar.getSicByTicker(ticker) : null;
       const resolvedSic = resolveSicCode(secSic, details?.sic_code as string | number | undefined);
-      const sicClass = classifyFromSic(resolvedSic);
+      const sicClass = classifyFromSic(resolvedSic, ticker);
       // Nightly fundamentals-growth writes epsGrowthYoY / revenueGrowthYoY /
       // grossMargin to the company doc; this on-demand rebuild doesn't recompute
       // them, so carry them forward (else the returned doc — the stock-detail's
@@ -1544,7 +1544,7 @@ export class OnDemandService implements OnModuleDestroy {
     const sic = details?.sic_code as string | number | null | undefined;
     const hasSic =
       sic != null && String(sic).trim() !== "" && String(sic).trim() !== "0";
-    const sicClass = hasSic ? classifyFromSic(sic) : null;
+    const sicClass = classifyFromSic(hasSic ? sic : null, ticker);
 
     const summary: Record<string, unknown> = {
       ticker,
