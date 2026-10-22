@@ -18,34 +18,43 @@ const IMAGE_URI = `us-central1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-dep
 async function main() {
   console.log('🚀 Starting automated deployment for market-catalyst-live...\n');
 
-  // 1. Resolve token
-  const homeDir = process.env.USERPROFILE || process.env.HOME || '';
-  const tokenPath = path.join(homeDir, '.config', 'configstore', 'firebase-tools.json');
-  if (!fs.existsSync(tokenPath)) {
-    throw new Error('Firebase login token not found. Please run: firebase login');
-  }
-  const cfg = JSON.parse(fs.readFileSync(tokenPath, 'utf8'));
-  let token = cfg.tokens?.access_token;
-
-  // 2. Refresh token if needed
+  // 1. Resolve token (prefer gcloud CLI token, fallback to firebase-tools config)
+  let token = null;
   try {
-    const refreshRes = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: '563584335869-fgrhgmd47bqnekij5i8b5pr03ho85qd6.apps.googleusercontent.com',
-        grant_type: 'refresh_token',
-        refresh_token: cfg.tokens.refresh_token,
-      }).toString()
-    });
-    const refreshed = await refreshRes.json();
-    if (refreshed.access_token) {
-      token = refreshed.access_token;
-      cfg.tokens.access_token = token;
-      fs.writeFileSync(tokenPath, JSON.stringify(cfg, null, 2));
-    }
+    token = execSync('gcloud auth print-access-token', { stdio: ['pipe', 'pipe', 'ignore'] }).toString().trim();
   } catch {
-    // Proceed with existing token if refresh fails
+    // Fall back to firebase-tools.json
+  }
+
+  if (!token) {
+    const homeDir = process.env.USERPROFILE || process.env.HOME || '';
+    const tokenPath = path.join(homeDir, '.config', 'configstore', 'firebase-tools.json');
+    if (!fs.existsSync(tokenPath)) {
+      throw new Error('Firebase login token or gcloud credentials not found. Please run: gcloud auth login or firebase login');
+    }
+    const cfg = JSON.parse(fs.readFileSync(tokenPath, 'utf8'));
+    token = cfg.tokens?.access_token;
+
+    // Refresh token if needed
+    try {
+      const refreshRes = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: '563584335869-fgrhgmd47bqnekij5i8b5pr03ho85qd6.apps.googleusercontent.com',
+          grant_type: 'refresh_token',
+          refresh_token: cfg.tokens.refresh_token,
+        }).toString()
+      });
+      const refreshed = await refreshRes.json();
+      if (refreshed.access_token) {
+        token = refreshed.access_token;
+        cfg.tokens.access_token = token;
+        fs.writeFileSync(tokenPath, JSON.stringify(cfg, null, 2));
+      }
+    } catch {
+      // Proceed with existing token if refresh fails
+    }
   }
 
   // 3. Create zip
