@@ -204,10 +204,14 @@ export class CorporateActionsJob implements OnModuleInit {
 
       for (const ticker of batch) {
         try {
-          const [rawHistory, splits] = await Promise.all([
+          const [rawHistory, rawSplits] = await Promise.all([
             this.polygon.getDividendHistory(ticker, HISTORY_LIMIT),
             this.polygon.getSplits(ticker),
           ]);
+          const splits = (rawSplits || []).map((sp) => ({
+            date: sp.executionDate,
+            ratio: sp.splitFrom && sp.splitTo ? sp.splitTo / sp.splitFrom : 1,
+          }));
           const history = splitAdjustDividends(rawHistory, splits);
           const totals = annualTotals(history);
           // Growth and the raise streak describe the RECURRING dividend; a
@@ -296,7 +300,7 @@ export class CorporateActionsJob implements OnModuleInit {
           // reload. Only splits that execute AFTER the baseline can desync it,
           // and those are exactly what force the reset.
           const newestExecutedSplit =
-            splits.find((s) => s.executionDate && s.executionDate <= today) ??
+            rawSplits.find((s) => s.executionDate && s.executionDate <= today) ??
             null;
           if (SPLIT_READJUST_ENABLED && newestExecutedSplit) {
             const execDate = newestExecutedSplit.executionDate;

@@ -753,12 +753,13 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
     };
 
     for (const h of gradeNews) {
-      const act = (h.action ?? "").toLowerCase();
+      const row = h as any;
+      const act = (row.action ?? "").toLowerCase();
       const isInit =
         act.includes("init") ||
         /\binitiated\b|\bstarts\b|\binitiating\b/i.test(h.title ?? "");
       if (isInit) {
-        let grade = h.newGrade;
+        let grade: string | null = row.newGrade ?? null;
         if (!grade && h.title) {
           const m = /\bwith an? ([A-Za-z ]+?) at\b|\bstarts .+? at ([A-Za-z ]+)/i.exec(h.title);
           if (m) grade = m[1] || m[2];
