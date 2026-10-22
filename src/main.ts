@@ -33,6 +33,7 @@ process.on("uncaughtException", (err) => {
  * WITHOUT the service reflecting arbitrary origins.
  */
 const DEFAULT_ALLOWED_ORIGINS = [
+  "https://app.marketcatalyst.ai",
   "https://marketcatalyst.web.app",
   "https://marketcatalyst.firebaseapp.com",
 ];

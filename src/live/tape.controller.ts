@@ -1,7 +1,16 @@
-import { Controller, Get, Header, Req, Res, Sse, UseGuards } from "@nestjs/common";
+import {
+  Controller,
+  Get,
+  Header,
+  Req,
+  Res,
+  Sse,
+  UseGuards,
+} from "@nestjs/common";
 import type { Request, Response } from "express";
 import { Observable, interval, map, merge } from "rxjs";
 import { TapeService, type TapeFrame } from "./tape.service";
+import { capStreamLifetime } from "../common/sse-lifetime.util";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
 /**
@@ -81,7 +90,8 @@ export class TapeController {
       })),
     );
 
-    return merge(frames$, heartbeat$, lifecycle$);
+    // Bounded lifetime: the browser reconnects; an abandoned stream lets go.
+    return capStreamLifetime(merge(frames$, heartbeat$, lifecycle$));
   }
 
   /**

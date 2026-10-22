@@ -26,6 +26,7 @@ import {
   SnapshotCacheService,
   type SnapshotQuote,
 } from "./snapshot-cache.service";
+import { capStreamLifetime } from "../common/sse-lifetime.util";
 
 /**
  * Server-Sent Events bridge: browser <- our origin <- upstream price source.
@@ -78,7 +79,8 @@ export class LiveController {
       .toLowerCase();
     this.source = raw === "polygon" ? "polygon" : "fmp";
     const poll = Number(config.get<string>("LIVE_STREAM_POLL_MS"));
-    this.pollMs = Number.isFinite(poll) && poll > 0 ? poll : CACHE_POLL_MS_DEFAULT;
+    this.pollMs =
+      Number.isFinite(poll) && poll > 0 ? poll : CACHE_POLL_MS_DEFAULT;
     this.logger.log(`live stream: source=${this.source}`);
     if (this.source === "fmp" && this.snapshots.source !== "fmp") {
       this.logger.warn(
@@ -103,7 +105,10 @@ export class LiveController {
         'ticker must be 1-10 characters, A-Z and "." only',
       );
     }
-    if (this.source === "fmp") return this.streamFromQuoteCache(sym);
+    // Bounded lifetime on both paths: the browser reconnects; an abandoned
+    // stream releases its concurrency slot (see sse-lifetime.util.ts).
+    if (this.source === "fmp")
+      return capStreamLifetime(this.streamFromQuoteCache(sym));
 
     // Upstream subscription is tied to the CLIENT's subscription, not to the
     // request handler. Calling this.live.subscribe() eagerly here would connect
@@ -159,7 +164,7 @@ export class LiveController {
     // upstream$ never emits — it exists purely so its teardown runs when the
     // browser disconnects (tab closed, navigation), releasing the ref count.
     // Without it the count would only ever grow.
-    return merge(snapshot$, ticks$, status$, upstream$);
+    return capStreamLifetime(merge(snapshot$, ticks$, status$, upstream$));
   }
 
   /**
