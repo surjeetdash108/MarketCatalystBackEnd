@@ -692,6 +692,43 @@ export class FmpService {
   }
 
   /**
+   * Analyst grades historical (`/stable/grades-historical`) — monthly consensus
+   * trend rows containing current and past active covering analyst tallies.
+   * Row 0 reflects the latest active coverage snapshot.
+   */
+  async getGradesHistorical(ticker: string): Promise<FmpConsensusRow[]> {
+    if (!this.apiKey) return [];
+    const rows = await this.get(
+      `grades-historical?symbol=${encodeURIComponent(ticker)}`,
+      { retries: 0 },
+    );
+    if (!Array.isArray(rows)) return [];
+    return rows.map((r) => {
+      const o = r as Record<string, unknown>;
+      const sb = num(o.analystRatingsStrongBuy);
+      const b = num(o.analystRatingsBuy);
+      const h = num(o.analystRatingsHold);
+      const s = num(o.analystRatingsSell);
+      const ss = num(o.analystRatingsStrongSell);
+      const tot = (sb ?? 0) + (b ?? 0) + (h ?? 0) + (s ?? 0) + (ss ?? 0);
+      let consensus: string | null = null;
+      if (tot > 0) {
+        const score = ((sb ?? 0) * 1 + (b ?? 0) * 2 + (h ?? 0) * 3 + (s ?? 0) * 4 + (ss ?? 0) * 5) / tot;
+        consensus = score <= 1.5 ? "Strong Buy" : score <= 2.5 ? "Buy" : score <= 3.5 ? "Hold" : score <= 4.5 ? "Sell" : "Strong Sell";
+      }
+      return {
+        symbol: String(o.symbol ?? ticker),
+        strongBuy: sb,
+        buy: b,
+        hold: h,
+        sell: s,
+        strongSell: ss,
+        consensus,
+      };
+    });
+  }
+
+  /**
    * Latest quote for one symbol (`/stable/quote`). Covers indices (^GSPC,
    * ^VIX) and commodity futures (GCUSD, BZUSD) as well as equities. One symbol
    * per call; for many symbols use getQuotes() (batch-quote verified available

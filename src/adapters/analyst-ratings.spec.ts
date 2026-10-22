@@ -321,4 +321,60 @@ describe("FmpAnalystRatingsAdapter previous targets", () => {
     ).getConsensus("CVNA");
     expect(out?.recentGrades[0]).toMatchObject({ priceTarget: 83, previousPriceTarget: null });
   });
+
+  it("prefers grades-historical row 0 for consensus tallies", async () => {
+    const out = await new FmpAnalystRatingsAdapter(
+      fmp({
+        getAnalystConsensus: async () => ({ strongBuy: 10, buy: 50, hold: 20, sell: 5, strongSell: 2, consensus: "Buy" }),
+        getGradesHistorical: async () => [
+          { symbol: "CRM", strongBuy: 6, buy: 34, hold: 15, sell: 0, strongSell: 2, consensus: "Buy" },
+        ],
+      }),
+    ).getConsensus("CRM");
+    expect(out).toMatchObject({
+      strongBuy: 6,
+      buy: 34,
+      hold: 15,
+      sell: 0,
+      strongSell: 2,
+      consensus: "Buy",
+    });
+  });
+
+  it("merges initiations from grade-news and price-target-news into recentGrades", async () => {
+    const out = await new FmpAnalystRatingsAdapter(
+      fmp({
+        getGrades: async () => [
+          { date: "2026-10-15", gradingCompany: "KeyBanc", previousGrade: "Buy", newGrade: "Buy", action: "maintain" },
+        ],
+        getGradeNews: async () => [
+          {
+            date: "2026-10-21",
+            firm: "CICC",
+            newGrade: "Outperform",
+            action: "initialise",
+            title: "Costco initiated with an Outperform at CICC",
+          },
+        ],
+        getPriceTargets: async () => [
+          {
+            date: "2026-10-21",
+            firm: "CICC",
+            priceTarget: 1050,
+            title: "Costco initiated with an Outperform at CICC",
+          },
+        ],
+      }),
+    ).getConsensus("COST");
+    expect(out?.recentGrades).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          firm: "CICC",
+          action: "initiate",
+          priceTarget: 1050,
+          date: "2026-10-21",
+        }),
+      ]),
+    );
+  });
 });

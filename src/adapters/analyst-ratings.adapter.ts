@@ -179,6 +179,14 @@ const GRADES_HISTORY_MAX = 2000;
 type TargetLookup = ((g: { gradingCompany: string | null; date: string; action: string | null }) => ReturnType<typeof resolveFirmTarget>) & {
   /** Each firm's most recent posted target (current share basis). */
   latestByFirm: Map<string, { date: string; priceTarget: number }>;
+  /** Initiations discovered from rating news or price-target news headlines. */
+  initiations: Array<{
+    date: string;
+    gradingCompany: string | null;
+    previousGrade: string | null;
+    newGrade: string | null;
+    action: string | null;
+  }>;
 };
 
 /** Low / high / median / mean of each firm's latest target within ACTIVE_TARGET_DAYS (null under MIN_ACTIVE_FIRMS). */
@@ -575,23 +583,38 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
     // Enrich a covered ticker with price target + recent grades. Each is
     // independent and best-effort: a miss degrades that field to null/[] rather
     // than dropping the whole (already-valid) consensus row.
-    const [pt, summary, grades, targetFor] = await Promise.all([
+    const [pt, summary, gradesHistorical, rawGrades, targetFor] = await Promise.all([
       this.fmp.getPriceTargetConsensus(ticker).catch(() => null),
       this.fmp.getPriceTargetSummary(ticker).catch(() => null),
+      typeof this.fmp.getGradesHistorical === "function"
+        ? this.fmp.getGradesHistorical(ticker).catch(() => [])
+        : Promise.resolve([]),
       this.fmp.getGrades(ticker, GRADES_HISTORY_MAX).catch(() => []),
       this.targetIndex(ticker),
     ]);
-    // Active coverage: each firm's latest rating / target within the last 12 months.
-    const active = activeCoverage(grades);
+
+    // Merge discovered initiations into the grade history stream
+    const grades = this.mergeInitiations(rawGrades, targetFor.initiations, ticker);
+
+    // Active coverage: prefer /stable/grades-historical row 0 if available
+    const hist0 = gradesHistorical[0];
+    const histTotal = hist0
+      ? n(hist0.strongBuy) +
+        n(hist0.buy) +
+        n(hist0.hold) +
+        n(hist0.sell) +
+        n(hist0.strongSell)
+      : 0;
+    const active = histTotal > 0 ? null : activeCoverage(grades);
     const ptStats = activeTargetStats(targetFor.latestByFirm);
 
     return {
-      strongBuy: active ? active.strongBuy : n(row.strongBuy),
-      buy: active ? active.buy : n(row.buy),
-      hold: active ? active.hold : n(row.hold),
-      sell: active ? active.sell : n(row.sell),
-      strongSell: active ? active.strongSell : n(row.strongSell),
-      consensus: active ? active.consensus : (row.consensus ?? null),
+      strongBuy: histTotal > 0 && hist0 ? n(hist0.strongBuy) : active ? active.strongBuy : n(row.strongBuy),
+      buy: histTotal > 0 && hist0 ? n(hist0.buy) : active ? active.buy : n(row.buy),
+      hold: histTotal > 0 && hist0 ? n(hist0.hold) : active ? active.hold : n(row.hold),
+      sell: histTotal > 0 && hist0 ? n(hist0.sell) : active ? active.sell : n(row.sell),
+      strongSell: histTotal > 0 && hist0 ? n(hist0.strongSell) : active ? active.strongSell : n(row.strongSell),
+      consensus: histTotal > 0 && hist0 ? hist0.consensus : active ? active.consensus : (row.consensus ?? null),
       priceTargetConsensus: ptStats?.mean ?? pt?.targetConsensus ?? null,
       priceTargetHigh: ptStats?.high ?? pt?.targetHigh ?? null,
       priceTargetLow: ptStats?.low ?? pt?.targetLow ?? null,
@@ -606,11 +629,39 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
   /** Full rating history for one ticker (every FMP grade row, newest first),
    *  each with its firm's own standing price target. */
   async getGradeHistory(ticker: string): Promise<AnalystRatingChange[]> {
-    const [grades, targetFor] = await Promise.all([
+    const [rawGrades, targetFor] = await Promise.all([
       this.fmp.getGrades(ticker, GRADES_HISTORY_MAX).catch(() => []),
       this.targetIndex(ticker),
     ]);
+    const grades = this.mergeInitiations(rawGrades, targetFor.initiations, ticker);
     return grades.filter((g) => g.date).map((g) => this.toChange(g, targetFor));
+  }
+
+  private mergeInitiations<T extends { date: string; gradingCompany: string | null; previousGrade: string | null; newGrade: string | null; action: string | null }>(
+    grades: T[],
+    initiations: Array<{ date: string; gradingCompany: string | null; previousGrade: string | null; newGrade: string | null; action: string | null }>,
+    ticker: string,
+  ): T[] {
+    const list = [...grades];
+    for (const init of initiations) {
+      const firmKey = canonicalFirm(init.gradingCompany);
+      const exists = list.some(
+        (g) =>
+          canonicalFirm(g.gradingCompany) === firmKey &&
+          Math.abs(Date.parse(g.date) - Date.parse(init.date)) <= 7 * 86_400_000,
+      );
+      if (!exists) {
+        list.push({
+          symbol: ticker,
+          date: init.date,
+          gradingCompany: init.gradingCompany,
+          previousGrade: init.previousGrade,
+          newGrade: init.newGrade,
+          action: init.action,
+        } as unknown as T);
+      }
+    }
+    return list.sort((a, b) => b.date.localeCompare(a.date));
   }
 
   private toChange(
@@ -641,17 +692,6 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
       this.fmp.getSplits(ticker).catch(() => []),
     ]);
 
-
-    // Index each firm's posted targets so a grade can pick up its OWN firm's
-    // target. Match on an EXACT canonicalFirm() key: canonicalization folds
-    // spelling variants between the FMP feeds ("JP Morgan"/"JPMorgan Chase") to
-    // one key, but it is still an exact key match — no prefix/substring
-    // fallback, which could collide between distinct firms ("Morgan" ⊂ "Morgan
-    // Stanley") and attach the wrong firm's number (BUG-DATA-012). An unmapped
-    // firm still yields null rather than a guess.
-    //
-    // Every post is restated on today's share basis, so targets from either
-    // side of a split compare with each other and with the current price.
     const ptByFirm = new Map<string, FirmTargetPost[]>();
     const addTarget = (
       key: string,
@@ -690,6 +730,52 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
       if (value != null && headlineNamesFirm(h.title, key))
         addTarget(key, h.date, value, headlinePreviousTarget(h.title));
     }
+
+    // Discover initiations from gradeNews & targets
+    const initiations: Array<{
+      date: string;
+      gradingCompany: string | null;
+      previousGrade: string | null;
+      newGrade: string | null;
+      action: string | null;
+    }> = [];
+
+    const addInitiation = (date: string, firm: string | null, grade: string | null) => {
+      if (!date || !firm) return;
+      const d = date.slice(0, 10);
+      initiations.push({
+        date: d,
+        gradingCompany: firm,
+        previousGrade: null,
+        newGrade: grade || "Buy",
+        action: "initiate",
+      });
+    };
+
+    for (const h of gradeNews) {
+      const act = (h.action ?? "").toLowerCase();
+      const isInit =
+        act.includes("init") ||
+        /\binitiated\b|\bstarts\b|\binitiating\b/i.test(h.title ?? "");
+      if (isInit) {
+        let grade = h.newGrade;
+        if (!grade && h.title) {
+          const m = /\bwith an? ([A-Za-z ]+?) at\b|\bstarts .+? at ([A-Za-z ]+)/i.exec(h.title);
+          if (m) grade = m[1] || m[2];
+        }
+        addInitiation(h.date, h.firm, grade);
+      }
+    }
+
+    for (const t of targets) {
+      if (t.title && /\binitiated\b|\bstarts\b|\binitiating\b/i.test(t.title)) {
+        let grade: string | null = null;
+        const m = /\bwith an? ([A-Za-z ]+?) at\b|\bstarts .+? at ([A-Za-z ]+)/i.exec(t.title);
+        if (m) grade = m[1] || m[2];
+        addInitiation(t.date, t.firm, grade);
+      }
+    }
+
     const lookup = (g: { gradingCompany: string | null; date: string; action: string | null }) =>
       resolveFirmTarget(ptByFirm.get(canonicalFirm(g.gradingCompany)) ?? [], g.date, g.action);
     const latestByFirm = new Map<string, { date: string; priceTarget: number }>();
@@ -697,6 +783,6 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
       const last = posts.reduce((a, b) => (b.date > a.date ? b : a));
       latestByFirm.set(firm, { date: last.date, priceTarget: last.priceTarget });
     }
-    return Object.assign(lookup, { latestByFirm });
+    return Object.assign(lookup, { latestByFirm, initiations });
   }
 }
