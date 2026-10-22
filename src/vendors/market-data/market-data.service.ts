@@ -306,7 +306,14 @@ export class MarketDataService extends PolygonService {
           phone_number: p.phone ?? null,
           ceo: p.ceo ?? null,
           total_employees: num(p.fullTimeEmployees),
-          list_date: p.ipoDate ?? null,
+          list_date: await (async () => {
+            let ld = p.ipoDate ? String(p.ipoDate).slice(0, 10) : null;
+            try {
+              const poly = await super.getTickerDetails(ticker).catch(() => null);
+              if (poly?.list_date && (!ld || poly.list_date < ld)) ld = poly.list_date;
+            } catch {}
+            return ld;
+          })(),
           address: { address1: p.address ?? null, city: p.city ?? null, state: p.state ?? null, postal_code: p.zip ?? null },
           sic_code: sic,
           sic_description: null,
