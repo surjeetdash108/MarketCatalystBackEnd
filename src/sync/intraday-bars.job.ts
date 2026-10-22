@@ -6,6 +6,7 @@ import { SyncRegistry } from "../common/sync-registry.service";
 import { TICKER_UNIVERSE } from "../common/ticker-universe";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { isoDate } from "../common/date.util";
+import { etDate } from "../common/market-calendar.util";
 
 /**
  * Intraday aggregate bars → `intraday_bars/{ticker}_{key}`.
@@ -86,7 +87,7 @@ export class IntradayBarsJob implements OnModuleInit {
         { length: BATCH_SIZE },
         (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
       );
-      const today = isoDate(new Date());
+      const today = etDate();
 
       const docs: { id: string; data: Record<string, unknown> }[] = [];
       let barsWritten = 0;

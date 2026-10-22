@@ -22,6 +22,7 @@ import {
   TxnType,
   withRunningTotals,
 } from "./portfolio-lots";
+import { etDate } from "../common/market-calendar.util";
 
 const TICKER_RE = /^[A-Z][A-Z0-9.-]{0,9}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -84,7 +85,7 @@ function qtyText(n: number): string {
 
 /** Today in UTC as YYYY-MM-DD — the trade date for clients that send none. */
 function utcToday(): string {
-  return new Date().toISOString().slice(0, 10);
+  return etDate();
 }
 
 /**

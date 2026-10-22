@@ -5,6 +5,7 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { isoDate } from "../common/date.util";
 import { splitMovers } from "../common/movers-split.util";
+import { etDate } from "../common/market-calendar.util";
 
 /**
  * End-of-Day recap → `recaps/{date}` (delivery-plan R28).
@@ -223,7 +224,7 @@ export class RecapsJob implements OnModuleInit {
         sectorLaggards: weeklySectors.slice(-3).reverse(),
       };
 
-      const date = breadthId ?? isoDate(new Date());
+      const date = breadthId ?? etDate();
       await setWithCreatedAt(db, db.collection("recaps").doc(date), {
         date,
         indices,

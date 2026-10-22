@@ -6,6 +6,7 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { isoDate } from "../common/date.util";
+import { etDate } from "../common/market-calendar.util";
 
 const JOB_NAME = "options-chains";
 const CONTRACTS_PER_TICKER = 20;
@@ -37,7 +38,7 @@ export class OptionsChainsJob implements OnModuleInit {
   }
 
   async run() {
-    const today = isoDate(new Date());
+    const today = etDate();
     const lookback = new Date();
     lookback.setUTCDate(lookback.getUTCDate() - AGG_LOOKBACK_DAYS);
     const from = isoDate(lookback);

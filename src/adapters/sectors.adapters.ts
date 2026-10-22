@@ -7,6 +7,7 @@ import type {
   SectorsAdapter,
 } from "./types";
 import { withFallback } from "./with-fallback.util";
+import { etDate } from "../common/market-calendar.util";
 
 /** "0.62%" / 0.62 → 0.62. */
 function parsePct(v: string | number | null | undefined): number {
@@ -29,7 +30,7 @@ export class FmpSectorsAdapter implements SectorsAdapter {
     AdapterResult<CanonicalSectorPerformance[]>
   > {
     const rows = await this.fmp.getSectorPerformance();
-    const date = new Date().toISOString().slice(0, 10);
+    const date = etDate();
     const data = rows
       .map((r) => ({
         date,

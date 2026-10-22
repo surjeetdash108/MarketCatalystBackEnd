@@ -8,6 +8,7 @@ import { PolygonService } from "../vendors/polygon/polygon.service";
 import { FmpService } from "../vendors/fmp/fmp.service";
 import { classifyFromSic } from "../common/sic-tv.util";
 import { isoDate } from "../common/date.util";
+import { etDate } from "../common/market-calendar.util";
 
 const JOB_NAME = "ipos";
 // Cover the full "Recent IPO performance" range so every displayed name is
@@ -89,7 +90,7 @@ export class IposJob implements OnModuleInit {
           `ipos: ${result.warnings.map((w) => w.code).join(", ")}`,
         );
       }
-      const today = isoDate(new Date());
+      const today = etDate();
       // Aftermarket enrichment: for IPOs that have ALREADY listed, fetch daily
       // bars and compute real current price + day-1 pop + return-since-offer.
       // Was mock-only because the IPO feed carries no post-listing price.

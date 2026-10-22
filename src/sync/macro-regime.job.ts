@@ -4,6 +4,7 @@ import { setWithCreatedAt } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { FredService } from "../vendors/fred/fred.service";
 import { SyncRegistry } from "../common/sync-registry.service";
+import { etDate } from "../common/market-calendar.util";
 
 /**
  * Macro regime label → `macro_regime/current`. A rules-based, graded read
@@ -169,7 +170,7 @@ export class MacroRegimeJob implements OnModuleInit {
         curveObs[0]?.date ??
         vixObs[0]?.date ??
         sp500Obs[0]?.date ??
-        new Date().toISOString().slice(0, 10);
+        etDate();
 
       await setWithCreatedAt(
         this.firebase.firestore,

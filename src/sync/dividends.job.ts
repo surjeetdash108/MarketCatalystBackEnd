@@ -5,6 +5,7 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { DIVIDENDS_ADAPTER, type DividendsAdapter } from "../adapters/types";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { isoDate } from "../common/date.util";
+import { etDate } from "../common/market-calendar.util";
 
 const JOB_NAME = "dividends";
 const LOOKAHEAD_DAYS = 30;
@@ -56,7 +57,7 @@ export class DividendsJob implements OnModuleInit {
 
   async run() {
     try {
-      const from = isoDate(new Date());
+      const from = etDate();
       const to = new Date();
       to.setUTCDate(to.getUTCDate() + LOOKAHEAD_DAYS);
       const toStr = isoDate(to);

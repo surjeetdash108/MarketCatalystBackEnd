@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { FirebaseAdminService } from "./firebase-admin.provider";
 import { setWithCreatedAt } from "./firestore-batch.util";
 import { SyncRegistry } from "./sync-registry.service";
+import { etDate } from "./market-calendar.util";
 
 export interface SyncResult {
   ok: boolean;
@@ -41,7 +42,7 @@ export class SyncMetaService {
         day: "2-digit",
       }).format(new Date());
     } catch {
-      return new Date().toISOString().slice(0, 10);
+      return etDate();
     }
   }
 

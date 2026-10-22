@@ -8,7 +8,7 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { QUOTE_ADAPTER, type QuoteAdapter } from "../adapters/types";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
-import { isoDate } from "../common/date.util";
+import { etDate } from "../common/market-calendar.util";
 
 const JOB_NAME = "market-indices";
 
@@ -127,7 +127,7 @@ export class MarketIndicesJob implements OnModuleInit {
       const historyCol = this.firebase.firestore.collection(
         "market_indices_history",
       );
-      const today = isoDate(new Date());
+      const today = etDate();
       let written = 0;
       for (const idx of INDEX_PROXIES) {
         try {

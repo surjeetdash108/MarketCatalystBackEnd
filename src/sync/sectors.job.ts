@@ -7,6 +7,7 @@ import {
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SECTORS_ADAPTER, type SectorsAdapter } from "../adapters/types";
 import { SyncRegistry } from "../common/sync-registry.service";
+import { etDate } from "../common/market-calendar.util";
 
 const JOB_NAME = "sectors";
 
@@ -84,7 +85,7 @@ export class SectorsJob implements OnModuleInit {
         agg.set(sector, cur);
       }
 
-      const date = new Date().toISOString().slice(0, 10);
+      const date = etDate();
       const writes: PendingWrite[] = [];
       const col = db.collection("sectors");
       const historyCol = db.collection("sectors_history");

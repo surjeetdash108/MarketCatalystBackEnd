@@ -8,6 +8,7 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { addDays, isoDate } from "../common/date.util";
 import { PolygonService } from "../vendors/polygon/polygon.service";
+import { etDate } from "../common/market-calendar.util";
 
 const JOB_NAME = "history-backfill";
 /** Job whose watermarks this fills, so it does not re-fetch what we just wrote. */
@@ -73,7 +74,7 @@ export class HistoryBackfillJob implements OnModuleInit {
 
   async run() {
     try {
-      const today = isoDate(new Date());
+      const today = etDate();
       const dates: string[] = [];
       for (let i = 1; i <= CALENDAR_SPAN && dates.length < DEFAULT_SESSIONS; i++) {
         const d = isoDate(addDays(new Date(), -i));

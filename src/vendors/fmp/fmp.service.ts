@@ -1057,10 +1057,11 @@ export class FmpService {
     // while the full 100 carry 37, so nine firms' targets were being dropped
     // before the join could ever see them.
     limit = 100,
+    page = 0,
   ): Promise<FmpPriceTargetRow[]> {
     if (!this.apiKey) return [];
     const rows = await this.get(
-      `price-target-news?symbol=${encodeURIComponent(ticker)}&limit=${limit}`,
+      `price-target-news?symbol=${encodeURIComponent(ticker)}&page=${page}&limit=${limit}`,
       { retries: 0 },
     ).catch(() => [] as unknown[]);
     return rows
@@ -1082,10 +1083,10 @@ export class FmpService {
    * Citi, …) or lags months behind, while their PT changes still appear here as
    * headlines. Same 100-row server ceiling as `price-target-news`.
    */
-  async getGradeNews(ticker: string, limit = 100): Promise<FmpGradeNewsRow[]> {
+  async getGradeNews(ticker: string, limit = 100, page = 0): Promise<FmpGradeNewsRow[]> {
     if (!this.apiKey) return [];
     const rows = await this.get(
-      `grades-news?symbol=${encodeURIComponent(ticker)}&limit=${limit}`,
+      `grades-news?symbol=${encodeURIComponent(ticker)}&page=${page}&limit=${limit}`,
       { retries: 0 },
     ).catch(() => [] as unknown[]);
     return rows

@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { fetchJson } from "../common/http.util";
+import { etDate } from "../common/market-calendar.util";
 
 /** Holdings and fund facts change slowly; refresh any ETF at least weekly. */
 const HOLDINGS_TTL_MS = 7 * 86_400_000;
@@ -301,7 +302,7 @@ export class EtfHoldingsService {
 
       // Extract asOfDate
       const firstRowUpdated = sortedHoldings[0]?.updatedAt;
-      let asOfDate = new Date().toISOString().slice(0, 10);
+      let asOfDate = etDate();
       if (firstRowUpdated) {
         try {
           const parsed = new Date(firstRowUpdated);
