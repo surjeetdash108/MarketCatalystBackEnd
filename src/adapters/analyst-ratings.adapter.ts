@@ -103,10 +103,97 @@ const GRADES_SCAN = 200;
 const GRADES_EVENTS = 14;
 /** Hard cap on stored rows per ticker — keeps the doc small. */
 const GRADES_TOTAL = 20;
+/**
+ * Firms that rated the stock within this window count toward the consensus
+ * tallies. Measured against Yahoo on 9 names (Oct 2026): FMP's raw tallies
+ * were off by ~24 analysts on average (CRM 98 vs 56), a 12-month window by
+ * ~15 the other way (CRM 36), 36 months by ~8 (CRM 47, XOM 25 = 25). Firms
+ * often hold coverage for years without a new grade row, hence the long window.
+ */
+const ACTIVE_COVERAGE_DAYS = 3 * 365;
+/** Firms' standing price targets count toward low/mean/high within this window. */
+const ACTIVE_TARGET_DAYS = 365;
+/** Below this many active firms, FMP's own tallies are kept. */
+const MIN_ACTIVE_FIRMS = 3;
+
+type RatingBucket = "strongBuy" | "buy" | "hold" | "sell" | "strongSell";
+
+/** A firm's rating wording → one of the five consensus buckets (null if unknown). */
+export function ratingBucket(grade: string | null | undefined): RatingBucket | null {
+  const g = (grade ?? "").toLowerCase().trim();
+  if (!g) return null;
+  if (/strong\s*sell/.test(g)) return "strongSell";
+  if (/strong\s*buy|conviction buy|top pick/.test(g)) return "strongBuy";
+  if (/under\s*perform|under\s*weight|\bsell\b|\breduce\b|negative|sector underperform/.test(g)) return "sell";
+  if (/out\s*perform|over\s*weight|\bbuy\b|accumulate|positive|\badd\b|speculative buy/.test(g)) return "buy";
+  if (/hold|neutral|equal|market perform|sector perform|in-line|inline|peer perform|sector weight|mixed|fair value|perform/.test(g)) return "hold";
+  return null;
+}
+
+/**
+ * Consensus tallies the way Yahoo / TipRanks count them: each firm's LATEST
+ * rating, only for firms still covering (rated within ACTIVE_COVERAGE_DAYS).
+ * FMP's grades-consensus counts every grade it holds, so firms that dropped
+ * coverage years ago inflated it (CRM 98 analysts vs 56 actively covering).
+ * Null when too few firms are active to say.
+ */
+export function activeCoverage(
+  rows: ReadonlyArray<{ date: string; gradingCompany: string | null; newGrade: string | null }>,
+  now = Date.now(),
+): (Record<RatingBucket, number> & { consensus: string }) | null {
+  const since = new Date(now - ACTIVE_COVERAGE_DAYS * DAY_MS).toISOString().slice(0, 10);
+  const latest = new Map<string, { date: string; bucket: RatingBucket }>();
+  for (const r of rows) {
+    if (!r.gradingCompany || !r.date || r.date < since) continue;
+    const bucket = ratingBucket(r.newGrade);
+    if (!bucket) continue;
+    const k = canonicalFirm(r.gradingCompany);
+    const cur = latest.get(k);
+    if (!cur || r.date > cur.date) latest.set(k, { date: r.date, bucket });
+  }
+  if (latest.size < MIN_ACTIVE_FIRMS) return null;
+  const t: Record<RatingBucket, number> = { strongBuy: 0, buy: 0, hold: 0, sell: 0, strongSell: 0 };
+  for (const { bucket } of latest.values()) t[bucket]++;
+  const score = (t.strongBuy * 1 + t.buy * 2 + t.hold * 3 + t.sell * 4 + t.strongSell * 5) / latest.size;
+  const consensus = score <= 1.5 ? "Strong Buy" : score <= 2.5 ? "Buy" : score <= 3.5 ? "Hold" : score <= 4.5 ? "Sell" : "Strong Sell";
+  return { ...t, consensus };
+}
+
+/** Pages of per-ticker target posts / rating headlines read (100 each). */
+const TARGET_HISTORY_PAGES = 3;
+
+/** Reads up to TARGET_HISTORY_PAGES pages, stopping at the first short page. */
+async function pagesOf<T>(fetchPage: (page: number) => Promise<T[]>): Promise<T[]> {
+  const out: T[] = [];
+  for (let page = 0; page < TARGET_HISTORY_PAGES; page++) {
+    const rows = await fetchPage(page).catch(() => [] as T[]);
+    out.push(...rows);
+    if (rows.length < 100) break;
+  }
+  return out;
+}
+
 /** Upper bound on a stock's full rating history (FMP returns it all in one call). */
 const GRADES_HISTORY_MAX = 2000;
 
-type TargetLookup = (g: { gradingCompany: string | null; date: string; action: string | null }) => ReturnType<typeof resolveFirmTarget>;
+type TargetLookup = ((g: { gradingCompany: string | null; date: string; action: string | null }) => ReturnType<typeof resolveFirmTarget>) & {
+  /** Each firm's most recent posted target (current share basis). */
+  latestByFirm: Map<string, { date: string; priceTarget: number }>;
+};
+
+/** Low / high / median / mean of each firm's latest target within ACTIVE_TARGET_DAYS (null under MIN_ACTIVE_FIRMS). */
+export function activeTargetStats(
+  latestByFirm: ReadonlyMap<string, { date: string; priceTarget: number }>,
+  now = Date.now(),
+): { low: number; high: number; median: number; mean: number } | null {
+  const since = new Date(now - ACTIVE_TARGET_DAYS * DAY_MS).toISOString().slice(0, 10);
+  const v = [...latestByFirm.values()].filter((p) => p.date >= since && p.priceTarget > 0).map((p) => p.priceTarget).sort((a, b) => a - b);
+  if (v.length < MIN_ACTIVE_FIRMS) return null;
+  const mid = Math.floor(v.length / 2);
+  const median = v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  return { low: r2(v[0]), high: r2(v[v.length - 1]), median: r2(median), mean: r2(v.reduce((a, b) => a + b, 0) / v.length) };
+}
 
 /**
  * FMP's `grades` feed never labels a coverage initiation: across 8,546 stored
@@ -243,7 +330,7 @@ const FIRM_ALIASES: Record<string, string> = {
 };
 
 /** Fold a firm name to a stable key so the two FMP feeds can be joined. */
-function canonicalFirm(name: string | null): string {
+export function canonicalFirm(name: string | null): string {
   if (!name) return "";
   const stripped = name
     .toLowerCase()
@@ -491,25 +578,28 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
     const [pt, summary, grades, targetFor] = await Promise.all([
       this.fmp.getPriceTargetConsensus(ticker).catch(() => null),
       this.fmp.getPriceTargetSummary(ticker).catch(() => null),
-      this.fmp.getGrades(ticker, GRADES_SCAN).catch(() => []),
+      this.fmp.getGrades(ticker, GRADES_HISTORY_MAX).catch(() => []),
       this.targetIndex(ticker),
     ]);
+    // Active coverage: each firm's latest rating / target within the last 12 months.
+    const active = activeCoverage(grades);
+    const ptStats = activeTargetStats(targetFor.latestByFirm);
 
     return {
-      strongBuy: n(row.strongBuy),
-      buy: n(row.buy),
-      hold: n(row.hold),
-      sell: n(row.sell),
-      strongSell: n(row.strongSell),
-      consensus: row.consensus ?? null,
-      priceTargetConsensus: pt?.targetConsensus ?? null,
-      priceTargetHigh: pt?.targetHigh ?? null,
-      priceTargetLow: pt?.targetLow ?? null,
-      priceTargetMedian: pt?.targetMedian ?? null,
+      strongBuy: active ? active.strongBuy : n(row.strongBuy),
+      buy: active ? active.buy : n(row.buy),
+      hold: active ? active.hold : n(row.hold),
+      sell: active ? active.sell : n(row.sell),
+      strongSell: active ? active.strongSell : n(row.strongSell),
+      consensus: active ? active.consensus : (row.consensus ?? null),
+      priceTargetConsensus: ptStats?.mean ?? pt?.targetConsensus ?? null,
+      priceTargetHigh: ptStats?.high ?? pt?.targetHigh ?? null,
+      priceTargetLow: ptStats?.low ?? pt?.targetLow ?? null,
+      priceTargetMedian: ptStats?.median ?? pt?.targetMedian ?? null,
       ptAvgLastMonth: summary?.lastMonthAvg ?? null,
       ptAvgLastQuarter: summary?.lastQuarterAvg ?? null,
       ptAvgLastYear: summary?.lastYearAvg ?? null,
-      recentGrades: selectGrades(grades).map((g) => this.toChange(g, targetFor)),
+      recentGrades: selectGrades(grades.slice(0, GRADES_SCAN)).map((g) => this.toChange(g, targetFor)),
     };
   }
 
@@ -543,9 +633,11 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
   /** Each covering firm's posted targets, as a lookup from a grade row to the
    *  target that firm had standing on that day. */
   private async targetIndex(ticker: string): Promise<TargetLookup> {
+    // FMP serves 100 posts a page; one page covers only the last few months on
+    // a heavily covered name, so older calls fell back to "consensus".
     const [targets, gradeNews, splits] = await Promise.all([
-      this.fmp.getPriceTargets(ticker).catch(() => []),
-      this.fmp.getGradeNews(ticker).catch(() => []),
+      pagesOf((page) => this.fmp.getPriceTargets(ticker, 100, page)),
+      pagesOf((page) => this.fmp.getGradeNews(ticker, 100, page)),
       this.fmp.getSplits(ticker).catch(() => []),
     ]);
 
@@ -598,7 +690,13 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
       if (value != null && headlineNamesFirm(h.title, key))
         addTarget(key, h.date, value, headlinePreviousTarget(h.title));
     }
-    return (g: { gradingCompany: string | null; date: string; action: string | null }) =>
+    const lookup = (g: { gradingCompany: string | null; date: string; action: string | null }) =>
       resolveFirmTarget(ptByFirm.get(canonicalFirm(g.gradingCompany)) ?? [], g.date, g.action);
+    const latestByFirm = new Map<string, { date: string; priceTarget: number }>();
+    for (const [firm, posts] of ptByFirm) {
+      const last = posts.reduce((a, b) => (b.date > a.date ? b : a));
+      latestByFirm.set(firm, { date: last.date, priceTarget: last.priceTarget });
+    }
+    return Object.assign(lookup, { latestByFirm });
   }
 }
