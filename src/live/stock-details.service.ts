@@ -293,6 +293,7 @@ export class StockDetailsService {
       if (!this.ratings) return null;
       const c = await this.ratings.getConsensus(toFmpSymbol(ticker));
       if (!c) return null;
+      const history = await this.getAnalystHistory(ticker).catch(() => []);
       return {
         ticker,
         consensus: c.consensus,
@@ -308,7 +309,7 @@ export class StockDetailsService {
         ptAvgLastMonth: c.ptAvgLastMonth,
         ptAvgLastQuarter: c.ptAvgLastQuarter,
         ptAvgLastYear: c.ptAvgLastYear,
-        recentGrades: c.recentGrades,
+        recentGrades: history.length > 0 ? history : c.recentGrades,
         source: this.ratings.sourceName,
         updatedAt: new Date().toISOString(),
       };
