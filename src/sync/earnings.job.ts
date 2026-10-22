@@ -7,6 +7,7 @@ import { SyncRegistry } from "../common/sync-registry.service";
 import { EARNINGS_ESTIMATES_ADAPTER } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { addDays, daysBetween, isoDate } from "../common/date.util";
+import { etDate } from "../common/market-calendar.util";
 
 const JOB_NAME = "earnings";
 // Reported quarters come from Polygon SEC financials keyed on `filing_date`
@@ -80,7 +81,7 @@ export class EarningsJob implements OnModuleInit {
 
   async run() {
     try {
-      const to = isoDate(new Date());
+      const to = etDate();
       const from = isoDate(addDays(new Date(), -LOOKBACK_DAYS));
       // Polygon's /vX/reference/financials is retired (410 Gone). Letting that
       // throw aborted the WHOLE run, so the FMP forward calendar was never

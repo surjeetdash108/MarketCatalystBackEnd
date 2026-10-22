@@ -204,19 +204,7 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
     const seen = new Set<string>();
     const out: UpcomingEarnings[] = [];
     for (const [f, t] of chunkWindow(from, to, CALENDAR_CHUNK_DAYS)) {
-      const rows = await this.fmp.getEarningsCalendar(f, t).catch((err) => {
-        this.logger.warn(
-          `FMP upcoming calendar failed (${f}..${t}): ${err.message}`,
-        );
-        return [];
-      });
-      // The cap is enforced by silent truncation, so a slice that comes back
-      // near it has probably lost rows. Shout rather than quietly under-report.
-      if (rows.length >= CALENDAR_TRUNCATION_WARN) {
-        this.logger.warn(
-          `FMP earnings-calendar ${f}..${t} returned ${rows.length} rows — at or near the vendor cap, so earlier dates in this slice may have been dropped. Lower CALENDAR_CHUNK_DAYS.`,
-        );
-      }
+      const rows = await this.calendarSlice(f, t);
       for (const r of rows) {
         if (!r.symbol || !r.date) continue;
         // Keep a row if it carries ANY of estimate/actual (a just-announced row
@@ -243,6 +231,31 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
       }
     }
     return out;
+  }
+
+  /**
+   * One calendar slice, split in half and re-fetched while it comes back at the
+   * vendor cap. Peak season runs ~1,300 rows a DAY worldwide, so even a 4-day
+   * slice was silently cut (Oct 27–28 2026 — MSFT, STRL — never arrived).
+   */
+  private async calendarSlice(from: string, to: string): Promise<Awaited<ReturnType<FmpService["getEarningsCalendar"]>>> {
+    const rows = await this.fmp.getEarningsCalendar(from, to).catch((err) => {
+      this.logger.warn(`FMP upcoming calendar failed (${from}..${to}): ${err.message}`);
+      return [];
+    });
+    if (rows.length < CALENDAR_TRUNCATION_WARN) return rows;
+    const DAY = 86_400_000;
+    const a = Date.parse(from), b = Date.parse(to);
+    if (!(b > a)) {
+      this.logger.warn(`FMP earnings-calendar ${from} alone returned ${rows.length} rows — at the vendor cap; some rows may be missing.`);
+      return rows;
+    }
+    const mid = a + Math.floor((b - a) / DAY / 2) * DAY;
+    const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+    return [
+      ...(await this.calendarSlice(from, iso(mid))),
+      ...(await this.calendarSlice(iso(mid + DAY), to)),
+    ];
   }
 
   async getForwardAnnual(ticker: string): Promise<ForwardAnnualEstimate[]> {
