@@ -6,11 +6,21 @@ import {
 } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { candidateTradingDays } from "../common/trading-days.util";
-import { PolygonService } from "../vendors/polygon/polygon.service";
+import {
+  PolygonService,
+  type PolygonAggBar,
+} from "../vendors/polygon/polygon.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 
 const JOB_NAME = "fear-greed";
 const LOOKBACK_DAYS = 5;
+/** Calendar days of daily closes pulled: the 125-session momentum window plus
+ *  ~90 sessions of history for the chart (220 days left only ~28). */
+const SERIES_DAYS = 730;
+/** Volatility index. The real VIX — VIXY (a futures ETF) decays steadily and
+ *  hid spikes: on 22 Oct 2026 the VIX was 24% over its 50-day average while
+ *  VIXY was 3% over, reading ~42 instead of fear. */
+const VOL_TICKER = "^VIX";
 const clamp = (n: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n));
 const sma = (v: number[], n: number) =>
   v.length < n ? null : v.slice(-n).reduce((a, b) => a + b, 0) / n;
@@ -41,7 +51,8 @@ export class FearGreedJob implements OnModuleInit {
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
       collections: ["market_sentiment", "market_sentiment_history"],
-      cronExpression: "15 18 * * 1-5",
+      // After market-breadth (18:30), whose breadth this reads for the day.
+      cronExpression: "45 18 * * 1-5",
       timeZone: "America/New_York",
     });
   }
@@ -53,7 +64,7 @@ export class FearGreedJob implements OnModuleInit {
   /** Daily closes WITH their trading date, so the history backfill can align them. */
   private async series(ticker: string): Promise<{ d: string; c: number }[]> {
     const to = new Date();
-    const from = new Date(to.getTime() - 220 * 24 * 60 * 60 * 1000);
+    const from = new Date(to.getTime() - SERIES_DAYS * 24 * 60 * 60 * 1000);
     const iso = (d: Date) => d.toISOString().slice(0, 10);
     const bars = await this.polygon.getAggsRange(ticker, iso(from), iso(to));
     // `t` is epoch-ms at the bar's start; the UTC date is the ET trading date for
@@ -71,7 +82,7 @@ export class FearGreedJob implements OnModuleInit {
   private componentsAt(
     spy: number[],
     tlt: number[],
-    vixy: number[],
+    vix: number[],
     i: number,
   ): Record<string, number> {
     const c: Record<string, number> = {};
@@ -79,40 +90,89 @@ export class FearGreedJob implements OnModuleInit {
     if (spyMa) c.momentum = clamp(50 + (spy[i] / spyMa - 1) * 625);
     const spyR = ret(spy.slice(0, i + 1), 20);
     const tltR = ret(tlt.slice(0, i + 1), 20);
-    if (spyR != null && tltR != null)
+    if (
+      spyR != null &&
+      tltR != null &&
+      Number.isFinite(spyR) &&
+      Number.isFinite(tltR)
+    )
       c.safeHaven = clamp(50 + (spyR - tltR) * 500);
-    const vixMa = sma(vixy.slice(0, i + 1), 50);
-    if (vixMa) c.volatility = clamp(50 - (vixy[i] / vixMa - 1) * 250);
+    // VIX 40% above its 50-day average reads 0 (extreme fear), 40% below 100.
+    const vixMa = sma(vix.slice(0, i + 1), 50);
+    if (vixMa && Number.isFinite(vixMa) && Number.isFinite(vix[i]))
+      c.volatility = clamp(50 - (vix[i] / vixMa - 1) * 125);
     return c;
+  }
+
+  /**
+   * Fallback when market_breadth has no row for the day: share of US stocks
+   * whose close beat their previous session's close, from two daily bulk files.
+   */
+  private async breadthVsPrevClose(
+    date: string | null,
+  ): Promise<number | null> {
+    if (!date) return null;
+    const days = candidateTradingDays(
+      new Date(`${date}T12:00:00Z`),
+      LOOKBACK_DAYS,
+    );
+    const today: PolygonAggBar[] = await this.polygon
+      .getGroupedDaily(date)
+      .catch((): PolygonAggBar[] => []);
+    if (today.length === 0) return null;
+    const prev = await this.polygon
+      .getLatestGroupedDaily([...days].filter((d) => d < date))
+      .catch((): null => null);
+    if (!prev?.bars.length) return null;
+    const prevClose = new Map<string, number>(prev.bars.map((b) => [b.T, b.c]));
+    let up = 0;
+    let total = 0;
+    for (const b of today) {
+      const pc = prevClose.get(b.T);
+      if (!(pc && pc > 0) || !(b.c > 0) || b.c === pc) continue;
+      total++;
+      if (b.c > pc) up++;
+    }
+    return total > 0 ? clamp((up / total) * 100) : null;
   }
 
   async run() {
     try {
-      const [spySer, tltSer, vixySer] = await Promise.all([
+      const [spySer, tltSer, vixSer] = await Promise.all([
         this.series("SPY"),
         this.series("TLT"),
-        this.series("VIXY"),
+        this.series(VOL_TICKER),
       ]);
+      // Align TLT and VIX to SPY's sessions by date, so index i is one day in
+      // all three series (a missing print stays a gap, never a shifted value).
+      const byDate = (ser: { d: string; c: number }[]) =>
+        new Map(ser.map((x) => [x.d, x.c]));
+      const tltBy = byDate(tltSer);
+      const vixBy = byDate(vixSer);
       const spy = spySer.map((x) => x.c);
-      const tlt = tltSer.map((x) => x.c);
-      const vixy = vixySer.map((x) => x.c);
+      const tlt = spySer.map((x) => tltBy.get(x.d) ?? NaN);
+      const vix = spySer.map((x) => vixBy.get(x.d) ?? NaN);
 
-      // Today's value — unchanged 4-component composite.
-      const components = this.componentsAt(spy, tlt, vixy, spy.length - 1);
-      const latest = await this.polygon.getLatestGroupedDaily(
-        candidateTradingDays(new Date(), LOOKBACK_DAYS),
-      );
-      if (latest && latest.bars.length) {
-        let up = 0;
-        let total = 0;
-        for (const b of latest.bars) {
-          if (b.o > 0) {
-            total++;
-            if (b.c > b.o) up++;
-          }
-        }
-        if (total > 0) components.breadth = clamp((up / total) * 100);
+      // Breadth = share of stocks closing ABOVE THE PREVIOUS CLOSE — the same
+      // definition the history uses (market_breadth.breadthPct). It used to be
+      // close vs that day's OPEN, so today's point and the line disagreed.
+      const breadthByDate = new Map<string, number>();
+      const bsnap = await this.firebase.firestore
+        .collection("market_breadth")
+        .get();
+      for (const d of bsnap.docs) {
+        const b = d.data();
+        if (typeof b.breadthPct === "number")
+          breadthByDate.set(d.id, clamp(b.breadthPct * 100));
       }
+
+      const lastIdx = spy.length - 1;
+      const asOfDate = spySer[lastIdx]?.d ?? null;
+      const components = this.componentsAt(spy, tlt, vix, lastIdx);
+      const todayBreadth =
+        (asOfDate ? breadthByDate.get(asOfDate) : undefined) ??
+        (await this.breadthVsPrevClose(asOfDate));
+      if (todayBreadth != null) components.breadth = todayBreadth;
       const vals = Object.values(components);
       if (vals.length === 0) {
         throw new Error("No Fear & Greed components could be computed");
@@ -129,8 +189,8 @@ export class FearGreedJob implements OnModuleInit {
           components: Object.fromEntries(
             Object.entries(components).map(([k, v]) => [k, Math.round(v)]),
           ),
-          asOfDate: latest?.date ?? null,
-          source: "polygon",
+          asOfDate,
+          source: "fmp",
           updatedAt: new Date().toISOString(),
         },
       );
@@ -141,20 +201,11 @@ export class FearGreedJob implements OnModuleInit {
       // 3 price-based components as of each past trading day and join the stored
       // per-day breadth (market_breadth.breadthPct) — the same four inputs as the
       // live value — and write market_sentiment_history/{date}.
-      const breadthByDate = new Map<string, number>();
-      const bsnap = await this.firebase.firestore
-        .collection("market_breadth")
-        .get();
-      for (const d of bsnap.docs) {
-        const b = d.data();
-        if (typeof b.breadthPct === "number")
-          breadthByDate.set(d.id, clamp(b.breadthPct * 100));
-      }
       const hist: { id: string; data: Record<string, unknown> }[] = [];
       // Start once the 125-day momentum window is available.
       for (let i = 125; i < spySer.length; i++) {
         const date = spySer[i].d;
-        const comp = this.componentsAt(spy, tlt, vixy, i);
+        const comp = this.componentsAt(spy, tlt, vix, i);
         const br = breadthByDate.get(date);
         if (br != null) comp.breadth = br;
         const cv = Object.values(comp);
@@ -169,7 +220,7 @@ export class FearGreedJob implements OnModuleInit {
               Object.entries(comp).map(([k, val]) => [k, Math.round(val)]),
             ),
             asOfDate: date,
-            source: "polygon",
+            source: "fmp",
             updatedAt: new Date().toISOString(),
           },
         });
