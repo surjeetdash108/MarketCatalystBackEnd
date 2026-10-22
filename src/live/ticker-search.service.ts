@@ -69,6 +69,22 @@ export class TickerSearchService {
     return this.loading;
   }
 
+  /**
+   * Whether `ticker` is an active listing. Null while the universe is not
+   * loaded, so callers never drop real tickers on a failed load.
+   */
+  async isListed(ticker: string): Promise<boolean | null> {
+    await this.ensureLoaded();
+    if (this.universe.length === 0) return null;
+    if (!this.tickerSet || this.tickerSetAt !== this.loadedAt) {
+      this.tickerSet = new Set(this.universe.map((u) => u.ticker));
+      this.tickerSetAt = this.loadedAt;
+    }
+    return this.tickerSet.has(ticker.toUpperCase());
+  }
+  private tickerSet: Set<string> | null = null;
+  private tickerSetAt = 0;
+
   /** Ranked: exact ticker → ticker prefix → name prefix → substring. */
   async search(rawQuery: string): Promise<SearchHit[]> {
     this.stats.searches++;
