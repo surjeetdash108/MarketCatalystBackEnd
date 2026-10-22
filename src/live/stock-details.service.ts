@@ -27,7 +27,7 @@ const INSIDER_PAGE_CONCURRENCY = 4;
 const SEC_FALLBACK_FILINGS = 40;
 /** Market-wide feed windows: purchases are the signal and rare; sales are ~10× as frequent. */
 const MARKET_BUY_DAYS = 90;
-const MARKET_SELL_DAYS = 30;
+const MARKET_SELL_DAYS = 90;
 /** Page cap per transaction type (100 rows a page; ~40 pages ≈ 90 days of purchases). */
 const MARKET_INSIDER_MAX_PAGES = 48;
 const MARKET_INSIDER_TTL_MS = 30 * 60_000;

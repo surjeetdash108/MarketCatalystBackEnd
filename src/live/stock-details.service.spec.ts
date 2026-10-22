@@ -139,7 +139,7 @@ describe("StockDetailsService", () => {
               row("AAPL", "P-Purchase", daysAgo(3), "2020-03-05"), // late filing of an old trade
               row("MSFT", "P-Purchase", daysAgo(1), daysAgo(1), null), // unpriced
             ]
-          : [row("NVDA", "S-Sale", daysAgo(0), daysAgo(0)), row("TSLA", "S-Sale", daysAgo(40), daysAgo(40))]; // past 30d
+          : [row("NVDA", "S-Sale", daysAgo(0), daysAgo(0)), row("TSLA", "S-Sale", daysAgo(95), daysAgo(95))]; // past 90d
       });
       const { svc } = make({ fmp: { getMarketInsiderTrades } });
       const rows = await svc.getMarketWideInsiderTransactions();

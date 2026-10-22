@@ -71,6 +71,7 @@ function roleFromFmpOwnerType(typeOfOwner: string): string | null {
  */
 export function fmpInsiderRows(ticker: string, rows: Record<string, unknown>[]): InsiderRow[] {
   const out: InsiderRow[] = [];
+  const seen = new Set<string>();
   rows.forEach((r, i) => {
     const shares = Number(r.securitiesTransacted);
     const date = String(r.transactionDate ?? "").slice(0, 10);
@@ -80,6 +81,14 @@ export function fmpInsiderRows(ticker: string, rows: Record<string, unknown>[]):
     const code = String(r.transactionType ?? "").split("-")[0].trim();
     const filingDate = r.filingDate ? String(r.filingDate).slice(0, 10) : null;
     if (isFutureDated(date, filingDate)) return;
+
+    const rowTicker = ticker || fromFmpSymbol(String(r.symbol ?? "").toUpperCase());
+    const owner = String(r.reportingName ?? "");
+    const price = plausiblePrice(r.price);
+    const dedupeKey = `${rowTicker}_${owner}_${date}_${code}_${shares}_${price ?? "x"}`;
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+
     const owned = Number(r.securitiesOwned);
     out.push({
       // Stable across refreshes for the same filing line.
@@ -87,7 +96,7 @@ export function fmpInsiderRows(ticker: string, rows: Record<string, unknown>[]):
       // The caller's ticker when given (per-stock feeds, already in app form,
       // e.g. "BRK.B"); otherwise the row's own symbol converted from FMP's
       // class-share spelling ("BRK-B" → "BRK.B") so it matches the rest of the app.
-      ticker: ticker || fromFmpSymbol(String(r.symbol ?? "").toUpperCase()),
+      ticker: rowTicker,
       issuerName: r.companyName ? String(r.companyName) : null,
       ownerName: r.reportingName ? String(r.reportingName) : null,
       isOfficer: /officer/i.test(typeOfOwner),
@@ -96,7 +105,7 @@ export function fmpInsiderRows(ticker: string, rows: Record<string, unknown>[]):
       transactionCode: code,
       acquiredOrDisposed: String(r.acquisitionOrDisposition ?? ""),
       shares,
-      pricePerShare: plausiblePrice(r.price),
+      pricePerShare: price,
       sharesOwnedAfter: Number.isFinite(owned) && owned >= 0 ? owned : null,
       filingDate,
       url: r.url ? String(r.url) : null,
