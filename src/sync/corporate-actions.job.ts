@@ -110,6 +110,37 @@ export function increaseStreak(totals: AnnualTotal[]): number {
   return streak;
 }
 
+/**
+ * Consecutive years in which the regular per-payment dividend was raised,
+ * counting back from the latest year that paid more than the year before
+ * (this year included once a raise has been paid). Compares each year's
+ * highest regular payment, so a partial first year or a missing quarter does
+ * not read as a cut — CRM: 0.40 (2024) → 0.416 (2025) → 0.44 (2026) is 2.
+ */
+export function raiseStreak(
+  history: Array<{ exDividendDate: string | null; cashAmount: number | null }>,
+): number {
+  const maxByYear = new Map<number, number>();
+  for (const d of history) {
+    if (!d.exDividendDate || d.cashAmount == null || !(d.cashAmount > 0)) continue;
+    const y = Number(d.exDividendDate.slice(0, 4));
+    if (!Number.isFinite(y)) continue;
+    maxByYear.set(y, Math.max(maxByYear.get(y) ?? 0, d.cashAmount));
+  }
+  const years = [...maxByYear.keys()].sort((a, b) => b - a);
+  // Raised = more than 0.5% above the prior year (rounding noise is not a raise).
+  const raised = (y: number) => maxByYear.has(y - 1) && maxByYear.get(y)! > maxByYear.get(y - 1)! * 1.005;
+  let i = 0;
+  // This year without a raise yet does not break a streak that ran to last year.
+  if (years[0] != null && !raised(years[0]) && years[0] === new Date().getUTCFullYear()) i = 1;
+  let streak = 0;
+  for (; i < years.length; i++) {
+    if (raised(years[i])) streak++;
+    else break;
+  }
+  return streak;
+}
+
 @Injectable()
 export class CorporateActionsJob implements OnModuleInit {
   private readonly logger = new Logger(CorporateActionsJob.name);
@@ -166,7 +197,7 @@ export class CorporateActionsJob implements OnModuleInit {
 
       const divDocs: { id: string; data: Record<string, unknown> }[] = [];
       const splitDocs: { id: string; data: Record<string, unknown> }[] = [];
-      const today = new Date().toISOString().slice(0, 10);
+      const today = etDate();
       let failed = 0;
       let splitResets = 0;
 
@@ -225,7 +256,7 @@ export class CorporateActionsJob implements OnModuleInit {
                     : null,
                 yieldBasisPrice: price,
                 cagr5yPct: dividendCagr(regularTotals, CAGR_YEARS),
-                increaseStreakYears: increaseStreak(regularTotals),
+                increaseStreakYears: raiseStreak(history.filter(isRegularDividend)),
                 frequency: history[0]?.frequency ?? null,
                 isPayer: history.length > 0,
                 source: "polygon",
