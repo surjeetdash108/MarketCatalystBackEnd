@@ -298,10 +298,15 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
     if (points.length === 0) return EMPTY_QUARTERLY;
     const nearest = (periodEnd: string | null) => {
       if (!periodEnd) return null;
+      const endMs = Date.parse(periodEnd);
       let best: { d: number; p: (typeof points)[number] } | null = null;
       for (const p of points) {
-        const d = daysBetween(p.date, periodEnd);
-        if (d <= QUARTER_MATCH_DAYS && (!best || d < best.d)) best = { d, p };
+        const pMs = Date.parse(p.date);
+        const diffDays = (pMs - endMs) / 86_400_000;
+        // Earnings report occurs after period end, within 0-65 days.
+        if (diffDays >= 0 && diffDays <= 65 && (!best || diffDays < best.d)) {
+          best = { d: diffDays, p };
+        }
       }
       return best?.p ?? null;
     };
