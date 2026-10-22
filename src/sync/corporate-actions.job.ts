@@ -7,6 +7,7 @@ import { activeUniverse } from "../common/ticker-universe";
 import { isRegularDividend } from "../common/dividend-annualization.util";
 import { etDate } from "../common/market-calendar.util";
 import { PolygonService } from "../vendors/polygon/polygon.service";
+import { splitAdjustDividends } from "../live/ondemand.service";
 
 /**
  * Per-ticker dividend history → `dividend_history/{ticker}`
@@ -203,10 +204,11 @@ export class CorporateActionsJob implements OnModuleInit {
 
       for (const ticker of batch) {
         try {
-          const history = await this.polygon.getDividendHistory(
-            ticker,
-            HISTORY_LIMIT,
-          );
+          const [rawHistory, splits] = await Promise.all([
+            this.polygon.getDividendHistory(ticker, HISTORY_LIMIT),
+            this.polygon.getSplits(ticker),
+          ]);
+          const history = splitAdjustDividends(rawHistory, splits);
           const totals = annualTotals(history);
           // Growth and the raise streak describe the RECURRING dividend; a
           // special lifts its own year and makes the next look like a cut.
@@ -264,8 +266,6 @@ export class CorporateActionsJob implements OnModuleInit {
               },
             });
           }
-
-          const splits = await this.polygon.getSplits(ticker);
 
           // ── Stock-split re-adjustment trigger (BUG-DATA-001) ──────────────
           // ohlcv_bars are stored adjusted=true. When a split EXECUTES after a
