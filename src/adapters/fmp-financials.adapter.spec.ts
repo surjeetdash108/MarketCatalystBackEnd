@@ -91,6 +91,21 @@ describe("mapFmpStatements", () => {
     expect(q.cashAndCashEquivalents).toBe(30000000);
   });
 
+  it("calculates standard total debt from shortTermDebt + longTermDebt + capital leases", () => {
+    const balMsft = stmt("2025-06-30", {
+      totalAssets: 500000000,
+      shortTermDebt: 9000000,
+      longTermDebt: 31000000,
+      capitalLeaseObligationsCurrent: 10000000,
+      capitalLeaseObligationsNonCurrent: 78000000,
+      totalDebt: 128000000, // raw FMP totalDebt including operating leases
+      cashAndCashEquivalents: 30000000,
+    });
+    const { rows } = mapFmpStatements([gauzIncome], [balMsft], [gauzCashFlow]);
+    const q = mapQuarterRow(rows[0], null);
+    expect(q.totalDebt).toBe(50000000); // 9M + 31M + 10M, excluding 78M non-current operating leases
+  });
+
   describe("Enterprise Value and EV/EBITDA calculation rules", () => {
     function calcEvEbitda(
       mcap: number | null,

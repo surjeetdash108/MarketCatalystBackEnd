@@ -84,6 +84,18 @@ function pick(
   );
 }
 
+function pickBalanceSheet(row: FmpStatementRow | undefined): Record<string, number | null> {
+  if (!row) return {};
+  const base = pick(row, BALANCE_SHEET_KEYS);
+  const std = row.values.shortTermDebt;
+  const ltd = row.values.longTermDebt;
+  const leaseCur = row.values.capitalLeaseObligationsCurrent ?? 0;
+  if (std != null && ltd != null) {
+    base.total_debt = Number(std) + Number(ltd) + Number(leaseCur);
+  }
+  return base;
+}
+
 /**
  * A period explicitly reported in a non-USD currency. Every consumer assumes
  * USD (TSM reports TWD — its revenue would chart ~32× too high), so such
@@ -141,7 +153,7 @@ export function mapFmpStatements(
       endDate: inc.date,
       filingDate: inc.filingDate,
       income: bankNetRevenue(inc, pick(inc, INCOME_KEYS)),
-      balanceSheet: pick(bsByDate.get(inc.date), BALANCE_SHEET_KEYS),
+      balanceSheet: pickBalanceSheet(bsByDate.get(inc.date)),
       cashFlow: pick(cfByDate.get(inc.date), CASH_FLOW_KEYS),
     });
   }
