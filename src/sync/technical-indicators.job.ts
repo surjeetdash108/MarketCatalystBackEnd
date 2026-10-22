@@ -56,19 +56,29 @@ export function rsi(closes: number[], period = 14) {
   return 100 - 100 / (1 + avgGain / avgLoss);
 }
 
-/** Stochastic %K over `period` — where the last close sits in the period range. */
+/**
+ * Stochastic %K (14, 3) — the `smooth`-session average of the raw %K, which is
+ * the %K Yahoo and TradingView publish for Stochastic (14, 3, 3). The raw
+ * reading alone swings far more: JPM's raw 43.8 on 19 Oct beside a published
+ * 57.9, NEE's 64.2 beside 81.6.
+ */
 function stochK(
   highs: number[],
   lows: number[],
   closes: number[],
   period = 14,
+  smooth = 3,
 ): number | null {
-  if (closes.length < period) return null;
-  const hh = Math.max(...highs.slice(-period));
-  const ll = Math.min(...lows.slice(-period));
-  const c = closes[closes.length - 1];
-  if (!Number.isFinite(hh) || !Number.isFinite(ll) || hh === ll) return null;
-  return ((c - ll) / (hh - ll)) * 100;
+  if (closes.length < period + smooth - 1) return null;
+  let sum = 0;
+  for (let i = 0; i < smooth; i++) {
+    const end = closes.length - i;
+    const hh = Math.max(...highs.slice(end - period, end));
+    const ll = Math.min(...lows.slice(end - period, end));
+    if (!Number.isFinite(hh) || !Number.isFinite(ll) || hh === ll) return null;
+    sum += ((closes[end - 1] - ll) / (hh - ll)) * 100;
+  }
+  return sum / smooth;
 }
 
 /** Wilder ADX(14) — trend strength from smoothed +DI/-DI. */
@@ -282,6 +292,7 @@ function weekKey(dateStr: string): string {
 /** Aggregate H/L/C of the last COMPLETE week (excludes the current partial week). */
 function priorWeekHLC(
   bars: Array<{ barDate?: string; high?: number; low?: number; close?: number }>,
+  now: Date,
 ): { high: number; low: number; close: number } | null {
   const weeks = new Map<
     string,
@@ -309,8 +320,20 @@ function priorWeekHLC(
     }
   }
   const keys = [...weeks.keys()].sort();
-  if (keys.length < 2) return null;
-  const prior = weeks.get(keys[keys.length - 2]);
+  // The newest bucket is the week still trading only while today (ET) is in
+  // it and its Friday close has not passed. Once it has finished it IS the
+  // last complete week: always skipping it put COST's pivots for the week of
+  // 19 Oct on 5–9 Oct, because its bars ended on Friday 16 Oct.
+  const { etDate, regularSessionClosed } = marketTimeEt(now);
+  const newest = keys[keys.length - 1];
+  const thisWeek = weekKey(etDate);
+  const dow = new Date(`${etDate}T00:00:00Z`).getUTCDay();
+  const weekDone =
+    dow === 6 || dow === 0 || (dow === 5 && regularSessionClosed);
+  const newestComplete =
+    newest != null && (newest < thisWeek || (newest === thisWeek && weekDone));
+  const basis = newestComplete ? newest : keys[keys.length - 2];
+  const prior = basis != null ? weeks.get(basis) : undefined;
   return prior ? { high: prior.high, low: prior.low, close: prior.close } : null;
 }
 
@@ -650,10 +673,10 @@ export function computeIndicators(
             : undefined) ?? pivotBasisBar.close;
         return pivotLevels(pivotBasisBar.high, pivotBasisBar.low, pivotClose);
       })(),
-      // Weekly pivots from the last COMPLETE week. priorWeekHLC already returns
-      // the second-to-last week bucket (excluding the current in-progress week);
-      // feeding it `completedBars` also keeps a still-forming current-day bar out
-      // of the week aggregation so its H/L/C can never leak into the basis.
+      // Weekly pivots from the last COMPLETE week. priorWeekHLC skips the
+      // newest week bucket only while that week is still trading; feeding it
+      // `completedBars` also keeps a still-forming current-day bar out of the
+      // week aggregation so its H/L/C can never leak into the basis.
       weekly: (() => {
         const w = priorWeekHLC(
           completedBars as Array<{
@@ -662,6 +685,7 @@ export function computeIndicators(
             low?: number;
             close?: number;
           }>,
+          now,
         );
         return w ? pivotLevels(w.high, w.low, w.close) : null;
       })(),

@@ -22,6 +22,20 @@ export interface DivHistItem {
 }
 
 /**
+ * A recurring payment: neither one-time (`frequency` 0) nor a special /
+ * capital-gains distribution. The forward run-rate, the growth rate and the
+ * raise streak all describe this dividend, not the one-offs.
+ */
+export function isRegularDividend(
+  d: Pick<DivHistItem, "dividendType" | "frequency">,
+): boolean {
+  return (
+    d.frequency !== 0 &&
+    !(d.dividendType != null && SPECIAL_DIVIDEND_TYPES.has(d.dividendType))
+  );
+}
+
+/**
  * Polygon's `frequency` integer is a payments-per-year count when it is a real
  * cadence (1 = annual, 2 = semi-annual, 4 = quarterly, 12 = monthly). 0 = one-
  * time and null are not usable cadences → return null so the caller falls back
@@ -77,10 +91,7 @@ export function forwardAnnualDividend(
   history: DivHistItem[],
 ): { perShare: number; paymentsPerYear: number } | null {
   const regular = history.filter(
-    (d) =>
-      (d.cashAmount ?? 0) > 0 &&
-      d.frequency !== 0 &&
-      !(d.dividendType != null && SPECIAL_DIVIDEND_TYPES.has(d.dividendType)),
+    (d) => (d.cashAmount ?? 0) > 0 && isRegularDividend(d),
   );
   if (regular.length === 0) return null;
 

@@ -4,6 +4,8 @@ import { chunkedBatchSet } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { activeUniverse } from "../common/ticker-universe";
+import { isRegularDividend } from "../common/dividend-annualization.util";
+import { etDate } from "../common/market-calendar.util";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 
 /**
@@ -175,11 +177,19 @@ export class CorporateActionsJob implements OnModuleInit {
             HISTORY_LIMIT,
           );
           const totals = annualTotals(history);
+          // Growth and the raise streak describe the RECURRING dividend; a
+          // special lifts its own year and makes the next look like a cut.
+          const regularTotals = annualTotals(history.filter(isRegularDividend));
           const cutoff = new Date();
           cutoff.setUTCFullYear(cutoff.getUTCFullYear() - 1);
           const cutoffIso = cutoff.toISOString().slice(0, 10);
+          // Trailing = already gone ex; a declared future ex-date is not paid yet.
+          const todayEt = etDate();
           const ttm = history.filter(
-            (d) => d.exDividendDate != null && d.exDividendDate >= cutoffIso,
+            (d) =>
+              d.exDividendDate != null &&
+              d.exDividendDate >= cutoffIso &&
+              d.exDividendDate <= todayEt,
           );
           const ttmTotal = ttm.reduce((s, d) => s + (d.cashAmount ?? 0), 0);
           const price = priceByTicker.get(ticker) ?? null;
@@ -214,8 +224,8 @@ export class CorporateActionsJob implements OnModuleInit {
                     ? Math.round((ttmTotal / price) * 10000) / 100
                     : null,
                 yieldBasisPrice: price,
-                cagr5yPct: dividendCagr(totals, CAGR_YEARS),
-                increaseStreakYears: increaseStreak(totals),
+                cagr5yPct: dividendCagr(regularTotals, CAGR_YEARS),
+                increaseStreakYears: increaseStreak(regularTotals),
                 frequency: history[0]?.frequency ?? null,
                 isPayer: history.length > 0,
                 source: "polygon",
