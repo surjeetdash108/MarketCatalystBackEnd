@@ -96,6 +96,26 @@ function nonUsdCurrency(row: FmpStatementRow): string | null {
 }
 
 /**
+ * Banks report revenue NET of interest expense (JPM Q3: $76.19B gross per FMP,
+ * $50.17B net — what the company, Yahoo and TradingView show). A statement whose
+ * interest income is a large share of its revenue is a bank's, so its revenue
+ * is restated net of interest expense; its "gross profit" is then not a real
+ * line and is cleared. Every other company passes through unchanged.
+ */
+export function bankNetRevenue(
+  row: FmpStatementRow,
+  income: Record<string, number | null>,
+): Record<string, number | null> {
+  const v = row.values;
+  const revenue = v.revenue ?? null;
+  const interestIncome = v.interestIncome ?? null;
+  const interestExpense = v.interestExpense ?? null;
+  if (revenue == null || revenue <= 0 || interestIncome == null || interestExpense == null) return income;
+  if (interestIncome / revenue < 0.35 || interestExpense <= 0) return income;
+  return { ...income, revenues: revenue - interestExpense, gross_profit: null, cost_of_revenue: null };
+}
+
+/**
  * Join FMP's three statement series into canonical periods (newest first).
  * Periods without an income statement are not emitted — the income statement
  * is what every consumer keys on.
@@ -120,7 +140,7 @@ export function mapFmpStatements(
       fiscalPeriod: inc.period,
       endDate: inc.date,
       filingDate: inc.filingDate,
-      income: pick(inc, INCOME_KEYS),
+      income: bankNetRevenue(inc, pick(inc, INCOME_KEYS)),
       balanceSheet: pick(bsByDate.get(inc.date), BALANCE_SHEET_KEYS),
       cashFlow: pick(cfByDate.get(inc.date), CASH_FLOW_KEYS),
     });

@@ -3,6 +3,7 @@ import { mapAnnualRow, mapQuarterRow } from "../sync/financials.job";
 import {
   FmpFinancialsAdapter,
   mapFmpStatements,
+  bankNetRevenue,
 } from "./fmp-financials.adapter";
 import { CompositeFinancialsAdapter } from "./market-data.adapters";
 import type { CanonicalFinancialStatement, FinancialsAdapter } from "./types";
@@ -302,5 +303,18 @@ describe("CompositeFinancialsAdapter (Polygon → FMP)", () => {
       adapter("fmp", () => []),
     ).fetchFinancialStatements("SPY", "quarterly", 10);
     expect(res.data).toEqual([]);
+  });
+});
+
+describe("bankNetRevenue", () => {
+  const row = (values: Record<string, number>) => ({ date: "2026-09-30", fiscalYear: "2026", period: "Q3", filingDate: null, reportedCurrency: "USD", values });
+  it("restates a bank's revenue net of interest expense (JPM Q3 2026)", () => {
+    const r = row({ revenue: 76_192e6, interestIncome: 53_056e6, interestExpense: 26_020e6, grossProfit: 47_429e6 });
+    expect(bankNetRevenue(r, { revenues: 76_192e6, gross_profit: 47_429e6 })).toMatchObject({ revenues: 50_172e6, gross_profit: null });
+  });
+  it("leaves an ordinary company alone", () => {
+    const r = row({ revenue: 80_000e6, interestIncome: 900e6, interestExpense: 700e6 });
+    const inc = { revenues: 80_000e6, gross_profit: 30_000e6 };
+    expect(bankNetRevenue(r, inc)).toBe(inc);
   });
 });
