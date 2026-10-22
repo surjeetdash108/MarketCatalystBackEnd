@@ -19,7 +19,8 @@ async function main() {
   console.log('🚀 Starting automated deployment for market-catalyst-live...\n');
 
   // 1. Resolve token
-  const tokenPath = path.join(process.env.USERPROFILE, '.config', 'configstore', 'firebase-tools.json');
+  const homeDir = process.env.USERPROFILE || process.env.HOME || '';
+  const tokenPath = path.join(homeDir, '.config', 'configstore', 'firebase-tools.json');
   if (!fs.existsSync(tokenPath)) {
     throw new Error('Firebase login token not found. Please run: firebase login');
   }
@@ -53,10 +54,17 @@ async function main() {
   const zipFile = path.join(repoRoot, 'deploy-temp.zip');
   if (fs.existsSync(zipFile)) fs.unlinkSync(zipFile);
 
-  execSync(`tar.exe -a -cf "${zipFile}" --exclude="node_modules" --exclude=".git" --exclude="dist" *`, {
-    cwd: repoRoot,
-    stdio: 'inherit'
-  });
+  if (process.platform === 'win32') {
+    execSync(`tar.exe -a -cf "${zipFile}" --exclude="node_modules" --exclude=".git" --exclude="dist" *`, {
+      cwd: repoRoot,
+      stdio: 'inherit'
+    });
+  } else {
+    execSync(`zip -q -r "${zipFile}" . -x "node_modules/*" ".git/*" "dist/*" "deploy-temp.zip"`, {
+      cwd: repoRoot,
+      stdio: 'inherit'
+    });
+  }
 
   const zipBuffer = fs.readFileSync(zipFile);
   const zipSizeMb = (zipBuffer.length / 1024 / 1024).toFixed(2);
