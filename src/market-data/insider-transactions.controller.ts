@@ -23,6 +23,9 @@ const TICKER_RE = /^[A-Z0-9.-]{1,10}$/;
  *  - no ticker (the Insider screen's market-wide feed): the `insider_transactions`
  *    collection, refreshed by the `sec-form4` job when stale per decision #3a.
  */
+/** Longest a request waits on a cold market-wide FMP insider load. */
+const COLD_WAIT_MS = 8_000;
+
 @Controller("market-data")
 // Market data is the product. These read surfaces answered anonymous
 // callers, returning full datasets — the policy lived only in a Firestore
@@ -57,8 +60,14 @@ export class InsiderTransactionsController {
       Number.isInteger(limit) && limit > 0 ? rows.slice(0, limit) : rows;
     // Market-wide open-market buys/sells from FMP; the SEC Form 4 collection
     // (nightly job) only when FMP has nothing.
-    const latest = await this.stockDetails.getMarketWideInsiderTransactions();
-    if (latest.length > 0) return cap(latest);
+    // A cold FMP walk can take tens of seconds (dozens of pages), which left
+    // the dashboard widget on "Loading…". Wait a bounded time; past it, serve
+    // the SEC rows now while the FMP load keeps filling its cache.
+    const latest = await Promise.race([
+      this.stockDetails.getMarketWideInsiderTransactions(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), COLD_WAIT_MS)),
+    ]);
+    if (latest && latest.length > 0) return cap(latest);
     await this.marketData.ensureFresh("sec-form4");
     const { insider_transactions } = await this.cached.get([
       "insider_transactions",
