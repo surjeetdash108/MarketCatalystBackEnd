@@ -39,9 +39,24 @@ export const COMPUTE_INFRA_TICKERS: readonly string[] = [
   "WULF", "CORZ", "BTBT", "BTDR", "SDIG", "APLD", "CANG", "SOS", "BTCM",
   "GREE", "ARBK", "SLNH", "DGHI", "MIGI", "SATO",
 ];
-const TICKER_OVERRIDES: Record<string, TvClassification> = Object.fromEntries(
-  COMPUTE_INFRA_TICKERS.map((t) => [t, { sector: "Technology Services", industry: "Data Processing Services" }]),
-);
+/**
+ * Well-known names whose SEC SIC code lands on the wrong TradingView industry
+ * (XOM's SIC 2911 "petroleum refining" reads as a refiner, not an integrated
+ * major; ETN's switchgear code as machinery). Sector follows the industry.
+ */
+const INDUSTRY_OVERRIDES: Record<string, { sector: TvSector; industry: string }> = {
+  XOM: { sector: "Energy Minerals", industry: "Integrated Oil" },
+  CVX: { sector: "Energy Minerals", industry: "Integrated Oil" },
+  ETN: { sector: "Producer Manufacturing", industry: "Electrical Products" },
+  COST: { sector: "Retail Trade", industry: "Specialty Stores" },
+};
+
+const TICKER_OVERRIDES: Record<string, TvClassification> = {
+  ...Object.fromEntries(
+    COMPUTE_INFRA_TICKERS.map((t) => [t, { sector: "Technology Services" as TvSector, industry: "Data Processing Services" }]),
+  ),
+  ...INDUSTRY_OVERRIDES,
+};
 
 /**
  * Applies the ticker overrides to an already-stored doc (companies / movers
