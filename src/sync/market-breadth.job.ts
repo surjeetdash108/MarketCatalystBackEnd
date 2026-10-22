@@ -20,7 +20,11 @@ import { TICKER_UNIVERSE } from "../common/ticker-universe";
 
 const JOB_NAME = "market-breadth";
 const WINDOW_DAYS = 260;
-const BARS_PER_TICKER = 270; // a little over the window so deltas are complete
+/** 52-week lookback (sessions) for new highs / new lows. */
+const HIGH_LOW_SESSIONS = 252;
+/** Bars read per ticker: enough for the deltas over the window, plus a full
+ *  52-week lookback for the most recent ~40 sessions' new highs / lows. */
+const BARS_PER_TICKER = 292;
 
 interface DayAgg {
   adv: number;
@@ -28,6 +32,11 @@ interface DayAgg {
   unch: number;
   upVol: number;
   downVol: number;
+  /** Stocks closing at a 52-week high / low (only where a full year of bars exists). */
+  newHighs: number;
+  newLows: number;
+  /** Stocks with a full 52-week lookback that day. */
+  highLowCovered: number;
 }
 
 @Injectable()
@@ -88,7 +97,28 @@ export class MarketBreadthJob implements OnModuleInit {
             unch: 0,
             upVol: 0,
             downVol: 0,
+            newHighs: 0,
+            newLows: 0,
+            highLowCovered: 0,
           };
+          // 52-week high / low on a close basis over the prior 251 sessions.
+          if (i >= HIGH_LOW_SESSIONS - 1) {
+            let hi = -Infinity;
+            let lo = Infinity;
+            for (let j = i - (HIGH_LOW_SESSIONS - 1); j < i; j++) {
+              const c = bars[j].close as number | undefined;
+              if (typeof c === "number") {
+                if (c > hi) hi = c;
+                if (c < lo) lo = c;
+              }
+            }
+            const c = bars[i].close as number | undefined;
+            if (typeof c === "number" && Number.isFinite(hi)) {
+              agg.highLowCovered++;
+              if (c >= hi) agg.newHighs++;
+              else if (c <= lo) agg.newLows++;
+            }
+          }
           if (delta > 0) {
             agg.adv++;
             agg.upVol += vol;
@@ -145,6 +175,15 @@ export class MarketBreadthJob implements OnModuleInit {
             upVolume: a.upVol,
             downVolume: a.downVol,
             breadthPct: Math.round(breadthPct * 1000) / 1000,
+            // Stock price strength (Fear & Greed): null where too few stocks had
+            // a full year of bars to call a 52-week high or low.
+            ...(a.highLowCovered >= 50
+              ? {
+                  newHighs: a.newHighs,
+                  newLows: a.newLows,
+                  highLowCovered: a.highLowCovered,
+                }
+              : {}),
             // 0–100 sentiment proxy from breadth — feeds the F&G history line.
             breadthSentiment: Math.round(breadthPct * 100),
             trin: trin == null ? null : Math.round(trin * 100) / 100,
@@ -156,7 +195,11 @@ export class MarketBreadthJob implements OnModuleInit {
       });
 
       await chunkedBatchSet(this.firebase.firestore, "market_breadth", docs);
-      await this.meta.record(JOB_NAME, { ok: true, count: docs.length, docsRead });
+      await this.meta.record(JOB_NAME, {
+        ok: true,
+        count: docs.length,
+        docsRead,
+      });
       this.logger.log(
         `market_breadth: wrote ${docs.length} trading day(s) from ${docsRead} bar reads`,
       );

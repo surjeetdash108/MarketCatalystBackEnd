@@ -101,6 +101,14 @@ upsert_lab_job() {
 upsert_lab_job "sync-strategy-lab-daily" "30 17 * * 1-5" "${SERVICE_URL}/sync/strategy-lab-daily/run" "900s"
 upsert_lab_job "sync-strategy-lab-intraday" "*/5 9-16 * * 1-5" "${SERVICE_URL}/sync/strategy-lab-intraday/run" "600s"
 
+# Intraday refreshes. The live service cannot run sync jobs (they are only
+# registered on the worker), so a stale-on-read refresh never fires in
+# production — these keep the dashboard current through the session.
+#  - fear-greed: live index every 15 min (the :00–:45 runs after 16:00 settle the close)
+#  - sectors: sector % from the 5-minute company quotes, every 10 min
+upsert_lab_job "sync-fear-greed-intraday" "*/15 9-16 * * 1-5" "${SERVICE_URL}/sync/fear-greed/run" "300s"
+upsert_lab_job "sync-sectors-intraday" "*/10 9-16 * * 1-5" "${SERVICE_URL}/sync/sectors/run" "300s"
+
 # ── Retire the old per-job schedules ─────────────────────────────────────────
 OLD_JOBS=(
   sec-13f sec-form4 companies stock-history ticker-universe rs-rating
