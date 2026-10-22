@@ -421,8 +421,10 @@ export class AiAnalysisService {
       macdSignal: pick("macdSignal"),
       sma50: pick("sma50"),
       sma200: pick("sma200"),
-      aboveSma50: pick("aboveSma50"),
-      aboveSma200: pick("aboveSma200"),
+      // Recomputed against the CURRENT price: the stored flags are as of the
+      // last close, so the model wrote "439.44 below 200-day 437.51" (ISRG).
+      aboveSma50: aboveNow(pick("price"), pick("sma50")) ?? pick("aboveSma50"),
+      aboveSma200: aboveNow(pick("price"), pick("sma200")) ?? pick("aboveSma200"),
       ema50: pick("ema50"),
       stochK: pick("stochK"),
       adx14: pick("adx14"),
@@ -433,7 +435,9 @@ export class AiAnalysisService {
       keyLevels: pick("keyLevels"),
       sector: pick("sector"),
       industry: pick("industry"),
-      nextEarnings: pick("nextEarningsDate") ?? pick("earningsDate"),
+      // A stored date can be a report that already happened; never hand the
+      // model a past date as the "next" report.
+      nextEarnings: futureDate(pick("nextEarningsDate") ?? pick("earningsDate")),
     };
 
     const headlines =
@@ -784,4 +788,16 @@ export class AiAnalysisService {
       },
     };
   }
+}
+
+/** The value when it is a YYYY-MM-DD date today (ET) or later, else null. */
+function futureDate(v: unknown): string | null {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(v)) return null;
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+  return v.slice(0, 10) >= today ? v.slice(0, 10) : null;
+}
+
+/** price >= ma when both are numbers, else null. */
+function aboveNow(price: unknown, ma: unknown): boolean | null {
+  return typeof price === "number" && typeof ma === "number" && ma > 0 ? price >= ma : null;
 }
