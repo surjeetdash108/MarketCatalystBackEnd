@@ -27,7 +27,7 @@ import { reconcileMarketCap } from "../common/validate.util";
 import {
   annualTotals,
   dividendCagr,
-  increaseStreak,
+  raiseStreak,
 } from "../sync/corporate-actions.job";
 import {
   mapAnnualRow,
@@ -726,7 +726,7 @@ export class OnDemandService implements OnModuleDestroy {
       const { multiplier, timespan } = RES_PARAMS[resolution];
       const lastT = doc.bars[doc.bars.length - 1].t;
       const from = isoDate(new Date(lastT));
-      const to = isoDate(new Date());
+      const to = etDate();
       this.stats.barsVendorCalls++;
       const raw: PolygonAggBar[] = await this.polygon.getAggsRange(
         ticker,
@@ -1078,7 +1078,40 @@ export class OnDemandService implements OnModuleDestroy {
     }
   }
 
+  /**
+   * The company doc with a CURRENT next-earnings date. A stored
+   * `nextEarningsDate` can be a report that already happened (MSFT carried
+   * Jul 29 after reporting), so a missing or past one is replaced by the next
+   * scheduled report in FMP's EPS history (rows with no actual yet).
+   */
   async getCompany(ticker: string): Promise<Record<string, unknown> | null> {
+    const doc = await this.getCompanyDoc(ticker);
+    if (!doc) return doc;
+    const today = etDate();
+    const stored = typeof doc.nextEarningsDate === "string" ? doc.nextEarningsDate : null;
+    if (stored && stored >= today) return doc;
+    const next = await this.nextReportDate(ticker).catch(() => null);
+    return { ...doc, nextEarningsDate: next };
+  }
+
+  private readonly nextReportCache = new Map<string, { at: number; date: string | null }>();
+
+  /** Next scheduled report (YYYY-MM-DD, ET today or later) from FMP's EPS history; cached 6h. */
+  private async nextReportDate(ticker: string): Promise<string | null> {
+    const hit = this.nextReportCache.get(ticker);
+    if (hit && Date.now() - hit.at < 6 * 3600_000) return hit.date;
+    if (!this.estimatesAdapter) return null;
+    const today = etDate();
+    const rows = await this.estimatesAdapter.getEpsHistory(ticker);
+    const date = rows
+      .filter((r) => r.epsActual == null && r.date >= today)
+      .map((r) => r.date)
+      .sort()[0] ?? null;
+    this.nextReportCache.set(ticker, { at: Date.now(), date });
+    return date;
+  }
+
+  private async getCompanyDoc(ticker: string): Promise<Record<string, unknown> | null> {
     // Checked HERE, not only at the endpoint: the premarket warm calls this for
     // every watchlist/portfolio ticker, and would otherwise rebuild a delisted
     // symbol's company doc — and so its place in every list — each morning.
@@ -1229,8 +1262,10 @@ export class OnDemandService implements OnModuleDestroy {
       const epsTtmReported = ttmReportedEpsFromRows(
         epsHistRes.status === "fulfilled" ? epsHistRes.value : [],
       );
-      // Prefer the non-GAAP TTM (matches NASDAQ/IBD); GAAP is the fallback.
-      const eps = epsTtmReported ?? gaapTtm;
+      // GAAP diluted TTM first — the basis Yahoo, TradingView and most quote
+      // pages use for EPS (TTM) and P/E; the adjusted TTM only fills a gap.
+      // (Adjusted read ETN 12.36 / ISRG 11.13 vs the public 9.83 / 8.27.)
+      const eps = gaapTtm ?? epsTtmReported;
       const peRatio =
         eps != null && eps > 0 && price != null
           ? Math.round((price / eps) * 100) / 100
@@ -1507,17 +1542,17 @@ export class OnDemandService implements OnModuleDestroy {
     if (!details && !q && !fmpQuote) return null;
     const price = fmpQuote?.price ?? (q?.price as number | undefined) ?? null;
 
-    // EPS / P/E — non-GAAP TTM preferred, GAAP fallback (same as full doc).
+    // EPS / P/E — GAAP diluted TTM preferred, adjusted fallback (same as full doc).
     const epsRows = epsHist ?? [];
     const epsTtmReported = ttmReportedEpsFromRows(epsRows);
-    const eps = epsTtmReported ?? gaapTtm ?? null;
+    const eps = gaapTtm ?? epsTtmReported ?? null;
     const peRatio =
       eps != null && eps > 0 && price != null
         ? Math.round((price / eps) * 100) / 100
         : (fmpQuote?.pe ?? null);
 
     // Next ER — FMP lists scheduled quarters with no actual yet.
-    const today = iso(new Date());
+    const today = etDate();
     const nextEarningsDate =
       epsRows
         .filter((r) => r.epsActual == null && r.date >= today)
@@ -1996,10 +2031,13 @@ export class OnDemandService implements OnModuleDestroy {
     if (existing) return existing;
 
     const p = (async () => {
-      const history = await this.polygon.getDividendHistory(
-        ticker,
-        DIV_HISTORY_LIMIT,
-      );
+      const [rawHistory, splits] = await Promise.all([
+        this.polygon.getDividendHistory(ticker, DIV_HISTORY_LIMIT),
+        this.fmp.getSplits(toFmpSymbol(ticker)).catch(() => []),
+      ]);
+      // Per-share amounts on TODAY's share basis: NVDA's pre-split payments
+      // (0.04 before its 4:1 and 10:1 splits) read as a -42.6%/yr dividend.
+      const history = splitAdjustDividends(rawHistory, splits);
       const totals = annualTotals(history);
       // Growth and the raise streak describe the RECURRING dividend. A special
       // lifts its own year and makes the next look like a cut: COST's $10
@@ -2045,7 +2083,7 @@ export class OnDemandService implements OnModuleDestroy {
             : null,
         yieldBasisPrice: price,
         cagr5yPct: dividendCagr(regularTotals, DIV_CAGR_YEARS),
-        increaseStreakYears: increaseStreak(regularTotals),
+        increaseStreakYears: raiseStreak(history.filter(isRegularDividend)),
         frequency: history[0]?.frequency ?? null,
         isPayer: history.length > 0,
         source: "polygon-ondemand",
@@ -2592,7 +2630,7 @@ export class OnDemandService implements OnModuleDestroy {
     if (existing) return existing;
 
     const p = (async () => {
-      const today = isoDate(new Date());
+      const today = etDate();
       const lookback = new Date();
       lookback.setUTCDate(lookback.getUTCDate() - OPTIONS_AGG_LOOKBACK_DAYS);
       const from = isoDate(lookback);
@@ -3163,4 +3201,31 @@ export class OnDemandService implements OnModuleDestroy {
       summary,
     };
   }
+}
+
+/**
+ * Restates dividends paid before a split on the current share basis, but only
+ * where the feed has not already done so: a split is applied when the payment
+ * just before it is at least √ratio times the one after (an adjusted series
+ * shows no drop; √ratio leaves room for a raise announced with the split —
+ * NVDA went 0.04 → 0.01 across its 10:1).
+ */
+export function splitAdjustDividends<T extends { exDividendDate: string | null; cashAmount: number | null }>(
+  history: T[],
+  splits: ReadonlyArray<{ date: string; ratio: number }>,
+): T[] {
+  const dated = history.filter((d) => d.exDividendDate && d.cashAmount != null && d.cashAmount > 0);
+  const factors = splits
+    .filter((sp) => sp.ratio > 1)
+    .filter((sp) => {
+      const before = dated.filter((d) => d.exDividendDate! < sp.date).sort((a, b) => b.exDividendDate!.localeCompare(a.exDividendDate!))[0];
+      const after = dated.filter((d) => d.exDividendDate! >= sp.date).sort((a, b) => a.exDividendDate!.localeCompare(b.exDividendDate!))[0];
+      return !!before && !!after && before.cashAmount! / after.cashAmount! >= Math.sqrt(sp.ratio);
+    });
+  if (factors.length === 0) return history;
+  return history.map((d) => {
+    if (!d.exDividendDate || d.cashAmount == null) return d;
+    const f = factors.filter((sp) => d.exDividendDate! < sp.date).reduce((a, sp) => a * sp.ratio, 1);
+    return f === 1 ? d : { ...d, cashAmount: Math.round((d.cashAmount / f) * 1e6) / 1e6 };
+  });
 }

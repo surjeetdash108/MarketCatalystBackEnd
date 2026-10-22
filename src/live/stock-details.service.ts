@@ -6,7 +6,7 @@ import {
   type InsiderRow,
 } from "../common/insider-rows.util";
 import { getTickerToCik } from "../common/sec-cik-map.util";
-import type { AnalystRatingsAdapter } from "../adapters/analyst-ratings.adapter";
+import { canonicalFirm, headlinePreviousTarget, headlineTarget, type AnalystRatingsAdapter } from "../adapters/analyst-ratings.adapter";
 import { ANALYST_RATINGS_ADAPTER } from "../adapters/types";
 import { FmpService, filedThirteenFQuarters } from "../vendors/fmp/fmp.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
@@ -399,16 +399,32 @@ export class StockDetailsService {
         Array.from({ length: MARKET_GRADES_PAGES }, (_, i) => this.fmp.getLatestPriceTargets(i, 100).catch(() => [])),
       );
       const day = (v: unknown) => String(v ?? "").slice(0, 10);
-      const firmKey = (v: unknown) => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      // Same-firm, same-day price targets: "Jefferies" ↔ "Jefferies".
-      const ptByKey = new Map<string, number>();
+      // Canonical firm key, so "JP Morgan" (grades) joins "JPMorgan Chase" (targets).
+      const firmKey = (v: unknown) => canonicalFirm(v == null ? null : String(v));
+      const shiftDay = (iso: string, d: number) =>
+        new Date(Date.parse(`${iso}T00:00:00Z`) + d * 86_400_000).toISOString().slice(0, 10);
+      // Same-firm price targets by day, with the "from" figure its headline states.
+      type LatestPt = { raw: string; target: number; previous: number | null; firm: string; date: string };
+      const ptByKey = new Map<string, LatestPt>();
       for (const pt of ptPages.flat()) {
         const sym = String(pt.symbol ?? "").toUpperCase();
         const target = Number(pt.priceTarget);
-        if (!isUsSymbol(sym) || !Number.isFinite(target) || target <= 0) continue;
-        const key = `${sym}|${firmKey(pt.analystCompany)}|${day(pt.publishedDate)}`;
-        if (!ptByKey.has(key)) ptByKey.set(key, target);
+        if (!isUsSymbol(sym) || !Number.isFinite(target) || target <= 0 || !pt.analystCompany) continue;
+        const date = day(pt.publishedDate);
+        const key = `${sym}|${firmKey(pt.analystCompany)}|${date}`;
+        if (ptByKey.has(key)) continue;
+        const title = String(pt.newsTitle ?? "");
+        const stated = title && headlineTarget(title) === target ? headlinePreviousTarget(title) : null;
+        const previous = stated ?? (Number(pt.priceTargetPrevious) > 0 ? Number(pt.priceTargetPrevious) : null);
+        ptByKey.set(key, { raw: sym, target, previous, firm: String(pt.analystCompany), date });
       }
+      /** A target post for this grade: same day, or a day either side (news lag). */
+      const ptFor = (raw: string, firm: unknown, date: string) =>
+        ptByKey.get(`${raw}|${firmKey(firm)}|${date}`) ??
+        ptByKey.get(`${raw}|${firmKey(firm)}|${shiftDay(date, 1)}`) ??
+        ptByKey.get(`${raw}|${firmKey(firm)}|${shiftDay(date, -1)}`) ??
+        null;
+      const usedPt = new Set<LatestPt>();
 
       const docMap = new Map<string, Doc>();
       for (const d of baseDocs) {
@@ -421,23 +437,63 @@ export class StockDetailsService {
         const date = day(g.publishedDate);
         if (!isUsSymbol(raw) || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !g.gradingCompany) continue;
         const sym = fromFmpSymbol(raw);
-        const item = {
+        const pt = ptFor(raw, g.gradingCompany, date);
+        if (pt) usedPt.add(pt);
+        const item: Record<string, unknown> = {
           date,
           firm: String(g.gradingCompany),
           previousGrade: g.previousGrade ?? null,
           newGrade: g.newGrade ?? null,
           action: g.action ?? null,
-          priceTarget: ptByKey.get(`${raw}|${firmKey(g.gradingCompany)}|${date}`) ?? null,
+          priceTarget: pt?.target ?? null,
+          priceTargetDate: pt ? pt.date : null,
+          previousPriceTarget: pt?.previous ?? null,
         };
         const list = changesBySym.get(sym) ?? [];
         list.push(item);
         changesBySym.set(sym, list);
       }
 
+      // Target posts with no grade row (a pure PT raise/cut): their own rows,
+      // labelled with the firm's standing rating where the doc knows it.
+      for (const pt of ptByKey.values()) {
+        if (usedPt.has(pt)) continue;
+        const sym = fromFmpSymbol(pt.raw);
+        const list = changesBySym.get(sym) ?? [];
+        list.push({
+          date: pt.date, firm: pt.firm, previousGrade: null, newGrade: null, action: null,
+          priceTarget: pt.target, priceTargetDate: pt.date, previousPriceTarget: pt.previous,
+        });
+        changesBySym.set(sym, list);
+      }
+
+      const sameFirm = (a: unknown, b: unknown) => firmKey(a) === firmKey(b);
       const mergeInto = (doc: Doc, items: Array<Record<string, unknown>>) => {
-        const grades = Array.isArray(doc.recentGrades) ? [...(doc.recentGrades as Array<Record<string, unknown>>)] : [];
+        const grades = Array.isArray(doc.recentGrades) ? (doc.recentGrades as Array<Record<string, unknown>>).map((g) => ({ ...g })) : [];
         for (const it of items) {
-          if (!grades.some((rg) => rg.firm === it.firm && rg.date === it.date)) grades.push(it);
+          const near = (rg: Record<string, unknown>) =>
+            sameFirm(rg.firm, it.firm) &&
+            Math.abs(Date.parse(String(rg.date)) - Date.parse(String(it.date))) <= 86_400_000;
+          const existing = grades.find(near);
+          // The firm's latest standing rating labels a pure target change.
+          const standing = grades.find((rg) => sameFirm(rg.firm, it.firm) && rg.newGrade);
+          if (!existing) {
+            grades.push(it.newGrade == null && standing
+              ? { ...it, newGrade: standing.newGrade, previousGrade: standing.newGrade, action: "maintain" }
+              : it);
+            continue;
+          }
+          // The market-wide feed's publish timestamp is the call's real date
+          // (NVDA Needham: Oct 22 05:50 ET, dated Oct 21 in the per-ticker feed).
+          if (it.action != null && String(it.date) > String(existing.date)) existing.date = it.date;
+          // A fresh same-day target replaces a target carried forward from an
+          // older post (ISRG Evercore 10-21: $430 standing → $385 posted that day).
+          if (it.priceTarget != null && existing.priceTarget !== it.priceTarget) {
+            const carried = existing.priceTarget as number | null;
+            existing.previousPriceTarget = it.previousPriceTarget ?? carried ?? null;
+            existing.priceTarget = it.priceTarget;
+            existing.priceTargetDate = it.priceTargetDate;
+          }
         }
         grades.sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")));
         doc.recentGrades = grades.slice(0, 20);

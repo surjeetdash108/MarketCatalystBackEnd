@@ -159,6 +159,22 @@ describe("StockDetailsService", () => {
   });
 
   describe("market-wide analyst merge", () => {
+    it("replaces a carried-forward target with the same-day post, keeping the old one as previous", async () => {
+      const getLatestGrades = jest.fn(async () => []);
+      const getLatestPriceTargets = jest.fn(async (page: number) => page > 0 ? [] : [
+        { symbol: "ISRG", publishedDate: "2026-10-21T12:00:00.000Z", analystCompany: "Evercore ISI", priceTarget: 385,
+          newsTitle: "Evercore ISI lowers Intuitive Surgical price target to $385 from $400" },
+      ]);
+      const { svc } = make({ fmp: { getLatestGrades, getLatestPriceTargets } });
+      const base = [{ id: "ISRG", ticker: "ISRG", consensus: "Buy", recentGrades: [
+        { date: "2026-10-21", firm: "Evercore", action: "maintain", newGrade: "Outperform", priceTarget: 430, priceTargetDate: "2026-07-20" },
+      ] }];
+      const [isrg] = await svc.getMarketWideAnalystActions(base);
+      expect((isrg as { recentGrades: unknown[] }).recentGrades).toEqual([
+        expect.objectContaining({ firm: "Evercore", priceTarget: 385, previousPriceTarget: 400, priceTargetDate: "2026-10-21" }),
+      ]);
+    });
+
     const consensus = {
       consensus: "Buy", strongBuy: 1, buy: 10, hold: 3, sell: 0, strongSell: 0,
       priceTargetConsensus: 150, priceTargetHigh: 200, priceTargetLow: 100, priceTargetMedian: 150,
@@ -187,7 +203,9 @@ describe("StockDetailsService", () => {
 
       const aapl = by.get("AAPL") as { recentGrades: Array<Record<string, unknown>> };
       expect(aapl.recentGrades[0]).toMatchObject({ date: "2026-10-18", firm: "Jefferies", priceTarget: 300 });
-      expect(aapl.recentGrades).toHaveLength(2);
+      // A target post with no grade row is its own row (a pure PT change).
+      expect(aapl.recentGrades).toHaveLength(3);
+      expect(aapl.recentGrades.find((g) => g.firm === "Morgan Stanley")).toMatchObject({ date: "2026-10-18", priceTarget: 999 });
       // Untracked with an FMP consensus: the REAL counts, not one firm's rating.
       expect(by.get("CRWV")).toMatchObject({ consensus: "Buy", buy: 10, hold: 3, priceTargetConsensus: 150 });
       // No FMP consensus → left out; foreign symbol → never considered.

@@ -36,9 +36,43 @@ const JOB_NAME = "company-quotes";
  */
 const SNAPSHOT_CHUNK = 250;
 
+/** Share of the regular session elapsed (0.05–1) at `ms`, or null before the
+ *  open / on a weekend — weighting a partial day's volume for live RVOL. */
+export function sessionFraction(ms: number): number | null {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "numeric", hour12: false })
+      .formatToParts(new Date(ms)).map((x) => [x.type, x.value]),
+  );
+  if (p.weekday === "Sat" || p.weekday === "Sun") return null;
+  const mins = (Number(p.hour) % 24) * 60 + Number(p.minute) - (9 * 60 + 30);
+  if (mins <= 0) return null;
+  return Math.min(1, Math.max(0.05, mins / 390));
+}
+
+/** How long the 20-day average volumes are reused before re-reading them. */
+const AVG_VOLUME_TTL_MS = 60 * 60_000;
+
 @Injectable()
 export class CompanyQuotesJob implements OnModuleInit {
   private readonly logger = new Logger(CompanyQuotesJob.name);
+  private avgVolCache: { at: number; map: Map<string, number> } | null = null;
+
+  /** 20-day average volume per ticker (written nightly), cached an hour. */
+  private async avgVolumes(): Promise<Map<string, number>> {
+    if (this.avgVolCache && Date.now() - this.avgVolCache.at < AVG_VOLUME_TTL_MS) return this.avgVolCache.map;
+    const map = new Map<string, number>();
+    try {
+      const snap = await this.firebase.firestore.collection("companies").select("avgVolume20").get();
+      for (const d of snap.docs) {
+        const v = d.get("avgVolume20");
+        if (typeof v === "number" && v > 0) map.set(d.id, v);
+      }
+      this.avgVolCache = { at: Date.now(), map };
+    } catch (err) {
+      this.logger.warn(`company-quotes: avg volume read failed: ${(err as Error).message}`);
+    }
+    return this.avgVolCache?.map ?? map;
+  }
 
   constructor(
     private readonly polygon: PolygonService,
@@ -72,6 +106,8 @@ export class CompanyQuotesJob implements OnModuleInit {
 
       const now = new Date().toISOString();
       const docs: Array<{ id: string; data: Record<string, unknown> }> = [];
+      const avgVol = await this.avgVolumes();
+      const fraction = sessionFraction(Date.now());
       let missing = 0;
 
       for (let i = 0; i < universe.length; i += SNAPSHOT_CHUNK) {
@@ -90,12 +126,23 @@ export class CompanyQuotesJob implements OnModuleInit {
         for (const s of snaps) {
           if (!s.ticker || s.price == null) continue;
           seen.add(s.ticker);
+          // Live relative volume: today's volume against the 20-day average
+          // scaled to the share of the session elapsed (TradingView's "relative
+          // volume at time"). The stored daily rvol is the LAST session's, so
+          // ISRG read 2.8x the morning after its earnings day. Not written
+          // before the open, when there is no session volume yet.
+          const avg = avgVol.get(s.ticker);
+          const liveRvol =
+            fraction != null && s.volume != null && avg != null && avg > 0
+              ? Math.round((s.volume / (avg * fraction)) * 100) / 100
+              : undefined;
           docs.push({
             id: s.ticker,
             data: {
               price: s.price,
               pctChange: s.changePercent ?? null,
               prevClose: s.previousClose ?? null,
+              ...(liveRvol !== undefined ? { rvol: liveRvol, dayVolume: s.volume } : {}),
               quoteUpdatedAt: now,
               updatedAt: now,
             },

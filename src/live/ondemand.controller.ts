@@ -768,6 +768,8 @@ ${JSON.stringify(ctx, null, 2)}`,
     const sym = (ticker ?? "").toUpperCase().trim();
     if (!TICKER_RE.test(sym))
       throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+    // A typo ("AAAPL") is not a ticker: never count it toward Most Searched.
+    if ((await this.search.isListed(sym)) === false) return { ok: false, reason: "not a listed ticker" };
     await this.searchedTickers.record(sym);
     return { ok: true };
   }
@@ -785,9 +787,10 @@ ${JSON.stringify(ctx, null, 2)}`,
   ) {
     const n = Math.min(Math.max(parseInt(limit ?? "10", 10) || 10, 1), 50);
     // Over-fetch so dropping delisted names still fills the requested count.
-    const results = (
-      await this.delisted.filterRows(await this.searchedTickers.mostSearched(n + 20))
-    ).slice(0, n);
+    const rows = await this.delisted.filterRows(await this.searchedTickers.mostSearched(n + 20));
+    // Drop typos recorded before searches were validated (e.g. "AAAPL").
+    const listed = await Promise.all(rows.map((r) => this.search.isListed(r.ticker)));
+    const results = rows.filter((_, i) => listed[i] !== false).slice(0, n);
     sendWithEtag(req, res, { results });
   }
 

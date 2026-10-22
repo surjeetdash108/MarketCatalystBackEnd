@@ -63,6 +63,8 @@ const POLYGON_DELAY_MS = 15 * 60_000;
 const IDLE_EVICT_MS = 5 * 60_000;
 /** Guard against an unbounded refresh set if callers request wildly. */
 const MAX_TRACKED = 200;
+/** Symbols per FMP batch-quote call. */
+const FMP_QUOTE_CHUNK = 100;
 
 /** True during US extended trading (04:00–20:00 ET weekdays) — the only window
  *  in which a delayed-quote refresh can return something new. */
@@ -353,7 +355,12 @@ export class SnapshotCacheService implements OnModuleDestroy {
     // caller is not handed an empty result on a cold start. Subsequent calls
     // are served from cache by the timer.
     if (added || tickers.some((t) => !this.cache.has(t))) {
-      await this.refresh(tickers.filter((t) => !this.cache.has(t)));
+      // A refresh already running would make ours a no-op and hand back
+      // nothing for these tickers (ETF Corner showed DIA/IWM/HYG… as "—").
+      // Wait for it, then fetch whatever it did not cover.
+      if (this.inflight) await this.inflight.catch(() => undefined);
+      const missing = tickers.filter((t) => !this.cache.has(t));
+      if (missing.length) await this.refresh(missing);
     }
 
     const quotes = tickers
@@ -421,7 +428,19 @@ export class SnapshotCacheService implements OnModuleDestroy {
    * one request, and user count does not appear in this function at all.
    * (Under LIVE_QUOTE_SOURCE=fmp without batch-quote it is N calls — see top.)
    */
-  private async refresh(tickers: string[]): Promise<void> {
+  /** The refresh in progress, so a cold request can wait for it. */
+  private inflight: Promise<void> | null = null;
+
+  private refresh(tickers: string[]): Promise<void> {
+    if (this.refreshing || tickers.length === 0) return this.inflight ?? Promise.resolve();
+    const run = this.doRefresh(tickers).finally(() => {
+      if (this.inflight === run) this.inflight = null;
+    });
+    this.inflight = run;
+    return run;
+  }
+
+  private async doRefresh(tickers: string[]): Promise<void> {
     const primaryOk = this.canFetch(this.source);
     if (
       tickers.length === 0 ||
@@ -493,9 +512,12 @@ export class SnapshotCacheService implements OnModuleDestroy {
   ): Promise<SnapshotQuote[]> {
     if (source === "fmp") {
       const batched = this.fmp.batchQuoteSupported;
-      const rows = await this.fmp.getQuotes(tickers);
-      // Honest accounting: without batch-quote every ticker is its own call.
-      this.stats.upstreamCalls += batched ? 1 : tickers.length;
+      // Bounded batches: one URL carrying every tracked symbol can fail whole.
+      const rows: Awaited<ReturnType<FmpService["getQuotes"]>> = [];
+      for (let i = 0; i < tickers.length; i += FMP_QUOTE_CHUNK) {
+        rows.push(...(await this.fmp.getQuotes(tickers.slice(i, i + FMP_QUOTE_CHUNK))));
+        this.stats.upstreamCalls += batched ? 1 : Math.min(FMP_QUOTE_CHUNK, tickers.length - i);
+      }
       // Outside regular hours the quote is still the close; one batch call
       // fetches the extended-hours trades that move the price off it.
       const now = Date.now();
