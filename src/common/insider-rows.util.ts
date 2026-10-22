@@ -1,4 +1,5 @@
 import { fromFmpSymbol } from "../vendors/market-data/fmp-mapping.util";
+import { etDate } from "./market-calendar.util";
 
 /**
  * Insider-transaction rows in the `insider_transactions` shape the UI reads
@@ -32,6 +33,21 @@ export interface InsiderRow {
   vendor: "fmp" | "sec";
 }
 
+/**
+ * A Form 4 reports trades that have already happened, so a row dated after its
+ * own filing — or after today — is a vendor artifact, not a trade. ETN carried
+ * two such FMP rows (2027-01-01, 2027-02-25) as if they were real.
+ */
+function isFutureDated(
+  transactionDate: string,
+  filingDate: string | null,
+): boolean {
+  return (
+    (filingDate != null && transactionDate > filingDate) ||
+    transactionDate > etDate()
+  );
+}
+
 /** Positive, plausible per-share price, else null — never a fabricated dollar value. */
 export function plausiblePrice(raw: unknown): number | null {
   const n = Number(raw);
@@ -63,6 +79,7 @@ export function fmpInsiderRows(ticker: string, rows: Record<string, unknown>[]):
     // "G-Gift" → "G": the SEC transaction code the UI labels.
     const code = String(r.transactionType ?? "").split("-")[0].trim();
     const filingDate = r.filingDate ? String(r.filingDate).slice(0, 10) : null;
+    if (isFutureDated(date, filingDate)) return;
     const owned = Number(r.securitiesOwned);
     out.push({
       // Stable across refreshes for the same filing line.
@@ -101,7 +118,7 @@ export function form4InsiderRows(
   },
 ): InsiderRow[] {
   const { issuer, owner, transactions } = parsed;
-  return transactions.map((t, i) => ({
+  const rows: InsiderRow[] = transactions.map((t, i) => ({
     id: `${accessionNumber}_${i}`,
     ticker: issuer?.ticker ?? ticker,
     issuerName: issuer?.name ?? null,
@@ -118,4 +135,5 @@ export function form4InsiderRows(
     filingDate,
     vendor: "sec",
   }));
+  return rows.filter((r) => !isFutureDated(r.transactionDate, filingDate));
 }

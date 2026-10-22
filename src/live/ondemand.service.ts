@@ -20,6 +20,7 @@ import { MonthlyBetaService } from "./monthly-beta.service";
 import { BETA_METHOD } from "../common/monthly-beta.util";
 import {
   forwardAnnualDividend,
+  isRegularDividend,
   type DivHistItem,
 } from "../common/dividend-annualization.util";
 import { reconcileMarketCap } from "../common/validate.util";
@@ -46,6 +47,7 @@ import { toFmpSymbol } from "../vendors/market-data/fmp-mapping.util";
 import {
   anchor52wToPrice,
   computeIndicators,
+  lastCompletedSession,
   type IndicatorBar,
 } from "../sync/technical-indicators.job";
 import { computeRsScore, rsPercentile } from "../sync/rs-rating.job";
@@ -334,6 +336,14 @@ const FIN_STATEMENT_RETRY_MS = 6 * 3600_000;
 const NEWS_TTL_MS = 15 * 60_000;
 /** 13F tab holder list: FMP pages of 100, largest holders first (~10 calls). */
 const MAX_13F_HOLDERS = 1_000;
+/**
+ * Stamped on every `filings_13f` doc; a doc without the current value is
+ * rebuilt rather than served. Docs written before the holder cap and the FMP
+ * rollup carry FMP's 10-row default page as their whole holder list and
+ * `totalHolders`, and a filed quarter's doc never expires — so MSFT went on
+ * reading "10" 13F holders against ~6,600 filers.
+ */
+const FILINGS_13F_CACHE_VERSION = 2;
 const NEWS_LOOKBACK_DAYS = 7;
 const NEWS_ARTICLE_CAP = 5;
 
@@ -865,13 +875,19 @@ export class OnDemandService implements OnModuleDestroy {
       // heaviest part of an on-demand miss — hundreds of vendor rows and
       // hundreds of writes — spent to reproduce data we have.
       //
-      // Only recent, deep-enough history qualifies: too few bars and the long
+      // Only current, deep-enough history qualifies: too few bars and the long
       // windows (sma200, the rolling 52-week range) would be computed over a
       // short series, and a stale edge would rank the ticker on old prices.
       // Either way it falls through to the vendor, so this can only make the
       // path cheaper, never wrong.
+      //
+      // Current means the store reaches the last session the market has
+      // COMPLETED. The old allowance of "newest bar at most 6 days old"
+      // accepted a store missing sessions: COST's ended Fri 16 Oct, so on Tue
+      // 20 Oct its MACD, ADX, Stoch and pivots were all built a session
+      // behind. The calendar here is weekdays only, so the day after a market
+      // holiday goes to the vendor — costlier, never stale.
       const STORED_MIN_BARS = 200;
-      const STORED_MAX_STALE_DAYS = 6;
       let bars: IndicatorBar[] = [];
       try {
         const storedSnap = await col
@@ -885,12 +901,8 @@ export class OnDemandService implements OnModuleDestroy {
         const newest = stored.length
           ? String(stored[stored.length - 1].barDate ?? "")
           : "";
-        const ageDays = newest
-          ? Math.floor(
-              (Date.now() - new Date(`${newest}T00:00:00Z`).getTime()) / 86_400_000,
-            )
-          : Infinity;
-        if (stored.length >= STORED_MIN_BARS && ageDays <= STORED_MAX_STALE_DAYS) {
+        const lastSession = lastCompletedSession(new Map(), new Date());
+        if (stored.length >= STORED_MIN_BARS && newest >= lastSession) {
           bars = stored;
         }
       } catch {
@@ -1989,11 +2001,21 @@ export class OnDemandService implements OnModuleDestroy {
         DIV_HISTORY_LIMIT,
       );
       const totals = annualTotals(history);
+      // Growth and the raise streak describe the RECURRING dividend. A special
+      // lifts its own year and makes the next look like a cut: COST's $10
+      // (2020) and $15 (Dec 2023) read as -16.9%/yr and a 1-year streak.
+      const regularTotals = annualTotals(history.filter(isRegularDividend));
       const cutoff = new Date();
       cutoff.setUTCFullYear(cutoff.getUTCFullYear() - 1);
       const cutoffIso = cutoff.toISOString().slice(0, 10);
+      // Trailing = already gone ex. A declared, still-future ex-date counted as
+      // a fifth payment (MSFT 0.87% against a trailing 0.68%).
+      const todayIso = etDate();
       const ttm = history.filter(
-        (d) => d.exDividendDate != null && d.exDividendDate >= cutoffIso,
+        (d) =>
+          d.exDividendDate != null &&
+          d.exDividendDate >= cutoffIso &&
+          d.exDividendDate <= todayIso,
       );
       const ttmTotal = ttm.reduce((s, d) => s + (d.cashAmount ?? 0), 0);
       const company: Record<string, unknown> | null = await this.getCompany(
@@ -2022,8 +2044,8 @@ export class OnDemandService implements OnModuleDestroy {
             ? Math.round((ttmTotal / price) * 10000) / 100
             : null,
         yieldBasisPrice: price,
-        cagr5yPct: dividendCagr(totals, DIV_CAGR_YEARS),
-        increaseStreakYears: increaseStreak(totals),
+        cagr5yPct: dividendCagr(regularTotals, DIV_CAGR_YEARS),
+        increaseStreakYears: increaseStreak(regularTotals),
         frequency: history[0]?.frequency ?? null,
         isPayer: history.length > 0,
         source: "polygon-ondemand",
@@ -2947,6 +2969,7 @@ export class OnDemandService implements OnModuleDestroy {
     const isFiled = (year: number, quarter: number) => filed.has(`${year}_${quarter}`);
     const usableCache = (data: Record<string, any> | undefined, year: number, quarter: number) =>
       !!data &&
+      data.cacheVersion === FILINGS_13F_CACHE_VERSION &&
       Array.isArray(data.holders) &&
       data.holders.length > 0 &&
       (isFiled(year, quarter) ||
@@ -3122,6 +3145,7 @@ export class OnDemandService implements OnModuleDestroy {
           quarterLabel,
           holders,
           summary,
+          cacheVersion: FILINGS_13F_CACHE_VERSION,
           updatedAt: new Date().toISOString(),
         })
         .catch((err) => {
