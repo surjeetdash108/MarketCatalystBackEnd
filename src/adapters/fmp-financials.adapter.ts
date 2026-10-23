@@ -208,7 +208,11 @@ export class FmpFinancialsAdapter implements FinancialsAdapter {
     ticker: string,
     timeframe: FinancialsTimeframe,
     limit: number,
-    opts?: { incomeOnly?: boolean },
+    opts?: {
+      incomeOnly?: boolean;
+      convertNonUsd?: boolean;
+      adrRatio?: number | null;
+    },
   ): Promise<AdapterResult<CanonicalFinancialStatement[]>> {
     const period = timeframe === "annual" ? "annual" : "quarter";
     const warnings: AdapterWarning[] = [];

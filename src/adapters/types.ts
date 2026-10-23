@@ -301,7 +301,11 @@ export interface FinancialsAdapter {
     ticker: string,
     timeframe: FinancialsTimeframe,
     limit: number,
-    opts?: { incomeOnly?: boolean },
+    opts?: {
+      incomeOnly?: boolean;
+      convertNonUsd?: boolean;
+      adrRatio?: number | null;
+    },
   ): Promise<AdapterResult<CanonicalFinancialStatement[]>>;
 }
 
