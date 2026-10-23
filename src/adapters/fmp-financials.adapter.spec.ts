@@ -91,19 +91,36 @@ describe("mapFmpStatements", () => {
     expect(q.cashAndCashEquivalents).toBe(30000000);
   });
 
-  it("calculates standard total debt from shortTermDebt + longTermDebt + capital leases", () => {
+  it("uses provider totalDebt from FMP balance sheet for non-banks", () => {
     const balMsft = stmt("2025-06-30", {
       totalAssets: 500000000,
       shortTermDebt: 9000000,
       longTermDebt: 31000000,
       capitalLeaseObligationsCurrent: 10000000,
       capitalLeaseObligationsNonCurrent: 78000000,
-      totalDebt: 128000000, // raw FMP totalDebt including operating leases
+      totalDebt: 128000000, // provider totalDebt including lease liabilities
       cashAndCashEquivalents: 30000000,
     });
     const { rows } = mapFmpStatements([gauzIncome], [balMsft], [gauzCashFlow]);
     const q = mapQuarterRow(rows[0], null);
-    expect(q.totalDebt).toBe(50000000); // 9M + 31M + 10M, excluding 78M non-current operating leases
+    expect(q.totalDebt).toBe(128000000);
+  });
+
+  it("calculates bank debt from funded debt (shortTermDebt + longTermDebt) excluding customer deposits", () => {
+    const bankIncome = stmt("2025-06-30", {
+      revenue: 100000000,
+      interestIncome: 45000000, // 45% of revenue -> bank
+      interestExpense: 20000000,
+    });
+    const balBank = stmt("2025-06-30", {
+      totalAssets: 1000000000,
+      shortTermDebt: 50000000,
+      longTermDebt: 450000000,
+      totalDebt: 900000000, // includes customer deposits
+    });
+    const { rows } = mapFmpStatements([bankIncome], [balBank], [gauzCashFlow]);
+    const q = mapQuarterRow(rows[0], null);
+    expect(q.totalDebt).toBe(500000000); // 50M + 450M funded debt
   });
 
   describe("Enterprise Value and EV/EBITDA calculation rules", () => {

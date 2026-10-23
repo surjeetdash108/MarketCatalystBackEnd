@@ -58,7 +58,7 @@ describe("insider rows", () => {
 
   it("keeps only plausible per-share prices", () => {
     expect(plausiblePrice("536.08")).toBe(536.08);
-    expect([0, -1, "", null, "x", 2_110_482].map(plausiblePrice)).toEqual([null, null, null, null, null, null]);
+    expect([0, -1, "", null, "x", 2_110_482].map((v) => plausiblePrice(v))).toEqual([null, null, null, null, null, null]);
   });
 
   it("maps a parsed SEC Form 4 the way the nightly job always stored it", () => {

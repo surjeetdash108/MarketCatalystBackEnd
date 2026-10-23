@@ -84,14 +84,36 @@ function pick(
   );
 }
 
-function pickBalanceSheet(row: FmpStatementRow | undefined): Record<string, number | null> {
+export function isBankStatement(row: FmpStatementRow | undefined): boolean {
+  if (!row) return false;
+  const v = row.values;
+  const revenue = v.revenue ?? null;
+  const interestIncome = v.interestIncome ?? null;
+  const interestExpense = v.interestExpense ?? null;
+  if (revenue == null || revenue <= 0 || interestIncome == null || interestExpense == null) return false;
+  return interestIncome / revenue >= 0.35 && interestExpense > 0;
+}
+
+function pickBalanceSheet(row: FmpStatementRow | undefined, isBank = false): Record<string, number | null> {
   if (!row) return {};
   const base = pick(row, BALANCE_SHEET_KEYS);
+  const totalDebt = row.values.totalDebt;
   const std = row.values.shortTermDebt;
   const ltd = row.values.longTermDebt;
   const leaseCur = row.values.capitalLeaseObligationsCurrent ?? 0;
-  if (std != null && ltd != null) {
-    base.total_debt = Number(std) + Number(ltd) + Number(leaseCur);
+
+  if (isBank) {
+    // For banks, exclude customer deposits and repos by using funded debt
+    if (std != null || ltd != null) {
+      base.total_debt = Number(std ?? 0) + Number(ltd ?? 0) + Number(leaseCur);
+    }
+  } else {
+    // For non-banks, use FMP's totalDebt if available; fallback to funded debt
+    if (totalDebt != null) {
+      base.total_debt = Number(totalDebt);
+    } else if (std != null || ltd != null) {
+      base.total_debt = Number(std ?? 0) + Number(ltd ?? 0) + Number(leaseCur);
+    }
   }
   return base;
 }
@@ -147,13 +169,14 @@ export function mapFmpStatements(
       quarantined.push(`${inc.date} (${currency})`);
       continue;
     }
+    const isBank = isBankStatement(inc);
     rows.push({
       fiscalYear: inc.fiscalYear,
       fiscalPeriod: inc.period,
       endDate: inc.date,
       filingDate: inc.filingDate,
       income: bankNetRevenue(inc, pick(inc, INCOME_KEYS)),
-      balanceSheet: pickBalanceSheet(bsByDate.get(inc.date)),
+      balanceSheet: pickBalanceSheet(bsByDate.get(inc.date), isBank),
       cashFlow: pick(cfByDate.get(inc.date), CASH_FLOW_KEYS),
     });
   }

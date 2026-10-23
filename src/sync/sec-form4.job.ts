@@ -4,7 +4,7 @@ import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { chunkedBatchSet } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
-import { TICKER_UNIVERSE } from "../common/ticker-universe";
+import { TICKER_UNIVERSE, activeUniverse } from "../common/ticker-universe";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 
@@ -38,10 +38,12 @@ export class SecForm4Job implements OnModuleInit {
 
   async run() {
     try {
+      const live = await activeUniverse(this.firebase.firestore);
+      const universe = live.length > 0 ? live : TICKER_UNIVERSE;
       const cursor = await this.meta.getCursor(JOB_NAME);
       const batch = Array.from(
         { length: BATCH_SIZE },
-        (_, i) => TICKER_UNIVERSE[(cursor + i) % TICKER_UNIVERSE.length],
+        (_, i) => universe[(cursor + i) % universe.length],
       );
       const tickerToCik = await getTickerToCik(
         this.firebase.firestore,
@@ -94,7 +96,7 @@ export class SecForm4Job implements OnModuleInit {
       );
       await this.meta.setCursor(
         JOB_NAME,
-        (cursor + BATCH_SIZE) % TICKER_UNIVERSE.length,
+        (cursor + BATCH_SIZE) % universe.length,
       );
       await this.meta.record(JOB_NAME, { ok: true, count: docs.length });
       return { count: docs.length };

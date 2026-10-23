@@ -568,10 +568,10 @@ export class StockDetailsService {
 
   private async institutional(symbol: string) {
     if (!this.fmp.enabled) return null;
-    for (const { year, quarter } of filedThirteenFQuarters(3)) {
+    for (const { year, quarter } of filedThirteenFQuarters(10)) {
       const summary = await this.fmp.getInstitutionalOwnership(symbol, year, quarter).catch(() => null);
       if (!summary) continue;
-      const holders = (await this.fmp.get13FExtractAnalytics(symbol, year, quarter, 100))
+      const rawHolders = (await this.fmp.get13FExtractAnalytics(symbol, year, quarter, 100))
         .map((h: Record<string, unknown>) => ({
           name: String(h.investorName ?? ""),
           cik: h.cik ? String(h.cik) : null,
@@ -582,8 +582,17 @@ export class StockDetailsService {
           isNew: h.isNew === true,
           filingDate: h.filingDate ? String(h.filingDate) : null,
         }))
-        .filter((h) => h.name && h.shares > 0)
+        .filter((h) => h.name && h.shares > 0);
+
+      const seenCik = new Set<string>();
+      const holders = rawHolders
         .sort((a, b) => b.shares - a.shares)
+        .filter((h) => {
+          const key = h.cik || h.name.toLowerCase().trim();
+          if (seenCik.has(key)) return false;
+          seenCik.add(key);
+          return true;
+        })
         .slice(0, TOP_HOLDERS);
       return {
         summary: {

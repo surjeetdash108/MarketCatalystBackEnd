@@ -1135,11 +1135,7 @@ export class OnDemandService implements OnModuleDestroy {
       if (
         Number.isFinite(created) &&
         Date.now() - created < COMPANY_TTL_MS &&
-        data.price != null &&
-        "description" in data &&
-        "descriptionSource" in data &&
-        "instOwnershipPct" in data &&
-        "epsTtm" in data
+        data.price != null
       ) {
         // The nightly cron writes the 52w % from the last bar close; re-measure
         // it from the price this doc carries (see anchor52wToPrice).
@@ -1625,6 +1621,8 @@ export class OnDemandService implements OnModuleDestroy {
       monthChangePct: ind?.monthChangePct ?? null,
       weeklyChange: ind?.week5ChangePct ?? null,
       monthlyChange: ind?.monthChangePct ?? null,
+      week5BaseClose: ind?.week5BaseClose ?? null,
+      week5Closes: ind?.week5Closes ?? null,
       // Lets the frontend tell this apart from the full company doc.
       partial: true,
       source: "polygon-summary",

@@ -49,9 +49,11 @@ function isFutureDated(
 }
 
 /** Positive, plausible per-share price, else null — never a fabricated dollar value. */
-export function plausiblePrice(raw: unknown): number | null {
+/** Positive, plausible per-share price, else null — never a fabricated dollar value. */
+export function plausiblePrice(raw: unknown, code?: string): number | null {
   const n = Number(raw);
-  return Number.isFinite(n) && n > 0 && n <= MAX_PLAUSIBLE_SHARE_PRICE ? n : null;
+  if (!Number.isFinite(n) || n > MAX_PLAUSIBLE_SHARE_PRICE) return null;
+  return n > 0 ? n : null;
 }
 
 /** "director, officer: Chief Executive Officer" → "Chief Executive Officer"; "director" → "Director". */
@@ -78,18 +80,30 @@ export function fmpInsiderRows(ticker: string, rows: Record<string, unknown>[]):
     if (!(shares > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
     const typeOfOwner = String(r.typeOfOwner ?? "");
     // "G-Gift" → "G": the SEC transaction code the UI labels.
-    const code = String(r.transactionType ?? "").split("-")[0].trim();
+    let code = (String(r.transactionCode ?? "").trim() || String(r.transactionType ?? "").split("-")[0].trim()).toUpperCase();
+    if (!code || code.length > 2) {
+      const typeStr = String(r.transactionType ?? "").toLowerCase();
+      if (typeStr.includes("exercise") || typeStr.includes("derivative")) code = "M";
+      else if (typeStr.includes("award") || typeStr.includes("grant")) code = "A";
+      else if (typeStr.includes("tax") || typeStr.includes("withhold")) code = "F";
+      else if (typeStr.includes("gift")) code = "G";
+      else if (typeStr.includes("sale") || typeStr.includes("sell")) code = "S";
+      else if (typeStr.includes("purchase") || typeStr.includes("buy")) code = "P";
+      else code = "J";
+    }
     const filingDate = r.filingDate ? String(r.filingDate).slice(0, 10) : null;
     if (isFutureDated(date, filingDate)) return;
 
     const rowTicker = ticker || fromFmpSymbol(String(r.symbol ?? "").toUpperCase());
     const owner = String(r.reportingName ?? "");
-    const price = plausiblePrice(r.price);
-    const dedupeKey = `${rowTicker}_${owner}_${date}_${code}_${shares}_${price ?? "x"}`;
+    const price = plausiblePrice(r.price, code);
+    const owned = Number(r.securitiesOwned);
+    const ownedKey = Number.isFinite(owned) ? owned : "x";
+    const linkKey = r.link ? String(r.link) : (r.filingDate ? String(r.filingDate) : i);
+    const dedupeKey = `${rowTicker}_${owner}_${date}_${code}_${shares}_${price ?? "x"}_${ownedKey}_${linkKey}`;
     if (seen.has(dedupeKey)) return;
     seen.add(dedupeKey);
 
-    const owned = Number(r.securitiesOwned);
     out.push({
       // Stable across refreshes for the same filing line.
       id: `fmp_${r.reportingCik ?? "x"}_${filingDate ?? "x"}_${date}_${code}_${shares}_${i}`,

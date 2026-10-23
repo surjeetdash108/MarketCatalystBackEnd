@@ -353,14 +353,24 @@ export class SnapshotCacheService implements OnModuleDestroy {
     this.ensureTimer();
     // First-ever request for a ticker has nothing cached; fetch once so the
     // caller is not handed an empty result on a cold start. Subsequent calls
-    // are served from cache by the timer.
-    if (added || tickers.some((t) => !this.cache.has(t))) {
+    // are served from cache by the timer. Also refresh stale entries if Cloud Run
+    // timer suspended during inactivity (e.g. quote freeze).
+    const isStale = (t: string) => {
+      const entry = this.cache.get(t);
+      if (!entry) return true;
+      if (inExtendedSession(new Date(now))) {
+        return now - entry.fetchedAt > Math.max(60_000, this.refreshMs * 2);
+      }
+      return false;
+    };
+
+    const needsRefresh = tickers.filter(isStale);
+    if (added || needsRefresh.length > 0) {
       // A refresh already running would make ours a no-op and hand back
-      // nothing for these tickers (ETF Corner showed DIA/IWM/HYG… as "—").
-      // Wait for it, then fetch whatever it did not cover.
+      // nothing for these tickers. Wait for it, then fetch whatever is still stale/missing.
       if (this.inflight) await this.inflight.catch(() => undefined);
-      const missing = tickers.filter((t) => !this.cache.has(t));
-      if (missing.length) await this.refresh(missing);
+      const toFetch = tickers.filter(isStale);
+      if (toFetch.length) await this.refresh(toFetch);
     }
 
     const quotes = tickers

@@ -3,7 +3,7 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { chunkedBatchSet } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
-import { TICKER_UNIVERSE } from "../common/ticker-universe";
+import { TICKER_UNIVERSE, activeUniverse } from "../common/ticker-universe";
 
 /**
  * Daily market breadth → `market_breadth/{date}` (delivery-plan R11 Market
@@ -72,10 +72,11 @@ export class MarketBreadthJob implements OnModuleInit {
       // largest single read line we could attribute.
       let docsRead = 0;
 
-      // Per-ticker read (bounded memory) — same pattern as technical-indicators.
-      // Reading the whole collection at once would be tens of thousands of docs
-      // held in memory simultaneously.
-      for (const ticker of TICKER_UNIVERSE) {
+      // Read active universe dynamically from SecurityMaster / companies
+      const live = await activeUniverse(this.firebase.firestore);
+      const universe = live.length > 0 ? live : TICKER_UNIVERSE;
+
+      for (const ticker of universe) {
         const snap = await this.firebase.firestore
           .collection("ohlcv_bars")
           .where("ticker", "==", ticker)
@@ -170,7 +171,7 @@ export class MarketBreadthJob implements OnModuleInit {
             // must be able to tell a settled day from one still filling in
             // rather than publishing 4-vs-14 as though it were final.
             covered: a.adv + a.dec + a.unch,
-            universe: TICKER_UNIVERSE.length,
+            universe: universe.length,
             netAdvancers: a.adv - a.dec,
             upVolume: a.upVol,
             downVolume: a.downVol,

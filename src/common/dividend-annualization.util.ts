@@ -19,6 +19,8 @@ export interface DivHistItem {
   cashAmount: number | null;
   dividendType: string | null;
   frequency: number | null;
+  declarationDate?: string | null;
+  recordDate?: string | null;
 }
 
 /**
@@ -89,6 +91,7 @@ export function paymentsPerYearFromSpacing(regular: DivHistItem[]): number | nul
  */
 export function forwardAnnualDividend(
   history: DivHistItem[],
+  nowMs = Date.now(),
 ): { perShare: number; paymentsPerYear: number } | null {
   const regular = history.filter(
     (d) => (d.cashAmount ?? 0) > 0 && isRegularDividend(d),
@@ -96,13 +99,29 @@ export function forwardAnnualDividend(
   if (regular.length === 0) return null;
 
   // history is newest-first, so the first regular row is the latest payment.
-  const perPayment = regular[0].cashAmount ?? 0;
+  const latest = regular[0];
+  const perPayment = latest.cashAmount ?? 0;
   if (!(perPayment > 0)) return null;
 
   const paymentsPerYear =
-    paymentsPerYearFromFrequency(regular[0].frequency) ??
+    paymentsPerYearFromFrequency(latest.frequency) ??
     paymentsPerYearFromSpacing(regular);
   if (paymentsPerYear == null) return null;
+
+  // Grace window: require latest ex-dividend date to be within 1 cadence period + 60 days.
+  // If a company suspended its dividend years ago (e.g. BA or PLAY in 2020),
+  // annualizing a multi-year-old dividend revived a suspended/dead yield.
+  const exDateStr = latest.exDividendDate ?? latest.declarationDate ?? latest.recordDate;
+  if (exDateStr) {
+    const exTime = Date.parse(exDateStr);
+    if (Number.isFinite(exTime)) {
+      const expectedPeriodDays = Math.round(365 / paymentsPerYear);
+      const maxAgeMs = (expectedPeriodDays + 60) * 86_400_000;
+      if (nowMs - exTime > maxAgeMs) {
+        return null;
+      }
+    }
+  }
 
   return { perShare: perPayment * paymentsPerYear, paymentsPerYear };
 }
