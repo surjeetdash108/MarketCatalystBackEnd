@@ -20,6 +20,7 @@ import { MonthlyBetaService } from "./monthly-beta.service";
 import { BETA_METHOD } from "../common/monthly-beta.util";
 import {
   forwardAnnualDividend,
+  resolveDividendYields,
   isRegularDividend,
   type DivHistItem,
 } from "../common/dividend-annualization.util";
@@ -2061,6 +2062,9 @@ export class OnDemandService implements OnModuleDestroy {
         (company?.price as number | undefined) ?? null;
 
       const now = new Date().toISOString();
+      const yields = resolveDividendYields({ history, price });
+      const fwd = yields.forward;
+      const trailing = yields.trailing;
       const doc: Record<string, unknown> = {
         ticker,
         history: history.map((d) => ({
@@ -2073,17 +2077,20 @@ export class OnDemandService implements OnModuleDestroy {
           frequency: d.frequency,
         })),
         annualTotals: totals.slice(0, DIV_ANNUAL_YEARS),
-        ttmTotal: ttm.length > 0 ? Math.round(ttmTotal * 10000) / 10000 : null,
+        ttmTotal:
+          trailing?.perShare ??
+          (ttm.length > 0 ? Math.round(ttmTotal * 10000) / 10000 : null),
         ttmPayments: ttm.length,
-        yieldPct:
-          price != null && ttm.length > 0
-            ? Math.round((ttmTotal / price) * 10000) / 100
-            : null,
+        yieldPct: fwd?.yieldPct ?? trailing?.yieldPct ?? null,
+        forwardYieldPct: fwd?.yieldPct ?? null,
+        forwardPerShare: fwd?.perShare ?? null,
+        trailingYieldPct: trailing?.yieldPct ?? null,
+        trailingPerShare: trailing?.perShare ?? null,
         yieldBasisPrice: price,
         cagr5yPct: dividendCagr(regularTotals, DIV_CAGR_YEARS),
         increaseStreakYears: raiseStreak(history.filter(isRegularDividend)),
         frequency: history[0]?.frequency ?? null,
-        isPayer: history.length > 0,
+        isPayer: yields.isPayer,
         source: "polygon-ondemand",
         createdAt: now,
         updatedAt: now,

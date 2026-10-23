@@ -211,6 +211,22 @@ describe("mapFmpStatements", () => {
     expect(quarantined).toEqual(["2025-12-31 (TWD)"]);
   });
 
+  it("converts non-USD periods to USD when convertNonUsd is enabled", () => {
+    const jpy = stmt(
+      "2026-06-30",
+      { revenue: 1_500_000_000_000, epsDiluted: 113.87 },
+      { reportedCurrency: "JPY" },
+    );
+    const { rows, quarantined } = mapFmpStatements([jpy], [], [], {
+      convertNonUsd: true,
+      adrRatio: 0.2,
+    });
+    expect(quarantined).toEqual([]);
+    expect(rows.length).toBe(1);
+    expect(rows[0].income.revenues).toBeGreaterThan(5e9);
+    expect(rows[0].income.diluted_earnings_per_share).toBeCloseTo(0.145, 2);
+  });
+
   it("leaves balance sheet / cash flow empty when no period matches", () => {
     const { rows } = mapFmpStatements(
       [gauzIncome],

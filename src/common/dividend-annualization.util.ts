@@ -15,12 +15,22 @@ export const SPECIAL_DIVIDEND_TYPES = new Set(["SC", "LT", "ST"]);
 
 /** Subset of a Polygon getDividendHistory() row the forward yield needs. */
 export interface DivHistItem {
-  exDividendDate: string | null;
-  cashAmount: number | null;
-  dividendType: string | null;
-  frequency: number | null;
+  exDividendDate?: string | null;
+  cashAmount?: number | null;
+  amount?: number | null;
+  dividendType?: string | null;
+  frequency?: number | null;
   declarationDate?: string | null;
   recordDate?: string | null;
+  date?: string | null;
+}
+
+export function getDivAmount(d: DivHistItem): number {
+  return d.cashAmount ?? d.amount ?? 0;
+}
+
+export function getDivDate(d: DivHistItem): string | null {
+  return d.exDividendDate ?? d.declarationDate ?? d.recordDate ?? d.date ?? null;
 }
 
 /**
@@ -55,7 +65,10 @@ export function paymentsPerYearFromFrequency(freq: number | null): number | null
  */
 export function paymentsPerYearFromSpacing(regular: DivHistItem[]): number | null {
   const dates = regular
-    .map((d) => (d.exDividendDate ? Date.parse(d.exDividendDate) : NaN))
+    .map((d) => {
+      const dt = getDivDate(d);
+      return dt ? Date.parse(dt) : NaN;
+    })
     .filter((t) => Number.isFinite(t))
     .sort((a, b) => b - a);
   if (dates.length < 2) return null;
@@ -94,24 +107,24 @@ export function forwardAnnualDividend(
   nowMs = Date.now(),
 ): { perShare: number; paymentsPerYear: number } | null {
   const regular = history.filter(
-    (d) => (d.cashAmount ?? 0) > 0 && isRegularDividend(d),
+    (d) => getDivAmount(d) > 0 && isRegularDividend(d),
   );
   if (regular.length === 0) return null;
 
   // history is newest-first, so the first regular row is the latest payment.
   const latest = regular[0];
-  const perPayment = latest.cashAmount ?? 0;
+  const perPayment = getDivAmount(latest);
   if (!(perPayment > 0)) return null;
 
   const paymentsPerYear =
-    paymentsPerYearFromFrequency(latest.frequency) ??
+    paymentsPerYearFromFrequency(latest.frequency ?? null) ??
     paymentsPerYearFromSpacing(regular);
   if (paymentsPerYear == null) return null;
 
   // Grace window: require latest ex-dividend date to be within 1 cadence period + 60 days.
   // If a company suspended its dividend years ago (e.g. BA or PLAY in 2020),
   // annualizing a multi-year-old dividend revived a suspended/dead yield.
-  const exDateStr = latest.exDividendDate ?? latest.declarationDate ?? latest.recordDate;
+  const exDateStr = getDivDate(latest);
   if (exDateStr) {
     const exTime = Date.parse(exDateStr);
     if (Number.isFinite(exTime)) {
@@ -124,4 +137,69 @@ export function forwardAnnualDividend(
   }
 
   return { perShare: perPayment * paymentsPerYear, paymentsPerYear };
+}
+
+export interface DividendYieldResult {
+  forward: {
+    perShare: number;
+    yieldPct: number | null;
+    paymentsPerYear: number;
+  } | null;
+  trailing: {
+    perShare: number;
+    yieldPct: number | null;
+    paymentsCount: number;
+  } | null;
+  isPayer: boolean;
+}
+
+/**
+ * Unified dividend yield resolver: returns both forward and trailing yields
+ * with explicit labeling. Single source of truth across Key stats, Financials card,
+ * and SI so they never disagree.
+ */
+export function resolveDividendYields(params: {
+  history: DivHistItem[];
+  price: number | null;
+  nowMs?: number;
+}): DividendYieldResult {
+  const nowMs = params.nowMs ?? Date.now();
+  const fwd = forwardAnnualDividend(params.history, nowMs);
+  const forward = fwd
+    ? {
+        perShare: Math.round(fwd.perShare * 10000) / 10000,
+        yieldPct:
+          params.price != null && params.price > 0
+            ? Math.round((fwd.perShare / params.price) * 10000) / 100
+            : null,
+        paymentsPerYear: fwd.paymentsPerYear,
+      }
+    : null;
+
+  // Trailing twelve months (ex-dates within 365 days up to now)
+  const oneYearAgoMs = nowMs - 365 * 86_400_000;
+  const ttmItems = params.history.filter((d) => {
+    const ds = getDivDate(d);
+    if (!ds) return false;
+    const t = Date.parse(ds);
+    return Number.isFinite(t) && t >= oneYearAgoMs && t <= nowMs;
+  });
+  const ttmTotal = ttmItems.reduce((s, d) => s + getDivAmount(d), 0);
+  const trailing =
+    ttmItems.length > 0 && ttmTotal > 0
+      ? {
+          perShare: Math.round(ttmTotal * 10000) / 10000,
+          yieldPct:
+            params.price != null && params.price > 0
+              ? Math.round((ttmTotal / params.price) * 10000) / 100
+              : null,
+          paymentsCount: ttmItems.length,
+        }
+      : null;
+
+  return {
+    forward,
+    trailing,
+    isPayer: forward != null,
+  };
 }

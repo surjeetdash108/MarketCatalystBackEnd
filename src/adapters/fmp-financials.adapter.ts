@@ -1,4 +1,5 @@
 import type { FmpService, FmpStatementRow } from "../vendors/fmp/fmp.service";
+import { convertFinancialStatementToUsd } from "../common/adr-fx.util";
 import type {
   AdapterResult,
   AdapterWarning,
@@ -151,26 +152,29 @@ export function bankNetRevenue(
 
 /**
  * Join FMP's three statement series into canonical periods (newest first).
- * Periods without an income statement are not emitted — the income statement
- * is what every consumer keys on.
+ * Non-USD periods are converted to USD using FX and ADR ratios when enabled,
+ * preventing data loss for ADRs (like MFG) while ensuring all numbers are in USD.
  */
 export function mapFmpStatements(
   income: FmpStatementRow[],
   balanceSheet: FmpStatementRow[],
   cashFlow: FmpStatementRow[],
+  opts?: { convertNonUsd?: boolean; adrRatio?: number },
 ): { rows: CanonicalFinancialStatement[]; quarantined: string[] } {
   const bsByDate = new Map(balanceSheet.map((r) => [r.date, r]));
   const cfByDate = new Map(cashFlow.map((r) => [r.date, r]));
   const quarantined: string[] = [];
   const rows: CanonicalFinancialStatement[] = [];
+  const shouldConvert = opts?.convertNonUsd === true;
+
   for (const inc of [...income].sort((a, b) => b.date.localeCompare(a.date))) {
     const currency = nonUsdCurrency(inc);
-    if (currency) {
+    if (currency && !shouldConvert) {
       quarantined.push(`${inc.date} (${currency})`);
       continue;
     }
     const isBank = isBankStatement(inc);
-    rows.push({
+    let stmt: CanonicalFinancialStatement = {
       fiscalYear: inc.fiscalYear,
       fiscalPeriod: inc.period,
       endDate: inc.date,
@@ -178,7 +182,17 @@ export function mapFmpStatements(
       income: bankNetRevenue(inc, pick(inc, INCOME_KEYS)),
       balanceSheet: pickBalanceSheet(bsByDate.get(inc.date), isBank),
       cashFlow: pick(cfByDate.get(inc.date), CASH_FLOW_KEYS),
-    });
+    };
+
+    if (currency && shouldConvert) {
+      stmt = convertFinancialStatementToUsd({
+        statement: stmt,
+        currency,
+        adrRatio: opts?.adrRatio ?? 1.0,
+      });
+    }
+
+    rows.push(stmt);
   }
   return { rows, quarantined };
 }
@@ -244,6 +258,7 @@ export class FmpFinancialsAdapter implements FinancialsAdapter {
       income,
       balanceSheet,
       cashFlow,
+      { convertNonUsd: opts?.convertNonUsd !== false, adrRatio: opts?.adrRatio },
     );
     if (quarantined.length > 0) {
       warnings.push({

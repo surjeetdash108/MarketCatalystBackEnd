@@ -4,7 +4,10 @@ import { chunkedBatchSet } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { activeUniverse } from "../common/ticker-universe";
-import { isRegularDividend } from "../common/dividend-annualization.util";
+import {
+  isRegularDividend,
+  resolveDividendYields,
+} from "../common/dividend-annualization.util";
 import { etDate } from "../common/market-calendar.util";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { splitAdjustDividends } from "../live/ondemand.service";
@@ -236,6 +239,9 @@ export class CorporateActionsJob implements OnModuleInit {
           // history:[]/isPayer:false/null aggregates through merge:true would
           // clobber a prior good dividend record, so skip the whole write and let
           // merge preserve it. A genuine non-payer simply never gets a doc created.
+          const yields = resolveDividendYields({ history, price });
+          const fwd = yields.forward;
+          const trailing = yields.trailing;
           if (history.length > 0) {
             divDocs.push({
               id: ticker,
@@ -254,17 +260,19 @@ export class CorporateActionsJob implements OnModuleInit {
                 })),
                 annualTotals: totals.slice(0, ANNUAL_YEARS),
                 ttmTotal:
-                  ttm.length > 0 ? Math.round(ttmTotal * 10000) / 10000 : null,
+                  trailing?.perShare ??
+                  (ttm.length > 0 ? Math.round(ttmTotal * 10000) / 10000 : null),
                 ttmPayments: ttm.length,
-                yieldPct:
-                  price != null && ttm.length > 0
-                    ? Math.round((ttmTotal / price) * 10000) / 100
-                    : null,
+                yieldPct: fwd?.yieldPct ?? trailing?.yieldPct ?? null,
+                forwardYieldPct: fwd?.yieldPct ?? null,
+                forwardPerShare: fwd?.perShare ?? null,
+                trailingYieldPct: trailing?.yieldPct ?? null,
+                trailingPerShare: trailing?.perShare ?? null,
                 yieldBasisPrice: price,
                 cagr5yPct: dividendCagr(regularTotals, CAGR_YEARS),
                 increaseStreakYears: raiseStreak(history.filter(isRegularDividend)),
                 frequency: history[0]?.frequency ?? null,
-                isPayer: history.length > 0,
+                isPayer: yields.isPayer,
                 source: "polygon",
                 updatedAt: new Date().toISOString(),
               },
