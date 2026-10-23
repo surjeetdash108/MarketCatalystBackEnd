@@ -179,14 +179,15 @@ export class PolygonService {
 
   async getLatestGroupedDaily(
     candidateDates: Iterable<string>,
+    minBars = 1,
   ): Promise<{ date: string; bars: PolygonAggBar[] } | null> {
     for (const date of candidateDates) {
       const bars = await this.getGroupedDaily(date);
-      if (bars.length > 0) {
+      if (bars.length >= minBars) {
         return { date, bars };
       }
       this.logger.log(
-        `No grouped-daily data for ${date} (holiday/weekend) — trying prior day`,
+        `No grouped-daily session for ${date} (${bars.length} rows, need ${minBars}; holiday, weekend or not yet traded) — trying prior day`,
       );
     }
     return null;

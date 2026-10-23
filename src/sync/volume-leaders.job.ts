@@ -4,6 +4,7 @@ import { chunkedBatchSet } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { addDays, isoDate } from "../common/date.util";
+import { etDate } from "../common/market-calendar.util";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 
 const JOB_NAME = "volume-leaders";
@@ -65,6 +66,13 @@ const MIN_AVG_VOLUME = 50_000;
 const TOP_N = 300;
 /** How far back to look for the most recent session with data. */
 const LOOKBACK_DAYS = 6;
+/**
+ * Fewest symbols a real session can have (a full one is ~12,600). Grouped-daily
+ * also answers for a day whose session has not opened or has only just begun:
+ * on 22 Oct it returned 18 symbols for "23 Oct". Anything under this is not a
+ * session, so it is skipped rather than rolled into the windows.
+ */
+const MIN_SESSION_SYMBOLS = 1000;
 
 const STATE = "volume_state";
 const OUTPUT = "volume_leaders";
@@ -134,7 +142,13 @@ export class VolumeLeadersJob implements OnModuleInit {
 
   async run() {
     try {
-      const today = new Date();
+      // The calendar date in NEW YORK, not UTC. This job runs at 20:30 ET, which
+      // is 00:30 UTC the NEXT day, so `new Date()` named tomorrow: the newest
+      // candidate was a session that had not happened, Polygon answered with
+      // 18 symbols, and that stood in for the real day, publishing an empty
+      // leaderboard every Mon-Thu. Noon UTC keeps the day arithmetic clear of
+      // any DST edge.
+      const today = new Date(`${etDate()}T12:00:00Z`);
       const candidates = Array.from({ length: LOOKBACK_DAYS }, (_, i) =>
         isoDate(addDays(today, -i)),
       );
@@ -155,12 +169,15 @@ export class VolumeLeadersJob implements OnModuleInit {
         );
         for (const d of seedDates) {
           const seedBars = await this.polygon.getGroupedDaily(d).catch(() => []);
-          if (seedBars.length === 0) continue; // weekend or holiday
+          if (seedBars.length < MIN_SESSION_SYMBOLS) continue; // weekend, holiday or not a session
           await this.applySession(d, seedBars, { publish: false });
         }
       }
 
-      const latest = await this.polygon.getLatestGroupedDaily(candidates);
+      const latest = await this.polygon.getLatestGroupedDaily(
+        candidates,
+        MIN_SESSION_SYMBOLS,
+      );
       if (!latest || latest.bars.length === 0) {
         this.logger.warn(
           `volume-leaders: no grouped-daily data in the last ${LOOKBACK_DAYS} days — leaving the previous leaderboard in place`,
