@@ -33,7 +33,13 @@ import {
  * Concurrent viewers share one in-flight generation; the first viewer of a stale
  * period waits for it, everyone after reads the cache.
  *
- * Cutoffs (how stale the CURRENT period may get): weekly 12h, monthly 24h.
+ * Cutoffs (how stale the CURRENT period may get): weekly 12h, monthly 24h. A
+ * weekly digest generated after Friday 12:00 ET of its own week counts as fresh
+ * for the rest of that week (see isCurrentFresh).
+ *
+ * SCHEDULED, too: the `market-glance-weekly` sync job (Cloud Scheduler, Fridays
+ * 12:00 ET) calls rebuildCurrentWeek() so the Friday-noon summary is already
+ * stored when the first viewer opens the tab.
  */
 
 type Period = "weekly" | "monthly";
@@ -140,6 +146,40 @@ function prevBounds(period: Period, instant: Date): Bounds {
   const justBefore = new Date(Date.parse(cur.start) - 1); // 1ms before this period
   return boundsFor(period, justBefore);
 }
+/**
+ * The instant (epoch ms) of Friday 12:00 America/New_York in the week that
+ * starts at `weekStart` (a Monday 00:00 UTC, i.e. `weekBounds().start`).
+ *
+ * The ET offset is read off Intl rather than hard-coded, so EST/EDT are both
+ * right. DST never changes on a Friday (the switch is Sunday 02:00), so the
+ * offset sampled at the guess is also the offset at noon ET.
+ */
+function fridayNoonEtMs(weekStart: Date): number {
+  const friday = new Date(weekStart);
+  friday.setUTCDate(friday.getUTCDate() + 4); // Monday + 4 days
+  const guess = Date.UTC(friday.getUTCFullYear(), friday.getUTCMonth(), friday.getUTCDate(), 12, 0, 0);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hourCycle: "h23",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+  }).formatToParts(new Date(guess));
+  const part = (type: string): number => Number(parts.find((p) => p.type === type)?.value);
+  const etWallAsUtc = Date.UTC(
+    part("year"),
+    part("month") - 1,
+    part("day"),
+    part("hour"),
+    part("minute"),
+    part("second"),
+  );
+  const offsetMs = etWallAsUtc - guess; // negative: New York is behind UTC
+  return guess - offsetMs; // 12:00 ET expressed as a UTC instant
+}
 
 @Injectable()
 export class MarketGlanceService {
@@ -162,6 +202,37 @@ export class MarketGlanceService {
     return this.serve("monthly");
   }
 
+  /**
+   * Build + persist the CURRENT week's digest now, regardless of how fresh the
+   * stored one is. Called by the `market-glance-weekly` sync job (Cloud
+   * Scheduler, Fridays 12:00 ET) so the Friday-noon summary exists before
+   * anyone opens the tab, instead of the first viewer waiting on the model.
+   *
+   * Shares the in-flight map with `serve()`, so a viewer arriving mid-build
+   * joins this generation rather than starting a second one. Deliberately does
+   * NOT consult the failure cooldown: a scheduled run is the retry. Returns the
+   * stored doc, or null when nothing was persisted (model disabled or failed) —
+   * the caller decides whether that is an error.
+   */
+  rebuildCurrentWeek(): Promise<GlanceDoc | null> {
+    return this.rebuildOnce("weekly", boundsFor("weekly", new Date()));
+  }
+
+  /**
+   * Is the stored digest for the CURRENT period still good enough to serve?
+   * Within the cutoff, always. Weekly also treats a digest generated after
+   * Friday 12:00 ET of this week as fresh for the rest of the week: that is the
+   * scheduled "summary of the week", and re-running the model for weekend
+   * viewers would only be superseded when the week is finalised after it closes.
+   */
+  private isCurrentFresh(period: Period, doc: GlanceDoc | null, bounds: Bounds, now: number): boolean {
+    if (!doc) return false;
+    const generated = Date.parse(doc.generatedAt);
+    if (!Number.isFinite(generated)) return false;
+    if (now - generated < TTL_MS[period]) return true;
+    return period === "weekly" && generated >= fridayNoonEtMs(new Date(bounds.start));
+  }
+
   private col(period: Period) {
     return this.firebase.firestore.collection(COLLECTION[period]);
   }
@@ -174,10 +245,7 @@ export class MarketGlanceService {
 
     const cur = boundsFor(period, new Date());
     const curDoc = items.find((d) => d.periodKey === cur.key) ?? null;
-    const curFresh =
-      !!curDoc &&
-      Number.isFinite(Date.parse(curDoc.generatedAt)) &&
-      now - Date.parse(curDoc.generatedAt) < TTL_MS[period];
+    const curFresh = this.isCurrentFresh(period, curDoc, cur, now);
 
     if (!curFresh && this.canAttempt(period, cur.key, now)) {
       const built = await this.rebuildOnce(period, cur);
