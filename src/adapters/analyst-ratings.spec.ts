@@ -8,6 +8,10 @@ import {
   toCurrentShareBasis,
   alignPreviousToSplits,
   FmpAnalystRatingsAdapter,
+  canonicalFirm,
+  headlineFirm,
+  headlineTargetDirection,
+  dedupeGrades,
 } from "./analyst-ratings.adapter";
 import type { FmpService } from "../vendors/fmp/fmp.service";
 
@@ -114,33 +118,35 @@ describe("resolveFirmTarget", () => {
     { date: "2026-05-01", priceTarget: 244 },
     { date: "2026-08-05", priceTarget: 275 },
   ];
-  it("carries the standing target forward onto a later reiteration (AME/Baird, 61 days) — with no 'previous', since the target did not change at this call", () => {
-    expect(resolveFirmTarget(posts, "2026-10-05", "maintain")).toEqual({
-      priceTarget: 275,
-      date: "2026-08-05",
-      previousPriceTarget: null,
+  it("never carries an older target onto a later call (E2E A5: 41 stale '(as of …)' targets)", () => {
+    expect(resolveFirmTarget(posts, "2026-10-05")).toBeNull();
+    expect(resolveFirmTarget(posts, "2026-03-30")).toBeNull();
+  });
+  it("takes the post made with the call, with its previous target and direction", () => {
+    expect(resolveFirmTarget(posts, "2026-08-06")).toEqual({
+      priceTarget: 275, date: "2026-08-05", previousPriceTarget: 244, direction: "raise",
     });
   });
-  it("reports the previous target only for the call the post was made with (within the news-lag grace)", () => {
-    expect(resolveFirmTarget(posts, "2026-08-06", "maintain")?.previousPriceTarget).toBe(244);
+  it("accepts a post a day before (after-close note) or a few days after (news lag)", () => {
+    expect(resolveFirmTarget([{ date: "2026-08-31", priceTarget: 135 }], "2026-09-01")?.priceTarget).toBe(135);
+    expect(resolveFirmTarget([{ date: "2026-06-03", priceTarget: 10 }], "2026-06-01")?.priceTarget).toBe(10);
+    expect(resolveFirmTarget([{ date: "2026-06-05", priceTarget: 10 }], "2026-06-01")).toBeNull();
+    expect(resolveFirmTarget([{ date: "2026-05-30", priceTarget: 10 }], "2026-06-01")).toBeNull();
   });
-  it("never pins a target the firm posted AFTER the grade", () => {
-    // Old rule picked the nearest (2026-05-01, a month later); the standing one is Feb's.
-    expect(resolveFirmTarget(posts, "2026-03-30", "maintain")?.priceTarget).toBe(245);
+  it("keeps back-to-back calls on their own rows (ABT / Wells Fargo $119 on 10-22, $120 on 10-23)", () => {
+    const wf = [
+      { date: "2026-10-22", priceTarget: 119, previousTarget: 112 },
+      { date: "2026-10-23", priceTarget: 120, previousTarget: 119 },
+    ];
+    expect(resolveFirmTarget(wf, "2026-10-22")?.priceTarget).toBe(119);
+    expect(resolveFirmTarget(wf, "2026-10-23")?.priceTarget).toBe(120);
   });
-  it("accepts a post a day or two after the grade (news lag)", () => {
-    expect(resolveFirmTarget([{ date: "2026-06-03", priceTarget: 10 }], "2026-06-01", "upgrade")?.priceTarget).toBe(10);
-  });
-  it("keeps the tight window for rating changes", () => {
-    expect(resolveFirmTarget(posts, "2026-10-05", "downgrade")).toBeNull();
-    expect(resolveFirmTarget(posts, "2026-09-10", "upgrade")?.priceTarget).toBe(275);
-  });
-  it("drops a reiteration's target once it is older than the maintain window", () => {
-    expect(resolveFirmTarget(posts, "2027-03-01", "maintain")).toBeNull();
+  it("uses the headline's direction when no previous figure is known", () => {
+    expect(resolveFirmTarget([{ date: "2026-03-06", priceTarget: 24, direction: "raise" }], "2026-03-06")?.direction).toBe("raise");
   });
   it("handles no posts and bad dates", () => {
-    expect(resolveFirmTarget([], "2026-01-01", "maintain")).toBeNull();
-    expect(resolveFirmTarget(posts, "not-a-date", "maintain")).toBeNull();
+    expect(resolveFirmTarget([], "2026-01-01")).toBeNull();
+    expect(resolveFirmTarget(posts, "not-a-date")).toBeNull();
   });
 });
 
@@ -181,17 +187,18 @@ describe("resolveFirmTarget previous target", () => {
       { date: "2026-07-21", priceTarget: 94, previousTarget: 93 },
       { date: "2026-10-06", priceTarget: 80, previousTarget: 93 },
     ];
-    expect(resolveFirmTarget(posts, "2026-10-06", "maintain")?.previousPriceTarget).toBe(93);
+    expect(resolveFirmTarget(posts, "2026-10-06")?.previousPriceTarget).toBe(93);
   });
   it("uses a stated 'from' carried by the other feed's copy of the same call", () => {
     const posts = [
       { date: "2026-10-06", priceTarget: 83, previousTarget: 91.5 },
       { date: "2026-10-07", priceTarget: 83, previousTarget: null },
     ];
-    expect(resolveFirmTarget(posts, "2026-10-07", "maintain")).toEqual({
+    expect(resolveFirmTarget(posts, "2026-10-07")).toEqual({
       priceTarget: 83,
       date: "2026-10-07",
       previousPriceTarget: 91.5,
+      direction: "cut",
     });
   });
   it("falls back to the firm's previous post, never a duplicate of the same call", () => {
@@ -200,15 +207,15 @@ describe("resolveFirmTarget previous target", () => {
       { date: "2026-07-29", priceTarget: 90 },
       { date: "2026-07-30", priceTarget: 90 },
     ];
-    expect(resolveFirmTarget(posts, "2026-07-30", "downgrade")?.previousPriceTarget).toBe(102);
+    expect(resolveFirmTarget(posts, "2026-07-30")?.previousPriceTarget).toBe(102);
   });
   it("is null when the firm has no earlier post, or only one older than a year", () => {
-    expect(resolveFirmTarget([{ date: "2026-07-30", priceTarget: 90 }], "2026-07-30", "maintain")?.previousPriceTarget).toBeNull();
+    expect(resolveFirmTarget([{ date: "2026-07-30", priceTarget: 90 }], "2026-07-30")?.previousPriceTarget).toBeNull();
     const stale = [
       { date: "2025-06-01", priceTarget: 70 },
       { date: "2026-07-30", priceTarget: 90 },
     ];
-    expect(resolveFirmTarget(stale, "2026-07-30", "maintain")?.previousPriceTarget).toBeNull();
+    expect(resolveFirmTarget(stale, "2026-07-30")?.previousPriceTarget).toBeNull();
   });
 });
 
@@ -229,7 +236,7 @@ describe("FmpAnalystRatingsAdapter per-firm targets", () => {
     const out = await new FmpAnalystRatingsAdapter(
       fmp({
         getGrades: async () => [
-          { date: "2026-10-05", gradingCompany: "TD Cowen", previousGrade: "Buy", newGrade: "Buy", action: "maintain" },
+          { date: "2026-07-31", gradingCompany: "TD Cowen", previousGrade: "Buy", newGrade: "Buy", action: "maintain" },
         ],
         getGradeNews: async () => [
           { date: "2026-07-31", firm: "Cowen & Co.", title: "Amazon.com price target raised to $350 from $340 at TD Cowen" },
@@ -237,7 +244,7 @@ describe("FmpAnalystRatingsAdapter per-firm targets", () => {
         ],
       }),
     ).getConsensus("AMZN");
-    expect(out?.recentGrades[0]).toMatchObject({ priceTarget: 350, priceTargetDate: "2026-07-31" });
+    expect(out?.recentGrades[0]).toMatchObject({ priceTarget: 350, priceTargetDate: "2026-07-31", previousPriceTarget: 340, priceTargetChange: "raise" });
   });
 
   it("ignores a mis-tagged headline instead of giving Citi another firm's number", async () => {
@@ -376,5 +383,116 @@ describe("FmpAnalystRatingsAdapter previous targets", () => {
         }),
       ]),
     );
+  });
+});
+
+describe("E2E Oct 2026 analyst-action fixes", () => {
+  const fmp = (over: Partial<Record<keyof FmpService, unknown>>) =>
+    ({
+      getAnalystConsensus: async () => ({ strongBuy: 1, buy: 1, hold: 0, sell: 0, strongSell: 0, consensus: "Buy" }),
+      getPriceTargetConsensus: async () => null,
+      getPriceTargetSummary: async () => null,
+      getGrades: async () => [],
+      getPriceTargets: async () => [],
+      getGradeNews: async () => [],
+      getSplits: async () => [],
+      ...over,
+    }) as unknown as FmpService;
+  const grade = (date: string, firm: string, prev: string | null, next: string, action: string) =>
+    ({ date, gradingCompany: firm, previousGrade: prev, newGrade: next, action });
+
+  it("folds the firm spellings that failed to join", () => {
+    expect(canonicalFirm("Roth MKM")).toBe(canonicalFirm("Roth Capital"));
+    expect(canonicalFirm("Freedom Broker")).toBe(canonicalFirm("Freedom Capital Markets"));
+    expect(canonicalFirm("BMO Capital")).toBe(canonicalFirm("BMO Capital Markets"));
+    expect(canonicalFirm("B of A Securities")).toBe(canonicalFirm("Bank of America Securities"));
+    expect(canonicalFirm("Sidoti & Co.")).toBe(canonicalFirm("Sidoti"));
+    expect(canonicalFirm("Capital One")).not.toBe(canonicalFirm("One"));
+  });
+
+  it("reads the firm and direction a headline states", () => {
+    expect(headlineFirm("Chevron price target raised to $250 from $218 at HSBC")).toBe("HSBC");
+    expect(headlineFirm("Mama’s Creations (MAMA) PT Raised to $24 at DA Davidson on Organic Sales Growth")).toBe("DA Davidson");
+    expect(headlineFirm("Freedom Capital Markets Starts Mama’s Creations (MAMA) at Buy")).toBe("Freedom Capital Markets");
+    expect(headlineFirm("Braze (BRZE) Reiterated at Market Outperform by Citizens")).toBe("Citizens");
+    expect(headlineFirm("KeyBanc Sees 'Significant Upside' for La-Z-Boy (LZB)")).toBeNull();
+    expect(headlineTargetDirection("Abbott price target raised to $120 from $119 at Wells Fargo")).toBe("raise");
+    expect(headlineTargetDirection("Citi lowers Abbott price target to $122")).toBe("cut");
+    expect(headlineTargetDirection("Ametek Inc. (AME) PT Raised at RBC Capital Following 'Beat & Raise'")).toBe("raise");
+    expect(headlineTargetDirection("Braze (BRZE) Reiterated at Market Outperform by Citizens")).toBeNull();
+  });
+
+  it("drops a call FMP repeats under two spellings of the firm (LZB Sidoti)", () => {
+    const rows = [
+      grade("2025-11-19", "Sidoti", "Neutral", "Buy", "upgrade"),
+      grade("2025-11-19", "Sidoti & Co.", "Neutral", "Buy", "upgrade"),
+    ];
+    expect(dedupeGrades(rows)).toHaveLength(1);
+  });
+
+  it("does not read a market roundup FMP tags 'initialise' as an initiation (AAPL)", async () => {
+    const out = await new FmpAnalystRatingsAdapter(
+      fmp({
+        getGrades: async () => [grade("2026-08-17", "Goldman Sachs", "Buy", "Buy", "maintain")],
+        getGradeNews: async () => [
+          { date: "2026-08-17", firm: "Goldman Sachs", action: "initialise", title: "Apple upgraded, Workday downgraded: Wall Street's top analyst calls" },
+        ],
+      }),
+    ).getConsensus("AAPL");
+    expect(out?.recentGrades).toHaveLength(1);
+    expect(out?.recentGrades[0].action).toBe("maintain");
+  });
+
+  it("trusts the headline over a grossly wrong vendor target, and re-attributes a mis-tagged copy (CVX HSBC)", async () => {
+    const out = await new FmpAnalystRatingsAdapter(
+      fmp({
+        getGrades: async () => [grade("2026-09-25", "HSBC", "Buy", "Buy", "maintain")],
+        getPriceTargets: async () => [
+          { date: "2026-09-25", firm: "HSBC", priceTarget: 90, title: "Chevron price target raised to $250 from $218 at HSBC" },
+          { date: "2026-09-25", firm: "UBS", priceTarget: 250, title: "Chevron price target raised to $250 from $218 at HSBC" },
+        ],
+      }),
+    ).getConsensus("CVX");
+    expect(out?.recentGrades[0]).toMatchObject({ priceTarget: 250, previousPriceTarget: 218, priceTargetChange: "raise" });
+  });
+
+  it("joins Freedom Capital's targets FMP tags as Loop Capital Markets", async () => {
+    const out = await new FmpAnalystRatingsAdapter(
+      fmp({
+        getGrades: async () => [grade("2026-03-03", "Freedom Broker", "Buy", "Buy", "maintain")],
+        getPriceTargets: async () => [
+          { date: "2026-03-03", firm: "Loop Capital Markets", priceTarget: 21, title: "Mama’s Creations (MAMA) PT Raised to $21 at Freedom Capital Markets" },
+        ],
+      }),
+    ).getConsensus("MAMA");
+    expect(out?.recentGrades[0]).toMatchObject({ priceTarget: 21, priceTargetChange: "raise" });
+  });
+
+  it("relabels a grade as the initiation the firm's headline announced (CSCO Deutsche Bank)", async () => {
+    const out = await new FmpAnalystRatingsAdapter(
+      fmp({
+        getGrades: async () => [grade("2026-09-01", "Deutsche Bank", "Hold", "Buy", "upgrade")],
+        getGradeNews: async () => [
+          { date: "2026-08-31", firm: "Deutsche Bank", title: "Cisco initiated with a Buy at Deutsche Bank", action: "initialise" },
+        ],
+        getPriceTargets: async () => [
+          { date: "2026-08-31", firm: "Deutsche Bank", priceTarget: 135, title: "Cisco initiated with a Buy at Deutsche Bank" },
+        ],
+      }),
+    ).getConsensus("CSCO");
+    expect(out?.recentGrades).toHaveLength(1);
+    expect(out?.recentGrades[0]).toMatchObject({ action: "initiate", previousGrade: null, priceTarget: 135 });
+  });
+
+  it("marks a PT move the headline states without a figure, leaving the target blank", async () => {
+    const out = await new FmpAnalystRatingsAdapter(
+      fmp({
+        getGrades: async () => [grade("2026-08-11", "RBC Capital", "Outperform", "Outperform", "maintain")],
+        getGradeNews: async () => [
+          { date: "2026-08-11", firm: "RBC Capital", title: "Ametek Inc. (AME) PT Raised at RBC Capital Following 'Beat & Raise'" },
+        ],
+      }),
+    ).getConsensus("AME");
+    expect(out?.recentGrades[0]).toMatchObject({ priceTarget: null, priceTargetChange: "raise" });
   });
 });

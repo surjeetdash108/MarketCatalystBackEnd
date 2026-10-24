@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { fetchJson, type FetchJsonOptions } from "../../common/http.util";
+import { etDateOf } from "../../common/market-calendar.util";
 
 /**
  * Financial Modeling Prep (FMP) — a SUPPLEMENTARY vendor, wired only for the
@@ -344,6 +345,8 @@ export interface FmpGradeNewsRow {
    * headlines are tagged "Citigroup"); callers must verify it against `title`. */
   firm: string | null;
   title: string;
+  /** FMP's action word ("initialise", "upgrade", "hold"…), when given. */
+  action?: string | null;
 }
 
 /** A macro/economic-calendar release (past or scheduled). */
@@ -1105,7 +1108,8 @@ export class FmpService {
       .map((r) => {
         const o = r as Record<string, unknown>;
         return {
-          date: String(o.publishedDate ?? o.date ?? "").slice(0, 10),
+          // New York calendar day: the UTC date put after-8PM-ET posts on the next day.
+          date: etDateOf(String(o.publishedDate ?? o.date ?? "")),
           firm: o.analystCompany != null ? String(o.analystCompany) : null,
           priceTarget: num(o.priceTarget ?? o.adjPriceTarget),
           title: o.newsTitle != null ? String(o.newsTitle) : null,
@@ -1130,9 +1134,10 @@ export class FmpService {
       .map((r) => {
         const o = r as Record<string, unknown>;
         return {
-          date: String(o.publishedDate ?? "").slice(0, 10),
+          date: etDateOf(String(o.publishedDate ?? "")),
           firm: o.gradingCompany != null ? String(o.gradingCompany) : null,
           title: o.newsTitle != null ? String(o.newsTitle) : "",
+          action: o.action != null ? String(o.action) : null,
         };
       })
       .filter((r) => r.date && r.title);

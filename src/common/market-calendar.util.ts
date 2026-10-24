@@ -22,6 +22,21 @@ export function etDate(d: Date = new Date()): string {
   }).format(d);
 }
 
+/**
+ * The New York calendar day of a vendor timestamp ("2026-07-21T20:19:17.000Z"
+ * → "2026-07-21"). Slicing the UTC string instead put every story published
+ * after 8 PM ET on the next day. A plain YYYY-MM-DD is already a calendar day
+ * and is returned as-is; an unparseable value falls back to its first 10 chars.
+ */
+export function etDateOf(ts: string | null | undefined): string {
+  const s = String(ts ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // "2026-07-21 20:19:17" (no zone) is how some FMP feeds send UTC.
+  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s) ? `${s.replace(" ", "T")}Z` : s;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? etDate(new Date(t)) : s.slice(0, 10);
+}
+
 /** 0=Sun … 5=Fri … 6=Sat, as seen in New York. */
 export function etWeekday(d: Date = new Date()): number {
   const name = new Intl.DateTimeFormat("en-US", {

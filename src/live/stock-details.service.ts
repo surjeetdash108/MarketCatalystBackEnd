@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger, Optional } from "@nestjs/common";
+import { etDateOf } from "../common/market-calendar.util";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import {
   fmpInsiderRows,
@@ -398,7 +399,8 @@ export class StockDetailsService {
       const ptPages = await Promise.all(
         Array.from({ length: MARKET_GRADES_PAGES }, (_, i) => this.fmp.getLatestPriceTargets(i, 100).catch(() => [])),
       );
-      const day = (v: unknown) => String(v ?? "").slice(0, 10);
+      // New York calendar day of FMP's UTC publish timestamp.
+      const day = (v: unknown) => etDateOf(String(v ?? ""));
       // Canonical firm key, so "JP Morgan" (grades) joins "JPMorgan Chase" (targets).
       const firmKey = (v: unknown) => canonicalFirm(v == null ? null : String(v));
       const shiftDay = (iso: string, d: number) =>
@@ -486,13 +488,18 @@ export class StockDetailsService {
           // The market-wide feed's publish timestamp is the call's real date
           // (NVDA Needham: Oct 22 05:50 ET, dated Oct 21 in the per-ticker feed).
           if (it.action != null && String(it.date) > String(existing.date)) existing.date = it.date;
-          // A fresh same-day target replaces a target carried forward from an
-          // older post (ISRG Evercore 10-21: $430 standing → $385 posted that day).
+          // A fresh same-day target replaces the per-ticker feed's figure
+          // (ISRG Evercore 10-21: $430 → $385 posted that day).
           if (it.priceTarget != null && existing.priceTarget !== it.priceTarget) {
-            const carried = existing.priceTarget as number | null;
-            existing.previousPriceTarget = it.previousPriceTarget ?? carried ?? null;
+            // The replaced figure: the headline's "from", else the per-ticker
+            // feed's earlier post for this call (a day before at most).
+            const earlier = existing.priceTarget as number | null;
+            const prev = (it.previousPriceTarget as number | null) ?? earlier ?? null;
+            existing.previousPriceTarget = prev;
             existing.priceTarget = it.priceTarget;
             existing.priceTargetDate = it.priceTargetDate;
+            existing.priceTargetChange =
+              prev != null && prev !== it.priceTarget ? ((it.priceTarget as number) > prev ? "raise" : "cut") : null;
           }
         }
         grades.sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")));

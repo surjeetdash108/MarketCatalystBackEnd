@@ -19,13 +19,12 @@ export interface AnalystRatingChange {
   previousGrade: string | null;
   newGrade: string | null;
   action: string | null;
-  /** THIS firm's own 12-month price target standing as of the grade (from FMP
-   * price-target-news, or parsed from a grades-news headline). null when the
-   * firm posted no target in the window — never the ticker's consensus, so
-   * per-firm rows don't all show the same number. */
+  /** The target THIS firm posted with THIS call (FMP price-target-news, or
+   * parsed from a grades-news headline), within a day before / a few days
+   * after the grade. null when the firm posted none with the call — never an
+   * older target carried forward, and never the ticker's consensus. */
   priceTarget: number | null;
-  /** Date (YYYY-MM-DD) the firm posted `priceTarget` — lets the UI show "as of"
-   * when a reiteration carries forward an earlier target. null with it. */
+  /** Date (YYYY-MM-DD, New York) the firm posted `priceTarget`. null with it. */
   priceTargetDate: string | null;
   /** The target this firm's `priceTarget` replaced, so the UI can show
    * "$93 → $80 (−14.0%)". Taken from the firm's own headline ("lowered to $80
@@ -33,6 +32,11 @@ export interface AnalystRatingChange {
    * On the same (current) share basis as `priceTarget`. null when neither
    * source has it (first call in the feed, or the firm has no target). */
   previousPriceTarget: number | null;
+  /** Direction of the target change made with this call, when the firm's own
+   * headline says it ("price target raised…", "PT Lowered…") or both figures
+   * are known. Lets a "maintain" grade read as the PT Raise / PT Cut it was
+   * even when the feed omits the figure. null when nothing says. */
+  priceTargetChange?: "raise" | "cut" | null;
 }
 
 export interface AnalystConsensus {
@@ -176,7 +180,9 @@ async function pagesOf<T>(fetchPage: (page: number) => Promise<T[]>): Promise<T[
 /** Upper bound on a stock's full rating history (FMP returns it all in one call). */
 const GRADES_HISTORY_MAX = 2000;
 
-type TargetLookup = ((g: { gradingCompany: string | null; date: string; action: string | null }) => ReturnType<typeof resolveFirmTarget>) & {
+type TargetLookup = ((g: { gradingCompany: string | null; date: string }) => ResolvedFirmTarget | null) & {
+  /** A target move the firm's headline states for this call when no figure is known. */
+  directionFor: (g: { gradingCompany: string | null; date: string }) => "raise" | "cut" | null;
   /** Each firm's most recent posted target (current share basis). */
   latestByFirm: Map<string, { date: string; priceTarget: number }>;
   /** Initiations discovered from rating news or price-target news headlines. */
@@ -249,19 +255,22 @@ export function selectGrades<T extends { action: string | null; date: string }>(
 }
 
 /**
- * How far back a grade may reach for its firm's standing target.
+ * Which target posts belong to a grade: only the call's own.
  *
- * A rating CHANGE (upgrade/downgrade/initiate) almost always comes with a new
- * target the same day, so an older one belongs to a different thesis and a stale
- * number pinned to the row is worse than none (BUG-DATA-012) — keep it tight.
+ * Grades used to carry the firm's standing target forward (45 days for a
+ * rating change, 180 for a maintain) and the UI marked it "as of …". Checked
+ * against the public record (Oct 2026 E2E, 100 tickers) that was wrong far
+ * more often than right: a reiteration usually comes WITH a new target the
+ * feed lacks, so the carried number was stale (41 rows), the % to target was
+ * computed from it (45), and with no "previous" the call read "Maintain" when
+ * it was a PT Raise/Cut. A row now shows only a target posted with the call;
+ * otherwise "—".
  *
- * A "maintain" is the firm reiterating its stance, and its target stands until
- * the firm posts a new one. Reiterations routinely land 2–5 months after the
- * last PT post (AME/Baird 61d, AMZN/TD Cowen 66d, BETA/Cantor 145d), so the old
- * shared 45-day window blanked exactly the rows users check against the web.
+ * The post may be dated a day BEFORE the grade (an after-close note that FMP's
+ * grade dates the next session: CSCO / Deutsche Bank 08-31 16:28 ET vs grade
+ * 09-01) or a few days AFTER it (news lag). Anything further is another call.
  */
-const MAX_TARGET_AGE_DAYS_EVENT = 45;
-const MAX_TARGET_AGE_DAYS_MAINTAIN = 180;
+const TARGET_PRE_GRACE_DAYS = 1;
 /** A target may post shortly AFTER the grade it belongs to (news lag vs the
  *  grade's own date). Anything later is the firm's NEXT call, never this one's. */
 const TARGET_POST_GRACE_DAYS = 3;
@@ -294,6 +303,10 @@ const DAY_MS = 86_400_000;
 // different firm's number, BUG-DATA-012).
 const FIRM_QUALIFIERS =
   /\b(and|co|inc|incorporated|llc|lp|plc|ltd|group|holdings|securities|research|partners|advisors|advisers|corp|corporation|company|financial)\b/g;
+// "Roth Capital", "BMO Capital Markets", "Freedom Capital Markets" — the same
+// firm with and without the suffix. Only a TRAILING "capital (markets)" is
+// dropped, so a name that starts with "Capital" keeps it.
+const FIRM_CAPITAL_SUFFIX = /\bcapital(\s+markets)?\s*$/;
 const FIRM_ALIASES: Record<string, string> = {
   jpmorganchase: "jpmorgan",
   jpmorgan: "jpmorgan",
@@ -335,6 +348,13 @@ const FIRM_ALIASES: Record<string, string> = {
   citizens: "citizens",
   keefebruyettewoods: "kbw",
   kbw: "kbw",
+  // Spellings seen in the Oct 2026 E2E rows that failed to join.
+  rothmkm: "roth",
+  freedombroker: "freedom",
+  canaccordgenuity: "canaccord",
+  telseyadvisory: "telsey",
+  svbleerink: "leerink",
+  cantorfitzgerald: "cantor",
 };
 
 /** Fold a firm name to a stable key so the two FMP feeds can be joined. */
@@ -344,8 +364,55 @@ export function canonicalFirm(name: string | null): string {
     .toLowerCase()
     .replace(/&/g, " and ")
     .replace(FIRM_QUALIFIERS, " ")
+    .trim()
+    .replace(FIRM_CAPITAL_SUFFIX, "")
     .replace(/[^a-z0-9]/g, "");
   return FIRM_ALIASES[stripped] ?? stripped;
+}
+
+/** Words that end a firm name in a headline ("at RBC Capital Following …"). */
+const HEADLINE_FIRM_STOP = /^(following|after|on|as|amid|ahead|despite|with|citing|says|sees|over|into|to|for|in|from)$/i;
+
+/**
+ * The firm a rating headline attributes the call to, or null.
+ *
+ * FMP's firm tag is sometimes another firm entirely: CVX "price target raised
+ * to $250 from $218 at HSBC" arrives a second time tagged UBS, and Freedom
+ * Capital Markets' MAMA posts are tagged "Loop Capital Markets". The headline's
+ * "… at <Firm>" / "… by <Firm>" / "<Firm> Starts …" names the real author.
+ * A rating word in that slot ("Starts XYZ at Buy") is not a firm.
+ */
+export function headlineFirm(title: string | null | undefined): string | null {
+  const t = String(title ?? "");
+  const trailing: string[] = [];
+  for (const m of t.matchAll(/\b(?:at|by)\s+([A-Z][\w.&'’-]*(?:,?\s+(?:&\s+)?[A-Z][\w.&'’-]*){0,4})/g)) {
+    const words = m[1].split(/\s+/);
+    const cut = words.findIndex((w) => HEADLINE_FIRM_STOP.test(w));
+    trailing.push((cut === -1 ? words : words.slice(0, cut)).join(" "));
+  }
+  const lead = /^([A-Z][\w.&'’-]*(?:\s+[A-Z&][\w.&'’-]*){0,4})\s+(?:Starts|Initiates|Resumes|Reinstates|Upgrades|Downgrades|Raises|Lowers|Cuts|Boosts|Reiterates|Maintains)\b/.exec(t);
+  // The last "at/by <Firm>" is the attribution; a leading "<Firm> Starts" next.
+  for (const c of [...trailing.reverse(), ...(lead ? [lead[1]] : [])]) {
+    const name = c.replace(/[,.]+$/, "").trim();
+    if (name && !ratingBucket(name) && canonicalFirm(name)) return name;
+  }
+  return null;
+}
+
+/**
+ * Direction of the target change a headline states ("price target raised…",
+ * "Citi lowers Abbott PT…"), or null when it states none.
+ */
+export function headlineTargetDirection(title: string | null | undefined): "raise" | "cut" | null {
+  const t = String(title ?? "");
+  const UP = String.raw`rais(?:e|es|ed|ing)|boost(?:s|ed)?|lift(?:s|ed)?|increas(?:e|es|ed)|hik(?:e|es|ed)|bump(?:s|ed)?`;
+  const DOWN = String.raw`lower(?:s|ed)?|cut(?:s)?|reduc(?:e|es|ed)|trim(?:s|med)?|slash(?:es|ed)?|decreas(?:e|es|ed)`;
+  const TGT = String.raw`(?:price\s+target|target|PT)`;
+  const near = (verbs: string) =>
+    new RegExp(String.raw`\b${TGT}\b[^.;$]{0,30}?\b(?:${verbs})\b|\b(?:${verbs})\b[^.;$]{0,40}?\b${TGT}\b`, "i").test(t);
+  const up = near(UP);
+  const down = near(DOWN);
+  return up === down ? null : up ? "raise" : "cut";
 }
 
 /**
@@ -475,54 +542,77 @@ export interface FirmTargetPost {
   date: string;
   priceTarget: number;
   previousTarget?: number | null;
+  /** "raise" / "cut" when the post's headline says which way the target moved. */
+  direction?: "raise" | "cut" | null;
 }
 
 export interface ResolvedFirmTarget {
   priceTarget: number;
   date: string;
   previousPriceTarget: number | null;
+  direction: "raise" | "cut" | null;
+}
+
+/** Whether a post dated `postTime` can belong to a grade dated `gradeTime`. */
+function withinCallWindow(postTime: number, gradeTime: number): boolean {
+  return (
+    postTime >= gradeTime - TARGET_PRE_GRACE_DAYS * DAY_MS &&
+    postTime <= gradeTime + TARGET_POST_GRACE_DAYS * DAY_MS
+  );
 }
 
 /**
- * The firm's target standing as of `gradeDate`: its most recent post on or
- * before the grade (plus a short news-lag grace), no older than the action's
- * window. Never a target posted well after the grade — that is the firm's next
- * call, and the old "nearest in either direction" rule pinned future numbers
- * onto past rows. `posts` may be in any order.
+ * The target the firm posted WITH the call dated `gradeDate`: the post closest
+ * to the grade inside the call window (a day before to a few days after),
+ * the earlier on a tie. Null when the firm posted none with this call — an
+ * older target is never carried forward (see TARGET_PRE_GRACE_DAYS). Picking
+ * the closest rather than the latest keeps back-to-back calls apart (ABT /
+ * Wells Fargo: $119 on 10-22 and $120 on 10-23, each on its own row).
+ * `posts` may be in any order.
  */
 export function resolveFirmTarget(
   posts: ReadonlyArray<FirmTargetPost>,
   gradeDate: string,
-  action: string | null,
 ): ResolvedFirmTarget | null {
   const gradeTime = Date.parse(gradeDate);
   if (!Number.isFinite(gradeTime)) return null;
-  const maxAgeDays = isRatingEvent(action)
-    ? MAX_TARGET_AGE_DAYS_EVENT
-    : MAX_TARGET_AGE_DAYS_MAINTAIN;
-  const earliest = gradeTime - maxAgeDays * DAY_MS;
-  const latest = gradeTime + TARGET_POST_GRACE_DAYS * DAY_MS;
   let best: FirmTargetPost | null = null;
-  let bestTime = -Infinity;
+  let bestTime = NaN;
   for (const p of posts) {
     const t = Date.parse(p.date);
-    if (Number.isFinite(t) && t >= earliest && t <= latest && t > bestTime) {
-      bestTime = t;
+    if (!Number.isFinite(t) || !withinCallWindow(t, gradeTime)) continue;
+    const d = Math.abs(t - gradeTime);
+    const bestD = Math.abs(bestTime - gradeTime);
+    if (!best || d < bestD || (d === bestD && t < bestTime)) {
       best = p;
+      bestTime = t;
     }
   }
   if (!best) return null;
-  // A target carried forward from an earlier post is the firm's STANDING
-  // target — unchanged at this call — so it has no "previous" to report.
-  // Reporting the old post's prior value made a plain reiteration read as a
-  // target change on the wrong date (STRL Cantor: Aug 5's $482 → $742 shown
-  // again on Sep 30 and Oct 14, where Cantor only reiterated).
-  const sameCall = Math.abs(bestTime - gradeTime) <= TARGET_POST_GRACE_DAYS * DAY_MS;
-  return {
-    priceTarget: best.priceTarget,
-    date: best.date,
-    previousPriceTarget: sameCall ? previousFirmTarget(posts, best, bestTime) : null,
-  };
+  const previousPriceTarget = previousFirmTarget(posts, best, bestTime);
+  // The figures decide when both are known; otherwise the headline's own word.
+  const direction =
+    previousPriceTarget != null && previousPriceTarget !== best.priceTarget
+      ? best.priceTarget > previousPriceTarget ? "raise" : "cut"
+      : previousPriceTarget == null ? best.direction ?? sameCallDirection(posts, best, bestTime) : null;
+  return { priceTarget: best.priceTarget, date: best.date, previousPriceTarget, direction };
+}
+
+/** A direction stated by another feed's copy of the same call. */
+function sameCallDirection(
+  posts: ReadonlyArray<FirmTargetPost>,
+  current: FirmTargetPost,
+  currentTime: number,
+): "raise" | "cut" | null {
+  for (const p of posts) {
+    if (
+      p.direction &&
+      p.priceTarget === current.priceTarget &&
+      Math.abs(Date.parse(p.date) - currentTime) <= TARGET_POST_GRACE_DAYS * DAY_MS
+    )
+      return p.direction;
+  }
+  return null;
 }
 
 /**
@@ -561,6 +651,23 @@ function previousFirmTarget(
     prev = p.priceTarget;
   }
   return prev;
+}
+
+type GradeLike = { date: string; gradingCompany: string | null; previousGrade: string | null; newGrade: string | null; action: string | null };
+
+/**
+ * One row per call. FMP's `grades` repeats a call under each spelling of the
+ * firm it has ("Sidoti" and "Sidoti & Co.", "KeyBanc" and "Keybanc", same day,
+ * same grades), which rendered as two analyst actions. Order is preserved.
+ */
+export function dedupeGrades<T extends GradeLike>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  return rows.filter((g) => {
+    const k = `${canonicalFirm(g.gradingCompany)}|${g.date}|${(g.newGrade ?? "").toLowerCase().trim()}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 /** FMP-backed ratings: grades-consensus + price-target + grades (per ticker). */
@@ -642,14 +749,21 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
     initiations: Array<{ date: string; gradingCompany: string | null; previousGrade: string | null; newGrade: string | null; action: string | null }>,
     ticker: string,
   ): T[] {
-    const list = [...grades];
+    const list = dedupeGrades(grades).map((g) => ({ ...g }));
     for (const init of initiations) {
       const firmKey = canonicalFirm(init.gradingCompany);
-      const exists = list.some(
-        (g) =>
-          canonicalFirm(g.gradingCompany) === firmKey &&
-          Math.abs(Date.parse(g.date) - Date.parse(init.date)) <= 7 * 86_400_000,
-      );
+      const gap = (g: T) => Math.abs(Date.parse(g.date) - Date.parse(init.date));
+      const sameFirm = list.filter((g) => canonicalFirm(g.gradingCompany) === firmKey);
+      // The firm's own "initiated with a Buy" headline outranks how `grades`
+      // labelled the same call: CSCO / Deutsche Bank is "upgrade Hold → Buy"
+      // there (a stale Hold from coverage it had dropped).
+      const sameCall = sameFirm.find((g) => gap(g) <= TARGET_POST_GRACE_DAYS * DAY_MS);
+      if (sameCall) {
+        sameCall.action = "initiate";
+        sameCall.previousGrade = null;
+        continue;
+      }
+      const exists = sameFirm.some((g) => gap(g) <= 7 * DAY_MS);
       if (!exists) {
         list.push({
           symbol: ticker,
@@ -678,6 +792,7 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
       priceTarget: target?.priceTarget ?? null,
       priceTargetDate: target?.date ?? null,
       previousPriceTarget: target?.previousPriceTarget ?? null,
+      priceTargetChange: target ? target.direction : targetFor.directionFor(g),
     };
   }
 
@@ -693,42 +808,74 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
     ]);
 
     const ptByFirm = new Map<string, FirmTargetPost[]>();
+    /** Headlines that state a target move but no figure ("PT Raised at RBC"). */
+    const movesByFirm = new Map<string, Array<{ date: string; direction: "raise" | "cut" }>>();
     const addTarget = (
       key: string,
       date: string,
       priceTarget: number,
       statedPrevious: number | null,
+      direction: "raise" | "cut" | null,
     ) => {
       if (!key || !date) return;
+      const value = toCurrentShareBasis(priceTarget, date, splits);
+      const list = ptByFirm.get(key) ?? [];
+      // The same post often arrives twice (both feeds, or re-tagged): keep one,
+      // preferring the copy that states a "from".
+      const dup = list.find((p) => p.date === date && p.priceTarget === value);
       const previous =
         statedPrevious == null
           ? null
-          : alignPreviousToSplits(statedPrevious, priceTarget, date, splits);
-      const list = ptByFirm.get(key) ?? [];
-      list.push({
-        date,
-        priceTarget: toCurrentShareBasis(priceTarget, date, splits),
-        previousTarget:
-          previous == null ? null : toCurrentShareBasis(previous, date, splits),
-      });
+          : toCurrentShareBasis(alignPreviousToSplits(statedPrevious, priceTarget, date, splits), date, splits);
+      if (dup) {
+        dup.previousTarget ??= previous;
+        dup.direction ??= direction;
+        return;
+      }
+      list.push({ date, priceTarget: value, previousTarget: previous, direction });
       ptByFirm.set(key, list);
+    };
+    const addMove = (key: string, date: string, direction: "raise" | "cut" | null) => {
+      if (!key || !date || !direction) return;
+      const list = movesByFirm.get(key) ?? [];
+      list.push({ date, direction });
+      movesByFirm.set(key, list);
+    };
+    /**
+     * The firm a post belongs to: FMP's tag, unless the headline names a
+     * DIFFERENT firm and not the tagged one (CVX HSBC call tagged UBS; Freedom
+     * Capital Markets' posts tagged Loop Capital Markets).
+     */
+    const firmOf = (tag: string | null, title: string | null): string => {
+      const tagKey = canonicalFirm(tag);
+      if (!title || (tagKey && headlineNamesFirm(title, tagKey))) return tagKey;
+      const named = headlineFirm(title);
+      return named ? canonicalFirm(named) : tagKey;
     };
     for (const t of targets) {
       if (!t.firm || t.priceTarget == null) continue;
+      const stated = t.title ? headlineTarget(t.title) : null;
+      // The vendor's number is sometimes not the headline's: CVX / HSBC carries
+      // priceTarget 90 on "price target raised to $250 from $218 at HSBC". A
+      // gross disagreement means the field is wrong — the headline is the
+      // firm's own words. Small gaps are left to the field (a later correction).
+      const value =
+        stated != null && Math.abs(Math.log(stated / t.priceTarget)) > Math.log(1.2)
+          ? stated
+          : t.priceTarget;
       // Trust the headline's "from" only when its "to" is this row's target.
-      const stated =
-        t.title && headlineTarget(t.title) === t.priceTarget
-          ? headlinePreviousTarget(t.title)
-          : null;
-      addTarget(canonicalFirm(t.firm), t.date, t.priceTarget, stated);
+      const statedPrevious = stated === value && t.title ? headlinePreviousTarget(t.title) : null;
+      addTarget(firmOf(t.firm, t.title), t.date, value, statedPrevious, headlineTargetDirection(t.title));
     }
-    // Headline-stated targets fill firms price-target-news omits. Only kept when
-    // the headline itself names the tagged firm (FMP mis-tags some headlines).
+    // Headline-stated targets fill firms price-target-news omits, attributed to
+    // the firm the headline names (FMP mis-tags some: BRZE Citizens as Citigroup).
     for (const h of gradeNews) {
-      const key = canonicalFirm(h.firm);
+      const key = firmOf(h.firm, h.title);
       const value = headlineTarget(h.title);
+      const direction = headlineTargetDirection(h.title);
       if (value != null && headlineNamesFirm(h.title, key))
-        addTarget(key, h.date, value, headlinePreviousTarget(h.title));
+        addTarget(key, h.date, value, headlinePreviousTarget(h.title), direction);
+      else if (value == null && headlineNamesFirm(h.title, key)) addMove(key, h.date, direction);
     }
 
     // Discover initiations from gradeNews & targets
@@ -747,43 +894,44 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
         date: d,
         gradingCompany: firm,
         previousGrade: null,
-        newGrade: grade || "Buy",
+        // Unknown stays unknown — never a guessed "Buy".
+        newGrade: grade || null,
         action: "initiate",
       });
     };
 
-    for (const h of gradeNews) {
-      const row = h as any;
-      const act = (row.action ?? "").toLowerCase();
-      const isInit =
-        act.includes("init") ||
-        /\binitiated\b|\bstarts\b|\binitiating\b/i.test(h.title ?? "");
-      if (isInit) {
-        let grade: string | null = row.newGrade ?? null;
-        if (!grade && h.title) {
-          const m = /\bwith an? ([A-Za-z ]+?) at\b|\bstarts .+? at ([A-Za-z ]+)/i.exec(h.title);
-          if (m) grade = m[1] || m[2];
-        }
-        addInitiation(h.date, h.firm, grade);
-      }
+    // Only the headline counts: FMP tags market roundups ("What You Missed On
+    // Wall Street On Friday") with action "initialise" for every firm in them,
+    // which made AAPL show seven initiations in a year. The headline must say
+    // the firm started coverage, and name that firm.
+    const INIT_HEADLINE = /\binitiated\b|\binitiates\b|\binitiating\b|\bstarts\b|\bresumes\b|\breinstates\b/i;
+    const initGrade = (title: string): string | null => {
+      const m = /\bwith an? ([A-Za-z ]+?) at\b|\bstarts .+? at ([A-Za-z ]+)/i.exec(title);
+      return m ? (m[1] || m[2]).trim() : null;
+    };
+    for (const row of [...gradeNews.map((h) => ({ ...h, tag: h.firm })), ...targets.map((t) => ({ ...t, tag: t.firm }))]) {
+      const title = row.title ?? "";
+      const key = firmOf(row.tag, title);
+      if (!INIT_HEADLINE.test(title) || !headlineNamesFirm(title, key)) continue;
+      const firm = canonicalFirm(row.tag) === key ? row.tag : headlineFirm(title) ?? row.tag;
+      addInitiation(row.date, firm, initGrade(title));
     }
 
-    for (const t of targets) {
-      if (t.title && /\binitiated\b|\bstarts\b|\binitiating\b/i.test(t.title)) {
-        let grade: string | null = null;
-        const m = /\bwith an? ([A-Za-z ]+?) at\b|\bstarts .+? at ([A-Za-z ]+)/i.exec(t.title);
-        if (m) grade = m[1] || m[2];
-        addInitiation(t.date, t.firm, grade);
-      }
-    }
-
-    const lookup = (g: { gradingCompany: string | null; date: string; action: string | null }) =>
-      resolveFirmTarget(ptByFirm.get(canonicalFirm(g.gradingCompany)) ?? [], g.date, g.action);
+    const lookup = (g: { gradingCompany: string | null; date: string }) =>
+      resolveFirmTarget(ptByFirm.get(canonicalFirm(g.gradingCompany)) ?? [], g.date);
+    const directionFor = (g: { gradingCompany: string | null; date: string }) => {
+      const gradeTime = Date.parse(g.date);
+      if (!Number.isFinite(gradeTime)) return null;
+      const near = (movesByFirm.get(canonicalFirm(g.gradingCompany)) ?? [])
+        .filter((m) => withinCallWindow(Date.parse(m.date), gradeTime));
+      const dirs = new Set(near.map((m) => m.direction));
+      return dirs.size === 1 ? [...dirs][0] : null;
+    };
     const latestByFirm = new Map<string, { date: string; priceTarget: number }>();
     for (const [firm, posts] of ptByFirm) {
       const last = posts.reduce((a, b) => (b.date > a.date ? b : a));
       latestByFirm.set(firm, { date: last.date, priceTarget: last.priceTarget });
     }
-    return Object.assign(lookup, { latestByFirm, initiations });
+    return Object.assign(lookup, { directionFor, latestByFirm, initiations });
   }
 }

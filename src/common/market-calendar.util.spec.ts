@@ -1,4 +1,5 @@
 import {
+  etDateOf,
   etDate, isFriday, isLastFridayOfMonth, lastFridayOf,
   weekBounds, monthBounds, monthKey,
 } from "./market-calendar.util";
@@ -83,5 +84,18 @@ describe("etDate", () => {
   it("reports the New York day, not the UTC day", () => {
     // 01:30 UTC on the 24th is still 21:30 on the 23rd in New York.
     expect(etDate(new Date("2026-08-24T01:30:00Z"))).toBe("2026-08-23");
+  });
+});
+
+describe("etDateOf", () => {
+  it("dates a UTC timestamp on the New York calendar", () => {
+    expect(etDateOf("2026-07-22T01:30:00.000Z")).toBe("2026-07-21"); // 9:30 PM ET
+    expect(etDateOf("2026-07-21T20:19:17.000Z")).toBe("2026-07-21"); // 4:19 PM ET
+    expect(etDateOf("2026-01-15 03:00:00")).toBe("2026-01-14"); // zone-less UTC, 10 PM EST
+  });
+  it("keeps a plain calendar day and survives junk", () => {
+    expect(etDateOf("2026-07-21")).toBe("2026-07-21");
+    expect(etDateOf("")).toBe("");
+    expect(etDateOf(null)).toBe("");
   });
 });
