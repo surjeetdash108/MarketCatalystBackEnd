@@ -40,6 +40,9 @@ export interface UpcomingEarnings {
 }
 
 /** One forward fiscal year of consensus (the `*2026–28` rows). */
+/** Longest gap from a quarter's period end to its earnings report (10-K deadline + slack). */
+const REPORT_LAG_MAX_DAYS = 92;
+
 export interface ForwardAnnualEstimate {
   fiscalYear: string;
   epsEstimate: number | null;
@@ -303,8 +306,13 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
       for (const p of points) {
         const pMs = Date.parse(p.date);
         const diffDays = (pMs - endMs) / 86_400_000;
-        // Earnings report occurs after period end, within 0-65 days.
-        if (diffDays >= 0 && diffDays <= 65 && (!best || diffDays < best.d)) {
+        // The report for a quarter comes after its period end: within ~45
+        // days for a 10-Q, but a fiscal-YEAR-end quarter reports with the 10-K,
+        // due 60-90 days out by filer size (MCFT's June year-end reported on
+        // Sep 10, day 72, and was left with no matched pair at a 65-day cap).
+        // The nearest report wins, and the following quarter's report lands
+        // ~90 days later still, so the wider window cannot pair the wrong one.
+        if (diffDays >= 0 && diffDays <= REPORT_LAG_MAX_DAYS && (!best || diffDays < best.d)) {
           best = { d: diffDays, p };
         }
       }

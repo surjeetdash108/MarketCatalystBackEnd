@@ -1,4 +1,4 @@
-import { fmpInsiderRows, form4InsiderRows, plausiblePrice } from "./insider-rows.util";
+import { fmpInsiderRows, form4InsiderRows, isDerivativeSecurity, plausiblePrice } from "./insider-rows.util";
 
 describe("insider rows", () => {
   const fmpRow = (over: Record<string, unknown> = {}) => ({
@@ -92,5 +92,28 @@ describe("insider rows", () => {
       filingDate: "2026-10-07",
       vendor: "sec",
     }]);
+  });
+});
+
+describe("isDerivativeSecurity / Form 4 Table I only (E2E Oct 2026, category H)", () => {
+  it("treats options, SARs, RSUs/PSUs and deferred units as derivative", () => {
+    for (const n of ["Employee Stock Option (Right to buy)", "Stock Options (right to buy)", "Share Appreciation Right",
+      "Restricted Share Unit", "Performance Share Units", "Performance Stock Unit", "Deferred Stock Units", "Warrants"]) {
+      expect(isDerivativeSecurity(n)).toBe(true);
+    }
+  });
+  it("keeps the common stock itself, including class shares and MLP common units", () => {
+    for (const n of ["Common Stock", "Class A Common Stock", "Common Sotck", "Common Units", "Ordinary Shares", "Restricted Stock", ""]) {
+      expect(isDerivativeSecurity(n)).toBe(false);
+    }
+  });
+  it("shows the stock award, not the option grant beside it (BGS)", () => {
+    const base = { transactionDate: "2026-08-10", filingDate: "2026-08-12", transactionType: "A-Award", acquisitionOrDisposition: "A", reportingName: "Mills Robert D" };
+    const rows = fmpInsiderRows("BGS", [
+      { ...base, securitiesTransacted: 900000, price: 3.4, securityName: "Employee Stock Option (Right t" },
+      { ...base, securitiesTransacted: 134408, price: 0, securityName: "Common Stock" },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ shares: 134408, pricePerShare: null, transactionCode: "A" });
   });
 });

@@ -67,9 +67,30 @@ function roleFromFmpOwnerType(typeOfOwner: string): string | null {
 }
 
 /**
+ * A Form 4 Table II (derivative) security: options, SARs, RSUs/PSUs, deferred
+ * units, warrants. FMP returns both tables of a filing as separate rows; only
+ * Table I (the common stock itself) is the share activity insider tables and
+ * quote pages show. Reading Table II put an option GRANT's strike price and
+ * size on the screen as a priced share award (BGS "900,000 @ $3.40" — the
+ * stock award was 134,408 @ $0), performance units as half the award (WTTR,
+ * EPM), and a SAR grant in place of the code-M exercises (MTN). The SEC Form 4
+ * parser already reads only Table I; this keeps the FMP path identical.
+ */
+export function isDerivativeSecurity(securityName: unknown): boolean {
+  const name = String(securityName ?? "").toLowerCase();
+  if (!name) return false;
+  // Unmistakably derivative whatever else the name says.
+  if (/option|warrant|right to (buy|purchase)|appreciation|phantom|convertible|deferred/.test(name)) return true;
+  // "Common Stock", "Class A Common Stock", an MLP's "Common Units": Table I.
+  if (/common|ordinary/.test(name)) return false;
+  return /\bunits?\b|\brsus?\b|\bpsus?\b|\bsars?\b|\bright\b|performance/.test(name);
+}
+
+/**
  * FMP `/stable/insider-trading/search` rows → InsiderRow. Rows with no
  * transacted shares (Form 3 initial-holding statements) are dropped: they
- * record a position, not a trade.
+ * record a position, not a trade. Derivative (Table II) rows are dropped too —
+ * see isDerivativeSecurity.
  */
 export function fmpInsiderRows(ticker: string, rows: Record<string, unknown>[]): InsiderRow[] {
   const out: InsiderRow[] = [];
@@ -78,6 +99,7 @@ export function fmpInsiderRows(ticker: string, rows: Record<string, unknown>[]):
     const shares = Number(r.securitiesTransacted);
     const date = String(r.transactionDate ?? "").slice(0, 10);
     if (!(shares > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    if (isDerivativeSecurity(r.securityName)) return;
     const typeOfOwner = String(r.typeOfOwner ?? "");
     // "G-Gift" → "G": the SEC transaction code the UI labels.
     let code = (String(r.transactionCode ?? "").trim() || String(r.transactionType ?? "").split("-")[0].trim()).toUpperCase();
