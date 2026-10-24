@@ -35,6 +35,7 @@ import { EtfMarketService } from "./etf-market.service";
 import { EarningsTranscriptSummaryService } from "./earnings-transcript-summary.service";
 import { StockDetailsService } from "./stock-details.service";
 import { NewsWireService } from "./news-wire.service";
+import { EarningsWireService } from "./earnings-wire.service";
 import { NewsWireController } from "./news-wire.controller";
 import { StrategyLabService } from "./strategy-lab.service";
 import { StrategyLabController } from "./strategy-lab.controller";
@@ -95,6 +96,7 @@ import { LabResultsService } from "./strategy-lab/lab-results.service";
     EarningsTranscriptSummaryService,
     StockDetailsService,
     NewsWireService,
+    EarningsWireService,
     StrategyLabService,
     LabStoreService,
     LabResultsService,

@@ -58,6 +58,7 @@ import { PremarketJob } from "./premarket.job";
 import { PremarketPostJob } from "./premarket-post.job";
 import { EtfHoldingsJob } from "./etf-holdings.job";
 import { EtfMarketJob } from "./etf-market.job";
+import { MarketGlanceWeeklyJob } from "./market-glance-weekly.job";
 import { LiveModule } from "../live/live.module";
 import { MarketDataModule } from "../market-data/market-data.module";
 
@@ -127,6 +128,7 @@ import { MarketDataModule } from "../market-data/market-data.module";
     PremarketPostJob,
     EtfHoldingsJob,
     EtfMarketJob,
+    MarketGlanceWeeklyJob,
   ],
 })
 /**

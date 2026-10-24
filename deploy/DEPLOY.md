@@ -555,6 +555,18 @@ PROJECT_ID=$PROJECT_ID REGION=$REGION SERVICE_URL=$SERVICE_URL INVOKER_SA=$INVOK
 gcloud scheduler jobs run sync-analyst-actions --project="$PROJECT_ID" --location="$REGION"  # verify once
 ```
 
+**(d) `sync-market-glance-weekly` — Friday-noon "Week at a glance".** Fires
+Fridays 12:00 `America/New_York` (`0 12 * * 5`), OIDC POST to
+`/sync/market-glance-weekly/run` (same pattern as (b)). Builds and stores the
+current week's digest so the Live Feed Weekly Summary tab has it before the first
+viewer. A code deploy does **not** create this entry — run once:
+
+```bash
+PROJECT_ID=$PROJECT_ID REGION=$REGION SERVICE_URL=$SERVICE_URL INVOKER_SA=$INVOKER_SA \
+  ./deploy/create-glance-weekly-scheduler.sh
+gcloud scheduler jobs run sync-market-glance-weekly --project="$PROJECT_ID" --location="$REGION"  # verify once
+```
+
 > ⚠ `deploy/create-scheduler-jobs.sh` is **stale** — it still creates the retired
 > single `sync-premarket` HTTP job and points at `/sync/premarket/run`. Use the
 > commands above instead until that script is updated.
