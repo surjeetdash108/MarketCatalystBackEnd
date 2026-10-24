@@ -285,6 +285,30 @@ export class PolygonService {
   }
 
   /**
+   * The official regular-session high / low / close for one date (same
+   * open-close endpoint), or null. Used to finalise TODAY's stored bar after
+   * the 16:00 close: that bar was written mid-session, so its high/low/close
+   * are partial even once the session has ended.
+   */
+  async getOfficialDayBar(
+    ticker: string,
+    date: string,
+  ): Promise<{ high: number; low: number; close: number } | null> {
+    try {
+      const res = await fetchJson<{ high?: unknown; low?: unknown; close?: unknown }>(
+        `${this.baseUrl}/v1/open-close/${ticker}/${date}` +
+          `?adjusted=true&apiKey=${this.apiKey}`,
+      );
+      const high = finiteOrNull(res.high);
+      const low = finiteOrNull(res.low);
+      const close = finiteOrNull(res.close);
+      return high != null && low != null && close != null ? { high, low, close } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Peer tickers. Polygon DOES have a peers product — earlier notes in this repo
    * recorded `peers` as "structurally null on this source", which was wrong: the
    * companies job simply never called this endpoint. Verified on the paid plan,

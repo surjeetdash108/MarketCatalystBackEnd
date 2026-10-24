@@ -49,6 +49,7 @@ import {
   anchor52wToPrice,
   computeIndicators,
   lastCompletedSession,
+  officialTodayBarFor,
   type IndicatorBar,
 } from "../sync/technical-indicators.job";
 import { computeRsScore, rsPercentile } from "../sync/rs-rating.job";
@@ -414,6 +415,12 @@ export interface NextReportEstimate {
   date: string;
   epsEstimate: number | null;
   revenueEstimate: number | null;
+}
+
+/** A listing date that is a real date — not a vendor placeholder like 1900-01-01. */
+export function realListingDate(v: string | null | undefined): string | null {
+  const d = String(v ?? "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(d) && d > "1900-12-31" ? d : null;
 }
 
 @Injectable()
@@ -991,6 +998,7 @@ export class OnDemandService implements OnModuleDestroy {
         spyMap,
         undefined,
         officialCloseByDate,
+        await officialTodayBarFor(this.polygon, ticker, analysisBars),
       );
       if (!ind) return {};
 
@@ -1412,7 +1420,13 @@ export class OnDemandService implements OnModuleDestroy {
                 ) ?? (prevCo.marketCap as number | undefined) ?? null,
               exchange: details.primary_exchange ?? (prevCo.exchange as string | undefined) ?? null,
               employees: (details as any).total_employees ?? fmpProfile?.fullTimeEmployees ?? (prevCo.employees as number | undefined) ?? null,
-              listingDate: (details as any).list_date ?? fmpProfile?.ipoDate ?? (prevCo.listingDate as string | undefined) ?? null,
+              // Vendors fill an unknown listing date with a placeholder (GE:
+              // Polygon "1900-01-01"); such a date falls through to the next source.
+              listingDate:
+                realListingDate((details as any).list_date) ??
+                realListingDate(fmpProfile?.ipoDate) ??
+                realListingDate(prevCo.listingDate as string | undefined) ??
+                null,
               ceo: (details as any).ceo ?? fmpProfile?.ceo ?? (prevCo.ceo as string | undefined) ?? null,
             }
           : {}),

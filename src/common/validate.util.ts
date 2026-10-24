@@ -31,11 +31,8 @@ export function nonNegIntOrNull(n: unknown): number | null {
  * small cap stored at ≥$10B, which then slips through a "market cap > $10B"
  * screen. `price × weighted_shares_outstanding` is the current-price estimate.
  *
- * CONSERVATIVE by design: the stored value is kept whenever the two are within
- * 3× of each other (so multi-class names and normal drift are untouched); only a
- * gross discrepancy (>3×, i.e. clearly stale or a large recent move) is replaced
- * with the fresh figure. Returns the fresh value when the stored one is missing,
- * the stored value when the inputs for a fresh one are missing, else null.
+ * The fresh figure wins whenever price and share count are both known; the
+ * stored value is the fallback when they are not, else null.
  */
 export function reconcileMarketCap(
   storedMarketCap: unknown,
@@ -57,8 +54,8 @@ export function reconcileMarketCap(
     weightedShares > 0
       ? price * weightedShares
       : null;
-  if (mc == null) return fresh;
-  if (fresh == null) return mc;
-  const ratio = fresh / mc;
-  return ratio > 3 || ratio < 1 / 3 ? fresh : mc;
+  // The current-price figure whenever it can be computed: keeping the stored
+  // value "within 3×" kept ordinary staleness too (BGS $165M / EPM $155M / PNRG
+  // $334M against $170.7M / $157.9M / $341.4M at the day's close, E2E Oct 23).
+  return fresh ?? mc;
 }

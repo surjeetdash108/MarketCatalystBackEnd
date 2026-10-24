@@ -145,3 +145,32 @@ describe("lastCompletedSession", () => {
     expect(lastCompletedSession(new Map(), new Date("2026-10-19T21:00:00Z"))).toBe("2026-10-19");
   });
 });
+
+describe("computeIndicators — daily pivot basis after the close (E2E Oct 2026, category I)", () => {
+  // makeBars() ends on 2026-03-01 (a Sunday is fine — only the date match matters).
+  const AFTER_CLOSE = new Date("2026-03-01T22:30:00Z"); // 17:30 ET
+  const MIDDAY = new Date("2026-03-01T17:00:00Z"); // 12:00 ET
+  const piv = (h: number, l: number, c: number) => {
+    const p = (h + l + c) / 3;
+    return Math.round((2 * p - l) * 100) / 100; // R1
+  };
+  it("does not use today's mid-session stored bar as a completed session", () => {
+    const bars = makeBars();
+    const prev = bars[bars.length - 2];
+    const ind = computeIndicators(bars, new Map(), AFTER_CLOSE)!;
+    expect(ind.keyLevels.daily?.r1).toBe(piv(prev.high, prev.low, prev.close));
+  });
+  it("uses today's OFFICIAL high/low/close once it is in hand after the close", () => {
+    const bars = makeBars();
+    const official = new Map([["2026-03-01", { high: 140, low: 120, close: 130 }]]);
+    const ind = computeIndicators(bars, new Map(), AFTER_CLOSE, undefined, official)!;
+    expect(ind.keyLevels.daily?.r1).toBe(piv(140, 120, 130));
+  });
+  it("keeps the prior session mid-day even with an official bar", () => {
+    const bars = makeBars();
+    const prev = bars[bars.length - 2];
+    const official = new Map([["2026-03-01", { high: 140, low: 120, close: 130 }]]);
+    const ind = computeIndicators(bars, new Map(), MIDDAY, undefined, official)!;
+    expect(ind.keyLevels.daily?.r1).toBe(piv(prev.high, prev.low, prev.close));
+  });
+});

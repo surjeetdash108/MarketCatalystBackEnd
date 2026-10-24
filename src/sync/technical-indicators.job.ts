@@ -484,6 +484,13 @@ export function computeIndicators(
   // the extended-hours last trade). Optional and backward-compatible: when
   // absent, every output — keyLevels.daily included — is byte-identical to before.
   officialCloseByDate?: Map<string, number>,
+  // OFFICIAL regular-session high/low/close for TODAY's bar (keyed by date),
+  // supplied by callers after the 16:00 close. Today's stored bar is written
+  // mid-session, so after the close it is complete in time but not in content:
+  // its H/L/C are whatever had traded when it was stored. Today's bar is used as
+  // the pivot basis only with this official bar; without it the prior session
+  // stays the basis. (E2E Oct 23: 51 after-close pivots matched neither session.)
+  officialBarByDate?: Map<string, { high: number; low: number; close: number }>,
 ) {
   // Remove pre-spin-off / pre-ticker-reuse bars before any computation so the
   // 52-week range, pivots and MAs are all built from one continuous entity.
@@ -559,9 +566,17 @@ export function computeIndicators(
   // bar — VWAP and price-vs-MA reads want the current session, only the pivot
   // BASIS must be a completed session.
   const { etDate, regularSessionClosed } = marketTimeEt(now);
-  const lastIsCurrentOpenSession =
-    latestBar?.barDate === etDate && !regularSessionClosed;
-  const completedBars = lastIsCurrentOpenSession ? bars.slice(0, -1) : bars;
+  const lastIsToday = latestBar?.barDate === etDate;
+  const lastIsCurrentOpenSession = lastIsToday && !regularSessionClosed;
+  const todayOfficial = lastIsToday ? officialBarByDate?.get(etDate) : undefined;
+  // Today's bar counts as a completed session only once the session has closed
+  // AND its official H/L/C are in hand; it then carries those, not the stored
+  // mid-session values.
+  const completedBars = !lastIsToday
+    ? bars
+    : regularSessionClosed && todayOfficial
+      ? [...bars.slice(0, -1), { ...latestBar, ...todayOfficial }]
+      : bars.slice(0, -1);
   const pivotBasisBar = completedBars[completedBars.length - 1];
 
   const rsiHistory = rsiSeries(closes).slice(-RSI_SERIES_LEN);
@@ -691,6 +706,27 @@ export function computeIndicators(
       })(),
     },
   };
+}
+
+/**
+ * The official day bar for TODAY's stored bar (see computeIndicators'
+ * officialBarByDate), fetched only after the 16:00 ET close and only when the
+ * newest bar is dated today — at most one call per build. Empty otherwise, which
+ * keeps the prior completed session as the pivot basis.
+ */
+export async function officialTodayBarFor(
+  polygon: { getOfficialDayBar(ticker: string, date: string): Promise<{ high: number; low: number; close: number } | null> },
+  ticker: string,
+  bars: ReadonlyArray<{ barDate?: string }>,
+  now: Date = new Date(),
+): Promise<Map<string, { high: number; low: number; close: number }>> {
+  const map = new Map<string, { high: number; low: number; close: number }>();
+  const { etDate, regularSessionClosed } = marketTimeEt(now);
+  const last = bars[bars.length - 1]?.barDate;
+  if (!regularSessionClosed || last !== etDate) return map;
+  const bar = await polygon.getOfficialDayBar(ticker, etDate).catch(() => null);
+  if (bar) map.set(etDate, bar);
+  return map;
 }
 
 /**
@@ -868,7 +904,8 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
     // miss / weekend / holiday leaves the map empty and the pivot falls back to
     // the stored bar close (no regression). Not fetched for historical bars.
     const officialCloseByDate = await this.officialCloseMapFor(ticker, bars);
-    return computeIndicators(bars, mktByDate, undefined, officialCloseByDate);
+    const officialBarByDate = await officialTodayBarFor(this.polygon, ticker, bars);
+    return computeIndicators(bars, mktByDate, undefined, officialCloseByDate, officialBarByDate);
   }
 
   /**

@@ -279,6 +279,59 @@ export function mapFmpQuote(
   };
 }
 
+/**
+ * Today's regular-session bounds as epoch ms, from the New York clock:
+ * `openedAt` (09:30 ET) once it has passed on a weekday, else null (pre-market,
+ * weekend); `closedAt` (16:00 ET) on a weekday, else null. Holidays read as
+ * weekdays — harmless here: the bar fetched is then the last session's.
+ */
+export function sessionBoundsEt(now: number): { openedAt: number | null; closedAt: number | null } {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", hourCycle: "h23",
+      year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", weekday: "short",
+    }).formatToParts(new Date(now)).map((p) => [p.type, p.value]),
+  );
+  if (parts.weekday === "Sat" || parts.weekday === "Sun") return { openedAt: null, closedAt: null };
+  const [y, m, d] = [Number(parts.year), Number(parts.month) - 1, Number(parts.day)];
+  const etAsUtc = Date.UTC(y, m, d, Number(parts.hour), Number(parts.minute), Number(parts.second));
+  const offset = Math.round((etAsUtc - now) / 60_000) * 60_000;
+  const open = Date.UTC(y, m, d, 9, 30) - offset;
+  const close = Date.UTC(y, m, d, 16, 0) - offset;
+  return { openedAt: now >= open ? open : null, closedAt: close };
+}
+
+/** Polygon's view of a session: the official (consolidated) open / high / low. */
+export interface OfficialDayBar {
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  /** Fetched after the regular session closed, so high/low are final. */
+  final: boolean;
+  fetchedAt: number;
+}
+
+/**
+ * FMP quote with the official day figures laid over it.
+ *
+ * FMP's quote price is seconds-fresh, but its open / high / low for smaller
+ * names come from a partial feed: ELMD read open 27.03 = day high 27.03 against
+ * an official 26.72 / 27.355, NGS open = day low 30.165 against 29.95, TLYS,
+ * RGCO, LEA, CAR likewise (E2E Oct 23). Polygon's consolidated snapshot matches
+ * the official bar exactly. The open is fixed once the session starts, so
+ * Polygon's is used as soon as it has one; high / low keep moving, so FMP's
+ * live values stand until the session is over and the final official ones exist.
+ */
+export function applyOfficialDayBar(q: SnapshotQuote, bar: OfficialDayBar | undefined): SnapshotQuote {
+  if (!bar) return q;
+  return {
+    ...q,
+    open: bar.open ?? q.open,
+    dayHigh: bar.final && bar.high != null ? bar.high : q.dayHigh,
+    dayLow: bar.final && bar.low != null ? bar.low : q.dayLow,
+  };
+}
+
 @Injectable()
 export class SnapshotCacheService implements OnModuleDestroy {
   private readonly logger = new Logger(SnapshotCacheService.name);
@@ -290,6 +343,8 @@ export class SnapshotCacheService implements OnModuleDestroy {
   private readonly fallbackSource: QuoteSource;
 
   private readonly cache = new Map<string, CacheEntry>();
+  /** Polygon's official day bar per ticker (see applyOfficialDayBar). */
+  private readonly dayBars = new Map<string, OfficialDayBar>();
   /** ticker -> last time a client asked for it; drives the refresh set. */
   private readonly demand = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
@@ -491,6 +546,7 @@ export class SnapshotCacheService implements OnModuleDestroy {
         }
       }
       if (primaryErr && quotes.length === 0) throw primaryErr;
+      quotes = await this.withOfficialDayBars(quotes);
 
       const now = Date.now();
       for (const q of quotes) {
@@ -508,6 +564,52 @@ export class SnapshotCacheService implements OnModuleDestroy {
     } finally {
       this.refreshing = false;
     }
+  }
+
+  /**
+   * Lays Polygon's official open/high/low over FMP-sourced quotes. A ticker is
+   * re-fetched only when its stored bar is from before today's open (no open
+   * yet) or was taken mid-session and the session has since closed — so about
+   * twice a day per ticker, in batches of 250. Best-effort: a failure leaves the
+   * FMP figures in place.
+   */
+  private async withOfficialDayBars(quotes: SnapshotQuote[]): Promise<SnapshotQuote[]> {
+    if (this.source !== "fmp" || !this.apiKey || quotes.length === 0) return quotes;
+    const now = Date.now();
+    const { openedAt, closedAt } = sessionBoundsEt(now);
+    // The delayed feed shows the open ~15 minutes after it happens.
+    const openKnownAt = openedAt + POLYGON_DELAY_MS + 60_000;
+    const sessionOver = closedAt != null && now >= closedAt + POLYGON_DELAY_MS + 60_000;
+    const stale = (b: OfficialDayBar | undefined) =>
+      !b ||
+      (openedAt != null && b.fetchedAt < openKnownAt && now >= openKnownAt) ||
+      (sessionOver && !b.final);
+    const need = quotes.map((q) => q.ticker).filter((t) => stale(this.dayBars.get(t)));
+    if (need.length > 0 && (openedAt == null || now >= openKnownAt)) {
+      try {
+        for (let i = 0; i < need.length; i += 250) {
+          const list = need.slice(i, i + 250).join(",");
+          const res = await fetchJson<{ results?: any[] }>(
+            `${this.baseUrl}/v3/snapshot?ticker.any_of=${encodeURIComponent(list)}&limit=250&apiKey=${this.apiKey}`,
+          );
+          this.stats.upstreamCalls++;
+          const n = (v: unknown) => (typeof v === "number" && v > 0 ? v : null);
+          for (const r of res.results ?? []) {
+            const sess = r.session ?? {};
+            this.dayBars.set(String(r.ticker), {
+              open: n(sess.open),
+              high: n(sess.high),
+              low: n(sess.low),
+              final: openedAt == null || sessionOver,
+              fetchedAt: now,
+            });
+          }
+        }
+      } catch (err) {
+        this.logger.warn(`official day bars failed: ${(err as Error).message}`);
+      }
+    }
+    return quotes.map((q) => applyOfficialDayBar(q, this.dayBars.get(q.ticker)));
   }
 
   private canFetch(source: QuoteSource): boolean {
