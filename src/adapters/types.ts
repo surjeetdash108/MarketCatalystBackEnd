@@ -20,6 +20,10 @@ export interface CanonicalCompany {
   /** Vendor that supplied `description` — the doc-level `source` names the
    *  profile adapter, not this field (FMP's text is preferred over Polygon's). */
   descriptionSource: "fmp" | "polygon" | null;
+  /** The vendor's published beta (FMP profile), shown in place of our own
+   *  computed `beta` when present. Its own field so it never clobbers the
+   *  `beta` beta.job owns. */
+  betaVendor?: number | null;
   peRatio: number | null;
   eps: number | null;
   dividendYield: number | null;

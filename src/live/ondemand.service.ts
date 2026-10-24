@@ -14,7 +14,7 @@ import {
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { DelistedTickersService } from "../common/delisted-tickers.service";
-import { classifyFromSic, resolveSicCode } from "../common/sic-tv.util";
+import { classifyFromSic, resolveSicCode, withVendorIndustryFallback } from "../common/sic-tv.util";
 import { SnapshotCacheService } from "./snapshot-cache.service";
 import { MonthlyBetaService } from "./monthly-beta.service";
 import { BETA_METHOD } from "../common/monthly-beta.util";
@@ -406,6 +406,14 @@ export interface QuarterlyEstimate {
   revenueAvg: number | null;
   numAnalystsEps: number | null;
   numAnalystsRevenue: number | null;
+}
+
+/** The consensus for the NEXT scheduled report (FMP `/earnings` calendar row). */
+export interface NextReportEstimate {
+  /** Report date (YYYY-MM-DD). */
+  date: string;
+  epsEstimate: number | null;
+  revenueEstimate: number | null;
 }
 
 @Injectable()
@@ -1325,7 +1333,8 @@ export class OnDemandService implements OnModuleDestroy {
       // Canonical classification: SEC EDGAR regulatory filing SIC primary, Polygon fallback.
       const secSic = details ? await this.secEdgar.getSicByTicker(ticker) : null;
       const resolvedSic = resolveSicCode(secSic, details?.sic_code as string | number | undefined);
-      const sicClass = classifyFromSic(resolvedSic, ticker);
+      // No SIC anywhere (FDIC-filing banks like PFBC): FMP's profile industry.
+      const sicClass = withVendorIndustryFallback(classifyFromSic(resolvedSic, ticker), fmpProfile?.industry);
       // Nightly fundamentals-growth writes epsGrowthYoY / revenueGrowthYoY /
       // grossMargin to the company doc; this on-demand rebuild doesn't recompute
       // them, so carry them forward (else the returned doc — the stock-detail's
@@ -1387,6 +1396,7 @@ export class OnDemandService implements OnModuleDestroy {
               description:
                 fmpProfile?.description ?? details.description ?? (prevCo.description as string | undefined) ?? null,
               descriptionSource,
+              betaVendor: fmpProfile?.beta ?? (prevCo.betaVendor as number | undefined) ?? null,
               homepageUrl: details.homepage_url ?? (prevCo.homepageUrl as string | undefined) ?? null,
               sector: sicClass.sector,
               industry: sicClass.industry,
@@ -1907,6 +1917,26 @@ export class OnDemandService implements OnModuleDestroy {
       .sort((a, b) => a.date.localeCompare(b.date));
     this.memQuarterlyEstimates.set(sym, { data, at: Date.now() });
     return data;
+  }
+
+  /**
+   * The consensus for the next report on the calendar: the earliest FMP
+   * `/earnings` row dated today or later with no actual yet. This is the ONE
+   * "next quarter" estimate every screen shows. FMP's quarterly
+   * `analyst-estimates` can file it under the wrong quarter-end on irregular
+   * fiscal calendars (KR: the Dec-3 report's 1.16 / $34.57B sits under
+   * "2026-05-23", and "2026-11-15" carries the 16-week quarter's 1.69 /
+   * $46.6B), so the calendar row is what matches the report. Null when none.
+   */
+  async getNextReportEstimate(ticker: string): Promise<NextReportEstimate | null> {
+    const today = etDate();
+    const rows = await this.fmp.getEarningsSurprises(toFmpSymbol(ticker.toUpperCase().trim())).catch(() => []);
+    const next = rows
+      .filter((r) => r.date >= today && r.actualEarningResult == null && (r.estimatedEarning != null || r.revenueEstimated != null))
+      .sort((a, b) => a.date.localeCompare(b.date))[0];
+    return next
+      ? { date: next.date.slice(0, 10), epsEstimate: next.estimatedEarning, revenueEstimate: next.revenueEstimated ?? null }
+      : null;
   }
 
   /**

@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { fetchJson, type FetchJsonOptions } from "../../common/http.util";
 import { etDateOf } from "../../common/market-calendar.util";
+import { consensusLabel } from "../../common/consensus-label.util";
 
 /**
  * Financial Modeling Prep (FMP) — a SUPPLEMENTARY vendor, wired only for the
@@ -99,6 +100,8 @@ export interface FmpCompanyProfileRow {
   ceo?: string | null;
   fullTimeEmployees?: number | null;
   ipoDate?: string | null;
+  /** FMP's published beta — the 5-year monthly figure quote pages show. */
+  beta?: number | null;
 }
 
 /** One row of FMP /stable/income-statement. */
@@ -667,6 +670,7 @@ export class FmpService {
       ceo: str(o.ceo),
       fullTimeEmployees: num(o.fullTimeEmployees),
       ipoDate: str(o.ipoDate),
+      beta: num(o.beta),
     };
   }
 
@@ -713,12 +717,7 @@ export class FmpService {
       const h = num(o.analystRatingsHold);
       const s = num(o.analystRatingsSell);
       const ss = num(o.analystRatingsStrongSell);
-      const tot = (sb ?? 0) + (b ?? 0) + (h ?? 0) + (s ?? 0) + (ss ?? 0);
-      let consensus: string | null = null;
-      if (tot > 0) {
-        const score = ((sb ?? 0) * 1 + (b ?? 0) * 2 + (h ?? 0) * 3 + (s ?? 0) * 4 + (ss ?? 0) * 5) / tot;
-        consensus = score <= 1.5 ? "Strong Buy" : score <= 2.5 ? "Buy" : score <= 3.5 ? "Hold" : score <= 4.5 ? "Sell" : "Strong Sell";
-      }
+      const consensus = consensusLabel({ strongBuy: sb, buy: b, hold: h, sell: s, strongSell: ss });
       return {
         symbol: String(o.symbol ?? ticker),
         strongBuy: sb,

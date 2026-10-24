@@ -442,7 +442,11 @@ ${JSON.stringify(ctx, null, 2)}`,
     const sym = (ticker ?? "").toUpperCase().trim();
     if (!TICKER_RE.test(sym))
       throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
-    sendWithEtag(req, res, { ticker: sym, quarterly: await this.ondemand.getQuarterlyEstimates(sym) });
+    const [quarterly, next] = await Promise.all([
+      this.ondemand.getQuarterlyEstimates(sym),
+      this.ondemand.getNextReportEstimate(sym).catch(() => null),
+    ]);
+    sendWithEtag(req, res, { ticker: sym, quarterly, next });
   }
 
   @Get("peers-summary")

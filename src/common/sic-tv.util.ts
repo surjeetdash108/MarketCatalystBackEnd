@@ -49,6 +49,15 @@ const INDUSTRY_OVERRIDES: Record<string, { sector: TvSector; industry: string }>
   CVX: { sector: "Energy Minerals", industry: "Integrated Oil" },
   ETN: { sector: "Producer Manufacturing", industry: "Electrical Products" },
   COST: { sector: "Retail Trade", industry: "Specialty Stores" },
+  // SIC 2911 (refining) is ConocoPhillips' legacy code; it has been a pure
+  // exploration & production company since the 2012 Phillips 66 spin-off.
+  COP: { sector: "Energy Minerals", industry: "Oil & Gas Production" },
+  // SIC 3600 is the old GE conglomerate's code; after the 2024 spin-offs GE
+  // is GE Aerospace (jet engines).
+  GE: { sector: "Electronic Technology", industry: "Aerospace & Defense" },
+  // SIC 3829 "measuring & controlling devices": Thermo Fisher's instruments
+  // are life-science and clinical lab equipment.
+  TMO: { sector: "Health Technology", industry: "Medical Specialties" },
 };
 
 const TICKER_OVERRIDES: Record<string, TvClassification> = {
@@ -124,7 +133,9 @@ const EXACT_INDUSTRY: Record<number, string> = {
   1389: "Oilfield Services/Equipment",
   2911: "Oil Refining/Marketing",
   4922: "Oil & Gas Pipelines",
-  4923: "Oil & Gas Pipelines",
+  // "Natural gas transmission & DISTRIBUTION" — local gas utilities file here
+  // (RGC Resources, Atmos, National Fuel Gas); pipeline operators use 4922.
+  4923: "Gas Distributors",
   4924: "Gas Distributors",
   1221: "Coal",
   // ── Financials ──────────────────────────────────────────────────────────
@@ -159,7 +170,10 @@ const EXACT_INDUSTRY: Record<number, string> = {
   5399: "Discount Stores",
   5411: "Food Retail",
   5412: "Food Retail",
-  5531: "Automotive Aftermarket",
+  // 55xx are dealers and auto-parts STORES (AutoNation, MarineMax, AutoZone):
+  // retailers, not makers of aftermarket parts.
+  5500: "Specialty Stores",
+  5531: "Specialty Stores",
   5651: "Apparel/Footwear Retail",
   5661: "Apparel/Footwear Retail",
   5621: "Apparel/Footwear Retail",
@@ -169,6 +183,12 @@ const EXACT_INDUSTRY: Record<number, string> = {
   5812: "Restaurants",
   5813: "Restaurants",
   7011: "Hotels/Resorts/Cruise lines",
+  // Car / equipment rental and leasing (Avis, Hertz, United Rentals).
+  7510: "Finance/Rental/Leasing",
+  7513: "Finance/Rental/Leasing",
+  7514: "Finance/Rental/Leasing",
+  7515: "Finance/Rental/Leasing",
+  7359: "Finance/Rental/Leasing",
   // 7990 is SEC's GENERAL "Amusement & Recreation Services" bucket, not a
   // casino code — Disney files under it. Mapping it to Casinos/Gaming put DIS
   // in Casinos/Gaming. The specific gaming codes (7011 hotels-casinos, 7993
@@ -186,7 +206,25 @@ const EXACT_INDUSTRY: Record<number, string> = {
   2844: "Household/Personal Care",
   2840: "Household/Personal Care",
   2300: "Apparel/Footwear",
+  3021: "Apparel/Footwear", // rubber & plastic footwear (Crocs) — not an industrial specialty
   3140: "Apparel/Footwear",
+  3143: "Apparel/Footwear",
+  3144: "Apparel/Footwear",
+  3149: "Apparel/Footwear",
+  // Consumer goods that the major-group fallback put in manufacturing /
+  // electronics: toys & sporting goods, boats, watches, housewares & tools.
+  3940: "Recreational Products",
+  3942: "Recreational Products",
+  3944: "Recreational Products",
+  3949: "Recreational Products",
+  3730: "Recreational Products",
+  3732: "Recreational Products",
+  3873: "Other Consumer Specialties",
+  3420: "Tools & Hardware",
+  // Office furniture (MillerKnoll, Steelcase, HNI) is office equipment.
+  2520: "Office Equipment/Supplies",
+  2521: "Office Equipment/Supplies",
+  2522: "Office Equipment/Supplies",
   2000: "Foods",
   2020: "Foods",
   2030: "Foods",
@@ -348,7 +386,7 @@ const MAJOR_GROUP_INDUSTRY: Record<number, string> = {
   52: "Home Improvement Chains",
   53: "Discount Stores",
   54: "Food Retail",
-  55: "Automotive Aftermarket",
+  55: "Specialty Stores",
   56: "Apparel/Footwear Retail",
   57: "Electronics/Appliance Stores",
   58: "Restaurants",
@@ -419,3 +457,73 @@ export function resolveSicCode(
   return null;
 }
 
+
+/**
+ * Vendor (FMP profile) industry -> TradingView industry, used ONLY when no SIC
+ * code exists at all. Banks that report to the FDIC/Fed instead of the SEC
+ * (Preferred Bank, PFBC) have no EDGAR SIC and Polygon carries none, so they
+ * showed N/A. Exact names first, then prefixes; an unmapped industry stays
+ * null — a missing sector beats a guessed one.
+ */
+const VENDOR_INDUSTRY: Record<string, string> = {
+  "banks - regional": "Regional Banks",
+  "banks - diversified": "Major Banks",
+  "banks": "Regional Banks",
+  "asset management": "Investment Managers",
+  "capital markets": "Investment Banks/Brokers",
+  "financial - capital markets": "Investment Banks/Brokers",
+  "financial - credit services": "Finance/Rental/Leasing",
+  "financial - mortgages": "Finance/Rental/Leasing",
+  "insurance - life": "Life/Health Insurance",
+  "insurance - property & casualty": "Property/Casualty Insurance",
+  "insurance - diversified": "Multi-Line Insurance",
+  "insurance - specialty": "Specialty Insurance",
+  "insurance - brokers": "Insurance Brokers/Services",
+  "insurance - reinsurance": "Specialty Insurance",
+  "software - application": "Packaged Software",
+  "software - infrastructure": "Packaged Software",
+  "semiconductors": "Semiconductors",
+  "biotechnology": "Biotechnology",
+  "drug manufacturers - general": "Pharmaceuticals: Major",
+  "drug manufacturers - specialty & generic": "Pharmaceuticals: Generic",
+  "medical - devices": "Medical Specialties",
+  "medical - instruments & supplies": "Medical Specialties",
+  "oil & gas exploration & production": "Oil & Gas Production",
+  "oil & gas integrated": "Integrated Oil",
+  "oil & gas midstream": "Oil & Gas Pipelines",
+  "oil & gas refining & marketing": "Oil Refining/Marketing",
+  "oil & gas equipment & services": "Oilfield Services/Equipment",
+  "oil & gas drilling": "Contract Drilling",
+  "regulated electric": "Electric Utilities",
+  "regulated gas": "Gas Distributors",
+  "regulated water": "Water Utilities",
+  "renewable utilities": "Alternative Power Generation",
+  "restaurants": "Restaurants",
+  "specialty retail": "Specialty Stores",
+  "auto - dealerships": "Specialty Stores",
+  "packaged foods": "Foods",
+  "beverages - non-alcoholic": "Beverages: Non-Alcoholic",
+  "aerospace & defense": "Aerospace & Defense",
+};
+const VENDOR_INDUSTRY_PREFIX: Array<[string, string]> = [
+  ["reit - ", "Real Estate Investment Trusts"],
+  ["real estate - ", "Real Estate Development"],
+  ["banks", "Regional Banks"],
+];
+
+export function classifyFromVendorIndustry(industry: string | null | undefined): TvClassification {
+  const key = String(industry ?? "").trim().toLowerCase();
+  if (!key) return NONE;
+  const tv = VENDOR_INDUSTRY[key] ?? VENDOR_INDUSTRY_PREFIX.find(([p]) => key.startsWith(p))?.[1] ?? null;
+  if (!tv || !isTvIndustry(tv)) return NONE;
+  const sector = sectorForIndustry(tv);
+  return sector ? { sector, industry: tv } : NONE;
+}
+
+/** The SIC classification, or — only when it came back empty — the vendor-industry one. */
+export function withVendorIndustryFallback(
+  sicClass: TvClassification,
+  vendorIndustry: string | null | undefined,
+): TvClassification {
+  return sicClass.sector ? sicClass : classifyFromVendorIndustry(vendorIndustry);
+}

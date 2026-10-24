@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { classifyFromSic, resolveSicCode } from "../common/sic-tv.util";
+import { classifyFromSic, resolveSicCode, withVendorIndustryFallback } from "../common/sic-tv.util";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { reconcileMarketCap } from "../common/validate.util";
 import {
@@ -219,8 +219,8 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       // own labels are deliberately NOT used: FMP is GICS and sic_description is
       // raw uppercase SIC ("FIRE, MARINE & CASUALTY INSURANCE"), neither of
       // which is the TradingView vocabulary the app now standardises on.
-      sector: sicClass.sector,
-      industry: sicClass.industry,
+      sector: withVendorIndustryFallback(sicClass, fmpProfile?.industry).sector,
+      industry: withVendorIndustryFallback(sicClass, fmpProfile?.industry).industry,
       // Kept so a future taxonomy revision can reclassify from stored data.
       // Uses the resolved SIC (Polygon, or the SEC fallback above) so a
       // SEC-derived sector and its sicCode stay consistent.
@@ -235,6 +235,7 @@ export class PolygonCompanyProfileAdapter implements CompanyProfileAdapter {
       // Prefer FMP when available, fall back to Polygon (no key, no row, or a
       // vendor miss) rather than leaving the field null.
       description: fmpProfile?.description ?? details.description ?? null,
+      betaVendor: fmpProfile?.beta ?? null,
       descriptionSource: fmpProfile?.description
         ? "fmp"
         : details.description

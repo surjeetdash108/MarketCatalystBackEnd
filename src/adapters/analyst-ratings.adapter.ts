@@ -1,4 +1,5 @@
 import { FmpService, type FmpSplitRow } from "../vendors/fmp/fmp.service";
+import { consensusLabel } from "../common/consensus-label.util";
 
 /**
  * Analyst-ratings seam — Polygon has no analyst/ratings/consensus endpoint on
@@ -158,9 +159,7 @@ export function activeCoverage(
   if (latest.size < MIN_ACTIVE_FIRMS) return null;
   const t: Record<RatingBucket, number> = { strongBuy: 0, buy: 0, hold: 0, sell: 0, strongSell: 0 };
   for (const { bucket } of latest.values()) t[bucket]++;
-  const score = (t.strongBuy * 1 + t.buy * 2 + t.hold * 3 + t.sell * 4 + t.strongSell * 5) / latest.size;
-  const consensus = score <= 1.5 ? "Strong Buy" : score <= 2.5 ? "Buy" : score <= 3.5 ? "Hold" : score <= 4.5 ? "Sell" : "Strong Sell";
-  return { ...t, consensus };
+  return { ...t, consensus: consensusLabel(t) as string };
 }
 
 /** Pages of per-ticker target posts / rating headlines read (100 each). */
@@ -721,7 +720,9 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
       hold: histTotal > 0 && hist0 ? n(hist0.hold) : active ? active.hold : n(row.hold),
       sell: histTotal > 0 && hist0 ? n(hist0.sell) : active ? active.sell : n(row.sell),
       strongSell: histTotal > 0 && hist0 ? n(hist0.strongSell) : active ? active.strongSell : n(row.strongSell),
-      consensus: histTotal > 0 && hist0 ? hist0.consensus : active ? active.consensus : (row.consensus ?? null),
+      // Every label comes from the one shared rule (FMP's own grades-consensus
+      // label used a different cut-off).
+      consensus: histTotal > 0 && hist0 ? hist0.consensus : active ? active.consensus : (consensusLabel(row) ?? row.consensus ?? null),
       priceTargetConsensus: pt?.targetConsensus ?? ptStats?.mean ?? null,
       priceTargetHigh: pt?.targetHigh ?? ptStats?.high ?? null,
       priceTargetLow: pt?.targetLow ?? ptStats?.low ?? null,
