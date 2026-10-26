@@ -287,7 +287,14 @@ export class MarketDataService extends PolygonService {
         const price = num(p.price);
         const shares = marketCap != null && price ? Math.round(marketCap / price) : null;
         const isFund = !!p.isEtf || !!p.isFund;
-        const sic = isFund ? null : await this.sec.getSicByTicker(ticker).catch(() => null);
+        // Polygon's details carry its own SIC (and the listing date below), so
+        // one request serves both. SEC's SIC wins; Polygon's covers SEC being
+        // unavailable — without it every SEC outage blanked sector/industry for
+        // names whose FMP industry has no mapping (CAT on 2026-10-26).
+        const poly = await super.getTickerDetails(ticker).catch(() => null);
+        const secSic = isFund ? null : await this.sec.getSicByTicker(ticker).catch(() => null);
+        const polySic = poly?.sic_code != null && String(poly.sic_code).trim() !== "" ? poly.sic_code : null;
+        const sic = isFund ? null : (secSic ?? polySic);
         return {
           ticker: ticker.toUpperCase(),
           name: p.companyName,
@@ -306,17 +313,14 @@ export class MarketDataService extends PolygonService {
           phone_number: p.phone ?? null,
           ceo: p.ceo ?? null,
           total_employees: num(p.fullTimeEmployees),
-          list_date: await (async () => {
+          list_date: (() => {
             let ld = p.ipoDate ? String(p.ipoDate).slice(0, 10) : null;
-            try {
-              const poly = await super.getTickerDetails(ticker).catch(() => null);
-              if (poly?.list_date && (!ld || poly.list_date < ld)) ld = poly.list_date;
-            } catch {}
+            if (poly?.list_date && (!ld || poly.list_date < ld)) ld = poly.list_date;
             return ld;
           })(),
           address: { address1: p.address ?? null, city: p.city ?? null, state: p.state ?? null, postal_code: p.zip ?? null },
           sic_code: sic,
-          sic_description: null,
+          sic_description: secSic == null && polySic != null ? (poly?.sic_description ?? null) : null,
           branding: p.image ? { icon_url: p.image, logo_url: p.image } : undefined,
           source: "fmp",
         };
