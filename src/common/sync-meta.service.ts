@@ -4,6 +4,7 @@ import { FirebaseAdminService } from "./firebase-admin.provider";
 import { setWithCreatedAt } from "./firestore-batch.util";
 import { SyncRegistry } from "./sync-registry.service";
 import { etDate } from "./market-calendar.util";
+import { JOB_MANIFEST } from "./job-manifest";
 
 export interface SyncResult {
   ok: boolean;
@@ -49,6 +50,29 @@ export function isJobStale(
   return now.getTime() > missedSince + STALE_GRACE_MS;
 }
 
+/**
+ * isJobStale against the schedules that ACTUALLY run the job (job-manifest):
+ * a registered cronExpression is documentation nothing reads — stock-history
+ * registers "0 3 * * *" but runs in the weekday premarket job, so judging it
+ * by its registration flagged it every weekend. A job nothing triggers is
+ * never "stale" (there is no run to miss). A job missing from the manifest
+ * falls back to its registered cron.
+ */
+export function isJobStaleFor(
+  jobName: string,
+  lastSuccessAt: string | null | undefined,
+  registeredCron: string,
+  timeZone = "America/New_York",
+  now: Date = new Date(),
+): boolean {
+  const entry = JOB_MANIFEST.find((e) => e.name === jobName);
+  if (entry && entry.trigger === "none") return false;
+  const schedules = entry && entry.schedules.length ? entry.schedules : [registeredCron];
+  // Stale once two runs of ANY of its schedules have passed (an intraday entry
+  // missing twice is a failure even when the post-close entry is not due yet).
+  return schedules.some((cron) => isJobStale(lastSuccessAt, cron, timeZone, now));
+}
+
 /** Epoch ms of the second scheduled run after `fromMs`, or null for an unparseable cron. */
 export function secondRunAfter(fromMs: number, cronExpression: string, timeZone: string): number | null {
   try {
@@ -83,17 +107,18 @@ export class SyncMetaService implements OnModuleInit {
         await this.record(STALENESS_JOB, { ok: true, count: stale });
         return { checked: rows.length, stale };
       },
-      { collections: ["sync_meta"], cronExpression: "0 9,13,17,21 * * *", timeZone: "America/New_York" },
+      { collections: ["sync_meta"], cronExpression: "0 * * * *", timeZone: "America/New_York" },
     );
   }
 
   isJobStale(
+    jobName: string,
     lastSuccessAt: string | null | undefined,
     cronExpression: string,
     timeZone = "America/New_York",
     now: Date = new Date(),
   ): boolean {
-    return isJobStale(lastSuccessAt, cronExpression, timeZone, now);
+    return isJobStaleFor(jobName, lastSuccessAt, cronExpression, timeZone, now);
   }
 
   // Run counters are bucketed by the job's OWN timezone, not the server's, so
@@ -143,7 +168,8 @@ export class SyncMetaService implements OnModuleInit {
         const prev = (await tx.get(ref)).data() ?? {};
         const sameDay = prev.runCountDate === today;
         const effectiveLastSuccess = result.ok ? now : (prev.lastSuccessAt ?? null);
-        const stale = isJobStale(
+        const stale = isJobStaleFor(
+          jobName,
           effectiveLastSuccess,
           jobMeta?.cronExpression ?? "0 8 * * 1-5",
           jobMeta?.timeZone ?? "America/New_York",
@@ -217,7 +243,7 @@ export class SyncMetaService implements OnModuleInit {
         .get();
       const data = snap.data();
       const lastSuccessAt = data?.lastSuccessAt ?? null;
-      const stale = isJobStale(lastSuccessAt, job.cronExpression, job.timeZone, now);
+      const stale = isJobStaleFor(job.name, lastSuccessAt, job.cronExpression, job.timeZone, now);
       if (stale) {
         this.logger.error(
           `[Staleness] Alert: Job ${job.name} is stale — two scheduled runs have passed since its last success (${lastSuccessAt ?? "never"})`,

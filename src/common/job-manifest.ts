@@ -85,6 +85,7 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "market-glance-weekly", trigger: "scheduler", schedules: ["0 12 * * 5"], note: "Fridays 12:00 ET: builds and stores the current week's 'Week at a glance' digest (Live Feed > Weekly Summary) ahead of any viewer. Cloud Scheduler entry sync-market-glance-weekly (deploy/create-glance-weekly-scheduler.sh)" },
   { name: "volume-leaders", trigger: "scheduler", schedules: ["30 20 * * 1-5"], note: "ranks the whole US market by relative volume from ONE grouped-daily call; 20:30 ET, after the after-hours session closes at 20:00, so the day's volume is complete" },
   { name: "premarket", trigger: "scheduler", schedules: ["0 8 * * 1-5"], note: "Cloud Run JOB premarket-job, not an HTTP POST — it orchestrates the phases below" },
+  { name: "staleness-check", trigger: "scheduler", schedules: ["0 * * * *"], note: "hourly sweep: logs an ERROR for every job whose last success is older than two of its scheduled runs (a job that stops running never records itself)" },
 ];
 
 /**
@@ -118,6 +119,9 @@ const NOT_TRIGGERED: JobManifestEntry[] = [
   { name: "monthly-news-cleanup", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },
   { name: "ticker-weekly-ai", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },
   { name: "ticker-monthly-ai", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },
+  { name: "analyst-firm-stats", trigger: "none", schedules: [], note: "registered only — no scheduler entry" },
+  { name: "strategy-lab-daily", trigger: "none", schedules: [], note: "registered only — no scheduler entry" },
+  { name: "strategy-lab-intraday", trigger: "none", schedules: [], note: "registered only — no scheduler entry" },
   { name: "history-backfill", trigger: "none", schedules: [], note: "one-off. Cloud Run JOB history-backfill-job (SYNC_JOB=history-backfill), run by hand after the close — a 30-45 min run cannot go over HTTP, and its grouped-daily calls return a PARTIAL bar during market hours" },
 ];
 
