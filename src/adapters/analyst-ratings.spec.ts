@@ -495,4 +495,84 @@ describe("E2E Oct 2026 analyst-action fixes", () => {
     ).getConsensus("AME");
     expect(out?.recentGrades[0]).toMatchObject({ priceTarget: null, priceTargetChange: "raise" });
   });
+
+  describe("Confirmed bugs A-1, A-2, A-3, B-1", () => {
+    it("A-1: joins Seaport Global grade with Seaport Research headline target (CROX / MAT)", async () => {
+      const out = await new FmpAnalystRatingsAdapter(
+        fmp({
+          getGrades: async () => [
+            { date: "2026-07-20", gradingCompany: "Seaport Global", previousGrade: "Buy", newGrade: "Buy", action: "maintain" },
+          ],
+          getPriceTargets: async () => [
+            { date: "2026-07-20T11:19:03.000Z", firm: "Seaport Global", priceTarget: 160, title: "Crocs price target raised to $160 from $135 at Seaport Research" },
+          ],
+        }),
+      ).getConsensus("CROX");
+      expect(out?.recentGrades[0]).toMatchObject({
+        priceTarget: 160,
+        priceTargetDate: "2026-07-20T11:19:03.000Z",
+      });
+    });
+
+    it("A-2: duplicate posts under multiple firm tags use stated headline target and prefer firm's own tagged copy (GE Morgan Stanley)", async () => {
+      const out = await new FmpAnalystRatingsAdapter(
+        fmp({
+          getGrades: async () => [
+            { date: "2026-10-21", gradingCompany: "Morgan Stanley", previousGrade: "Overweight", newGrade: "Overweight", action: "maintain" },
+          ],
+          getPriceTargets: async () => [
+            // Re-attributed copy carrying 380 in vendor field, but headline states $375
+            { date: "2026-10-21T10:19:00.000Z", firm: "Guggenheim", priceTarget: 380, title: "GE Aerospace (GE) PT Lowered to $375 at Morgan Stanley" },
+            // Native copy carrying 375
+            { date: "2026-10-21T10:19:00.000Z", firm: "Morgan Stanley", priceTarget: 375, title: "GE Aerospace (GE) PT Lowered to $375 at Morgan Stanley" },
+          ],
+        }),
+      ).getConsensus("GE");
+      expect(out?.recentGrades[0]).toMatchObject({
+        priceTarget: 375,
+      });
+    });
+
+    it("A-3: an initiation never carries a previous price target from an older post (EOG Scotiabank)", async () => {
+      const out = await new FmpAnalystRatingsAdapter(
+        fmp({
+          getGrades: async () => [
+            { date: "2026-10-14", gradingCompany: "Scotiabank", previousGrade: null, newGrade: "Sector Perform", action: "initiate" },
+          ],
+          getPriceTargets: async () => [
+            { date: "2026-10-14", firm: "Scotiabank", priceTarget: 144, title: "Scotiabank initiates EOG at Sector Perform" },
+            { date: "2026-01-16", firm: "Scotiabank", priceTarget: 123, title: "Scotiabank maintains EOG" },
+          ],
+        }),
+      ).getConsensus("EOG");
+      expect(out?.recentGrades[0]).toMatchObject({
+        action: "initiate",
+        priceTarget: 144,
+        previousPriceTarget: null,
+        priceTargetChange: null,
+      });
+    });
+
+    it("B-1: uses grades-consensus.consensus when present instead of recomputing from historical row 0 (EOG / NGS)", async () => {
+      const out = await new FmpAnalystRatingsAdapter(
+        fmp({
+          getAnalystConsensus: async () => ({
+            symbol: "EOG",
+            strongBuy: 1,
+            buy: 38,
+            hold: 27,
+            sell: 0,
+            strongSell: 0,
+            consensus: "Buy",
+          }),
+          getGradesHistorical: async () => [
+            // Historical row 0 has 1 SB, 10 B, 22 H -> average 2.636 -> recomputed to "Hold" on old code
+            { symbol: "EOG", date: "2026-10-01", strongBuy: 1, buy: 10, hold: 22, sell: 0, strongSell: 0, consensus: "Hold" },
+          ],
+        }),
+      ).getConsensus("EOG");
+      expect(out?.consensus).toBe("Buy");
+    });
+  });
 });
+

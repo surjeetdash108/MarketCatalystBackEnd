@@ -179,7 +179,7 @@ async function pagesOf<T>(fetchPage: (page: number) => Promise<T[]>): Promise<T[
 /** Upper bound on a stock's full rating history (FMP returns it all in one call). */
 const GRADES_HISTORY_MAX = 2000;
 
-type TargetLookup = ((g: { gradingCompany: string | null; date: string }) => ResolvedFirmTarget | null) & {
+type TargetLookup = ((g: { gradingCompany: string | null; date: string; action?: string | null }) => ResolvedFirmTarget | null) & {
   /** A target move the firm's headline states for this call when no figure is known. */
   directionFor: (g: { gradingCompany: string | null; date: string }) => "raise" | "cut" | null;
   /** Each firm's most recent posted target (current share basis). */
@@ -354,6 +354,8 @@ const FIRM_ALIASES: Record<string, string> = {
   telseyadvisory: "telsey",
   svbleerink: "leerink",
   cantorfitzgerald: "cantor",
+  seaportglobal: "seaport",
+  seaport: "seaport",
 };
 
 /** Fold a firm name to a stable key so the two FMP feeds can be joined. */
@@ -543,6 +545,7 @@ export interface FirmTargetPost {
   previousTarget?: number | null;
   /** "raise" / "cut" when the post's headline says which way the target moved. */
   direction?: "raise" | "cut" | null;
+  isNative?: boolean;
 }
 
 export interface ResolvedFirmTarget {
@@ -572,6 +575,7 @@ function withinCallWindow(postTime: number, gradeTime: number): boolean {
 export function resolveFirmTarget(
   posts: ReadonlyArray<FirmTargetPost>,
   gradeDate: string,
+  action?: string | null,
 ): ResolvedFirmTarget | null {
   const gradeTime = Date.parse(gradeDate);
   if (!Number.isFinite(gradeTime)) return null;
@@ -582,16 +586,23 @@ export function resolveFirmTarget(
     if (!Number.isFinite(t) || !withinCallWindow(t, gradeTime)) continue;
     const d = Math.abs(t - gradeTime);
     const bestD = Math.abs(bestTime - gradeTime);
-    if (!best || d < bestD || (d === bestD && t < bestTime)) {
+    if (
+      !best ||
+      d < bestD ||
+      (d === bestD && t < bestTime) ||
+      (d === bestD && t === bestTime && p.isNative && !best.isNative)
+    ) {
       best = p;
       bestTime = t;
     }
   }
   if (!best) return null;
-  const previousPriceTarget = previousFirmTarget(posts, best, bestTime);
+  const isInitiation = action ? /^(init|reinstat|resum)/i.test(action) : false;
+  const previousPriceTarget = isInitiation ? null : previousFirmTarget(posts, best, bestTime);
   // The figures decide when both are known; otherwise the headline's own word.
-  const direction =
-    previousPriceTarget != null && previousPriceTarget !== best.priceTarget
+  const direction = isInitiation
+    ? null
+    : previousPriceTarget != null && previousPriceTarget !== best.priceTarget
       ? best.priceTarget > previousPriceTarget ? "raise" : "cut"
       : previousPriceTarget == null ? best.direction ?? sameCallDirection(posts, best, bestTime) : null;
   return { priceTarget: best.priceTarget, date: best.date, previousPriceTarget, direction };
@@ -720,9 +731,9 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
       hold: histTotal > 0 && hist0 ? n(hist0.hold) : active ? active.hold : n(row.hold),
       sell: histTotal > 0 && hist0 ? n(hist0.sell) : active ? active.sell : n(row.sell),
       strongSell: histTotal > 0 && hist0 ? n(hist0.strongSell) : active ? active.strongSell : n(row.strongSell),
-      // Every label comes from the one shared rule (FMP's own grades-consensus
-      // label used a different cut-off).
-      consensus: histTotal > 0 && hist0 ? hist0.consensus : active ? active.consensus : (consensusLabel(row) ?? row.consensus ?? null),
+      // Fix B-1: use grades-consensus.consensus whenever FMP provides it;
+      // fall back to computed label only when FMP has none.
+      consensus: row.consensus ?? (histTotal > 0 && hist0 ? hist0.consensus : active ? active.consensus : (consensusLabel(row) ?? null)),
       priceTargetConsensus: pt?.targetConsensus ?? ptStats?.mean ?? null,
       priceTargetHigh: pt?.targetHigh ?? ptStats?.high ?? null,
       priceTargetLow: pt?.targetLow ?? ptStats?.low ?? null,
@@ -783,17 +794,19 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
     g: { date: string; gradingCompany: string | null; previousGrade: string | null; newGrade: string | null; action: string | null },
     targetFor: TargetLookup,
   ): AnalystRatingChange {
-    const target = targetFor(g);
+    const action = normaliseGradeAction(g.action, g.previousGrade, g.newGrade);
+    const target = targetFor({ ...g, action });
+    const isInitiation = action ? /^(init|reinstat|resum)/i.test(action) : false;
     return {
       date: g.date,
       firm: g.gradingCompany,
       previousGrade: g.previousGrade,
       newGrade: g.newGrade,
-      action: normaliseGradeAction(g.action, g.previousGrade, g.newGrade),
+      action,
       priceTarget: target?.priceTarget ?? null,
       priceTargetDate: target?.date ?? null,
-      previousPriceTarget: target?.previousPriceTarget ?? null,
-      priceTargetChange: target ? target.direction : targetFor.directionFor(g),
+      previousPriceTarget: isInitiation ? null : (target?.previousPriceTarget ?? null),
+      priceTargetChange: isInitiation ? null : (target ? target.direction : targetFor.directionFor(g)),
     };
   }
 
@@ -817,23 +830,32 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
       priceTarget: number,
       statedPrevious: number | null,
       direction: "raise" | "cut" | null,
+      isNative = false,
     ) => {
       if (!key || !date) return;
       const value = toCurrentShareBasis(priceTarget, date, splits);
       const list = ptByFirm.get(key) ?? [];
       // The same post often arrives twice (both feeds, or re-tagged): keep one,
-      // preferring the copy that states a "from".
-      const dup = list.find((p) => p.date === date && p.priceTarget === value);
+      // preferring the copy that states a "from", and preferring native firm copy.
+      const dup = list.find((p) => p.date === date && (p.priceTarget === value || (!p.isNative && isNative)));
       const previous =
         statedPrevious == null
           ? null
           : toCurrentShareBasis(alignPreviousToSplits(statedPrevious, priceTarget, date, splits), date, splits);
       if (dup) {
-        dup.previousTarget ??= previous;
-        dup.direction ??= direction;
+        if (!dup.isNative && isNative) {
+          dup.priceTarget = value;
+          dup.isNative = true;
+          dup.previousTarget = previous ?? dup.previousTarget;
+          dup.direction = direction ?? dup.direction;
+        } else {
+          dup.previousTarget ??= previous;
+          dup.direction ??= direction;
+          if (isNative) dup.isNative = true;
+        }
         return;
       }
-      list.push({ date, priceTarget: value, previousTarget: previous, direction });
+      list.push({ date, priceTarget: value, previousTarget: previous, direction, isNative });
       ptByFirm.set(key, list);
     };
     const addMove = (key: string, date: string, direction: "raise" | "cut" | null) => {
@@ -851,31 +873,43 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
       const tagKey = canonicalFirm(tag);
       if (!title || (tagKey && headlineNamesFirm(title, tagKey))) return tagKey;
       const named = headlineFirm(title);
-      return named ? canonicalFirm(named) : tagKey;
+      if (!named) return tagKey;
+      const namedKey = canonicalFirm(named);
+      if (!namedKey || namedKey === tagKey) return tagKey;
+      return namedKey;
     };
     for (const t of targets) {
       if (!t.firm || t.priceTarget == null) continue;
+      const targetFirm = firmOf(t.firm, t.title);
+      const isReattributed = canonicalFirm(t.firm) !== targetFirm;
       const stated = t.title ? headlineTarget(t.title) : null;
+      // A post re-attributed to another firm carries the TAGGED firm's number in
+      // priceTarget, so only a target its headline states can be the named
+      // firm's; without one the post gives that firm nothing (PEP 2026-09-29
+      // "JPMorgan Downgrades Pepsico", tagged Jefferies at 138).
+      if (isReattributed && stated == null) continue;
+      const rawValue = isReattributed ? (stated as number) : t.priceTarget;
       // The vendor's number is sometimes not the headline's: CVX / HSBC carries
       // priceTarget 90 on "price target raised to $250 from $218 at HSBC". A
       // gross disagreement means the field is wrong — the headline is the
       // firm's own words. Small gaps are left to the field (a later correction).
       const value =
-        stated != null && Math.abs(Math.log(stated / t.priceTarget)) > Math.log(1.2)
+        stated != null && Math.abs(Math.log(stated / rawValue)) > Math.log(1.2)
           ? stated
-          : t.priceTarget;
+          : rawValue;
       // Trust the headline's "from" only when its "to" is this row's target.
       const statedPrevious = stated === value && t.title ? headlinePreviousTarget(t.title) : null;
-      addTarget(firmOf(t.firm, t.title), t.date, value, statedPrevious, headlineTargetDirection(t.title));
+      addTarget(targetFirm, t.date, value, statedPrevious, headlineTargetDirection(t.title), !isReattributed);
     }
     // Headline-stated targets fill firms price-target-news omits, attributed to
     // the firm the headline names (FMP mis-tags some: BRZE Citizens as Citigroup).
     for (const h of gradeNews) {
       const key = firmOf(h.firm, h.title);
+      const isReattributed = canonicalFirm(h.firm) !== key;
       const value = headlineTarget(h.title);
       const direction = headlineTargetDirection(h.title);
       if (value != null && headlineNamesFirm(h.title, key))
-        addTarget(key, h.date, value, headlinePreviousTarget(h.title), direction);
+        addTarget(key, h.date, value, headlinePreviousTarget(h.title), direction, !isReattributed);
       else if (value == null && headlineNamesFirm(h.title, key)) addMove(key, h.date, direction);
     }
 
@@ -918,8 +952,8 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
       addInitiation(row.date, firm, initGrade(title));
     }
 
-    const lookup = (g: { gradingCompany: string | null; date: string }) =>
-      resolveFirmTarget(ptByFirm.get(canonicalFirm(g.gradingCompany)) ?? [], g.date);
+    const lookup = (g: { gradingCompany: string | null; date: string; action?: string | null }) =>
+      resolveFirmTarget(ptByFirm.get(canonicalFirm(g.gradingCompany)) ?? [], g.date, g.action);
     const directionFor = (g: { gradingCompany: string | null; date: string }) => {
       const gradeTime = Date.parse(g.date);
       if (!Number.isFinite(gradeTime)) return null;
