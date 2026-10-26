@@ -5,51 +5,43 @@ import { FmpService } from "../vendors/fmp/fmp.service";
 import { FmpAnalystRatingsAdapter } from "./analyst-ratings.adapter";
 
 /**
- * A-2 follow-up, on saved FMP responses (validation-output/fmp_trace). A post
- * whose headline names a DIFFERENT firm than its tag is re-attributed to the
- * named firm; when that headline states no target, the post's priceTarget
- * field is the tagged firm's number, not the named firm's, so the post must
- * not give the named firm a target:
- *  - PEP 2026-09-29 "JPMorgan Downgrades Pepsico (PEP) to Neutral", tagged
- *    Jefferies, priceTarget 138.
- * (KO 2026-08-14 "Piper Sandler Reiterates Overweight…", tagged Seaport Global
- * at 95, is the same shape, but a newer Piper post supersedes it, so it cannot
- * show the bug.)
+ * Re-attributed posts (headline names a different firm than FMP's tag), on
+ * saved FMP responses. Every such post with no stated target that the Oct 24
+ * E2E could verify (3 of 3: CAT Freedom Broker $980, SFM JPMorgan $103, EPM
+ * Freedom $5.30) carried the HEADLINE firm's target in priceTarget — the tag
+ * is what FMP got wrong. So the target is kept, attributed to the named firm.
+ * A target the headline states still wins over the field (GE Morgan Stanley:
+ * a Guggenheim-tagged copy carries 380, the headline says $375).
  */
-describe("A-2: a re-attributed post with no stated target is dropped", () => {
-  const fx = JSON.parse(
-    fs.readFileSync(path.join(__dirname, "fixtures/a2-reattributed.json"), "utf-8"),
-  );
+describe("analyst targets of re-attributed posts", () => {
+  const fx = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures/a2-kept-targets.json"), "utf-8"));
 
   function adapterFor(ticker: string) {
     const svc = new FmpService(new ConfigService({ FMP_API_KEY: "test" }));
     // Real FmpService mapping; only the HTTP layer is replaced by the saved responses.
-    (svc as unknown as { get: (p: string) => Promise<unknown[]> }).get = async (p: string) => {
-      const endpoint = p.split("?")[0];
-      return (fx[ticker][endpoint] as unknown[]) ?? [];
-    };
-    // The rating-count row was not saved and plays no part in target attribution;
-    // any non-zero count lets getConsensus build the grade rows under test.
+    (svc as unknown as { get: (p: string) => Promise<unknown[]> }).get = async (p: string) =>
+      (fx[ticker][p.split("?")[0]] as unknown[]) ?? [];
+    // The rating-count row plays no part in target attribution.
     svc.getAnalystConsensus = async () => ({ strongBuy: 1, buy: 0, hold: 0, sell: 0, strongSell: 0 }) as never;
     return new FmpAnalystRatingsAdapter(svc);
   }
+  const rowFor = async (ticker: string, firm: RegExp, date: string) => {
+    const out = await adapterFor(ticker).getConsensus(ticker);
+    return (out?.recentGrades ?? []).find((g) => firm.test(String(g.firm)) && String(g.date).startsWith(date));
+  };
 
-  it("PEP 2026-09-29: JPMorgan's downgrade does not carry the Jefferies-tagged 138", async () => {
-    const out = await adapterFor("PEP").getConsensus("PEP");
-    const jpm = (out?.recentGrades ?? []).find(
-      (g) => /j\.?\s?p\.?\s?morgan/i.test(String(g.firm)) && g.date === "2026-09-29",
-    );
-    expect(jpm).toBeDefined();
-    expect(jpm!.priceTargetDate === "2026-09-29" && jpm!.priceTarget === 138).toBe(false);
+  it.each([
+    ["CAT", /freedom/i, "2026-09-10", 980],
+    ["SFM", /j\.?\s?p\.?\s?morgan/i, "2026-07-30", 103],
+    ["EPM", /freedom/i, "2025-12-23", 5.3],
+  ])("%s keeps the named firm's target from a mis-tagged post", async (ticker, firm, date, pt) => {
+    const row = await rowFor(ticker as string, firm as RegExp, date as string);
+    expect(row).toBeDefined();
+    expect(row!.priceTarget).toBe(pt);
   });
 
-  it("PEP: JPMorgan's latest target is not the 2026-09-29 Jefferies-tagged 138", async () => {
-    const index = await (
-      adapterFor("PEP") as unknown as {
-        targetIndex(t: string): Promise<{ latestByFirm: Map<string, { date: string; priceTarget: number }> }>;
-      }
-    ).targetIndex("PEP");
-    const latest = index.latestByFirm.get("jpmorgan");
-    expect(latest?.date === "2026-09-29" && latest?.priceTarget === 138).toBe(false);
+  it("GE Morgan Stanley stays $375 (the headline's stated target beats the 380 field)", async () => {
+    const row = await rowFor("GE", /morgan stanley/i, "2026-10-21");
+    expect(row?.priceTarget).toBe(375);
   });
 });
