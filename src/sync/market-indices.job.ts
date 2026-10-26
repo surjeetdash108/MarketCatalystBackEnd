@@ -28,7 +28,7 @@ const INDEX_PROXIES = [
   },
   {
     symbol: "NDX",
-    label: "Nasdaq",
+    label: "Nasdaq-100",
     proxyTicker: "QQQ",
     isProxy: true,
     note: "ETF proxy for the Nasdaq-100 index",

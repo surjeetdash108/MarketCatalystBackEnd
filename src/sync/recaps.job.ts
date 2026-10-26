@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { Injectable, Logger, OnModuleInit, Optional } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { setWithCreatedAt } from "../common/firestore-batch.util";
 import { SyncMetaService } from "../common/sync-meta.service";
@@ -6,6 +6,8 @@ import { SyncRegistry } from "../common/sync-registry.service";
 import { isoDate } from "../common/date.util";
 import { splitMovers } from "../common/movers-split.util";
 import { etDate } from "../common/market-calendar.util";
+import { formatRecapIndices, nasdaqCompositeQuote } from "../common/recap-indices.util";
+import { FmpService } from "../vendors/fmp/fmp.service";
 
 /**
  * End-of-Day recap → `recaps/{date}` (delivery-plan R28).
@@ -42,6 +44,7 @@ export class RecapsJob implements OnModuleInit {
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
+    @Optional() private readonly fmp?: FmpService,
   ) {}
 
   onModuleInit() {
@@ -84,7 +87,7 @@ export class RecapsJob implements OnModuleInit {
       ]);
 
       // Indices (SPX/NDX/DJI/RUT/VIX/US10Y/…) — label, value, % move.
-      const indices = indicesSnap.docs.map((d) => {
+      const rawIndices = indicesSnap.docs.map((d) => {
         const x = d.data();
         return {
           id: d.id,
@@ -97,6 +100,7 @@ export class RecapsJob implements OnModuleInit {
           unit: x.unit ?? null,
         };
       });
+      const indices = formatRecapIndices(rawIndices, await nasdaqCompositeQuote(this.fmp));
 
       // Movers → top gainers / losers by % change.
       const movers = moversSnap.docs

@@ -1,0 +1,55 @@
+{
+ "source": "FMP historical-price-eod ^IXIC and QQQ, saved to validation-output/trace_HIJKL",
+ "IXIC": [
+  {
+   "symbol": "^IXIC",
+   "date": "2026-10-23",
+   "open": 25893.95,
+   "high": 26111.62,
+   "low": 25866.15,
+   "close": 25955.34,
+   "volume": 5740324307,
+   "change": 61.39,
+   "changePercent": 0.23708,
+   "vwap": 25956.765
+  },
+  {
+   "symbol": "^IXIC",
+   "date": "2026-10-22",
+   "open": 26308.41,
+   "high": 26359.41,
+   "low": 25918.09,
+   "close": 26008.86,
+   "volume": 9012120000,
+   "change": -299.55,
+   "changePercent": -1.14,
+   "vwap": 26148.6925
+  }
+ ],
+ "QQQ": [
+  {
+   "symbol": "QQQ",
+   "date": "2026-10-23",
+   "open": 702.2,
+   "high": 709.3,
+   "low": 701.16,
+   "close": 704.4,
+   "volume": 30224671,
+   "change": 2.2,
+   "changePercent": 0.3133,
+   "vwap": 704.265
+  },
+  {
+   "symbol": "QQQ",
+   "date": "2026-10-22",
+   "open": 713.61,
+   "high": 715.43,
+   "low": 701.9,
+   "close": 704.47,
+   "volume": 64553400,
+   "change": -9.14,
+   "changePercent": -1.28,
+   "vwap": 708.8525
+  }
+ ]
+}

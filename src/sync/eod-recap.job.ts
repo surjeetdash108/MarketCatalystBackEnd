@@ -11,6 +11,7 @@ import { TAPE_INDICES } from "../live/tape-universe";
 import { AnthropicService } from "../vendors/anthropic/anthropic.service";
 import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { etDate, etWeekday } from "../common/market-calendar.util";
+import { formatRecapIndices, nasdaqCompositeQuote } from "../common/recap-indices.util";
 
 /**
  * Automated End-Of-Day (EOD) Market Recap Job.
@@ -401,7 +402,7 @@ export class EodRecapJob implements OnModuleInit {
       date: today,
       popular16Etfs: popularEtfs,
       otherEtfs,
-      indices,
+      indices: formatRecapIndices(indices, await nasdaqCompositeQuote(this.fmp)),
       yield10Y,
       gainers,
       losers,
