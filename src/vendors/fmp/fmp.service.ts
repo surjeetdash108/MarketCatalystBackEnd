@@ -557,26 +557,62 @@ export class FmpService {
 
   /**
    * Bulk earnings calendar for a date window (`/stable/earnings-calendar`) —
-   * ONE request covering every company, carrying the analyst EPS/revenue
-   * estimates Polygon lacks. `date` is the report date.
+   * splits ranges into <=7-day weekly windows to stay under FMP's 4,000-row cap,
+   * logs a warning whenever any response hits the cap, and merges/de-duplicates rows.
    */
   async getEarningsCalendar(
     from: string,
     to: string,
   ): Promise<FmpEarningRow[]> {
     if (!this.apiKey) return [];
-    const rows = await this.get(`earnings-calendar?from=${from}&to=${to}`);
-    return rows.map((r) => {
-      const o = r as Record<string, unknown>;
-      return {
-        date: String(o.date ?? ""),
-        symbol: String(o.symbol ?? ""),
-        epsEstimated: num(o.epsEstimated),
-        revenueEstimated: num(o.revenueEstimated),
-        epsActual: num(o.epsActual),
-        revenueActual: num(o.revenueActual),
-      };
-    });
+    const DAY_MS = 86_400_000;
+    const tStart = Date.parse(from);
+    const tEnd = Date.parse(to);
+    const slices: Array<[string, string]> = [];
+    if (!Number.isFinite(tStart) || !Number.isFinite(tEnd) || tStart > tEnd) {
+      if (from && to) slices.push([from, to]);
+    } else {
+      let cur = tStart;
+      while (cur <= tEnd) {
+        const next = Math.min(cur + 6 * DAY_MS, tEnd);
+        slices.push([
+          new Date(cur).toISOString().slice(0, 10),
+          new Date(next).toISOString().slice(0, 10),
+        ]);
+        cur = next + DAY_MS;
+      }
+    }
+
+    const seen = new Set<string>();
+    const out: FmpEarningRow[] = [];
+
+    for (const [f, t] of slices) {
+      const rows = ((await this.get(`earnings-calendar?from=${f}&to=${t}`)) ||
+        []) as Array<Record<string, unknown>>;
+      if (rows.length >= 4000) {
+        this.logger.warn(
+          `FMP earnings-calendar for ${f}..${t} returned exactly ${rows.length} rows (at vendor cap of 4,000); some rows may be missing.`,
+        );
+      }
+      for (const o of rows) {
+        const symbol = String(o.symbol ?? "").toUpperCase().trim();
+        const date = String(o.date ?? "").trim();
+        if (!symbol || !date) continue;
+        const key = `${symbol}_${date}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        out.push({
+          date,
+          symbol,
+          epsEstimated: num(o.epsEstimated),
+          revenueEstimated: num(o.revenueEstimated),
+          epsActual: num(o.epsActual),
+          revenueActual: num(o.revenueActual),
+        });
+      }
+    }
+    return out;
   }
 
   /**
