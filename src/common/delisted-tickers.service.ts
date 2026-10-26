@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "./firebase-admin.provider";
 
 /** Delistings change at most weekly; a short TTL only bounds the lag after one. */
@@ -18,13 +18,17 @@ const TTL_MS = 10 * 60_000;
  * Firestore error never briefly un-hides everything.
  */
 @Injectable()
-export class DelistedTickersService {
+export class DelistedTickersService implements OnModuleInit {
   private readonly logger = new Logger(DelistedTickersService.name);
   private set = new Set<string>();
   private loadedAt = 0;
   private loading: Promise<Set<string>> | null = null;
 
   constructor(private readonly firebase: FirebaseAdminService) {}
+
+  async onModuleInit(): Promise<void> {
+    void this.get().catch(() => {});
+  }
 
   async get(): Promise<Set<string>> {
     if (Date.now() - this.loadedAt < TTL_MS) return this.set;
