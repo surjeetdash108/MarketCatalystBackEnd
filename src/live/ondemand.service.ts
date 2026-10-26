@@ -14,6 +14,8 @@ import {
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { DelistedTickersService } from "../common/delisted-tickers.service";
+import { quoteRow, type QuoteRow } from "./official-quote.util";
+import type { SnapshotQuote } from "./snapshot-cache.service";
 import { classifyFromSic, keepStoredClassification, resolveSicCode, withVendorIndustryFallback } from "../common/sic-tv.util";
 import { SnapshotCacheService } from "./snapshot-cache.service";
 import { MonthlyBetaService } from "./monthly-beta.service";
@@ -1664,14 +1666,7 @@ export class OnDemandService implements OnModuleDestroy {
    * synced companies universe, so the peers list can show every ticker Polygon
    * returned, on demand — no per-ticker company fetch needed.
    */
-  async getQuotes(tickers: string[]): Promise<
-    Array<{
-      ticker: string;
-      name: string | null;
-      price: number | null;
-      pctChange: number | null;
-    }>
-  > {
+  async getQuotes(tickers: string[]): Promise<QuoteRow[]> {
     const syms = [
       ...new Set(tickers.map((t) => t.toUpperCase().trim()).filter(Boolean)),
     ].slice(0, 250);
@@ -1690,13 +1685,9 @@ export class OnDemandService implements OnModuleDestroy {
     // takes the display name from its own companies doc).
     const { quotes } = await this.snapshots
       .get(syms)
-      .catch(() => ({ quotes: [] as Array<{ ticker: string; price: number | null; changePct: number | null }> }));
-    return quotes.map((q) => ({
-      ticker: q.ticker,
-      name: null,
-      price: q.price ?? null,
-      pctChange: q.changePct ?? null,
-    }));
+      .catch(() => ({ quotes: [] as SnapshotQuote[] }));
+    // Official close outside regular hours; the extended trade rides separately.
+    return quotes.map(quoteRow);
   }
 
   /**
