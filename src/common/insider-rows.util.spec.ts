@@ -116,4 +116,20 @@ describe("isDerivativeSecurity / Form 4 Table I only (E2E Oct 2026, category H)"
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ shares: 134408, pricePerShare: null, transactionCode: "A" });
   });
+
+  it("excludes Stock Equivalents and deferred units / fractional shares at $0 (POST)", () => {
+    expect(isDerivativeSecurity("Post Holdings, Inc. Stock Equivalents")).toBe(true);
+    expect(isDerivativeSecurity("Stock Equivalents")).toBe(true);
+    expect(isDerivativeSecurity("Common Stock Equivalents")).toBe(true);
+    expect(isDerivativeSecurity("Deferred Units", 152.517, 0)).toBe(true);
+    expect(isDerivativeSecurity("Common Stock", 152.517, 0)).toBe(true); // fractional shares at $0 treated as derivative
+
+    const base = { transactionDate: "2026-09-30", filingDate: "2026-10-02", transactionType: "A-Award", acquisitionOrDisposition: "A", reportingName: "Zadoks Jeff A" };
+    const rows = fmpInsiderRows("POST", [
+      { ...base, securitiesTransacted: 152.517, price: 0, securityName: "Post Holdings, Inc. Stock Equivalents" },
+      { ...base, transactionDate: "2026-09-01", transactionType: "P-Purchase", acquisitionOrDisposition: "A", reportingName: "STIRITZ WILLIAM P", securitiesTransacted: 99990, price: 83.54, securityName: "Common Stock" },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ ticker: "POST", shares: 99990, pricePerShare: 83.54 });
+  });
 });

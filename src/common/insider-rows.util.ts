@@ -76,11 +76,16 @@ function roleFromFmpOwnerType(typeOfOwner: string): string | null {
  * EPM), and a SAR grant in place of the code-M exercises (MTN). The SEC Form 4
  * parser already reads only Table I; this keeps the FMP path identical.
  */
-export function isDerivativeSecurity(securityName: unknown): boolean {
+export function isDerivativeSecurity(
+  securityName: unknown,
+  shares?: number,
+  price?: number | null,
+): boolean {
   const name = String(securityName ?? "").toLowerCase();
-  if (!name) return false;
+  if (name.includes("equivalent")) return true;
   // Unmistakably derivative whatever else the name says.
   if (/option|warrant|right to (buy|purchase)|appreciation|phantom|convertible|deferred/.test(name)) return true;
+  if (shares != null && !Number.isInteger(shares) && (price == null || price === 0)) return true;
   // "Common Stock", "Class A Common Stock", an MLP's "Common Units": Table I.
   if (/common|ordinary/.test(name)) return false;
   return /\bunits?\b|\brsus?\b|\bpsus?\b|\bsars?\b|\bright\b|performance/.test(name);
@@ -99,7 +104,8 @@ export function fmpInsiderRows(ticker: string, rows: Record<string, unknown>[]):
     const shares = Number(r.securitiesTransacted);
     const date = String(r.transactionDate ?? "").slice(0, 10);
     if (!(shares > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
-    if (isDerivativeSecurity(r.securityName)) return;
+    const secName = r.securityName ?? r.securitiesTransactedName;
+    if (isDerivativeSecurity(secName, shares, Number(r.price))) return;
     const typeOfOwner = String(r.typeOfOwner ?? "");
     // "G-Gift" → "G": the SEC transaction code the UI labels.
     let code = (String(r.transactionCode ?? "").trim() || String(r.transactionType ?? "").split("-")[0].trim()).toUpperCase();
@@ -163,7 +169,14 @@ export function form4InsiderRows(
   },
 ): InsiderRow[] {
   const { issuer, owner, transactions } = parsed;
-  const rows: InsiderRow[] = transactions.map((t, i) => ({
+  const rows: InsiderRow[] = transactions
+    .filter((t) => {
+      const secTitle = t.securityTitle?.value ?? t.securityTitle;
+      const shares = Number(t.transactionAmounts?.transactionShares?.value) || 0;
+      const price = Number(t.transactionAmounts?.transactionPricePerShare?.value);
+      return !isDerivativeSecurity(secTitle, shares, price);
+    })
+    .map((t, i) => ({
     id: `${accessionNumber}_${i}`,
     ticker: issuer?.ticker ?? ticker,
     issuerName: issuer?.name ?? null,
