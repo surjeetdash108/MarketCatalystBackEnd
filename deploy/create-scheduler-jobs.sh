@@ -111,7 +111,7 @@ upsert_lab_job "sync-sectors-intraday" "*/10 9-16 * * 1-5" "${SERVICE_URL}/sync/
 
 upsert_lab_job "sync-volume-leaders" "30 20 * * 1-5" "${SERVICE_URL}/sync/volume-leaders/run" "900s"
 upsert_lab_job "sync-sec-form4" "30 1 * * *" "${SERVICE_URL}/sync/sec-form4/run" "900s"
-upsert_lab_job "sync-staleness-check" "0 9,13,17,21 * * *" "${SERVICE_URL}/sync/staleness-check/run" "300s"
+upsert_lab_job "sync-staleness-check" "0 * * * *" "${SERVICE_URL}/sync/staleness-check/run" "300s"
 
 # ── Retire the old per-job schedules ─────────────────────────────────────────
 OLD_JOBS=(

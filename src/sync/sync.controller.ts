@@ -142,6 +142,7 @@ export class SyncController {
             ? nextRunAt(job.cronExpression, job.timeZone)
             : null,
         isStale: this.meta.isJobStale(
+          job.name,
           m?.lastSuccessAt,
           job.cronExpression,
           job.timeZone,
