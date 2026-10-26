@@ -290,6 +290,7 @@ export class StockHistoryJob implements OnModuleInit {
         today,
         missingDates,
         tickerUniverse,
+        new Set(perTicker),
       );
 
       // Rotate the per-ticker queue with the cursor so a ticker whose fetch
@@ -426,6 +427,13 @@ export class StockHistoryJob implements OnModuleInit {
    * Every routed ticker's watermark moves to that session, including one with
    * no bar in it (halted, no trades): grouped-daily omits exactly the
    * sessions a per-ticker request would have returned nothing for.
+   *
+   * `queued` tickers wait in the per-ticker queue (deep fill, no watermark, or
+   * a gap older than the window), which takes PER_TICKER_CAP a run. They still
+   * get every recent session the grouped responses carry, so their newest
+   * bars do not wait for the queue to come round (TTMI/VICR/DOCN ended at
+   * Oct 22 on Oct 26, and their 5-day move with it). Their watermarks do NOT
+   * move: the per-ticker path still owns their gap and deep fill.
    */
   private async syncGrouped(
     watermarks: Map<string, string>,
@@ -433,6 +441,7 @@ export class StockHistoryJob implements OnModuleInit {
     today: string,
     missingDates?: Set<string>,
     universe?: Set<string>,
+    queued?: Set<string>,
   ): Promise<{
     barsWritten: number;
     rejected: number;
@@ -447,12 +456,17 @@ export class StockHistoryJob implements OnModuleInit {
       sessionsFetched: 0,
       coveredThrough: null,
     };
-    if (watermarks.size === 0 && (!missingDates || missingDates.size === 0)) return empty;
+    const hasQueued = queued != null && queued.size > 0;
+    if (watermarks.size === 0 && !hasQueued && (!missingDates || missingDates.size === 0)) return empty;
     const oldest = watermarks.size > 0
       ? [...watermarks.values()].reduce((a, b) => (a < b ? a : b))
       : null;
+    // Queued tickers have no watermark inside the window, so they need it all.
     const needed = dates.filter(
-      (d) => (oldest != null && d > oldest) || (missingDates != null && missingDates.has(d)),
+      (d) =>
+        hasQueued ||
+        (oldest != null && d > oldest) ||
+        (missingDates != null && missingDates.has(d)),
     );
     if (needed.length === 0) return empty;
 
@@ -480,9 +494,10 @@ export class StockHistoryJob implements OnModuleInit {
       for (const b of bars) {
         const ticker = b.T;
         const inUniverse = universe ? universe.has(ticker) : watermarks.has(ticker);
-        if (!inUniverse) continue;
+        const isQueued = queued?.has(ticker) ?? false;
+        if (!inUniverse && !isQueued) continue;
         const wm = watermarks.get(ticker);
-        if (!isBackfill && (wm == null || wm >= date)) continue;
+        if (!isBackfill && !isQueued && (wm == null || wm >= date)) continue;
         const bar = { open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v };
         // Same guard as the per-ticker path: a bar that cannot be true is
         // dropped rather than inherited by every indicator built over it.

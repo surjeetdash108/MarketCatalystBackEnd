@@ -5,6 +5,8 @@ import {
   weekdaysBefore,
 } from "./stock-history.job";
 import { batchSetWithCreatedAt } from "../common/firestore-batch.util";
+import * as fs from "fs";
+import * as path from "path";
 
 jest.mock("../common/firestore-batch.util", () => ({
   batchSetWithCreatedAt: jest.fn().mockResolvedValue(undefined),
@@ -74,6 +76,9 @@ type SyncGrouped = (
   watermarks: Map<string, string>,
   dates: string[],
   today: string,
+  missingDates?: Set<string>,
+  universe?: Set<string>,
+  queued?: Set<string>,
 ) => Promise<{ coveredThrough: string | null; rejected: number }>;
 
 describe("StockHistoryJob.syncGrouped", () => {
@@ -253,6 +258,65 @@ describe("StockHistoryJob.syncGrouped", () => {
     expect(bars).toContain("ohlcv_bars/AAPL_2026-10-09");
     expect(bars).toContain("ohlcv_bars/MSFT_2026-10-09");
     expect(bars).toContain("ohlcv_bars/MSFT_2026-10-12");
+  });
+});
+
+describe("StockHistoryJob.syncGrouped — tickers waiting in the per-ticker queue", () => {
+  /**
+   * Real Polygon grouped-daily rows (Oct 22/23) and FMP daily closes (Oct 14–22)
+   * from validation-output/trace_HIJKL. On Oct 26 TTMI/VICR/DOCN's stored bars
+   * ended Oct 22 (all source "polygon", the per-ticker path) although the
+   * grouped response for Oct 23 carried them, so the 5-day move ran Oct 15 →
+   * Oct 22 (−27.1 / −18.16 / −15.96). Public, Oct 16 → Oct 23: −14.67 / −8.07 / −5.54.
+   */
+  const fx = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "fixtures/weekly-movers-oct23.json"), "utf-8"),
+  );
+
+  function makeJob() {
+    const firestore = {
+      collection: (name: string) => ({ doc: (id: string) => ({ id: `${name}/${id}` }) }),
+    };
+    const polygon = {
+      getGroupedDaily: jest.fn((date: string) => Promise.resolve(fx.grouped[date] ?? [])),
+    };
+    const job = new StockHistoryJob({} as never, { firestore } as never, {} as never, {} as never, polygon as never);
+    return job as unknown as { syncGrouped: SyncGrouped };
+  }
+  const written = (collection: string) =>
+    writes.mock.calls
+      .flatMap(([, w]) => w as Array<{ ref: { id: string }; data: Record<string, number> }>)
+      .filter((w) => w.ref.id.startsWith(`${collection}/`));
+
+  beforeEach(() => writes.mockClear());
+
+  it.each([
+    ["TTMI", -14.67],
+    ["VICR", -8.07],
+    ["DOCN", -5.54],
+  ])("%s gets its Oct 23 bar and a 5-day move of %s", async (ticker, publicPct) => {
+    const job = makeJob();
+    const queued = new Set(["TTMI", "VICR", "DOCN"]);
+    await job.syncGrouped(
+      new Map([["SPY", "2026-10-22"]]),
+      ["2026-10-22", "2026-10-23"],
+      "2026-10-26",
+      new Set(),
+      new Set(["SPY", "TTMI", "VICR", "DOCN"]),
+      queued,
+    );
+    const bar = written("ohlcv_bars").find((w) => w.ref.id === `ohlcv_bars/${ticker}_2026-10-23`);
+    expect(bar).toBeDefined();
+    const closes = [
+      ...fx.priorBars[ticker].map((b: { close: number }) => b.close),
+      bar!.data.close,
+    ];
+    const pct = (closes[closes.length - 1] / closes[closes.length - 6] - 1) * 100;
+    expect(Math.round(pct * 100) / 100).toBe(publicPct);
+    // The per-ticker path still owns these tickers' gap and deep fill.
+    expect(written("sync_watermarks").map((w) => w.ref.id)).not.toContain(
+      `sync_watermarks/stock-history__${ticker}`,
+    );
   });
 });
 
