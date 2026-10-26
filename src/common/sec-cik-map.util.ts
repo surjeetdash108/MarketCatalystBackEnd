@@ -25,6 +25,21 @@ const SOURCE_URL = "https://www.sec.gov/files/company_tickers.json";
 
 const logger = new Logger("SecCikMap");
 
+export const SEC_USER_AGENT_MISSING =
+  "SEC_USER_AGENT is not set — SEC requests skipped";
+
+/**
+ * The User-Agent for every sec.gov request: SEC_USER_AGENT, which SEC's fair
+ * access policy requires to name the operator and a contact address. Null when
+ * unset — callers then log an error and skip the request. There is
+ * deliberately no generic default: SEC bot-blocks unidentified agents, and
+ * a made-up contact would be worse.
+ */
+export function getSecUserAgent(): string | null {
+  const ua = (process.env.SEC_USER_AGENT ?? "").trim();
+  return ua || null;
+}
+
 interface CachedMap {
   updatedAt: string;
   count: number;
@@ -61,7 +76,7 @@ async function fetchFromSec(userAgent: string): Promise<Map<string, string>> {
  */
 export async function getTickerToCik(
   db: Firestore,
-  userAgent: string,
+  userAgent: string | null = getSecUserAgent(),
 ): Promise<Map<string, string>> {
   const ref = db.doc(DOC_PATH);
   const snap = await ref.get().catch(() => null);
@@ -72,6 +87,13 @@ export async function getTickerToCik(
 
   if (cached?.map && age < REFRESH_AFTER_MS) {
     return new Map(Object.entries(cached.map));
+  }
+
+  // No configured contact: never call sec.gov (see getSecUserAgent).
+  if (!userAgent) {
+    logger.error(`${SEC_USER_AGENT_MISSING} — CIK map not refreshed`);
+    if (cached?.map) return new Map(Object.entries(cached.map));
+    throw new Error(SEC_USER_AGENT_MISSING);
   }
 
   try {

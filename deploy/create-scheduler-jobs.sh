@@ -109,9 +109,13 @@ upsert_lab_job "sync-strategy-lab-intraday" "*/5 9-16 * * 1-5" "${SERVICE_URL}/s
 upsert_lab_job "sync-fear-greed-intraday" "*/15 9-16 * * 1-5" "${SERVICE_URL}/sync/fear-greed/run" "300s"
 upsert_lab_job "sync-sectors-intraday" "*/10 9-16 * * 1-5" "${SERVICE_URL}/sync/sectors/run" "300s"
 
+upsert_lab_job "sync-volume-leaders" "30 20 * * 1-5" "${SERVICE_URL}/sync/volume-leaders/run" "900s"
+upsert_lab_job "sync-sec-form4" "30 1 * * *" "${SERVICE_URL}/sync/sec-form4/run" "900s"
+upsert_lab_job "sync-staleness-check" "0 9,13,17,21 * * *" "${SERVICE_URL}/sync/staleness-check/run" "300s"
+
 # ── Retire the old per-job schedules ─────────────────────────────────────────
 OLD_JOBS=(
-  sec-13f sec-form4 companies stock-history ticker-universe rs-rating
+  sec-13f companies stock-history ticker-universe rs-rating
   technical-indicators tech-rating fundamentals-growth analyst-actions
   earnings ipos dividends news market-indices market-quotes sectors
   market-movers macro-events fear-greed recaps options-chains

@@ -6,7 +6,7 @@ import {
   form4InsiderRows,
   type InsiderRow,
 } from "../common/insider-rows.util";
-import { getTickerToCik } from "../common/sec-cik-map.util";
+import * as cikMap from "../common/sec-cik-map.util";
 import { canonicalFirm, headlinePreviousTarget, headlineTarget, type AnalystRatingsAdapter } from "../adapters/analyst-ratings.adapter";
 import { ANALYST_RATINGS_ADAPTER } from "../adapters/types";
 import { FmpService, filedThirteenFQuarters } from "../vendors/fmp/fmp.service";
@@ -262,9 +262,12 @@ export class StockDetailsService {
   }
 
   private async secInsiderHistory(ticker: string): Promise<InsiderRow[]> {
-    const cik = (
-      await getTickerToCik(this.firebase.firestore, "Market Catalyst Backend hello@inc108.com")
-    ).get(ticker);
+    const ua = cikMap.getSecUserAgent();
+    if (!ua) {
+      this.logger.error(`insider ${ticker}: ${cikMap.SEC_USER_AGENT_MISSING}`);
+      return [];
+    }
+    const cik = (await cikMap.getTickerToCik(this.firebase.firestore, ua)).get(ticker);
     if (!cik) return [];
     const { recentFilings } = await this.secEdgar.getSubmissions(cik);
     const rows: InsiderRow[] = [];

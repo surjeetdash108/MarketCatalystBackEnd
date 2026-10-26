@@ -1,4 +1,5 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { CronTime } from "cron";
 import { FirebaseAdminService } from "./firebase-admin.provider";
 import { setWithCreatedAt } from "./firestore-batch.util";
 import { SyncRegistry } from "./sync-registry.service";
@@ -21,14 +22,79 @@ export interface SyncResult {
   docsRead?: number;
 }
 
+const STALENESS_JOB = "staleness-check";
+
+/** Allowance for a scheduled run to start and finish before it counts as missed. */
+const STALE_GRACE_MS = 30 * 60 * 1000;
+
+/**
+ * Stale = two scheduled runs have come and gone (plus a grace for the run
+ * itself) since the last success, read off the job's own cron in its own zone.
+ *
+ * "Older than 2× the shortest gap between runs" flagged every weekday job each
+ * Monday morning (Friday's 08:00 success is 71h old against a 48h limit) and
+ * every `*\/5 6-7,16-17` job each night, so a real failure looked like noise.
+ */
+export function isJobStale(
+  lastSuccessAt: string | null | undefined,
+  cronExpression: string,
+  timeZone = "America/New_York",
+  now: Date = new Date(),
+): boolean {
+  if (!lastSuccessAt) return true;
+  const lastSuccessMs = new Date(lastSuccessAt).getTime();
+  if (isNaN(lastSuccessMs)) return true;
+  const missedSince = secondRunAfter(lastSuccessMs, cronExpression, timeZone);
+  if (missedSince == null) return now.getTime() - lastSuccessMs > 2 * 24 * 60 * 60 * 1000;
+  return now.getTime() > missedSince + STALE_GRACE_MS;
+}
+
+/** Epoch ms of the second scheduled run after `fromMs`, or null for an unparseable cron. */
+export function secondRunAfter(fromMs: number, cronExpression: string, timeZone: string): number | null {
+  try {
+    const t = new CronTime(cronExpression, timeZone);
+    const first = t.getNextDateFrom(new Date(fromMs), timeZone);
+    return t.getNextDateFrom(first.toJSDate(), timeZone).toMillis();
+  } catch {
+    return null;
+  }
+}
+
 @Injectable()
-export class SyncMetaService {
+export class SyncMetaService implements OnModuleInit {
   private readonly logger = new Logger(SyncMetaService.name);
 
   constructor(
     private readonly firebase: FirebaseAdminService,
     private readonly registry: SyncRegistry,
   ) {}
+
+  /**
+   * A job that stops running never calls record(), so it can never flag
+   * itself. This sweep reads every registered job's sync_meta and logs an
+   * error for each stale one (Cloud Logging alerts on severity ERROR).
+   */
+  onModuleInit() {
+    this.registry.register(
+      STALENESS_JOB,
+      async () => {
+        const rows = await this.checkStaleness();
+        const stale = rows.filter((r) => r.isStale).length;
+        await this.record(STALENESS_JOB, { ok: true, count: stale });
+        return { checked: rows.length, stale };
+      },
+      { collections: ["sync_meta"], cronExpression: "0 9,13,17,21 * * *", timeZone: "America/New_York" },
+    );
+  }
+
+  isJobStale(
+    lastSuccessAt: string | null | undefined,
+    cronExpression: string,
+    timeZone = "America/New_York",
+    now: Date = new Date(),
+  ): boolean {
+    return isJobStale(lastSuccessAt, cronExpression, timeZone, now);
+  }
 
   // Run counters are bucketed by the job's OWN timezone, not the server's, so
   // "today" matches the cron schedule the job actually runs on. An unknown or
@@ -76,10 +142,23 @@ export class SyncMetaService {
       await this.firebase.firestore.runTransaction(async (tx) => {
         const prev = (await tx.get(ref)).data() ?? {};
         const sameDay = prev.runCountDate === today;
+        const effectiveLastSuccess = result.ok ? now : (prev.lastSuccessAt ?? null);
+        const stale = isJobStale(
+          effectiveLastSuccess,
+          jobMeta?.cronExpression ?? "0 8 * * 1-5",
+          jobMeta?.timeZone ?? "America/New_York",
+          new Date(now),
+        );
+        if (stale) {
+          this.logger.error(
+            `[Staleness] Alert: Job ${jobName} is stale — two scheduled runs have passed since its last success (${effectiveLastSuccess ?? "never"})`,
+          );
+        }
         tx.set(
           ref,
           {
             ...doc,
+            isStale: stale,
             runCount: (prev.runCount ?? 0) + 1,
             successCount: (prev.successCount ?? 0) + (result.ok ? 1 : 0),
             errorCount: (prev.errorCount ?? 0) + (result.ok ? 0 : 1),
@@ -118,6 +197,45 @@ export class SyncMetaService {
   async statusAll(): Promise<Array<{ job: string } & Record<string, unknown>>> {
     const snap = await this.firebase.firestore.collection("sync_meta").get();
     return snap.docs.map((d) => ({ job: d.id, ...d.data() }));
+  }
+
+  async checkStaleness(now: Date = new Date()): Promise<
+    Array<{
+      job: string;
+      isStale: boolean;
+      schedule: string;
+      lastSuccessAt: string | null;
+      lastStatus: string | null;
+    }>
+  > {
+    const list = this.registry.list();
+    const results = [];
+    for (const job of list) {
+      const snap = await this.firebase.firestore
+        .collection("sync_meta")
+        .doc(job.name)
+        .get();
+      const data = snap.data();
+      const lastSuccessAt = data?.lastSuccessAt ?? null;
+      const stale = isJobStale(lastSuccessAt, job.cronExpression, job.timeZone, now);
+      if (stale) {
+        this.logger.error(
+          `[Staleness] Alert: Job ${job.name} is stale — two scheduled runs have passed since its last success (${lastSuccessAt ?? "never"})`,
+        );
+      }
+      await this.firebase.firestore
+        .collection("sync_meta")
+        .doc(job.name)
+        .set({ isStale: stale }, { merge: true });
+      results.push({
+        job: job.name,
+        isStale: stale,
+        schedule: job.cronExpression,
+        lastSuccessAt,
+        lastStatus: data?.lastStatus ?? null,
+      });
+    }
+    return results;
   }
 
   async getCursor(jobName: string): Promise<number> {

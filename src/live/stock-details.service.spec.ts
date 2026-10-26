@@ -86,6 +86,7 @@ describe("StockDetailsService", () => {
     });
 
     it("falls back to SEC Form 4 when FMP errors", async () => {
+      process.env.SEC_USER_AGENT = "Example Operator ops@example.com";
       jest.spyOn(cikMap, "getTickerToCik").mockResolvedValue(new Map([["STRL", "874238"]]));
       const { svc, fs } = make({
         fmp: { getInsiderTrades: jest.fn().mockRejectedValue(new Error("503")) },
@@ -110,6 +111,19 @@ describe("StockDetailsService", () => {
       const rows = await svc.getInsiderTransactions("STRL");
       expect(rows).toEqual([expect.objectContaining({ id: "acc1_0", ownerName: "Hargis", shares: 1000, vendor: "sec" })]);
       expect(fs.store.get("insider_by_ticker/STRL")).toMatchObject({ source: "sec" });
+    });
+
+    it("SEC_USER_AGENT unset: no SEC fallback is attempted", async () => {
+      delete process.env.SEC_USER_AGENT;
+      const cik = jest.spyOn(cikMap, "getTickerToCik");
+      const getSubmissions = jest.fn();
+      const { svc } = make({
+        fmp: { getInsiderTrades: jest.fn().mockRejectedValue(new Error("503")) },
+        sec: { getSubmissions, getForm4Transactions: jest.fn() },
+      });
+      await svc.getInsiderTransactions("STRL").catch(() => []);
+      expect(cik).not.toHaveBeenCalled();
+      expect(getSubmissions).not.toHaveBeenCalled();
     });
 
     it("serves a fresh stored doc without calling any vendor", async () => {

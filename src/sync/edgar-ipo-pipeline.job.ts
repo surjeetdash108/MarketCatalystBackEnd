@@ -17,8 +17,9 @@ import { isoDate } from "../common/date.util";
  * amendments), so this is the raw registration pipeline, not a curated IPO list.
  */
 
+import { getSecUserAgent, SEC_USER_AGENT_MISSING } from "../common/sec-cik-map.util";
+
 const JOB_NAME = "edgar-ipo-pipeline";
-const USER_AGENT = "Market Catalyst Backend hello@inc108.com";
 const RECENT_DAYS = 60;
 const MAX_DOCS = 400;
 const TARGET_FORMS = new Set([
@@ -59,9 +60,10 @@ export class EdgarIpoPipelineJob implements OnModuleInit {
   private async fetchMasterIdx(
     year: number,
     qtr: number,
+    userAgent: string,
   ): Promise<string | null> {
     const url = `https://www.sec.gov/Archives/edgar/full-index/${year}/QTR${qtr}/master.idx`;
-    const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+    const res = await fetch(url, { headers: { "User-Agent": userAgent } });
     if (!res.ok) {
       this.logger.warn(`master.idx ${year} QTR${qtr} -> ${res.status}`);
       return null;
@@ -70,7 +72,14 @@ export class EdgarIpoPipelineJob implements OnModuleInit {
   }
 
   async run() {
+    const userAgent = getSecUserAgent();
     try {
+      // SEC requires an identified User-Agent; without SEC_USER_AGENT the run
+      // is skipped (logged + recorded as a failure) and sec.gov is not called.
+      if (!userAgent) {
+        this.logger.error(SEC_USER_AGENT_MISSING);
+        throw new Error(SEC_USER_AGENT_MISSING);
+      }
       const now = new Date();
       const cutoff = isoDate(
         new Date(now.getTime() - RECENT_DAYS * 86_400_000),
@@ -90,7 +99,7 @@ export class EdgarIpoPipelineJob implements OnModuleInit {
       const seen = new Set<string>();
       const docs: { id: string; data: Record<string, unknown> }[] = [];
       for (const s of sources) {
-        const text = await this.fetchMasterIdx(s.year, s.qtr);
+        const text = await this.fetchMasterIdx(s.year, s.qtr, userAgent);
         if (!text) continue;
         const lines = text.split("\n");
         for (const line of lines) {

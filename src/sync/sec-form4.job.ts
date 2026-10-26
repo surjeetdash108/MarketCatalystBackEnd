@@ -1,4 +1,4 @@
-import { getTickerToCik } from "../common/sec-cik-map.util";
+import { getTickerToCik, SEC_USER_AGENT_MISSING } from "../common/sec-cik-map.util";
 import { form4InsiderRows } from "../common/insider-rows.util";
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
@@ -38,6 +38,12 @@ export class SecForm4Job implements OnModuleInit {
 
   async run() {
     try {
+      // SEC requires an identified User-Agent; without SEC_USER_AGENT the run
+      // is skipped (logged + recorded as a failure) and sec.gov is not called.
+      if (!this.secEdgar.getUserAgent()) {
+        this.logger.error(SEC_USER_AGENT_MISSING);
+        throw new Error(SEC_USER_AGENT_MISSING);
+      }
       const live = await activeUniverse(this.firebase.firestore);
       const universe = live.length > 0 ? live : TICKER_UNIVERSE;
       const cursor = await this.meta.getCursor(JOB_NAME);
@@ -47,7 +53,7 @@ export class SecForm4Job implements OnModuleInit {
       );
       const tickerToCik = await getTickerToCik(
         this.firebase.firestore,
-        "Market Catalyst Backend hello@inc108.com",
+        this.secEdgar.getUserAgent(),
       );
       const docs = [];
       for (const ticker of batch) {

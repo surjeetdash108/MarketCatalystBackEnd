@@ -141,6 +141,11 @@ export class SyncController {
           manifest && manifest.trigger !== "none"
             ? nextRunAt(job.cronExpression, job.timeZone)
             : null,
+        isStale: this.meta.isJobStale(
+          m?.lastSuccessAt,
+          job.cronExpression,
+          job.timeZone,
+        ),
         metaError,
       };
     });

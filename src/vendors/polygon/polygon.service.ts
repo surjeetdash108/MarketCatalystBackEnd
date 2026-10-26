@@ -182,7 +182,15 @@ export class PolygonService {
     minBars = 1,
   ): Promise<{ date: string; bars: PolygonAggBar[] } | null> {
     for (const date of candidateDates) {
-      const bars = await this.getGroupedDaily(date);
+      let bars: PolygonAggBar[] = [];
+      try {
+        bars = await this.getGroupedDaily(date);
+      } catch (err: any) {
+        this.logger.log(
+          `Failed to fetch grouped-daily for ${date} (${err?.message ?? err}) — trying prior day`,
+        );
+        continue;
+      }
       if (bars.length >= minBars) {
         return { date, bars };
       }
@@ -706,6 +714,7 @@ export class PolygonService {
       revenueActual: number | null;
       netIncome: number | null;
     };
+    if (this.massiveFinancialsUnavailable) return [];
     const out: Row[] = [];
     // financials caps `limit` at 100 (unlike the 1000 other reference endpoints allow).
     let url =
@@ -713,7 +722,19 @@ export class PolygonService {
       `&filing_date.lte=${to}&timeframe=quarterly&order=asc&sort=filing_date` +
       `&limit=100&apiKey=${this.apiKey}`;
     while (url) {
-      const res = await fetchJson<any>(url);
+      let res: any;
+      try {
+        res = await fetchJson<any>(url);
+      } catch (err: any) {
+        if (err?.message?.includes("410") || err?.message?.includes("403")) {
+          this.massiveFinancialsUnavailable = true;
+          this.logger.warn(
+            `Polygon reference/financials unavailable (${err.message}); halting pagination`,
+          );
+          break;
+        }
+        throw err;
+      }
       for (const p of res.results ?? []) {
         const ticker = p.tickers?.[0];
         if (!ticker) continue;

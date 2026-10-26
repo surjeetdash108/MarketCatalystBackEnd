@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { XMLParser } from "fast-xml-parser";
 import { fetchJson } from "../../common/http.util";
+import { getSecUserAgent, SEC_USER_AGENT_MISSING } from "../../common/sec-cik-map.util";
 
 const SUBMISSIONS_BASE = "https://data.sec.gov/submissions";
 const ARCHIVES_BASE = "https://www.sec.gov/Archives/edgar/data";
@@ -194,7 +195,7 @@ function sameCik(a: unknown, b: unknown): boolean {
 @Injectable()
 export class SecEdgarService {
   private readonly logger = new Logger(SecEdgarService.name);
-  private readonly userAgent: string;
+  private readonly userAgent: string | null;
   private lastRequestAt = 0;
   // ticker -> CIK, from SEC's company_tickers.json. Cached in memory (the file
   // is ~800KB and changes rarely) and refreshed daily; concurrent callers share
@@ -204,24 +205,38 @@ export class SecEdgarService {
   private tickerCikMapInFlight: Promise<Map<string, string>> | null = null;
 
   constructor(private readonly config: ConfigService) {
-    this.userAgent = this.config.get(
-      "SEC_EDGAR_USER_AGENT",
-      "Market Catalyst Backend (unset-contact@example.com)",
-    );
+    this.userAgent = getSecUserAgent();
+    if (!this.userAgent) this.logger.error(SEC_USER_AGENT_MISSING);
+  }
+
+  /** SEC_USER_AGENT, or null when unset (every SEC call is then skipped). */
+  getUserAgent(): string | null {
+    return this.userAgent;
+  }
+
+  /** Throws before any network call when no User-Agent is configured. */
+  private requireUserAgent(): string {
+    if (!this.userAgent) {
+      this.logger.error(SEC_USER_AGENT_MISSING);
+      throw new Error(SEC_USER_AGENT_MISSING);
+    }
+    return this.userAgent;
   }
 
   private async throttledFetch(url: string): Promise<any> {
+    const userAgent = this.requireUserAgent();
     const elapsed = Date.now() - this.lastRequestAt;
     if (elapsed < MIN_DELAY_MS) await sleep(MIN_DELAY_MS - elapsed);
     this.lastRequestAt = Date.now();
-    return fetchJson(url, { headers: { "User-Agent": this.userAgent } });
+    return fetchJson(url, { headers: { "User-Agent": userAgent } });
   }
 
   private async throttledFetchText(url: string): Promise<string> {
+    const userAgent = this.requireUserAgent();
     const elapsed = Date.now() - this.lastRequestAt;
     if (elapsed < MIN_DELAY_MS) await sleep(MIN_DELAY_MS - elapsed);
     this.lastRequestAt = Date.now();
-    const res = await fetch(url, { headers: { "User-Agent": this.userAgent } });
+    const res = await fetch(url, { headers: { "User-Agent": userAgent } });
     if (!res.ok) throw new Error(`GET ${url} -> ${res.status}`);
     return res.text();
   }
