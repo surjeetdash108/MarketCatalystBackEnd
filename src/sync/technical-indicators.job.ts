@@ -538,12 +538,6 @@ export function computeIndicators(
         }));
   const latestClose = closes[closes.length - 1];
 
-  // 52-week range from the real rolling year of highs/lows.
-  const yearHighs = highs.slice(-TRADING_DAYS_YEAR);
-  const yearLows = lows.slice(-TRADING_DAYS_YEAR);
-  const high52 = yearHighs.length > 0 ? Math.max(...yearHighs) : null;
-  const low52 = yearLows.length > 0 ? Math.min(...yearLows) : null;
-
   // Full MA ladder for the drawer; sma50/sma200 stay as their own fields too.
   const smaLadder: Record<string, number | null> = {};
   const emaLadder: Record<string, number | null> = {};
@@ -578,6 +572,14 @@ export function computeIndicators(
       ? [...bars.slice(0, -1), { ...latestBar, ...todayOfficial }]
       : bars.slice(0, -1);
   const pivotBasisBar = completedBars[completedBars.length - 1];
+
+  // 52-week range over the completed sessions of the last 52 weeks (see
+  // fiftyTwoWeekWindow) — never an in-progress session.
+  const yearBars = fiftyTwoWeekWindow(completedBars);
+  const yearHighs = yearBars.map((b) => b.high);
+  const yearLows = yearBars.map((b) => b.low);
+  const high52 = yearHighs.length > 0 ? Math.max(...yearHighs) : null;
+  const low52 = yearLows.length > 0 ? Math.min(...yearLows) : null;
 
   const rsiHistory = rsiSeries(closes).slice(-RSI_SERIES_LEN);
   const stochKVal = stochK(highs, lows, closes);
@@ -727,6 +729,29 @@ export async function officialTodayBarFor(
   const bar = await polygon.getOfficialDayBar(ticker, etDate).catch(() => null);
   if (bar) map.set(etDate, bar);
   return map;
+}
+
+/** 52 weeks, in days. */
+const FIFTY_TWO_WEEKS_DAYS = 364;
+
+/**
+ * The sessions of the 52 weeks ending at the newest bar: every bar dated AFTER
+ * (newest bar date − 364 days). `bars` ascending, completed sessions only.
+ *
+ * Quote pages define the range as 52 weeks back from the last session: for the
+ * Oct 23 2026 close the window opens Mon Oct 27 2025 (Fri Oct 24 2025 is
+ * exactly 364 days back and excluded). "The last 252 sessions" reached Oct 23
+ * 2025 and "after the same date a year back" still took Oct 24 — both put a
+ * year-old extreme into the range (SFM 109.61 / GS 744.66 / CAT 513.01 against
+ * the published 107.31 / 754 / 521.43).
+ */
+export function fiftyTwoWeekWindow<T extends { barDate?: string }>(bars: ReadonlyArray<T>): T[] {
+  const last = bars[bars.length - 1]?.barDate;
+  if (!last) return bars.slice(-TRADING_DAYS_YEAR);
+  const start = new Date(`${last}T00:00:00Z`);
+  start.setUTCDate(start.getUTCDate() - FIFTY_TWO_WEEKS_DAYS);
+  const cut = start.toISOString().slice(0, 10);
+  return bars.filter((b) => b.barDate != null && b.barDate > cut);
 }
 
 /**
