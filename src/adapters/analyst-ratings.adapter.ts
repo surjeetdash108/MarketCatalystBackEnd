@@ -883,12 +883,13 @@ export class FmpAnalystRatingsAdapter implements AnalystRatingsAdapter {
       const targetFirm = firmOf(t.firm, t.title);
       const isReattributed = canonicalFirm(t.firm) !== targetFirm;
       const stated = t.title ? headlineTarget(t.title) : null;
-      // A post re-attributed to another firm carries the TAGGED firm's number in
-      // priceTarget, so only a target its headline states can be the named
-      // firm's; without one the post gives that firm nothing (PEP 2026-09-29
-      // "JPMorgan Downgrades Pepsico", tagged Jefferies at 138).
-      if (isReattributed && stated == null) continue;
-      const rawValue = isReattributed ? (stated as number) : t.priceTarget;
+      // A re-attributed post uses the target its headline states; with none
+      // stated, its priceTarget is kept for the named firm. FMP gets the TAG
+      // wrong, not the number: every such post the Oct 24 E2E could verify
+      // (CAT Freedom Broker $980 tagged Needham, SFM JPMorgan $103 tagged
+      // Coker Palmer, EPM Freedom $5.30 tagged Loop) carried the named firm's
+      // published target. The round-4 rule dropped them.
+      const rawValue = isReattributed && stated != null ? stated : t.priceTarget;
       // The vendor's number is sometimes not the headline's: CVX / HSBC carries
       // priceTarget 90 on "price target raised to $250 from $218 at HSBC". A
       // gross disagreement means the field is wrong — the headline is the
