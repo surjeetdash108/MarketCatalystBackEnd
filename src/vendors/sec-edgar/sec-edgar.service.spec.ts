@@ -35,6 +35,15 @@ describe("SEC User-Agent", () => {
     expect(headers["User-Agent"]).toBe("Example Operator ops@example.com");
   });
 
+  it("accepts SEC_EDGAR_USER_AGENT, the name the deployed services set", async () => {
+    process.env.SEC_EDGAR_USER_AGENT = "Example Operator ops@example.com";
+    const svc = new SecEdgarService(config);
+    expect(svc.getUserAgent()).toBe("Example Operator ops@example.com");
+    await svc.getSubmissions("320193").catch(() => undefined);
+    const headers = fetchSpy.mock.calls[0][1]?.headers as Record<string, string>;
+    expect(headers["User-Agent"]).toBe("Example Operator ops@example.com");
+  });
+
   it("unset: no agent, the request is refused and sec.gov is never called", async () => {
     const svc = new SecEdgarService(config);
     expect(svc.getUserAgent()).toBeNull();
