@@ -26,18 +26,22 @@ const SOURCE_URL = "https://www.sec.gov/files/company_tickers.json";
 const logger = new Logger("SecCikMap");
 
 export const SEC_USER_AGENT_MISSING =
-  "SEC_USER_AGENT is not set — SEC requests skipped";
+  "SEC_USER_AGENT / SEC_EDGAR_USER_AGENT is not set — SEC requests skipped";
 
 /**
- * The User-Agent for every sec.gov request: SEC_USER_AGENT, which SEC's fair
- * access policy requires to name the operator and a contact address. Null when
- * unset — callers then log an error and skip the request. There is
- * deliberately no generic default: SEC bot-blocks unidentified agents, and
- * a made-up contact would be worse.
+ * The User-Agent for every sec.gov request, which SEC's fair access policy
+ * requires to name the operator and a contact address: SEC_USER_AGENT, or
+ * SEC_EDGAR_USER_AGENT — the name DEPLOY.md documents and the deployed
+ * services set. Null when neither is set — callers then log an error and skip
+ * the request. There is deliberately no generic default: SEC bot-blocks
+ * unidentified agents, and a made-up contact would be worse.
  */
 export function getSecUserAgent(): string | null {
-  const ua = (process.env.SEC_USER_AGENT ?? "").trim();
-  return ua || null;
+  for (const name of ["SEC_USER_AGENT", "SEC_EDGAR_USER_AGENT"]) {
+    const ua = (process.env[name] ?? "").trim();
+    if (ua) return ua;
+  }
+  return null;
 }
 
 interface CachedMap {

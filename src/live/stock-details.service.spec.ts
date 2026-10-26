@@ -115,6 +115,7 @@ describe("StockDetailsService", () => {
 
     it("SEC_USER_AGENT unset: no SEC fallback is attempted", async () => {
       delete process.env.SEC_USER_AGENT;
+      delete process.env.SEC_EDGAR_USER_AGENT;
       const cik = jest.spyOn(cikMap, "getTickerToCik");
       const getSubmissions = jest.fn();
       const { svc } = make({
