@@ -94,14 +94,19 @@ export class TickerSearchService {
     const upper = q.toUpperCase();
     const lower = q.toLowerCase();
 
-    const exact: SearchHit[] = [];
+    // The exact ticker is looked up first, independent of the scan below: the
+    // scan stops early once it has enough prefix hits, and the universe is not
+    // in alphabetical order — "T" (AT&T) sits behind 282 other T-listings, so
+    // it was never reached.
+    const exact: SearchHit[] = this.universe
+      .filter((t) => t.ticker === upper)
+      .map((t) => ({ ticker: t.ticker, name: t.name || null }));
     const tickerPrefix: SearchHit[] = [];
     const namePrefix: SearchHit[] = [];
     const substring: SearchHit[] = [];
 
     for (const t of this.universe) {
-      if (t.ticker === upper)
-        exact.push({ ticker: t.ticker, name: t.name || null });
+      if (t.ticker === upper) continue;
       else if (t.ticker.startsWith(upper))
         tickerPrefix.push({ ticker: t.ticker, name: t.name || null });
       else if (t.nameLower.startsWith(lower))
