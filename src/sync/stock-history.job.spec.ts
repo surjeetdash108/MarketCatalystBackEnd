@@ -225,6 +225,35 @@ describe("StockHistoryJob.syncGrouped", () => {
     expect(r.rejected).toBe(1);
     expect(written("ohlcv_bars")).toHaveLength(0);
   });
+
+  it("back-fills a missing interior session even when ticker watermark has already advanced past it", async () => {
+    const { job } = makeJob({
+      "2026-10-09": [bar("AAPL", 250), bar("MSFT", 400)],
+      "2026-10-12": [bar("AAPL", 252), bar("MSFT", 405)],
+    });
+    // AAPL's watermark is 2026-10-12, but 2026-10-09 was missing from stored bars
+    const wm = new Map([
+      ["AAPL", "2026-10-12"],
+      ["MSFT", "2026-10-08"],
+    ]);
+    const missingDates = new Set(["2026-10-09"]);
+    const universe = new Set(["AAPL", "MSFT"]);
+    const r = await (job as any).syncGrouped(
+      wm,
+      ["2026-10-08", "2026-10-09", "2026-10-12"],
+      "2026-10-13",
+      missingDates,
+      universe,
+    );
+
+    const bars = written("ohlcv_bars")
+      .map((w) => w.ref.id)
+      .sort();
+    // AAPL must have 10-09 back-filled!
+    expect(bars).toContain("ohlcv_bars/AAPL_2026-10-09");
+    expect(bars).toContain("ohlcv_bars/MSFT_2026-10-09");
+    expect(bars).toContain("ohlcv_bars/MSFT_2026-10-12");
+  });
 });
 
 describe("perTickerWindows", () => {

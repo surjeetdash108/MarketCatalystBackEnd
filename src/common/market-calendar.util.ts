@@ -14,6 +14,33 @@
 
 const ET = "America/New_York";
 
+/**
+ * True if the daily session for `barDate` has fully ended as of `now`.
+ * Regular US equity sessions end at 16:00 America/New_York.
+ * A bar dated prior to today's ET date is always ended.
+ * A bar dated today has ended only if New York time is >= 16:00.
+ * A future date has not ended.
+ */
+export function isSessionEnded(barDate: string, now: Date = new Date()): boolean {
+  if (!barDate || !/^\d{4}-\d{2}-\d{2}$/.test(barDate)) return false;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: ET,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const etToday = `${get("year")}-${get("month")}-${get("day")}`;
+  let hour = Number(get("hour"));
+  if (hour === 24) hour = 0;
+  if (barDate < etToday) return true;
+  if (barDate === etToday) return hour >= 16;
+  return false;
+}
+
 /** YYYY-MM-DD for an instant, as seen in New York. */
 export function etDate(d: Date = new Date()): string {
   // en-CA renders ISO-style YYYY-MM-DD, which sorts and slices predictably.

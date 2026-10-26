@@ -246,6 +246,26 @@ export class StockHistoryJob implements OnModuleInit {
       const stranded = await this.findStranded(tickers, ranges, floor);
       const dates = weekdaysBefore(today, GROUPED_LOOKBACK_SESSIONS);
 
+      // Detect any completed session in `dates` that is missing from ohlcv_bars
+      // by checking benchmark ticker (SPY).
+      const missingDates = new Set<string>();
+      try {
+        const spySnaps = await this.firebase.firestore.getAll(
+          ...dates.map((d) =>
+            this.firebase.firestore.collection("ohlcv_bars").doc(`SPY_${d}`),
+          ),
+        );
+        dates.forEach((d, i) => {
+          if (!spySnaps[i]?.exists) {
+            missingDates.add(d);
+          }
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Failed checking missing sessions for SPY: ${(err as Error).message}`,
+        );
+      }
+
       const grouped = new Map<string, string>();
       const perTicker: string[] = [];
       for (const ticker of tickers) {
@@ -263,7 +283,14 @@ export class StockHistoryJob implements OnModuleInit {
         else perTicker.push(ticker);
       }
 
-      const g = await this.syncGrouped(grouped, dates, today);
+      const tickerUniverse = new Set(tickers);
+      const g = await this.syncGrouped(
+        grouped,
+        dates,
+        today,
+        missingDates,
+        tickerUniverse,
+      );
 
       // Rotate the per-ticker queue with the cursor so a ticker whose fetch
       // keeps failing cannot hold the front of the queue every run.
@@ -404,6 +431,8 @@ export class StockHistoryJob implements OnModuleInit {
     watermarks: Map<string, string>,
     dates: string[],
     today: string,
+    missingDates?: Set<string>,
+    universe?: Set<string>,
   ): Promise<{
     barsWritten: number;
     rejected: number;
@@ -418,9 +447,13 @@ export class StockHistoryJob implements OnModuleInit {
       sessionsFetched: 0,
       coveredThrough: null,
     };
-    if (watermarks.size === 0) return empty;
-    const oldest = [...watermarks.values()].reduce((a, b) => (a < b ? a : b));
-    const needed = dates.filter((d) => d > oldest);
+    if (watermarks.size === 0 && (!missingDates || missingDates.size === 0)) return empty;
+    const oldest = watermarks.size > 0
+      ? [...watermarks.values()].reduce((a, b) => (a < b ? a : b))
+      : null;
+    const needed = dates.filter(
+      (d) => (oldest != null && d > oldest) || (missingDates != null && missingDates.has(d)),
+    );
     if (needed.length === 0) return empty;
 
     const db = this.firebase.firestore;
@@ -442,11 +475,14 @@ export class StockHistoryJob implements OnModuleInit {
       sessionsFetched++;
       if (bars.length === 0) continue; // holiday, or not published yet
 
+      const isBackfill = missingDates?.has(date) ?? false;
       const writes: PendingWrite[] = [];
       for (const b of bars) {
         const ticker = b.T;
+        const inUniverse = universe ? universe.has(ticker) : watermarks.has(ticker);
+        if (!inUniverse) continue;
         const wm = watermarks.get(ticker);
-        if (wm == null || wm >= date) continue;
+        if (!isBackfill && (wm == null || wm >= date)) continue;
         const bar = { open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v };
         // Same guard as the per-ticker path: a bar that cannot be true is
         // dropped rather than inherited by every indicator built over it.

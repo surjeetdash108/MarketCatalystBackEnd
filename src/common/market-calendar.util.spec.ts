@@ -2,6 +2,7 @@ import {
   etDateOf,
   etDate, isFriday, isLastFridayOfMonth, lastFridayOf,
   weekBounds, monthBounds, monthKey,
+  isSessionEnded,
 } from "./market-calendar.util";
 
 /** Noon ET, so the instant can't drift across a day boundary in either zone. */
@@ -97,5 +98,28 @@ describe("etDateOf", () => {
     expect(etDateOf("2026-07-21")).toBe("2026-07-21");
     expect(etDateOf("")).toBe("");
     expect(etDateOf(null)).toBe("");
+  });
+});
+
+describe("isSessionEnded", () => {
+  it("returns true for any past calendar date", () => {
+    // 2026-10-22 is in the past relative to 2026-10-23
+    const midday = new Date("2026-10-23T16:00:00Z"); // 12:00 PM ET
+    expect(isSessionEnded("2026-10-22", midday)).toBe(true);
+  });
+
+  it("returns false for today's session before 16:00 ET", () => {
+    const midday = new Date("2026-10-23T16:00:00Z"); // 12:00 PM ET
+    expect(isSessionEnded("2026-10-23", midday)).toBe(false);
+  });
+
+  it("returns true for today's session at or after 16:00 ET", () => {
+    const postClose = new Date("2026-10-23T20:05:00Z"); // 16:05 ET
+    expect(isSessionEnded("2026-10-23", postClose)).toBe(true);
+  });
+
+  it("returns false for future dates", () => {
+    const postClose = new Date("2026-10-23T20:05:00Z");
+    expect(isSessionEnded("2026-10-24", postClose)).toBe(false);
   });
 });

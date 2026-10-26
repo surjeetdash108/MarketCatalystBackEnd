@@ -65,7 +65,7 @@ import {
 import { FmpService, filedThirteenFQuarters } from "../vendors/fmp/fmp.service";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { isoDate } from "../common/date.util";
-import { etDate } from "../common/market-calendar.util";
+import { etDate, isSessionEnded } from "../common/market-calendar.util";
 import {
   groupCandles,
   sliceRange,
@@ -943,9 +943,11 @@ export class OnDemandService implements OnModuleDestroy {
       // RS / tech-rating crons can rank this ticker next run. Chunked to stay
       // under Firestore's 500-write batch ceiling. Only for bars we FETCHED —
       // rewriting what we just read back would be pure cost.
-      for (let i = 0; i < bars.length; i += 450) {
+      // NEVER save a bar for a session that hasn't ended.
+      const endedBars = bars.filter((b) => isSessionEnded(b.barDate));
+      for (let i = 0; i < endedBars.length; i += 450) {
         const batch = this.firebase.firestore.batch();
-        for (const b of bars.slice(i, i + 450)) {
+        for (const b of endedBars.slice(i, i + 450)) {
           batch.set(
             col.doc(`${ticker}_${b.barDate}`),
             {
