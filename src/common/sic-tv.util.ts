@@ -527,3 +527,19 @@ export function withVendorIndustryFallback(
 ): TvClassification {
   return sicClass.sector ? sicClass : classifyFromVendorIndustry(vendorIndustry);
 }
+
+/**
+ * The classification to write: a newly resolved one, else the one already
+ * stored. A source being unavailable (SEC down, an unmapped vendor industry)
+ * must never blank a sector the doc already has — on 2026-10-26, 45 of 100
+ * tested companies lost theirs that way.
+ */
+export function keepStoredClassification(
+  computed: { sector: string | null; industry: string | null },
+  stored: { sector?: unknown; industry?: unknown },
+): { sector: string | null; industry: string | null } {
+  if (computed.sector) return computed;
+  const s = typeof stored.sector === "string" && stored.sector ? stored.sector : null;
+  const i = typeof stored.industry === "string" && stored.industry ? stored.industry : null;
+  return s ? { sector: s, industry: i } : computed;
+}

@@ -14,7 +14,7 @@ import {
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { DelistedTickersService } from "../common/delisted-tickers.service";
-import { classifyFromSic, resolveSicCode, withVendorIndustryFallback } from "../common/sic-tv.util";
+import { classifyFromSic, keepStoredClassification, resolveSicCode, withVendorIndustryFallback } from "../common/sic-tv.util";
 import { SnapshotCacheService } from "./snapshot-cache.service";
 import { MonthlyBetaService } from "./monthly-beta.service";
 import { BETA_METHOD } from "../common/monthly-beta.util";
@@ -1408,8 +1408,7 @@ export class OnDemandService implements OnModuleDestroy {
               descriptionSource,
               betaVendor: fmpProfile?.beta ?? (prevCo.betaVendor as number | undefined) ?? null,
               homepageUrl: details.homepage_url ?? (prevCo.homepageUrl as string | undefined) ?? null,
-              sector: sicClass.sector,
-              industry: sicClass.industry,
+              ...keepStoredClassification(sicClass, prevCo),
               sicCode: resolvedSic == null ? null : String(resolvedSic),
               sicDescription: details.sic_description ?? null,
               // Correct a grossly-stale Polygon market_cap with price × shares

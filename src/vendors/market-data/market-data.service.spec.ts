@@ -1,5 +1,6 @@
 import { MarketDataService } from "./market-data.service";
 import { PolygonService } from "../polygon/polygon.service";
+import { classifyFromSic } from "../../common/sic-tv.util";
 import type { ConfigService } from "@nestjs/config";
 import type { FmpService } from "../fmp/fmp.service";
 import type { SecEdgarService } from "../sec-edgar/sec-edgar.service";
@@ -243,5 +244,30 @@ describe("MarketDataService (FMP primary, Polygon fallback)", () => {
       await expect(make(jest.fn().mockRejectedValue(new Error("503"))).getDelisting("AACB")).resolves.toBeNull();
       expect(poly).toHaveBeenCalledWith("AACB");
     });
+  });
+});
+
+describe("MarketDataService.getTickerDetails — classification when SEC is unavailable", () => {
+  // Real FMP profile + Polygon ticker details for CAT (saved 2026-10-26).
+  const fx = JSON.parse(
+    require("fs").readFileSync(require("path").join(__dirname, "fixtures/cat-profile-details.json"), "utf-8"),
+  );
+  afterEach(() => jest.restoreAllMocks());
+
+  it("takes Polygon's SIC when SEC returns none, so CAT still classifies", async () => {
+    jest.spyOn(PolygonService.prototype, "getTickerDetails").mockResolvedValue(fx.polygonDetails);
+    const fmp = { enabled: true, request: jest.fn().mockResolvedValue(fx.fmpProfile), requestText: jest.fn() } as unknown as FmpService;
+    const sec = { getSicByTicker: jest.fn().mockResolvedValue(null) } as unknown as SecEdgarService;
+    const d = await new MarketDataService(config, fmp, sec).getTickerDetails("CAT");
+    expect(String(d.sic_code)).toBe("3531");
+    expect(classifyFromSic(d.sic_code, "CAT")?.sector).toBe("Producer Manufacturing");
+  });
+
+  it("SEC's SIC still wins when present", async () => {
+    jest.spyOn(PolygonService.prototype, "getTickerDetails").mockResolvedValue(fx.polygonDetails);
+    const fmp = { enabled: true, request: jest.fn().mockResolvedValue(fx.fmpProfile), requestText: jest.fn() } as unknown as FmpService;
+    const sec = { getSicByTicker: jest.fn().mockResolvedValue("3523") } as unknown as SecEdgarService;
+    const d = await new MarketDataService(config, fmp, sec).getTickerDetails("CAT");
+    expect(String(d.sic_code)).toBe("3523");
   });
 });

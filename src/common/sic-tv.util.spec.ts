@@ -1,4 +1,4 @@
-import { classifyFromSic, classifyFromVendorIndustry, withTickerOverride, withVendorIndustryFallback } from "./sic-tv.util";
+import { keepStoredClassification, classifyFromSic, classifyFromVendorIndustry, withTickerOverride, withVendorIndustryFallback } from "./sic-tv.util";
 
 describe("classifyFromSic ticker overrides", () => {
   it("classifies bitcoin-mining / AI-compute operators as Technology Services, not Finance", () => {
@@ -57,5 +57,20 @@ describe("SIC mapping fixes (E2E Oct 2026, category C)", () => {
     expect(withVendorIndustryFallback(classifyFromSic(5500), "Banks - Regional").industry).toBe("Specialty Stores");
     expect(classifyFromVendorIndustry("REIT - Office").industry).toBe("Real Estate Investment Trusts");
     expect(classifyFromVendorIndustry("Something Unmapped")).toEqual({ sector: null, industry: null });
+  });
+});
+
+describe("keepStoredClassification", () => {
+  // CAT on 2026-10-26: SEC unavailable, FMP industry "Agricultural - Machinery"
+  // unmapped → no classification; the stored one must survive.
+  const stored = { sector: "Producer Manufacturing", industry: "Trucks/Construction/Farm Machinery" };
+  it("keeps the stored sector/industry when no new classification resolves", () => {
+    expect(keepStoredClassification({ sector: null, industry: null }, stored)).toEqual(stored);
+  });
+  it("a resolved classification replaces the stored one", () => {
+    expect(keepStoredClassification({ sector: "Finance", industry: "Regional Banks" }, stored)).toEqual({ sector: "Finance", industry: "Regional Banks" });
+  });
+  it("nothing stored and nothing resolved stays null", () => {
+    expect(keepStoredClassification({ sector: null, industry: null }, {})).toEqual({ sector: null, industry: null });
   });
 });
