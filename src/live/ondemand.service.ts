@@ -151,7 +151,7 @@ const TF: Record<BarsTf, TfSpec> = {
   "1M": { resolution: "30min", fetchDays: 40, span: { kind: "months", months: 1 } },
   "3M": { resolution: "daily", fetchDays: 95, span: { kind: "months", months: 3 } },
   "6M": { resolution: "daily", fetchDays: 190, span: { kind: "months", months: 6 } },
-  "1Y": { resolution: "daily", fetchDays: 380, span: { kind: "months", months: 12 } },
+  "1Y": { resolution: "daily", fetchDays: 380, span: { kind: "sessions", sessions: 252 } },
   "5Y": { resolution: "daily", fetchDays: 1830, span: { kind: "months", months: 60 } },
 };
 
