@@ -22,10 +22,7 @@ export class CompaniesController {
   ) {}
 
   @Get("companies")
-  @Header(
-    "Cache-Control",
-    "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
-  )
+  @Header("Cache-Control", "no-cache, no-store, must-revalidate")
   async companies() {
     await this.marketData.ensureFresh("companies");
     const { companies, market_movers } = await this.cached.get([

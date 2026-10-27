@@ -167,7 +167,7 @@ export class OnDemandController {
    */
   @Get("scan/biggest-pct")
   @UseGuards(FirebaseAuthGuard)
-  @Header("Cache-Control", "public, max-age=300")
+  @Header("Cache-Control", "no-cache, no-store, must-revalidate")
   async scanBiggestPct(@Req() req: Request, @Res() res: Response) {
     sendWithEtag(req, res, await this.marketScan.getBiggestPct());
   }
@@ -178,7 +178,7 @@ export class OnDemandController {
    */
   @Get("scan/most-active")
   @UseGuards(FirebaseAuthGuard)
-  @Header("Cache-Control", "public, max-age=300")
+  @Header("Cache-Control", "no-cache, no-store, must-revalidate")
   async scanMostActive(@Req() req: Request, @Res() res: Response) {
     sendWithEtag(req, res, await this.marketScan.getMostActive());
   }
