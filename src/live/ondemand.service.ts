@@ -1108,9 +1108,12 @@ export class OnDemandService implements OnModuleDestroy {
     if (!doc) return doc;
     const today = etDate();
     const stored = typeof doc.nextEarningsDate === "string" ? doc.nextEarningsDate : null;
-    if (stored && stored >= today) return doc;
     const next = await this.nextReportDate(ticker).catch(() => null);
-    return { ...doc, nextEarningsDate: next };
+    const candidateDates = [stored, next].filter(
+      (d): d is string => typeof d === "string" && d >= today,
+    ).sort();
+    const resolvedDate = candidateDates[0] ?? null;
+    return { ...doc, nextEarningsDate: resolvedDate };
   }
 
   private readonly nextReportCache = new Map<string, { at: number; date: string | null }>();
