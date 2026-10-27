@@ -71,7 +71,8 @@ export class SnapshotController {
     @Req() req: Request,
     @Res() res: Response,
   ) {
-    const list = (tickers ?? "")
+    const raw = tickers || (req.query.symbols as string | undefined) || "";
+    const list = raw
       .split(",")
       .map((t) => t.trim().toUpperCase())
       .filter(Boolean);
