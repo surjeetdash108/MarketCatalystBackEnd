@@ -1,4 +1,4 @@
-import { formatRecapIndices, nasdaqCompositeQuote, type IndexRow } from "./recap-indices.util";
+import { formatRecapIndices, nasdaqCompositeQuote, nasdaqCompositeFromEod, type IndexRow } from "./recap-indices.util";
 
 describe("recap indices formatting", () => {
   it("labels QQQ/NDX as 'Nasdaq-100' and assigns Nasdaq Composite (^IXIC) to 'Nasdaq'", () => {
@@ -61,5 +61,27 @@ describe("recap Nasdaq Composite row (Oct 23 2026 close)", () => {
   it("no FMP quote: no Nasdaq row is invented", async () => {
     const out = formatRecapIndices(stored, await nasdaqCompositeQuote({ getQuote: async () => null }));
     expect(out.find((r) => r.label === "Nasdaq")).toBeUndefined();
+  });
+});
+
+describe("nasdaqCompositeFromEod (one-off recap backfill)", () => {
+  // Real FMP ^IXIC daily rows (Oct 22 + 23 2026). The Oct 23 recap showed the QQQ
+  // proxy as "Nasdaq" at −0.01%; the Composite closed 25,955.34, −0.21%.
+  const fx = JSON.parse(
+    require("fs").readFileSync(require("path").join(__dirname, "fixtures/nasdaq-oct23.json"), "utf-8"),
+  );
+  it("Oct 23: 25,955.34, −0.21%, −53.52 from the previous close", () => {
+    expect(nasdaqCompositeFromEod(fx.IXIC, "2026-10-23")).toEqual({ price: 25955.34, pctChange: -0.21, change: -53.52 });
+  });
+  it("no row for the date: null (the recap is left as is)", () => {
+    expect(nasdaqCompositeFromEod(fx.IXIC, "2026-10-24")).toBeNull();
+  });
+  it("patched recap: Composite after the S&P 500, QQQ relabelled Nasdaq-100", () => {
+    const stored = [
+      { id: "SPX", label: "S&P 500", value: 6800, pctChange: -0.1, isProxy: true, proxyTicker: "SPY" },
+      { id: "NDX", label: "Nasdaq", value: 25639, pctChange: -0.01, isProxy: true, proxyTicker: "QQQ" },
+    ];
+    const out = formatRecapIndices(stored, nasdaqCompositeFromEod(fx.IXIC, "2026-10-23"));
+    expect(out.map((r) => [r.label, r.pctChange])).toEqual([["S&P 500", -0.1], ["Nasdaq", -0.21], ["Nasdaq-100", -0.01]]);
   });
 });

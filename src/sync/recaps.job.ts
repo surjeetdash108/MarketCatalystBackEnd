@@ -6,7 +6,7 @@ import { SyncRegistry } from "../common/sync-registry.service";
 import { isoDate } from "../common/date.util";
 import { splitMovers } from "../common/movers-split.util";
 import { etDate } from "../common/market-calendar.util";
-import { formatRecapIndices, nasdaqCompositeQuote } from "../common/recap-indices.util";
+import { formatRecapIndices, nasdaqCompositeQuote, nasdaqCompositeFromEod, type IndexRow } from "../common/recap-indices.util";
 import { FmpService } from "../vendors/fmp/fmp.service";
 
 /**
@@ -36,6 +36,10 @@ const TOP_N = 6;
 const BREADTH_MIN_COVERAGE = 0.5;
 
 
+const BACKFILL_JOB = "recaps-nasdaq-backfill";
+/** The QQQ proxy was labelled "Nasdaq" from this date (713b463). */
+const BACKFILL_SINCE = "2026-08-13";
+
 @Injectable()
 export class RecapsJob implements OnModuleInit {
   private readonly logger = new Logger(RecapsJob.name);
@@ -53,6 +57,45 @@ export class RecapsJob implements OnModuleInit {
       cronExpression: "45 18 * * 1-5",
       timeZone: "America/New_York",
     });
+    // One-off, manual run only (job-manifest: trigger "none").
+    this.registry.register(BACKFILL_JOB, () => this.backfillNasdaq(), {
+      collections: ["recaps"],
+      cronExpression: "0 0 30 2 *",
+      timeZone: "America/New_York",
+    });
+  }
+
+  /**
+   * ONE-OFF repair of recaps written while the QQQ proxy stood in for "Nasdaq"
+   * (from 2026-08-13, when that label shipped, until 97e31ba): relabels the QQQ
+   * row "Nasdaq-100" and inserts the Nasdaq Composite for the recap's own date
+   * from FMP's ^IXIC daily closes. Only `indices` is touched; a recap whose date
+   * has no ^IXIC row is left as is.
+   */
+  async backfillNasdaq(since = BACKFILL_SINCE): Promise<{ checked: number; patched: number; skipped: number }> {
+    try {
+      if (!this.fmp) throw new Error("FMP is not configured");
+      const db = this.firebase.firestore;
+      const snap = await db.collection("recaps").where("date", ">=", since).get();
+      const to = etDate();
+      const rows = (await this.fmp.request(
+        `historical-price-eod/full?symbol=${encodeURIComponent("^IXIC")}&from=${isoDate(new Date(Date.parse(`${since}T00:00:00Z`) - 10 * 86_400_000))}&to=${to}`,
+      )) as Array<{ date: string; close: number }>;
+      let patched = 0, skipped = 0;
+      for (const d of snap.docs) {
+        const x = d.data() as { date?: string; indices?: IndexRow[] };
+        const ixic = x.date ? nasdaqCompositeFromEod(rows, x.date) : null;
+        if (!ixic || !Array.isArray(x.indices)) { skipped++; continue; }
+        await d.ref.set({ indices: formatRecapIndices(x.indices, ixic), indicesRepairedAt: new Date().toISOString() }, { merge: true });
+        patched++;
+      }
+      this.logger.log(`recap Nasdaq backfill: ${patched} patched, ${skipped} skipped of ${snap.size}`);
+      await this.meta.record(BACKFILL_JOB, { ok: true, count: patched });
+      return { checked: snap.size, patched, skipped };
+    } catch (err) {
+      await this.meta.record(BACKFILL_JOB, { ok: false, error: (err as Error).message });
+      throw err;
+    }
   }
 
   async scheduled() {

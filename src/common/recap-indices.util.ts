@@ -85,3 +85,25 @@ export async function nasdaqCompositeQuote(fmp: {
     change: q.previousClose != null ? Math.round((q.price - q.previousClose) * 100) / 100 : null,
   };
 }
+
+/**
+ * The Nasdaq Composite for a PAST session from FMP daily rows (^IXIC
+ * historical-price-eod): that day's close and its change from the previous
+ * session's close. Used to repair recaps written while the QQQ proxy stood in
+ * for "Nasdaq". Null when the date has no row (or no previous row).
+ */
+export function nasdaqCompositeFromEod(
+  rows: ReadonlyArray<{ date: string; close: number }>,
+  date: string,
+): { price: number; pctChange: number; change: number } | null {
+  const asc = [...rows].filter((r) => r.date && Number.isFinite(r.close)).sort((a, b) => a.date.localeCompare(b.date));
+  const i = asc.findIndex((r) => r.date === date);
+  if (i <= 0) return null;
+  const close = asc[i].close, prev = asc[i - 1].close;
+  if (!(prev > 0)) return null;
+  return {
+    price: close,
+    pctChange: Math.round(((close - prev) / prev) * 10000) / 100,
+    change: Math.round((close - prev) * 100) / 100,
+  };
+}

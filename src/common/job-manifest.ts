@@ -119,6 +119,7 @@ const NOT_TRIGGERED: JobManifestEntry[] = [
   { name: "monthly-news-cleanup", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },
   { name: "ticker-weekly-ai", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },
   { name: "ticker-monthly-ai", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },
+  { name: "recaps-nasdaq-backfill", trigger: "none", schedules: [], note: "one-off repair of recaps since 2026-08-13 (QQQ shown as Nasdaq) — manual run only" },
   { name: "analyst-firm-stats", trigger: "none", schedules: [], note: "registered only — no scheduler entry" },
   { name: "strategy-lab-daily", trigger: "none", schedules: [], note: "registered only — no scheduler entry" },
   { name: "strategy-lab-intraday", trigger: "none", schedules: [], note: "registered only — no scheduler entry" },
