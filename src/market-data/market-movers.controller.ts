@@ -25,10 +25,7 @@ export class MarketMoversController {
   ) {}
 
   @Get("movers")
-  @Header(
-    "Cache-Control",
-    "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
-  )
+  @Header("Cache-Control", "no-cache, no-store, must-revalidate")
   async movers() {
     await this.marketData.ensureFresh("market-movers");
     const { market_movers, companies } = await this.cached.get([
@@ -89,10 +86,7 @@ export class MarketMoversController {
    * as "no data yet", where an error renders as broken.
    */
   @Get("volume-leaders")
-  @Header(
-    "Cache-Control",
-    "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
-  )
+  @Header("Cache-Control", "no-cache, no-store, must-revalidate")
   async volumeLeaders() {
     const snap = await this.firebase.firestore
       .collection("volume_leaders")

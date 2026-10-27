@@ -18,8 +18,8 @@ import { splitMovers } from "../common/movers-split.util";
 
 const BIGGEST_PCT_COLLECTION = "scan_biggest_pct";
 const MOST_ACTIVE_COLLECTION = "scan_most_active";
-const BIGGEST_PCT_TTL_MS = 2 * 60 * 60 * 1000;
-const MOST_ACTIVE_TTL_MS = 1 * 60 * 60 * 1000;
+const BIGGEST_PCT_TTL_MS = 30 * 1000;
+const MOST_ACTIVE_TTL_MS = 30 * 1000;
 const TOP_N = 20;
 
 interface CompanyRow {
