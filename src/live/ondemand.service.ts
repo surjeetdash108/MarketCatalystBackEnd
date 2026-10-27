@@ -51,7 +51,7 @@ import {
   anchor52wToPrice,
   computeIndicators,
   lastCompletedSession,
-  officialTodayBarFor,
+  officialBarsFor,
   type IndicatorBar,
 } from "../sync/technical-indicators.job";
 import { computeRsScore, rsPercentile } from "../sync/rs-rating.job";
@@ -992,17 +992,15 @@ export class OnDemandService implements OnModuleDestroy {
       // partial current-day bar, weekend, holiday) falls back to the stored bar
       // close (no regression). Not fetched for historical bars.
       const officialCloseByDate = new Map<string, number>();
-      for (const b of analysisBars.slice(-2)) {
-        if (!b.barDate) continue;
-        const oc = await this.polygon.getOfficialClose(ticker, b.barDate);
-        if (oc != null) officialCloseByDate.set(b.barDate, oc);
-      }
+      // Official H/L/C of the possible pivot-basis sessions (see officialBarsFor).
+      const officialBars = await officialBarsFor(this.polygon, ticker, analysisBars);
+      for (const [d, b] of officialBars) officialCloseByDate.set(d, b.close);
       const ind = computeIndicators(
         analysisBars,
         spyMap,
         undefined,
         officialCloseByDate,
-        await officialTodayBarFor(this.polygon, ticker, analysisBars),
+        officialBars,
       );
       if (!ind) return {};
 

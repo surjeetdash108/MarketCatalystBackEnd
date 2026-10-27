@@ -572,7 +572,13 @@ export function computeIndicators(
     : regularSessionClosed && todayOfficial
       ? [...bars.slice(0, -1), { ...latestBar, ...todayOfficial }]
       : bars.slice(0, -1);
-  const pivotBasisBar = completedBars[completedBars.length - 1];
+  // The basis session carries its OFFICIAL high/low/close when the caller has
+  // them: a stored bar can hold vendor or mid-session high/low that are not the
+  // official ones (BJRI Oct 23: stored 58.31 / 55.99 vs official 58.46 / 55.59,
+  // E2E Oct 26), and correcting only the close left the pivots off.
+  const basisRaw = completedBars[completedBars.length - 1];
+  const basisOfficial = basisRaw?.barDate ? officialBarByDate?.get(basisRaw.barDate) : undefined;
+  const pivotBasisBar = basisOfficial && basisRaw ? { ...basisRaw, ...basisOfficial } : basisRaw;
 
   // 52-week range over the completed sessions of the last 52 weeks (see
   // fiftyTwoWeekWindow) — never an in-progress session.
@@ -712,12 +718,12 @@ export function computeIndicators(
 }
 
 /**
- * The official day bar for TODAY's stored bar (see computeIndicators'
- * officialBarByDate), fetched only after the 16:00 ET close and only when the
- * newest bar is dated today — at most one call per build. Empty otherwise, which
- * keeps the prior completed session as the pivot basis.
+ * Official high/low/close (Polygon open-close) for the sessions a pivot basis
+ * can be: the last two bars, today's only once its regular session has closed.
+ * Used for the pivot basis and, after the close, to finalise today's bar (see
+ * computeIndicators' officialBarByDate) — two calls per build, as before.
  */
-export async function officialTodayBarFor(
+export async function officialBarsFor(
   polygon: { getOfficialDayBar(ticker: string, date: string): Promise<{ high: number; low: number; close: number } | null> },
   ticker: string,
   bars: ReadonlyArray<{ barDate?: string }>,
@@ -725,10 +731,12 @@ export async function officialTodayBarFor(
 ): Promise<Map<string, { high: number; low: number; close: number }>> {
   const map = new Map<string, { high: number; low: number; close: number }>();
   const { etDate, regularSessionClosed } = marketTimeEt(now);
-  const last = bars[bars.length - 1]?.barDate;
-  if (!regularSessionClosed || last !== etDate) return map;
-  const bar = await polygon.getOfficialDayBar(ticker, etDate).catch(() => null);
-  if (bar) map.set(etDate, bar);
+  for (const b of bars.slice(-2)) {
+    const d = b.barDate;
+    if (!d || d > etDate || (d === etDate && !regularSessionClosed)) continue;
+    const bar = await polygon.getOfficialDayBar(ticker, d).catch(() => null);
+    if (bar) map.set(d, bar);
+  }
   return map;
 }
 
@@ -946,28 +954,9 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
     // bar dates (the possible basis dates) and pass only non-null results — any
     // miss / weekend / holiday leaves the map empty and the pivot falls back to
     // the stored bar close (no regression). Not fetched for historical bars.
-    const officialCloseByDate = await this.officialCloseMapFor(ticker, bars);
-    const officialBarByDate = await officialTodayBarFor(this.polygon, ticker, bars);
+    const officialBarByDate = await officialBarsFor(this.polygon, ticker, bars);
+    const officialCloseByDate = new Map([...officialBarByDate].map(([d, b]) => [d, b.close]));
     return computeIndicators(bars, mktByDate, undefined, officialCloseByDate, officialBarByDate);
-  }
-
-  /**
-   * Build the pivot-basis official-close map: at most the last two ascending bar
-   * dates, each looked up via Polygon's official (regular-session) close. Only
-   * non-null lookups are added, so an empty map (all failed / no dates) makes
-   * computeIndicators fall back to the stored daily close. 1–2 calls per build.
-   */
-  private async officialCloseMapFor(
-    ticker: string,
-    bars: IndicatorBar[],
-  ): Promise<Map<string, number>> {
-    const map = new Map<string, number>();
-    for (const b of bars.slice(-2)) {
-      if (!b.barDate) continue;
-      const oc = await this.polygon.getOfficialClose(ticker, b.barDate);
-      if (oc != null) map.set(b.barDate, oc);
-    }
-    return map;
   }
 
   async run() {
