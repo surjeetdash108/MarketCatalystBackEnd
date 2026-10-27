@@ -45,3 +45,31 @@ describe("52-week high/low — 52-week (364-day) window of completed sessions", 
     expect(ind.high52).not.toBe(120);
   });
 });
+
+describe("52-week range during the session the vendor has not rolled over yet", () => {
+  // Real Polygon bars to Mon Oct 26 2026. Public (Yahoo), read Oct 26 15:45–18:00 ET:
+  // ANIP 96.57, MSEX 62.18, ORCL 287 — the 52 weeks ending at the PREVIOUS
+  // session (Fri Oct 23, so from Mon Oct 27 2025) plus today's high/low. The
+  // window rolls to the new session only once its day, extended hours
+  // included, is over (20:00 ET) — the Oct 23 reads above came after it.
+  const fx = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures/52w-rollover-oct26.json"), "utf-8"));
+  const AFTER_CLOSE_OCT26 = new Date("2026-10-26T21:00:00Z"); // 17:00 ET
+
+  it.each([
+    ["ANIP", "high52", 96.57],
+    ["MSEX", "high52", 62.18],
+    ["ORCL", "high52", 287],
+  ])("%s %s matches the public value read on Oct 26 after the close", (t, field, expected) => {
+    // As the live API runs it after 16:00: with Polygon's official Oct 26 day bar.
+    const bars = fx[t as string];
+    const last = bars[bars.length - 1];
+    const official = new Map([[last.barDate, { high: last.high, low: last.low, close: last.close }]]);
+    const ind = computeIndicators(bars, new Map(), AFTER_CLOSE_OCT26, undefined, official)!;
+    expect(Math.abs((ind as unknown as Record<string, number>)[field as string] - (expected as number))).toBeLessThanOrEqual((expected as number) * 0.005);
+  });
+
+  it("after 20:00 ET the window rolls to the new session", () => {
+    const w = fiftyTwoWeekWindow(fx.ANIP, new Date("2026-10-27T01:00:00Z")); // 21:00 ET Oct 26
+    expect(w[0].barDate).toBe("2025-10-28");
+  });
+});

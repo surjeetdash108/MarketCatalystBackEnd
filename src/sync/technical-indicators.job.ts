@@ -1,3 +1,4 @@
+import { etDate as etDateOfInstant } from "../common/market-calendar.util";
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import {
@@ -575,7 +576,7 @@ export function computeIndicators(
 
   // 52-week range over the completed sessions of the last 52 weeks (see
   // fiftyTwoWeekWindow) — never an in-progress session.
-  const yearBars = fiftyTwoWeekWindow(completedBars);
+  const yearBars = fiftyTwoWeekWindow(completedBars, now);
   const yearHighs = yearBars.map((b) => b.high);
   const yearLows = yearBars.map((b) => b.low);
   const high52 = yearHighs.length > 0 ? Math.max(...yearHighs) : null;
@@ -734,21 +735,38 @@ export async function officialTodayBarFor(
 /** 52 weeks, in days. */
 const FIFTY_TWO_WEEKS_DAYS = 364;
 
+/** Minutes past midnight in New York for an instant. */
+function etMinutes(d: Date): number {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false })
+      .formatToParts(d).map((x) => [x.type, x.value]),
+  );
+  return (Number(p.hour) % 24) * 60 + Number(p.minute);
+}
+
+/** The vendor day rolls to a new session once that day's extended hours end. */
+const ROLLOVER_MINUTES_ET = 20 * 60;
+
 /**
- * The sessions of the 52 weeks ending at the newest bar: every bar dated AFTER
- * (newest bar date − 364 days). `bars` ascending, completed sessions only.
+ * The sessions of the 52 weeks the published range covers: every bar dated
+ * AFTER (anchor − 364 days), through the newest bar. `bars` ascending,
+ * completed sessions only.
  *
- * Quote pages define the range as 52 weeks back from the last session: for the
- * Oct 23 2026 close the window opens Mon Oct 27 2025 (Fri Oct 24 2025 is
- * exactly 364 days back and excluded). "The last 252 sessions" reached Oct 23
- * 2025 and "after the same date a year back" still took Oct 24 — both put a
- * year-old extreme into the range (SFM 109.61 / GS 744.66 / CAT 513.01 against
- * the published 107.31 / 754 / 521.43).
+ * The anchor is the newest session once its day — extended hours included —
+ * is over (20:00 ET). Before that, quote pages still measure the 52 weeks from
+ * the PREVIOUS session and widen them with today's high/low. Measured on both
+ * E2E workbooks (all 52-week rows, both halves): read Oct 26 15:45–18:00 ET,
+ * ANIP 96.57 / MSEX 62.18 / ORCL 287 include Mon Oct 27 2025 (anchor Fri Oct
+ * 23); read after midnight on Oct 23, SFM 107.31 / GS 754 / CAT 521.43 start
+ * at Oct 27 2025 (anchor Oct 23). Anchoring at the newest bar as soon as it
+ * completed got the first three wrong (95.57 / 61.60 / 285.46).
  */
-export function fiftyTwoWeekWindow<T extends { barDate?: string }>(bars: ReadonlyArray<T>): T[] {
+export function fiftyTwoWeekWindow<T extends { barDate?: string }>(bars: ReadonlyArray<T>, now: Date = new Date()): T[] {
   const last = bars[bars.length - 1]?.barDate;
   if (!last) return bars.slice(-TRADING_DAYS_YEAR);
-  const start = new Date(`${last}T00:00:00Z`);
+  const prev = bars[bars.length - 2]?.barDate;
+  const anchor = prev && last === etDateOfInstant(now) && etMinutes(now) < ROLLOVER_MINUTES_ET ? prev : last;
+  const start = new Date(`${anchor}T00:00:00Z`);
   start.setUTCDate(start.getUTCDate() - FIFTY_TWO_WEEKS_DAYS);
   const cut = start.toISOString().slice(0, 10);
   return bars.filter((b) => b.barDate != null && b.barDate > cut);
