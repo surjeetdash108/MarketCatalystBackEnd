@@ -410,11 +410,15 @@ export class SnapshotCacheService implements OnModuleDestroy {
     // caller is not handed an empty result on a cold start. Subsequent calls
     // are served from cache by the timer. Also refresh stale entries if Cloud Run
     // timer suspended during inactivity (e.g. quote freeze).
+    // Older than one refresh interval during the session (04:00–20:00 ET) is
+    // stale on READ. The interval timer cannot be relied on to keep entries
+    // fresh (no CPU between requests), and a 60 s allowance plus a 30 s client
+    // poll left the search dropdown minutes behind the header (E2E Oct 26).
     const isStale = (t: string) => {
       const entry = this.cache.get(t);
       if (!entry) return true;
       if (inExtendedSession(new Date(now))) {
-        return now - entry.fetchedAt > Math.max(60_000, this.refreshMs * 2);
+        return now - entry.fetchedAt > this.refreshMs;
       }
       return false;
     };
@@ -496,8 +500,18 @@ export class SnapshotCacheService implements OnModuleDestroy {
   /** The refresh in progress, so a cold request can wait for it. */
   private inflight: Promise<void> | null = null;
 
-  private refresh(tickers: string[]): Promise<void> {
-    if (this.refreshing || tickers.length === 0) return this.inflight ?? Promise.resolve();
+  private refresh(tickers: string[], attempt = 0): Promise<void> {
+    if (tickers.length === 0) return Promise.resolve();
+    // A refresh already running covers only ITS tickers. Returning it here
+    // (as before) dropped any ticker it did not include — a first-time ticker
+    // requested during a refresh came back with no quote at all (the search
+    // dropdown's "no price" rows, E2E Oct 26). Wait for it, then fetch whatever
+    // it did not cover.
+    if (this.refreshing) {
+      const running = this.inflight ?? Promise.resolve();
+      if (attempt >= 3) return running;
+      return running.then(() => this.refresh(tickers.filter((t) => !this.cache.has(t) || this.cache.get(t)!.fetchedAt < Date.now() - this.refreshMs), attempt + 1));
+    }
     const run = this.doRefresh(tickers).finally(() => {
       if (this.inflight === run) this.inflight = null;
     });
