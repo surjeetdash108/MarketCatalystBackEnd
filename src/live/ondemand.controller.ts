@@ -577,7 +577,11 @@ ${JSON.stringify(ctx, null, 2)}`,
     if (!TICKER_RE.test(sym))
       throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
     const doc = await this.ondemand.getFinancials(sym);
-    if (!doc) throw new NotFoundException(`No data for ${sym}`);
+    if (!doc) {
+      res.setHeader("Cache-Control", "public, max-age=300, s-maxage=300, stale-while-revalidate=600");
+      res.json({ ticker: sym, quarters: [], annual: [], epsHistory: [] });
+      return;
+    }
     sendWithEtag(req, res, doc);
   }
 

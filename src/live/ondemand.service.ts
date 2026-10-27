@@ -2007,16 +2007,41 @@ export class OnDemandService implements OnModuleDestroy {
     ticker: string,
   ): Promise<{ data: Buffer; contentType: string } | null> {
     const mem = this.memLogo.get(ticker);
-    if (mem && mem.data && Date.now() - mem.at < 24 * 60 * 60_000) return mem.data;
+    // Positive cache: 7 days. Negative cache (missing logo): 1 hour.
+    if (mem && Date.now() - mem.at < (mem.data ? 7 * 24 * 60 * 60_000 : 60 * 60_000)) {
+      return mem.data;
+    }
     this.recordUsage(ticker);
+
+    // 1. Polygon branding
     let img = await this.polygon.getBrandingImage(ticker).catch(() => null);
+
+    // 2. FMP image CDN (fast public CDN, high coverage including ETFs)
+    if (!img) {
+      try {
+        const fmpResp = await fetch(
+          `https://images.financialmodelingprep.com/symbol/${encodeURIComponent(ticker)}.png`,
+          { headers: { "User-Agent": "MarketCatalyst/1.0" }, signal: AbortSignal.timeout(2000) },
+        );
+        if (fmpResp.ok && fmpResp.headers.get("content-type")?.startsWith("image/")) {
+          const contentType =
+            fmpResp.headers.get("content-type") ?? "image/png";
+          const data = Buffer.from(await fmpResp.arrayBuffer());
+          img = { data, contentType };
+        }
+      } catch {
+        // Fall back to Parqet
+      }
+    }
+
+    // 3. Parqet fallback (ETFs / secondary symbols)
     if (!img) {
       try {
         const parqetResp = await fetch(
           `https://assets.parqet.com/logos/symbol/${encodeURIComponent(ticker)}?format=png`,
-          { headers: { "User-Agent": "MarketCatalyst/1.0" } },
+          { headers: { "User-Agent": "MarketCatalyst/1.0" }, signal: AbortSignal.timeout(2000) },
         );
-        if (parqetResp.ok) {
+        if (parqetResp.ok && parqetResp.headers.get("content-type")?.startsWith("image/")) {
           const contentType =
             parqetResp.headers.get("content-type") ?? "image/png";
           const data = Buffer.from(await parqetResp.arrayBuffer());
@@ -2026,6 +2051,8 @@ export class OnDemandService implements OnModuleDestroy {
         // Fall back to null
       }
     }
+
+    // Cache both positive and negative results so missing logos never re-hit vendors repeatedly
     this.memLogo.set(ticker, { data: img, at: Date.now() });
     return img;
   }
