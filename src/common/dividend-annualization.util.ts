@@ -102,6 +102,13 @@ export function paymentsPerYearFromSpacing(regular: DivHistItem[]): number | nul
  * frequency nor the ex-date spacing determines a cadence, so the caller leaves
  * dividendYield null rather than falling back to a (misleading) TTM sum.
  */
+/**
+ * A payment above this multiple of the recent median is not the regular rate.
+ * Evidence (forward dividend, E2E Oct 26, alphabetical halves): 50/52 + 48/48
+ * vs the current 49/52 + 48/48 (half 2 already at 100%).
+ */
+const OUTLIER_MULTIPLE = 1.5;
+
 export function forwardAnnualDividend(
   history: DivHistItem[],
   nowMs = Date.now(),
@@ -111,8 +118,16 @@ export function forwardAnnualDividend(
   );
   if (regular.length === 0) return null;
 
-  // history is newest-first, so the first regular row is the latest payment.
-  const latest = regular[0];
+  // history is newest-first, so the first regular row is the latest payment —
+  // unless it stands far above the recent run. A special the vendor tags as a
+  // regular cash dividend (ETD's $3.00 on 2026-09-03, "frequency 12") was
+  // annualized into $36/yr vs the published $1.56. A payment above
+  // OUTLIER_MULTIPLE × the median of the last 8 regular payments is passed over
+  // for the latest one that is not.
+  const recent = regular.slice(0, 8).map(getDivAmount).sort((a, b) => a - b);
+  const mid = Math.floor(recent.length / 2);
+  const median = recent.length % 2 ? recent[mid] : (recent[mid - 1] + recent[mid]) / 2;
+  const latest = regular.find((d) => getDivAmount(d) <= OUTLIER_MULTIPLE * median) ?? regular[0];
   const perPayment = getDivAmount(latest);
   if (!(perPayment > 0)) return null;
 
@@ -124,7 +139,9 @@ export function forwardAnnualDividend(
   // Grace window: require latest ex-dividend date to be within 1 cadence period + 60 days.
   // If a company suspended its dividend years ago (e.g. BA or PLAY in 2020),
   // annualizing a multi-year-old dividend revived a suspended/dead yield.
-  const exDateStr = getDivDate(latest);
+  // Recency is the newest regular payment's — an outlier skipped above still
+  // shows the company is paying.
+  const exDateStr = getDivDate(regular[0]);
   if (exDateStr) {
     const exTime = Date.parse(exDateStr);
     if (Number.isFinite(exTime)) {

@@ -103,3 +103,19 @@ describe("dividend-annualization.util", () => {
     });
   });
 });
+
+describe("forwardAnnualDividend skips a payment far above the recent run", () => {
+  // Real Polygon histories (deployed /live/dividend-history, 2026-10-26). ETD's
+  // Sep 3 $3.00 and Aug 12 $0.64 specials are tagged regular cash dividends,
+  // the $3.00 with frequency 12 — forward read $36 (yield 178%) vs public $1.56.
+  const fx = JSON.parse(
+    require("fs").readFileSync(require("path").join(__dirname, "fixtures/dividend-history-etd-pep-lcut.json"), "utf-8"),
+  );
+  const at = Date.parse("2026-10-26T20:00:00Z");
+  it("ETD: forward 1.56 (0.39 × 4), not 36", () => {
+    expect(forwardAnnualDividend(fx.ETD, at)?.perShare).toBeCloseTo(1.56, 4);
+  });
+  it.each([["PEP", 5.92], ["LCUT", 0.17]])("%s (regular payer) unchanged: %s", (t, v) => {
+    expect(forwardAnnualDividend(fx[t as string], at)?.perShare).toBeCloseTo(v as number, 4);
+  });
+});
