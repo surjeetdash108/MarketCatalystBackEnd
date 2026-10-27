@@ -2061,7 +2061,13 @@ export class OnDemandService implements OnModuleDestroy {
     const key = `dividend_history_${ticker}`;
     const existing = this.inflight.get(key) as
       Promise<Record<string, unknown> | null> | undefined;
-    if (existing) return existing;
+    // A usable stored doc is served at once while it is rebuilt (stale-while-
+    // revalidate): waiting on a full vendor rebuild outran the UI's 20 s timeout
+    // and rendered stored data as missing (E2E Oct 26: LCUT ex-dividend "N/A",
+    // KR statements). The rebuild writes the doc for the next request.
+    const staleDoc = snap.exists ? (snap.data() as Record<string, unknown>) : null;
+    const serveStale = staleDoc != null && (Array.isArray(staleDoc.history) && (staleDoc.history as unknown[]).length > 0);
+    if (existing) return serveStale ? staleDoc : existing;
 
     const p = (async () => {
       const [rawHistory, splits] = await Promise.all([
@@ -2135,6 +2141,10 @@ export class OnDemandService implements OnModuleDestroy {
     })().finally(() => this.inflight.delete(key));
 
     this.inflight.set(key, p);
+    if (serveStale) {
+      p.catch((err) => this.logger.warn(`background rebuild failed for ${ticker}: ${(err as Error)?.message ?? err}`));
+      return staleDoc;
+    }
     return p;
   }
 
@@ -2218,7 +2228,13 @@ export class OnDemandService implements OnModuleDestroy {
     const key = `financials_${ticker}`;
     const existing = this.inflight.get(key) as
       Promise<Record<string, unknown> | null> | undefined;
-    if (existing) return existing;
+    // A usable stored doc is served at once while it is rebuilt (stale-while-
+    // revalidate): waiting on a full vendor rebuild outran the UI's 20 s timeout
+    // and rendered stored data as missing (E2E Oct 26: LCUT ex-dividend "N/A",
+    // KR statements). The rebuild writes the doc for the next request.
+    const staleDoc = snap.exists ? (snap.data() as Record<string, unknown>) : null;
+    const serveStale = staleDoc != null && (Array.isArray(staleDoc.quarters) && (staleDoc.quarters as unknown[]).length > 0);
+    if (existing) return serveStale ? staleDoc : existing;
 
     const p = (async () => {
       // The bulk sync job (financials.job.ts) is the ONLY writer that fetches the
@@ -2427,6 +2443,10 @@ export class OnDemandService implements OnModuleDestroy {
     })().finally(() => this.inflight.delete(key));
 
     this.inflight.set(key, p);
+    if (serveStale) {
+      p.catch((err) => this.logger.warn(`background rebuild failed for ${ticker}: ${(err as Error)?.message ?? err}`));
+      return staleDoc;
+    }
     return p;
   }
 
