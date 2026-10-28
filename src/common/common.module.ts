@@ -10,6 +10,7 @@ import { FirebaseAdminService } from "./firebase-admin.provider";
 import { NotificationsService } from "./notifications.service";
 import { SyncMetaService } from "./sync-meta.service";
 import { SyncRegistry } from "./sync-registry.service";
+import { UserSessionService } from "./user-session.service";
 
 @Global()
 @Module({
@@ -19,6 +20,7 @@ import { SyncRegistry } from "./sync-registry.service";
     DelistedTickerGuard,
     FirebaseAuthGuard,
     FirebaseAdminService,
+    UserSessionService,
     SyncRegistry,
     SyncMetaService,
     NotificationsService,
@@ -33,6 +35,7 @@ import { SyncRegistry } from "./sync-registry.service";
     DelistedTickerGuard,
     FirebaseAuthGuard,
     FirebaseAdminService,
+    UserSessionService,
     SyncRegistry,
     SyncMetaService,
     NotificationsService,
