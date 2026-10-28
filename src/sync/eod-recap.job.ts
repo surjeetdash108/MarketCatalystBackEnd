@@ -454,16 +454,16 @@ Order of sections is FIXED:
 <div class="toc">
   <div class="toc-title">In this article</div>
   <ol>
-    <li><a href="#numbers" rel="noopener noreferrer nofollow">The numbers, by the close</a></li>
-    <li><a href="#etf-scoreboard" rel="noopener noreferrer nofollow">ETF scoreboard</a></li>
-    <li><a href="#sentiment" rel="noopener noreferrer nofollow">Market temperature and volatility</a></li>
-    <li><a href="#cross-asset" rel="noopener noreferrer nofollow">Rates, dollar, gold, and crypto</a></li>
-    <li><a href="#sectors" rel="noopener noreferrer nofollow">Sectors: leaders and laggards</a></li>
-    <li><a href="#drivers" rel="noopener noreferrer nofollow">The day's market-moving stories</a></li>
-    <li><a href="#movers" rel="noopener noreferrer nofollow">Movers below the headlines</a></li>
-    <li><a href="#risks" rel="noopener noreferrer nofollow">Key market &amp; macro risks to watch</a></li>
-    <li><a href="#calendar" rel="noopener noreferrer nofollow">What to watch next</a></li>
-    <li><a href="#takeaway" rel="noopener noreferrer nofollow">The takeaway</a></li>
+    <li><a href="#numbers">The numbers, by the close</a></li>
+    <li><a href="#etf-scoreboard">ETF scoreboard</a></li>
+    <li><a href="#sentiment">Market temperature and volatility</a></li>
+    <li><a href="#cross-asset">Rates, dollar, gold, and crypto</a></li>
+    <li><a href="#sectors">Sectors: leaders and laggards</a></li>
+    <li><a href="#drivers">The day's market-moving stories</a></li>
+    <li><a href="#movers">Movers below the headlines</a></li>
+    <li><a href="#risks">Key market &amp; macro risks to watch</a></li>
+    <li><a href="#calendar">What to watch next</a></li>
+    <li><a href="#takeaway">The takeaway</a></li>
   </ol>
 </div>
 <hr class="rule">
@@ -1157,7 +1157,7 @@ ${RECAP_TEMPLATE_CSS}
 ${input.bodyHtml}
 
 <div class="disclaimer">
-  <p><a href="https://marketcatalyst.ai/" target="_blank" rel="noopener noreferrer nofollow">MarketCatalyst</a> LLC is not a registered investment advisor and does not manage client assets. Content on this platform is provided for informational and educational purposes only. It is not investment advice, and MarketCatalyst is not a stock-picking or trade-alert service. Trading stocks and options involves risk, including the possible loss of principal. Consider your own goals, time horizon, and risk tolerance, and consult a qualified financial advisor before making any investment decision.</p>
+  <p><a href="https://marketcatalyst.ai/" target="_blank">MarketCatalyst</a> is not a registered investment advisor and does not manage client assets. Content on this platform is provided for informational and educational purposes only. It is not investment advice, and MarketCatalyst is not a stock-picking or trade-alert service. Trading stocks and options involves risk, including the possible loss of principal. Consider your own goals, time horizon, and risk tolerance, and consult a qualified financial advisor before making any investment decision.</p>
 </div>
 
 </div>
@@ -1172,16 +1172,16 @@ ${input.bodyHtml}
 const CANONICAL_TOC = `<div class="toc">
   <div class="toc-title">In this article</div>
   <ol>
-    <li><a href="#numbers" rel="noopener noreferrer nofollow">The numbers, by the close</a></li>
-    <li><a href="#etf-scoreboard" rel="noopener noreferrer nofollow">ETF scoreboard</a></li>
-    <li><a href="#sentiment" rel="noopener noreferrer nofollow">Market temperature and volatility</a></li>
-    <li><a href="#cross-asset" rel="noopener noreferrer nofollow">Rates, dollar, gold, and crypto</a></li>
-    <li><a href="#sectors" rel="noopener noreferrer nofollow">Sectors: leaders and laggards</a></li>
-    <li><a href="#drivers" rel="noopener noreferrer nofollow">The day's market-moving stories</a></li>
-    <li><a href="#movers" rel="noopener noreferrer nofollow">Movers below the headlines</a></li>
-    <li><a href="#risks" rel="noopener noreferrer nofollow">Key market &amp; macro risks to watch</a></li>
-    <li><a href="#calendar" rel="noopener noreferrer nofollow">What to watch next</a></li>
-    <li><a href="#takeaway" rel="noopener noreferrer nofollow">The takeaway</a></li>
+    <li><a href="#numbers">The numbers, by the close</a></li>
+    <li><a href="#etf-scoreboard">ETF scoreboard</a></li>
+    <li><a href="#sentiment">Market temperature and volatility</a></li>
+    <li><a href="#cross-asset">Rates, dollar, gold, and crypto</a></li>
+    <li><a href="#sectors">Sectors: leaders and laggards</a></li>
+    <li><a href="#drivers">The day's market-moving stories</a></li>
+    <li><a href="#movers">Movers below the headlines</a></li>
+    <li><a href="#risks">Key market &amp; macro risks to watch</a></li>
+    <li><a href="#calendar">What to watch next</a></li>
+    <li><a href="#takeaway">The takeaway</a></li>
   </ol>
 </div>
 <hr class="rule">`;

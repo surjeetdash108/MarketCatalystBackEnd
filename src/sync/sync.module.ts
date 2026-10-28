@@ -56,6 +56,9 @@ import { EodRecapJob } from "./eod-recap.job";
 import { TickerUniverseJob } from "./ticker-universe.job";
 import { PremarketJob } from "./premarket.job";
 import { PremarketPostJob } from "./premarket-post.job";
+import { D03PremarketMoversJob } from "./d03-premarket-movers.job";
+import { D04AnalystCallsJob } from "./d04-analyst-calls.job";
+import { D06WhyItMovedJob } from "./d06-why-it-moved.job";
 import { EtfHoldingsJob } from "./etf-holdings.job";
 import { EtfMarketJob } from "./etf-market.job";
 import { MarketGlanceWeeklyJob } from "./market-glance-weekly.job";
@@ -126,6 +129,9 @@ import { MarketDataModule } from "../market-data/market-data.module";
     PremarketJob,
     EodRecapJob,
     PremarketPostJob,
+    D03PremarketMoversJob,
+    D04AnalystCallsJob,
+    D06WhyItMovedJob,
     EtfHoldingsJob,
     EtfMarketJob,
     MarketGlanceWeeklyJob,
