@@ -5,6 +5,7 @@ import { FeatureRequestsController } from "./feature-requests.controller";
 import { NotificationsController } from "./notifications.controller";
 import { PortfolioController } from "./portfolio.controller";
 import { ProfileController } from "./profile.controller";
+import { SessionController } from "./session.controller";
 import { SettingsController } from "./settings.controller";
 import { StockNotesController } from "./stock-notes.controller";
 import { WatchlistController } from "./watchlist.controller";
@@ -25,6 +26,7 @@ import { WhoamiUserController } from "./whoami-user.controller";
     StockNotesController,
     WatchlistController,
     PortfolioController,
+    SessionController,
     SettingsController,
     ProfileController,
     NotificationsController,
