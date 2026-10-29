@@ -231,6 +231,41 @@ describe("StockDetailsService", () => {
       expect(by.has("ONEAN")).toBe(false);
       expect(ratings.getConsensus).not.toHaveBeenCalledWith("ESLOY");
     });
+
+    it("shares one FMP rebuild between concurrent cold callers", async () => {
+      const getLatestGrades = jest.fn(async () => []);
+      const getLatestPriceTargets = jest.fn(async () => []);
+      const { svc } = make({ fmp: { getLatestGrades, getLatestPriceTargets } });
+      const base = [{ id: "AAPL", ticker: "AAPL" }];
+      const [a, b] = await Promise.all([
+        svc.getMarketWideAnalystActions(base),
+        svc.getMarketWideAnalystActions(base),
+      ]);
+      expect(a).toBe(b);
+      expect(getLatestGrades).toHaveBeenCalledTimes(3); // MARKET_GRADES_PAGES, once
+    });
+
+    it("serves the stale feed at once after expiry while one rebuild runs", async () => {
+      jest.useFakeTimers({ doNotFake: ["setImmediate", "nextTick"] });
+      try {
+        const getLatestGrades = jest.fn(async () => []);
+        const getLatestPriceTargets = jest.fn(async () => []);
+        const { svc } = make({ fmp: { getLatestGrades, getLatestPriceTargets } });
+        const first = await svc.getMarketWideAnalystActions([{ id: "OLD", ticker: "OLD" }]);
+        jest.advanceTimersByTime(6 * 60_000); // past the 5-min feed TTL
+
+        let release!: () => void;
+        getLatestGrades.mockImplementation(() => new Promise((r) => (release = () => r([]))));
+        const stale = await svc.getMarketWideAnalystActions([{ id: "NEW", ticker: "NEW" }]);
+        const again = await svc.getMarketWideAnalystActions([{ id: "NEW", ticker: "NEW" }]);
+        expect(stale).toBe(first);
+        expect(again).toBe(first);
+        expect(getLatestGrades).toHaveBeenCalledTimes(3 + 3); // cold build + ONE rebuild
+        release();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   describe("analyst consensus", () => {

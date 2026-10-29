@@ -377,6 +377,7 @@ export class StockDetailsService {
   }
 
   private marketWideAnalystCache: { expires: number; data: Doc[] } | null = null;
+  private marketWideAnalystLoading: Promise<Doc[]> | null = null;
 
   /**
    * The Analyst Actions feed: the swept `analyst_actions` docs plus FMP's
@@ -390,11 +391,18 @@ export class StockDetailsService {
    * stock FMP has no consensus for is left out. US listings only.
    */
   async getMarketWideAnalystActions(baseDocs: Doc[]): Promise<Doc[]> {
-    const now = Date.now();
-    if (this.marketWideAnalystCache && this.marketWideAnalystCache.expires > now) {
-      return this.marketWideAnalystCache.data;
-    }
+    const cached = this.marketWideAnalystCache;
+    if (cached && cached.expires > Date.now()) return cached.data;
     if (!this.fmp?.enabled) return baseDocs;
+    // One rebuild at a time (a cold one is dozens of FMP calls, ~30 s), and a
+    // stale feed is served while it runs — same pattern as the insider feed.
+    this.marketWideAnalystLoading ??= this.buildMarketWideAnalystActions(baseDocs).finally(() => {
+      this.marketWideAnalystLoading = null;
+    });
+    return cached ? cached.data : this.marketWideAnalystLoading;
+  }
+
+  private async buildMarketWideAnalystActions(baseDocs: Doc[]): Promise<Doc[]> {
     try {
       const pages = await Promise.all(
         Array.from({ length: MARKET_GRADES_PAGES }, (_, i) => this.fmp.getLatestGrades(i, 100).catch(() => [])),
@@ -534,7 +542,7 @@ export class StockDetailsService {
       }
 
       const merged = Array.from(docMap.values());
-      this.marketWideAnalystCache = { expires: now + 5 * 60_000, data: merged };
+      this.marketWideAnalystCache = { expires: Date.now() + 5 * 60_000, data: merged };
       return merged;
     } catch (err) {
       this.logger.warn(`marketWideAnalystActions failed: ${errMessage(err)}`);
