@@ -71,6 +71,8 @@ const FAST = new Set<string>([
   "sectors",
 ]);
 
+const RETRY_BACKOFF_MS = 30 * 1000;
+
 const ttlFor = (name: string): number =>
   FAST.has(name) ? FAST_TTL_MS : SLOW_TTL_MS;
 
@@ -78,6 +80,7 @@ const ttlFor = (name: string): number =>
 export class CachedCollectionsService {
   private readonly logger = new Logger(CachedCollectionsService.name);
   private readonly cache = new Map<string, { data: unknown[]; at: number }>();
+  private readonly inflight = new Map<string, Promise<unknown[]>>();
 
   constructor(
     private readonly firebase: FirebaseAdminService,
@@ -88,7 +91,54 @@ export class CachedCollectionsService {
     return ALLOWED.has(name);
   }
 
-  /** Fetch the requested (allow-listed) collections, from cache when fresh. */
+  /**
+   * Warm the intraday collections at boot so the first dashboard load doesn't
+   * pay a cold full-collection read (and every concurrent caller with it).
+   */
+  onApplicationBootstrap(): void {
+    for (const name of FAST) void this.load(name);
+  }
+
+  /**
+   * One Firestore read per collection at a time: concurrent callers (the
+   * dashboard fires several endpoints backed by `companies` at once) share the
+   * same promise instead of each reading the whole collection. Never rejects.
+   */
+  private load(name: string): Promise<unknown[]> {
+    const running = this.inflight.get(name);
+    if (running) return running;
+    const prev = this.cache.get(name);
+    const run = (async () => {
+      try {
+        const snap = await this.firebase.firestore.collection(name).get();
+        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        this.cache.set(name, { data, at: Date.now() });
+        return data;
+      } catch (err) {
+        // Serve stale on error if we have it; else an empty array (the client
+        // falls back to its own direct Firestore read).
+        this.logger.warn(
+          `cached-collections read failed for ${name}: ${(err as Error).message}`,
+        );
+        if (prev) {
+          // Retry in ~30s rather than on every request while Firestore is down.
+          this.cache.set(name, {
+            data: prev.data,
+            at: Date.now() - ttlFor(name) + RETRY_BACKOFF_MS,
+          });
+        }
+        return prev?.data ?? [];
+      }
+    })().finally(() => this.inflight.delete(name));
+    this.inflight.set(name, run);
+    return run;
+  }
+
+  /**
+   * Fetch the requested (allow-listed) collections. Fresh → cache; stale → the
+   * stale copy is served at once while a single background refresh runs; only a
+   * truly cold collection makes the caller wait.
+   */
   async get(names: string[]): Promise<Record<string, unknown[]>> {
     const out: Record<string, unknown[]> = {};
     await Promise.all(
@@ -98,19 +148,12 @@ export class CachedCollectionsService {
           out[name] = hit.data;
           return;
         }
-        try {
-          const snap = await this.firebase.firestore.collection(name).get();
-          const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-          this.cache.set(name, { data, at: Date.now() });
-          out[name] = data;
-        } catch (err) {
-          // Serve stale on error if we have it; else an empty array (the client
-          // falls back to its own direct Firestore read).
-          this.logger.warn(
-            `cached-collections read failed for ${name}: ${(err as Error).message}`,
-          );
-          out[name] = hit?.data ?? [];
+        if (hit) {
+          void this.load(name);
+          out[name] = hit.data;
+          return;
         }
+        out[name] = await this.load(name);
       }),
     );
     // Applied on the way OUT, not to the cache, so a delisting takes effect
