@@ -299,7 +299,7 @@ export class D03PremarketMoversJob implements OnModuleInit {
       // 1. Holiday & trading day gate (skip weekends and NYSE holidays)
       const postKey = `d03_premarket_${today}`;
       const force = process.env.FORCE_RUN === "true";
-      const enabled = process.env.ENABLE_D03_AUTOMATION === "true";
+      const enabled = process.env.ENABLE_D03_AUTOMATION !== "false";
 
       if (!force) {
         const weekday = etWeekday();

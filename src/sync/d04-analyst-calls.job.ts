@@ -230,7 +230,7 @@ export class D04AnalystCallsJob implements OnModuleInit {
     try {
       const postKey = `d04_analyst_calls_${today}`;
       const force = process.env.FORCE_RUN === "true";
-      const enabled = process.env.ENABLE_D04_AUTOMATION === "true";
+      const enabled = process.env.ENABLE_D04_AUTOMATION !== "false";
 
       if (!force) {
         const weekday = etWeekday();

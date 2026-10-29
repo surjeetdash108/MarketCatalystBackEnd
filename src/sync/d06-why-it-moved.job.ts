@@ -282,7 +282,7 @@ export class D06WhyItMovedJob implements OnModuleInit {
 
     try {
       const force = process.env.FORCE_RUN === "true";
-      const enabled = process.env.ENABLE_D06_AUTOMATION === "true";
+      const enabled = process.env.ENABLE_D06_AUTOMATION !== "false";
 
       if (!force) {
         const weekday = etWeekday();
