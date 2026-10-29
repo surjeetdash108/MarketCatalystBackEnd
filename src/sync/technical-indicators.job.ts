@@ -258,7 +258,7 @@ function changeOverSessions(closes: number[], sessions: number): number | null {
  * & resistance levels the "Key levels" widget/drawer render. Derived from the
  * Polygon bars we already store (no vendor has a native S/R feed).
  */
-interface PivotLevels {
+export interface PivotLevels {
   pivot: number | null;
   r1: number | null;
   r2: number | null;
@@ -268,7 +268,7 @@ interface PivotLevels {
   s3: number | null;
 }
 
-function pivotLevels(high: number, low: number, close: number): PivotLevels {
+export function pivotLevels(high: number, low: number, close: number): PivotLevels {
   const p = (high + low + close) / 3;
   const range = high - low;
   return {

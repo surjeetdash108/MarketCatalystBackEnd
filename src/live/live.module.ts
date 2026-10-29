@@ -41,6 +41,8 @@ import { StrategyLabService } from "./strategy-lab.service";
 import { StrategyLabController } from "./strategy-lab.controller";
 import { LabStoreService } from "./strategy-lab/lab-store.service";
 import { LabResultsService } from "./strategy-lab/lab-results.service";
+import { MoneyFlowController } from "./money-flow/money-flow.controller";
+import { MoneyFlowService } from "./money-flow/money-flow.service";
 
 /**
  * Live (delayed) price streaming for the Search screen and the header tape.
@@ -71,6 +73,7 @@ import { LabResultsService } from "./strategy-lab/lab-results.service";
     OnDemandController,
     NewsWireController,
     StrategyLabController,
+    MoneyFlowController,
   ],
   providers: [
     WhatMattersNowService,
@@ -100,6 +103,7 @@ import { LabResultsService } from "./strategy-lab/lab-results.service";
     StrategyLabService,
     LabStoreService,
     LabResultsService,
+    MoneyFlowService,
   ],
   exports: [
     WhatMattersNowService,
