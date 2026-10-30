@@ -1,7 +1,10 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { FmpService } from "../vendors/fmp/fmp.service";
 import { LlmGatewayService } from "../vendors/llm-gateway.service";
-import { toFmpSymbol } from "../vendors/market-data/fmp-mapping.util";
+import {
+  fromFmpSymbol,
+  toFmpSymbol,
+} from "../vendors/market-data/fmp-mapping.util";
 
 /** One bar: [date, open, high, low, close, volume] — compact for the wire. */
 export type LabBar = [string, number, number, number, number, number];
@@ -18,6 +21,9 @@ export const LAB_INTRADAY: Record<string, string> = {
 
 const DAY = 86_400_000;
 const DAILY_TTL_MS = 6 * 3_600_000;
+const UNIVERSE_TTL_MS = 12 * 3_600_000;
+/** Stocks in the Strategy Lab test universe: the largest S&P 500 constituents by market cap. */
+export const LAB_UNIVERSE_SIZE = 50;
 const INTRADAY_TTL_MS = 5 * 60_000;
 /** Safety cap on backwards paging for one intraday request. */
 const MAX_PAGES = 40;
@@ -79,11 +85,64 @@ export class StrategyLabService {
   private readonly logger = new Logger(StrategyLabService.name);
   private readonly cache = new Map<string, { rows: LabBar[]; at: number }>();
   private readonly inflight = new Map<string, Promise<LabBar[]>>();
+  private universeMem: {
+    at: number;
+    value: {
+      asOf: string;
+      source: string;
+      stocks: Array<{ t: string; n: string; marketCap: number }>;
+    };
+  } | null = null;
 
   constructor(
     private readonly fmp: FmpService,
     private readonly llm: LlmGatewayService,
   ) {}
+
+  /**
+   * The test universe: the LAB_UNIVERSE_SIZE largest S&P 500 constituents by
+   * market cap (FMP constituents + FMP quotes), cached for 12 hours. Throws
+   * when FMP can't supply it — the caller shows the error, never a fallback list.
+   */
+  async universe(): Promise<{
+    asOf: string;
+    source: string;
+    stocks: Array<{ t: string; n: string; marketCap: number }>;
+  }> {
+    if (this.universeMem && Date.now() - this.universeMem.at < UNIVERSE_TTL_MS)
+      return this.universeMem.value;
+    const rows = (await this.fmp.request("sp500-constituent")) as Array<{
+      symbol?: string;
+      name?: string;
+    }>;
+    const names = new Map<string, string>();
+    for (const r of rows)
+      if (r?.symbol) names.set(r.symbol, r.name ?? r.symbol);
+    const syms = [...names.keys()];
+    if (!syms.length) throw new Error("FMP returned no S&P 500 constituents");
+    const caps: Array<{ t: string; n: string; marketCap: number }> = [];
+    for (let i = 0; i < syms.length; i += 100) {
+      for (const q of await this.fmp.getQuotes(syms.slice(i, i + 100))) {
+        const mc = Number(q.marketCap);
+        if (Number.isFinite(mc) && mc > 0)
+          caps.push({
+            t: fromFmpSymbol(q.symbol),
+            n: names.get(q.symbol) ?? q.symbol,
+            marketCap: mc,
+          });
+      }
+    }
+    if (caps.length < LAB_UNIVERSE_SIZE)
+      throw new Error(`FMP priced only ${caps.length} S&P 500 constituents`);
+    caps.sort((a, b) => b.marketCap - a.marketCap);
+    const value = {
+      asOf: new Date().toISOString(),
+      source: "FMP S&P 500 constituents ranked by market cap",
+      stocks: caps.slice(0, LAB_UNIVERSE_SIZE),
+    };
+    this.universeMem = { at: Date.now(), value };
+    return value;
+  }
 
   /**
    * Bars for each symbol, ascending. `tf` "d" (daily, `years` back) or an
@@ -134,7 +193,7 @@ export class StrategyLabService {
     const intraday = LAB_INTRADAY[tf];
     const key = intraday
       ? `${sym}|${tf}|${span.days}`
-      : `${sym}|d|${span.years}|${etDay(Date.now())}`;
+      : `${sym}|d|${span.days != null ? span.days + "d" : span.years}|${etDay(Date.now())}`;
     const hit = this.cache.get(key);
     if (
       hit &&
@@ -146,7 +205,10 @@ export class StrategyLabService {
     const p = (
       intraday
         ? this.fetchIntraday(sym, intraday, span.days ?? 21)
-        : this.fetchDaily(sym, span.years ?? 6)
+        : this.fetchDaily(
+            sym,
+            span.days != null ? span.days / 365.25 : (span.years ?? 6),
+          )
     )
       .then((rows) => {
         this.cache.set(key, { rows, at: Date.now() });

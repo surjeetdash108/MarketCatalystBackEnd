@@ -205,8 +205,9 @@ describe("universe runs", () => {
   });
 
   it("runs every stock, keeps only ready/setup rows, counts stocks without data", () => {
+    // UP needs the SMA(50) warm-up before its 1-year window: 365 + 50 bars at least.
     const packs = new Map([
-      ["UP", packFromRows(rising(400), false)],
+      ["UP", packFromRows(rising(430), false)],
       ["SHORT", packFromRows(rising(100), false)],
     ]);
     const run = computeRun(
