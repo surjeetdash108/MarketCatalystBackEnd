@@ -359,6 +359,27 @@ export const API_CATALOG = {
     params: "body: q",
     vendors: LLM,
   },
+  "GET /live/strategy-lab/universe": {
+    summary:
+      "The stocks a Strategy Lab run covers: the 50 largest S&P 500 constituents by market cap.",
+    store: ["S&P 500 constituents and quotes (memory)"],
+    vendors: ["FMP"],
+  },
+  "GET /live/strategy-lab/saved": {
+    summary:
+      "The signed-in user's saved strategies (rules, candle, exit plan, costs, period).",
+    store: ["users/{uid}/lab_strategies"],
+  },
+  "POST /live/strategy-lab/saved/:id": {
+    summary: "Creates or updates one of the signed-in user's saved strategies.",
+    params: "id; body: name, tf, cond, cfg, q, why, hold",
+    store: ["users/{uid}/lab_strategies"],
+  },
+  "DELETE /live/strategy-lab/saved/:id": {
+    summary: "Deletes one of the signed-in user's saved strategies.",
+    params: "id",
+    store: ["users/{uid}/lab_strategies"],
+  },
 
   // ── Market data: shared lists filled by sync jobs ──────────────────────────
   "GET /market-data/companies": {
@@ -1259,6 +1280,10 @@ export const SCREENS = [
       "GET /live/strategy-lab/bars",
       "POST /live/strategy-lab/validate",
       "POST /live/strategy-lab/ai-rules",
+      "GET /live/strategy-lab/universe",
+      "GET /live/strategy-lab/saved",
+      "POST /live/strategy-lab/saved/:id",
+      "DELETE /live/strategy-lab/saved/:id",
       "GET /live/logo",
     ],
   },
