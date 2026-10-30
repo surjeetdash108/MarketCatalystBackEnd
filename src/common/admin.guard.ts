@@ -102,7 +102,12 @@ export class AdminGuard implements CanActivate {
     try {
       const decoded = await this.firebase.auth.verifyIdToken(token);
       const email = (decoded.email ?? "").toLowerCase();
-      if (email === this.adminEmail) return true;
+      if (email === this.adminEmail) {
+        // Exposed so handlers that change state can record WHO did it (the
+        // admin Jobs tab's audit trail). Only ever set from a verified token.
+        req.adminEmail = email;
+        return true;
+      }
       // A real, valid Firebase user who is NOT the admin — always refuse,
       // regardless of trustIam.
       this.logger.warn(

@@ -6,7 +6,15 @@ import type { Firestore } from "firebase-admin/firestore";
 import { AppJobModule } from "./app-job.module";
 import { FirebaseAdminService } from "./common/firebase-admin.provider";
 import { acquireLock, releaseLock } from "./common/job-lock.util";
+import { SyncMetaService } from "./common/sync-meta.service";
 import { SyncRegistry } from "./common/sync-registry.service";
+import {
+  isValidRunId,
+  outcomeFromSyncMeta,
+  reportRunFinished,
+  reportRunStarted,
+  type RunOutcome,
+} from "./api-health/job-runs";
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
@@ -85,6 +93,23 @@ async function main(): Promise<void> {
     );
   }
 
+  // A run started from the admin Jobs tab carries ADMIN_RUN_ID (the audit
+  // record it created), and reports its progress back there. Scheduled runs
+  // never set it, so for them all of this is a no-op. Reporting is best-effort
+  // by construction — reportRun* swallow their own errors — so it cannot fail
+  // the job.
+  const adminRunId = process.env.ADMIN_RUN_ID?.trim();
+  const reportTo =
+    firestore && isValidRunId(adminRunId)
+      ? { firestore, runId: adminRunId }
+      : null;
+  let reported = false;
+  const report = async (outcome: RunOutcome): Promise<void> => {
+    if (!reportTo || reported) return;
+    reported = true;
+    await reportRunFinished(reportTo.firestore, reportTo.runId, outcome);
+  };
+
   try {
     const registry = app.get(SyncRegistry);
     const runner = registry.get(jobName);
@@ -92,6 +117,14 @@ async function main(): Promise<void> {
       throw new Error(
         `Unknown job "${jobName}". Available: ${registry.names().join(", ")}`,
       );
+    }
+
+    if (reportTo) {
+      const attempt = Number(process.env.CLOUD_RUN_TASK_ATTEMPT);
+      await reportRunStarted(reportTo.firestore, reportTo.runId, {
+        executionName: process.env.CLOUD_RUN_EXECUTION?.trim() || null,
+        attempt: Number.isFinite(attempt) ? attempt : null,
+      });
     }
 
     // acquireLock returns true when Firestore is present and the lease is free
@@ -105,6 +138,11 @@ async function main(): Promise<void> {
         `job "${jobName}" is already running elsewhere (live lock held); ` +
           `skipping this run.`,
       );
+      await report({
+        status: "skipped",
+        summary:
+          "Another run of this job holds its lock, so this one did not start.",
+      });
       return;
     }
 
@@ -114,9 +152,27 @@ async function main(): Promise<void> {
       logger.log(
         `job "${jobName}" completed in ${secs}s: ${JSON.stringify(result)}`,
       );
+      if (reportTo) {
+        // Most jobs catch their own errors and return, so the exit status says
+        // "fine" for a failed run; what the job recorded in sync_meta says
+        // whether it really worked.
+        let meta: Record<string, unknown> = {};
+        try {
+          meta = (await app.get(SyncMetaService).status(jobName)) as Record<string, unknown>;
+        } catch (err) {
+          logger.warn(`could not read sync_meta for run report: ${(err as Error).message}`);
+        }
+        await report(outcomeFromSyncMeta(startedMs, meta, result));
+      }
     } finally {
       if (firestore) await releaseLock(firestore, jobName, ownerId);
     }
+  } catch (err) {
+    await report({
+      status: "failed",
+      error: (err instanceof Error ? err.message : String(err)).slice(0, 400),
+    });
+    throw err;
   } finally {
     // Flushes buffered metering (ApiUsageService.onModuleDestroy) and releases
     // any provider resources before the process exits.

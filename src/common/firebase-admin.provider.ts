@@ -131,6 +131,36 @@ export class FirebaseAdminService implements OnModuleInit {
     }
     return useNamed ? getFirestore(this.app, dbId) : getFirestore(this.app);
   }
+  /**
+   * OAuth2 access token for the identity this backend already authenticates as
+   * (Application Default Credentials on Cloud Run, or the FIREBASE_* service
+   * account when those env vars are set). Used to call Google APIs other than
+   * Firebase — today, the Cloud Run Admin API that starts a job execution for
+   * the admin Jobs tab. The credential's scopes include cloud-platform.
+   */
+  async getAccessToken(): Promise<string> {
+    const credential = this.app?.options.credential;
+    if (!credential) {
+      throw new ServiceUnavailableException(
+        "Firebase Admin has no credential to mint an access token from.",
+      );
+    }
+    const { access_token } = await credential.getAccessToken();
+    return access_token;
+  }
+
+  /**
+   * Who a Google API will see this backend as, for error messages that tell an
+   * operator which account needs a permission. Only known when the identity
+   * comes from FIREBASE_CLIENT_EMAIL; under ADC the account is whatever the
+   * Cloud Run service runs as, which the process cannot name without a
+   * metadata-server round trip.
+   */
+  describeIdentity(): string {
+    const email = this.config.get<string>("FIREBASE_CLIENT_EMAIL", "").trim();
+    return email || "the Cloud Run runtime service account of this service";
+  }
+
   /** Admin SDK Auth — used by AdminGuard to verify caller ID tokens. */
   get auth(): Auth {
     if (!this.app) {
