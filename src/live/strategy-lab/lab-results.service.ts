@@ -61,12 +61,22 @@ export function normalizeCfg(tf: string, cfg: Partial<RunCfg>): RunCfg {
   const T = tfInfo(tf);
   const num = (v: unknown, d: number) =>
     Number.isFinite(Number(v)) ? Number(v) : d;
+  const opt = (v: unknown) =>
+    v == null || !Number.isFinite(Number(v)) ? null : Number(v);
   const out: RunCfg = {
-    stop: Math.max(0, num(cfg.stop, 0.08)),
+    // No stop unless one is set (the exit plan's "None" is stop 0).
+    stop: Math.max(0, num(cfg.stop, 0)),
     tp: cfg.tp == null ? null : num(cfg.tp, 0),
     trail: cfg.trail == null ? null : num(cfg.trail, 0),
     costBps: Math.max(0, num(cfg.costBps, 5)),
     years: Math.min(10, Math.max(1, Math.round(num(cfg.years, 5)))),
+    stopAtr: opt(cfg.stopAtr),
+    tpR: opt(cfg.tpR),
+    trailAtr: opt(cfg.trailAtr),
+    trailAct: opt(cfg.trailAct),
+    trailActR: opt(cfg.trailActR),
+    be: !!cfg.be,
+    maxBars: opt(cfg.maxBars),
   };
   if (T.fmp) out.idays = Math.round(num(cfg.idays, T.days ?? 21));
   return out;

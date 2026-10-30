@@ -39,6 +39,14 @@ export interface RunCfg {
   stop: number;
   tp: number | null;
   trail: number | null;
+  /** Full exit plan (app/iq/sl/lab-config.js exitPlanEngine) — optional so older callers still work. */
+  stopAtr?: number | null;
+  tpR?: number | null;
+  trailAtr?: number | null;
+  trailAct?: number | null;
+  trailActR?: number | null;
+  be?: boolean;
+  maxBars?: number | null;
   costBps: number;
   years: number;
   /** Intraday period in calendar days (candles with an FMP intraday feed). */
@@ -154,13 +162,7 @@ export function runOne(
   const T = tfInfo(tf);
   const b = tf === "1w" ? Engine.toWeekly(bars) : bars;
   if (!b.length) return null;
-  const c: Record<string, unknown> = {
-    stop: cfg.stop,
-    tp: cfg.tp,
-    trail: cfg.trail,
-    costBps: cfg.costBps,
-    years: cfg.years,
-  };
+  const c: Record<string, unknown> = { ...cfg, tf };
   if (T.fmp) {
     c.intraday = true;
     c.flatEOD = T.flat;
