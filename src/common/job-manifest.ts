@@ -14,8 +14,11 @@
  * the premarket Cloud Run job, and 4 that nothing triggers.
  *
  * A job's trigger is now declared here, next to its schedule, in one readable
- * list. `assertManifestCoversRegistry()` fails loudly when the two drift, so a
- * new job cannot quietly join the 4.
+ * list. `manifestDrift()` reports when the registry and this list disagree (it
+ * is only LOGGED at worker start-up) and job-manifest.spec.ts fails the build on
+ * it, so a new job cannot quietly join the 4. The admin Jobs tab lists, and can
+ * run, exactly the jobs named here — a job missing from this file is invisible
+ * to it.
  *
  * Plain data on purpose: no Nest decorators, no DI. The live service does not
  * load SyncModule (APP_ROLE gating in app.module.ts), so nothing is registered
@@ -45,14 +48,35 @@ export interface JobManifestEntry {
   schedules: string[];
   /** Short human note — why this cadence, or why there is no trigger. */
   note?: string;
+  /**
+   * IANA zone the `schedules` are written in. Absent means
+   * DEFAULT_JOB_TIME_ZONE; see TIME_ZONE_OVERRIDES for the exceptions.
+   */
+  timeZone?: string;
+  /**
+   * Set when running the job by hand deserves more than a plain confirmation —
+   * it deletes data, or publishes something readers can see. The admin Jobs tab
+   * shows the note in the confirmation dialog; "destructive" also makes the
+   * admin type the job name before it will run.
+   */
+  risk?: JobRisk;
 }
+
+export interface JobRisk {
+  level: "caution" | "destructive";
+  note: string;
+}
+
+/** The zone every schedule below is written in unless overridden. */
+export const DEFAULT_JOB_TIME_ZONE = "America/New_York";
 
 /**
  * Cloud Scheduler entries, transcribed from
  * `gcloud scheduler jobs list --location us-central1`.
  *
- * All times are America/New_York. The `9-16` windows are market hours and the
- * `18`/`21` ones are post-close catch-ups.
+ * All times are America/New_York unless TIME_ZONE_OVERRIDES says otherwise. The
+ * `9-16` windows are market hours and the `18`/`21` ones are post-close
+ * catch-ups.
  */
 const SCHEDULER: JobManifestEntry[] = [
   { name: "analyst-actions", trigger: "scheduler", schedules: ["0 8,12,16 * * 1-5"], note: "refreshes 3x daily: 8 AM CST (9 AM ET), 12 PM CST (1 PM ET), and 4 PM CST (5 PM ET)" },
@@ -87,9 +111,60 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "companies-financials-backfill", trigger: "scheduler", schedules: ["0 12 * * 6"], note: "a cursor backfill with no deadline of its own" },
   { name: "market-glance-weekly", trigger: "scheduler", schedules: ["0 12 * * 5"], note: "Fridays 12:00 ET: builds and stores the current week's 'Week at a glance' digest (Live Feed > Weekly Summary) ahead of any viewer. Cloud Scheduler entry sync-market-glance-weekly (deploy/create-glance-weekly-scheduler.sh)" },
   { name: "volume-leaders", trigger: "scheduler", schedules: ["30 20 * * 1-5"], note: "ranks the whole US market by relative volume from ONE grouped-daily call; 20:30 ET, after the after-hours session closes at 20:00, so the day's volume is complete" },
+  { name: "strategy-lab-daily", trigger: "scheduler", schedules: ["30 17 * * 1-5"], note: "Strategy Lab: after the close, appends the session to every stock's bar pack (one FMP bulk EOD call) and precomputes the daily library strategies. The entry sync-strategy-lab-daily is created only by deploy/create-scheduler-jobs.sh, which DEPLOY.md marks stale — confirm it is live with gcloud scheduler jobs list" },
+  { name: "strategy-lab-intraday", trigger: "scheduler", schedules: ["*/5 9-16 * * 1-5"], note: "Strategy Lab: every 5 minutes in-session, refreshes the 5-minute bar packs and reruns the intraday library strategies. The entry sync-strategy-lab-intraday is created only by deploy/create-scheduler-jobs.sh, which DEPLOY.md marks stale — confirm it is live with gcloud scheduler jobs list" },
   { name: "premarket", trigger: "scheduler", schedules: ["0 8 * * 1-5"], note: "Cloud Run JOB premarket-job, not an HTTP POST — it orchestrates the phases below" },
   { name: "staleness-check", trigger: "scheduler", schedules: ["0 * * * *"], note: "hourly sweep: logs an ERROR for every job whose last success is older than two of its scheduled runs (a job that stops running never records itself)" },
 ];
+
+/**
+ * Schedules that are NOT written in America/New_York. The cron text is the
+ * same shape either way, so without this the next-run time shown for these two
+ * would be off by an hour.
+ */
+const TIME_ZONE_OVERRIDES: Record<string, string> = {
+  // create-analyst-close-scheduler.sh creates the entry in America/Chicago:
+  // 08:00 / 12:00 / 16:00 CT = 09:00 / 13:00 / 17:00 ET.
+  "analyst-actions": "America/Chicago",
+  // Registered as America/Chicago and documented as 7:35 AM CT. The deployed
+  // entry's zone is not recorded in the repo.
+  "premarket-post": "America/Chicago",
+};
+
+/**
+ * Jobs where "run now" has a consequence beyond refreshing a cache. Every claim
+ * below is read off the job's own code.
+ */
+const RISKS: Record<string, JobRisk> = {
+  "auto-purge": {
+    level: "destructive",
+    note: "Deletes stale documents from the ephemeral collections (market_movers, options_chains): everything older than the latest write minus 12 hours. AUTO_PURGE_DRY_RUN=true makes it a preview.",
+  },
+  "monthly-news-cleanup": {
+    level: "destructive",
+    note: "Deletes documents from the news collection. It only acts on the last Friday of the month and only after the month's analysis receipt verifies; any other day it does nothing.",
+  },
+  "eod-recap": {
+    level: "caution",
+    note: "Writes the End-of-Day recap with an LLM and publishes it to the PUBLIC blog immediately. It skips weekends, market holidays and a day that already has a recap.",
+  },
+  "premarket-post": {
+    level: "caution",
+    note: "Writes the Pre-Market Intelligence post with an LLM and publishes it to the PUBLIC blog immediately. It does nothing unless ENABLE_PREMARKET_POST=true, and skips weekends, holidays and a day that already has a post.",
+  },
+  "recap-blog": {
+    level: "caution",
+    note: "Calls an LLM and saves a Draft recap post (never published automatically). It skips a day that already has one.",
+  },
+  "history-backfill": {
+    level: "caution",
+    note: "A 30-45 minute backfill. Run it after the close: its grouped-daily calls return a PARTIAL bar while the market is open.",
+  },
+  premarket: {
+    level: "caution",
+    note: "The whole premarket bundle (cache warm, market-wide jobs, per-ticker jobs, recaps) — roughly 18 minutes of vendor calls and Firestore writes.",
+  },
+};
 
 /**
  * Run only as phases of the premarket Cloud Run job — see MARKET_WIDE /
@@ -105,6 +180,8 @@ const VIA_PREMARKET: string[] = [
   "stock-history", "edgar-8k", "technical-indicators", "rs-rating", "tech-rating",
   "financials", "fundamentals-growth", "corporate-actions", "beta", "recaps",
   "institutional-ownership", "dividends", "sec-13f", "sec-form4",
+  // Phase 3 of premarket.job.ts, after beta; it was missing from this list.
+  "analyst-firm-stats",
 ];
 
 /**
@@ -123,15 +200,12 @@ const NOT_TRIGGERED: JobManifestEntry[] = [
   { name: "ticker-weekly-ai", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },
   { name: "ticker-monthly-ai", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },
   { name: "recaps-nasdaq-backfill", trigger: "none", schedules: [], note: "one-off repair of recaps since 2026-08-13 (QQQ shown as Nasdaq) — manual run only" },
-  { name: "analyst-firm-stats", trigger: "none", schedules: [], note: "registered only — no scheduler entry" },
-  { name: "strategy-lab-daily", trigger: "none", schedules: [], note: "registered only — no scheduler entry" },
-  { name: "strategy-lab-intraday", trigger: "none", schedules: [], note: "registered only — no scheduler entry" },
   { name: "history-backfill", trigger: "none", schedules: [], note: "one-off. Cloud Run JOB history-backfill-job (SYNC_JOB=history-backfill), run by hand after the close — a 30-45 min run cannot go over HTTP, and its grouped-daily calls return a PARTIAL bar during market hours" },
 ];
 
 const bySchedulerName = new Map(SCHEDULER.map((e) => [e.name, e]));
 
-export const JOB_MANIFEST: JobManifestEntry[] = [
+const BASE_MANIFEST: JobManifestEntry[] = [
   ...SCHEDULER,
   // A job with its own entry keeps that entry even if premarket also runs it —
   // the scheduler cadence is the one that governs freshness.
@@ -145,6 +219,14 @@ export const JOB_MANIFEST: JobManifestEntry[] = [
   ),
   ...NOT_TRIGGERED,
 ];
+
+export const JOB_MANIFEST: JobManifestEntry[] = BASE_MANIFEST.map((entry) => ({
+  ...entry,
+  ...(TIME_ZONE_OVERRIDES[entry.name]
+    ? { timeZone: TIME_ZONE_OVERRIDES[entry.name] }
+    : {}),
+  ...(RISKS[entry.name] ? { risk: RISKS[entry.name] } : {}),
+}));
 
 const byName = new Map(JOB_MANIFEST.map((e) => [e.name, e]));
 

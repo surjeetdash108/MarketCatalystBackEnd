@@ -492,6 +492,56 @@ gcloud run jobs execute premarket-job --region "$REGION" --wait   # block until 
 the same image+entrypoint for a single job (`--update-env-vars=SYNC_JOB=<name>`).
 Its Cloud Scheduler trigger `run-premarket-job` is created in §5.
 
+### 3d. Admin "Run now" — let the admin console start a job on demand
+
+The admin console's **Jobs** tab lists every scheduled job (from
+`src/common/job-manifest.ts`) and can start one on demand. On the `live` service
+that is dispatched to the `premarket-job` Cloud Run **Job** from §3c with
+`SYNC_JOB=<name>` — the live service never runs a sync in-process (the Firebase
+Hosting request limit is 60 s). Until it is configured the tab still lists jobs
+and schedules; the Run button answers "runner not configured".
+
+```bash
+# 1. Tell the live service which Job to dispatch to. --update-env-vars is
+#    additive; do NOT use --set-env-vars here (see the warning in §3b).
+gcloud run services update market-catalyst-live \
+  --update-env-vars="JOB_RUNNER_JOB=premarket-job" \
+  --region "$REGION" --project "$PROJECT_ID"
+# Optional: JOB_RUNNER_REGION (default us-central1), JOB_RUNNER_PROJECT_ID
+# (default: FIREBASE_PROJECT_ID).
+
+# 2. Let the live service's runtime service account run that Job with
+#    environment overrides. The permission is run.jobs.runWithOverrides.
+LIVE_SA=$(gcloud run services describe market-catalyst-live --region "$REGION" \
+            --format='value(spec.template.spec.serviceAccountName)')
+gcloud run jobs add-iam-policy-binding premarket-job \
+  --region "$REGION" --project "$PROJECT_ID" \
+  --member="serviceAccount:${LIVE_SA}" --role="roles/run.developer"
+# Confirm the role carries the permission before relying on it:
+#   gcloud iam roles describe roles/run.developer | grep runWithOverrides
+# If it does not, bind a custom role that has run.jobs.runWithOverrides instead.
+```
+
+Redeploy **all three** so the manifest, the Jobs tab API and the job entrypoint
+agree: the live service (§3b image update), the worker (§3), and `premarket-job`
+(§3c `jobs update`). `src/job-entry.ts` now writes each admin-started run's
+progress to the `admin_job_runs` Firestore collection (the Jobs tab's history
+and "last run by" column), so a `premarket-job` that predates this change still
+runs the job but leaves the run showing "dispatched" until it is marked lost.
+
+Behaviour worth knowing before you hand this to anyone:
+
+- A job whose lease is held is refused (409). A lease whose run clearly already
+  finished is reported as stale and can be cleared only with explicit consent
+  in the confirm dialog; the owner is re-checked atomically before it is cleared.
+- At most 3 admin runs may be in flight at once (429 beyond that).
+- Jobs marked *destructive* in the manifest (`auto-purge`,
+  `monthly-news-cleanup`) require the admin to type the job name; the API
+  rejects the request without it. *Caution* jobs show a warning in the dialog.
+- The **API Docs** tab (screen → API → status) needs no setup. Its status is
+  derived from the registered routes, the existing health probe and the same
+  job health shown on the Jobs tab; "Run checks" probes from the admin's browser.
+
 ## 4. Create the Scheduler invoker service account
 
 ```bash

@@ -1,8 +1,24 @@
-import { Controller, Get, UseGuards } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  HttpCode,
+  HttpException,
+  HttpStatus,
+  Param,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
 import { AdminGuard } from "../common/admin.guard";
-import { JOB_MANIFEST } from "../common/job-manifest";
-import { SyncMetaService } from "../common/sync-meta.service";
 import { ApiHealthService } from "./api-health.service";
+import { JobsAdminService, type RunRequest } from "./jobs-admin.service";
+import { ScreenApiService } from "./screen-api.service";
+
+/** Admin responses carry internal detail; keep them out of every cache. */
+const NO_STORE = "private, no-store";
 
 /**
  * Admin API-health surface. Behind AdminGuard, so only the admin (with a
@@ -14,63 +30,77 @@ import { ApiHealthService } from "./api-health.service";
 export class ApiHealthController {
   constructor(
     private readonly health: ApiHealthService,
-    private readonly meta: SyncMetaService,
+    private readonly jobsAdmin: JobsAdminService,
+    private readonly screenApis: ScreenApiService,
   ) {}
 
   /**
-   * Job + scheduler inventory for the admin Monitor.
+   * Job + scheduler inventory for the admin Jobs tab.
    *
    * Served from the LIVE service, which does not load SyncModule (APP_ROLE
    * gating in app.module.ts) and so has no SyncRegistry to ask. It does not need
-   * one: JOB_MANIFEST is plain data readable from either role, and `sync_meta`
-   * is a Firestore collection the live service already reads. That avoids a
-   * cross-service call to the worker, which would need a new run.invoker
-   * binding — the live service's account is not on the worker's IAM policy.
+   * one: JOB_MANIFEST is plain data readable from either role, and `sync_meta`,
+   * `job_locks` and `admin_job_runs` are Firestore collections the live service
+   * already reads. That avoids a cross-service call to the worker.
    *
    * `lastSyncedAt: null` here means the job has genuinely never recorded a run.
    */
   @Get("jobs")
-  async jobs() {
-    let metaByJob = new Map<string, Record<string, unknown>>();
-    let metaError: string | null = null;
+  @Header("Cache-Control", NO_STORE)
+  jobs() {
+    return this.jobsAdmin.inventory();
+  }
+
+  /** Recent manual runs, newest first — the audit trail and the live progress. */
+  @Get("jobs/runs")
+  @Header("Cache-Control", NO_STORE)
+  async jobRuns(@Query("limit") limit?: string) {
     try {
-      metaByJob = new Map(
-        (await this.meta.statusAll()).map((m) => [m.job, m as Record<string, unknown>]),
-      );
-    } catch (err) {
-      // Report the manifest anyway — knowing WHAT should run and how it is
-      // triggered is useful even when the run history is unreadable.
-      metaError = (err as Error).message;
-    }
-
-    const jobs = JOB_MANIFEST.map((entry) => {
-      const m = metaByJob.get(entry.name);
       return {
-        name: entry.name,
-        trigger: entry.trigger,
-        schedules: entry.schedules,
-        note: entry.note ?? null,
-        lastSyncedAt: (m?.lastSyncedAt as string | null) ?? null,
-        lastStatus: (m?.lastStatus as string | null) ?? null,
-        lastCount: (m?.lastCount as number | null) ?? null,
-        lastError: (m?.lastError as string | null) ?? null,
-        lastSuccessAt: (m?.lastSuccessAt as string | null) ?? null,
-        lastFailedAt: (m?.lastFailedAt as string | null) ?? null,
-        runCount: (m?.runCount as number | null) ?? null,
-        errorCount: (m?.errorCount as number | null) ?? null,
+        runs: await this.jobsAdmin.recentRuns(Number(limit)),
+        generatedAt: new Date().toISOString(),
       };
-    });
+    } catch (err) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+          error: "SERVICE_UNAVAILABLE",
+          code: "RUNS_UNAVAILABLE",
+          message: `Could not read manual runs: ${(err as Error).message}`,
+        },
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+  }
 
-    const counts = {
-      total: jobs.length,
-      scheduler: jobs.filter((j) => j.trigger === "scheduler").length,
-      premarket: jobs.filter((j) => j.trigger === "premarket").length,
-      none: jobs.filter((j) => j.trigger === "none").length,
-      failing: jobs.filter((j) => j.lastStatus === "error").length,
-      neverRun: jobs.filter((j) => !j.lastSyncedAt).length,
-    };
+  /**
+   * Run a job now. Asynchronous by necessity: the browser's request reaches
+   * this service through a Firebase Hosting rewrite that gives up after 60 s,
+   * and a job can run for an hour. This returns 202 as soon as the run is
+   * started and recorded; the Jobs tab then polls GET jobs/runs.
+   */
+  @Post("jobs/:name/run")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Header("Cache-Control", NO_STORE)
+  runJob(
+    @Param("name") name: string,
+    @Body() body: RunRequest | undefined,
+    @Req() req: { adminEmail?: string },
+  ) {
+    // AdminGuard sets adminEmail from a verified Firebase token. A caller that
+    // got in on the IAM-trust path (worker only) has no email to record.
+    return this.jobsAdmin.requestRun(name, req.adminEmail ?? "iam-caller", body ?? {});
+  }
 
-    return { jobs, counts, metaError, generatedAt: new Date().toISOString() };
+  /**
+   * The screen -> API -> status catalogue (screen-api.registry.ts) joined with
+   * what this service can say about each API. `?fresh=1` re-runs the probe
+   * instead of reusing one from the last minute.
+   */
+  @Get("screen-apis")
+  @Header("Cache-Control", NO_STORE)
+  screenApisReport(@Query("fresh") fresh?: string) {
+    return this.screenApis.report({ fresh: fresh === "1" || fresh === "true" });
   }
 
   // Path is 'apihealth' (no hyphen), NOT 'api-health': the hyphenated path was

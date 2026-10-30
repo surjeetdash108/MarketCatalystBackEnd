@@ -23,6 +23,8 @@ export interface EndpointRow {
   path: string;
   controller: string;
   guarded: boolean;
+  /** Class names of the guards on the route, e.g. FirebaseAuthGuard. */
+  guards: string[];
   probe: EndpointProbe | { skipped: true; reason: string };
 }
 export interface VendorHealth {
@@ -88,12 +90,14 @@ export class ApiHealthService {
     path: string;
     controller: string;
     guarded: boolean;
+    guards: string[];
   }> {
     const rows: Array<{
       method: string;
       path: string;
       controller: string;
       guarded: boolean;
+      guards: string[];
     }> = [];
 
     for (const wrapper of this.discovery.getControllers()) {
@@ -132,11 +136,19 @@ export class ApiHealthService {
           handler,
         );
 
+        const guards = [...(classGuards ?? []), ...(methodGuards ?? [])].map(
+          (g) =>
+            typeof g === "function"
+              ? g.name
+              : ((g as { constructor?: { name?: string } })?.constructor?.name ??
+                "guard"),
+        );
         rows.push({
           method: RequestMethod[httpMethod] ?? String(httpMethod),
           path: this.joinPath(ctrlPath, methodPath),
           controller: metatype.name,
           guarded: !!(classGuards?.length || methodGuards?.length),
+          guards,
         });
       }
     }
@@ -329,7 +341,7 @@ export class ApiHealthService {
 
     const vendors = await vendorsPromise;
     const role = String(this.config.get("APP_ROLE", "worker")).toLowerCase();
-    return {
+    const report: ApiHealthReport = {
       service:
         role === "live" ? "market-catalyst-live" : "market-catalyst-backend",
       generatedAt: new Date().toISOString(),
@@ -345,5 +357,31 @@ export class ApiHealthService {
       },
       endpoints: rows,
     };
+    this.last = { at: Date.now(), report };
+    return report;
+  }
+
+  private last: { at: number; report: ApiHealthReport } | null = null;
+  private inflight: Promise<ApiHealthReport> | null = null;
+
+  /**
+   * The newest report no older than `maxAgeMs`, or a fresh one. A check fires
+   * about twenty requests at this very service plus three at vendors, so the
+   * docs tab — which wants the probe results beside each API — must not start a
+   * new round every time it is opened. Concurrent callers share one run.
+   */
+  async checkCached(
+    maxAgeMs: number = 60_000,
+    force: boolean = false,
+  ): Promise<ApiHealthReport> {
+    if (!force && this.last && Date.now() - this.last.at < maxAgeMs) {
+      return this.last.report;
+    }
+    if (!this.inflight) {
+      this.inflight = this.check().finally(() => {
+        this.inflight = null;
+      });
+    }
+    return this.inflight;
   }
 }

@@ -117,6 +117,65 @@ export async function acquireLock(
   }
 }
 
+export interface LockInfo {
+  jobName: string;
+  owner: string;
+  acquiredAt: number;
+  expiresAt: number;
+}
+
+/**
+ * Every lease that has not expired yet, by job name — for the admin Jobs tab,
+ * which shows "locked until" and decides whether a manual run can go ahead.
+ *
+ * Unlike acquireLock this does NOT fail open: it throws when Firestore does, and
+ * the caller picks the fallback (the Jobs tab degrades to "lock state unknown"
+ * and lets the job's own acquireLock make the final call).
+ */
+export async function readLiveLocks(
+  firestore: Firestore,
+  now: number = Date.now(),
+): Promise<Map<string, LockInfo>> {
+  const snap = await firestore.collection(JOB_LOCKS_COLLECTION).get();
+  const live = new Map<string, LockInfo>();
+  for (const doc of snap.docs) {
+    const data = doc.data() as Partial<JobLockDoc> | undefined;
+    const expiresAt = typeof data?.expiresAt === "number" ? data.expiresAt : 0;
+    if (expiresAt <= now) continue;
+    live.set(doc.id, {
+      jobName: doc.id,
+      owner: typeof data?.owner === "string" ? data.owner : "unknown",
+      acquiredAt: typeof data?.acquiredAt === "number" ? data.acquiredAt : 0,
+      expiresAt,
+    });
+  }
+  return live;
+}
+
+/**
+ * Delete the lease for `jobName` only if `expectedOwner` still holds it.
+ *
+ * The owner is re-read inside the transaction for the same reason releaseLock
+ * does: between the admin looking at the lease and clicking, the lease may have
+ * expired and been taken by a NEW run, and deleting that one would let a second
+ * copy start on top of it. Returns true when a lease was deleted.
+ */
+export async function clearLockIfOwner(
+  firestore: Firestore,
+  jobName: string,
+  expectedOwner: string,
+): Promise<boolean> {
+  const ref = firestore.collection(JOB_LOCKS_COLLECTION).doc(jobName);
+  return firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return false;
+    const data = snap.data() as Partial<JobLockDoc> | undefined;
+    if (data?.owner !== expectedOwner) return false;
+    tx.delete(ref);
+    return true;
+  });
+}
+
 /**
  * Release the lease for `jobName`, but only if WE still own it.
  *
