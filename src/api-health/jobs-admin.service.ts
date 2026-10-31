@@ -13,6 +13,12 @@ import {
   type LockInfo,
 } from "../common/job-lock.util";
 import { assessJob } from "../common/job-schedule.util";
+import {
+  assessActivity,
+  jobFeeds,
+  jobRole,
+  jobWrites,
+} from "./job-activity";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import {
@@ -193,7 +199,19 @@ export class JobsAdminService {
       const assessment = assessJob(entry, m, now);
       const lock = locks.get(entry.name);
       const lastRun = lastRunByJob.get(entry.name);
+      const feeds = jobFeeds(entry.name);
       return {
+        role: jobRole(entry.name),
+        feeds,
+        writes: jobWrites(feeds, m),
+        activity: assessActivity({
+          name: entry.name,
+          lock,
+          leaseStale: !!lock && isLeaseStale(lock, m),
+          adminRun: lastRun,
+          metaByJob,
+          now: now.getTime(),
+        }),
         name: entry.name,
         trigger: entry.trigger,
         schedules: entry.schedules,
@@ -223,9 +241,7 @@ export class JobsAdminService {
       };
     });
 
-    const inFlight = (j: (typeof jobs)[number]) =>
-      (j.lastAdminRun && IN_FLIGHT_STATUSES.includes(j.lastAdminRun.status)) ||
-      (j.lock !== null && !j.lock.probablyStale);
+    const inFlight = (j: (typeof jobs)[number]) => j.activity !== null;
 
     const counts = {
       total: jobs.length,

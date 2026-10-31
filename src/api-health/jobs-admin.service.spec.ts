@@ -343,6 +343,40 @@ describe("JobsAdminService.inventory", () => {
     expect(inv.counts.running).toBe(0); // a stale lease is not a running job
   });
 
+  it("says what a job is: its place in premarket, what it feeds, what it writes", async () => {
+    const { svc, meta } = rig();
+    meta["earnings-actuals"] = { lastSyncedAt: "2026-10-30T13:00:00Z", lastStatus: "ok", collections: ["earnings_events"] };
+    const inv = await svc.inventory(NOW);
+    const byName = Object.fromEntries(inv.jobs.map((j) => [j.name, j]));
+
+    expect(byName["fear-greed"].role).toMatchObject({ partOf: "premarket", step: { after: "market-breadth" } });
+    expect(byName.premarket.role.steps?.[0].name).toBe("warm");
+    const ea = byName["earnings-actuals"];
+    expect(ea.feeds.some((f) => f.api === "GET /live/earnings-wire" && f.screens.some((s) => s.id === "commentary"))).toBe(true);
+    expect(ea.writes).toContain("earnings_events");
+    expect(ea.activity).toBeNull();
+  });
+
+  it("shows what a running job is doing: how long, who started it, and premarket's step progress", async () => {
+    const { svc, fs, meta } = rig();
+    const acquiredAt = NOW.getTime() - 4 * 60_000;
+    fs.seed("job_locks", "premarket", { owner: "job-entry-1", acquiredAt, expiresAt: NOW.getTime() + 50 * 60_000 });
+    meta["market-indices"] = { lastSyncedAt: new Date(acquiredAt + 30_000).toISOString(), lastStatus: "ok" };
+    fs.seed(RUNS, "run00000000000000009", { job: "premarket", status: "running", requestedBy: ADMIN, requestedAt: new Date(acquiredAt - 5000).toISOString(), startedAt: new Date(acquiredAt).toISOString() });
+
+    const inv = await svc.inventory(NOW);
+    const pm = inv.jobs.find((j) => j.name === "premarket");
+    expect(pm.activity).toMatchObject({
+      state: "running",
+      elapsedMs: 4 * 60_000,
+      startedBy: { kind: "admin", by: ADMIN },
+      current: "sectors",
+    });
+    expect(pm.activity.steps.find((s) => s.name === "market-indices").state).toBe("done");
+    expect(inv.counts.running).toBe(1);
+    expect(inv.jobs.filter((j) => j.activity).map((j) => j.name)).toEqual(["premarket"]);
+  });
+
   it("explains an unavailable runner instead of failing", async () => {
     const { svc } = rig({ env: { JOB_RUNNER_JOB: "" } });
     const inv = await svc.inventory(NOW);
