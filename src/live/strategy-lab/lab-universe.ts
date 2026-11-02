@@ -19,12 +19,12 @@ const INDEXES: Array<{ name: string; path: string }> = [
 export const LAB_UNIVERSE_CAP: Record<string, number | null> = {
   d: null,
   "1w": null,
-  "1m": null,
-  "5m": null,
-  "15m": null,
-  "30m": null,
-  "1h": null,
-  "4h": null,
+  "1m": 50,
+  "5m": 100,
+  "15m": 100,
+  "30m": 100,
+  "1h": 150,
+  "4h": 150,
 };
 
 const UNIVERSE_TTL_MS = 12 * 3_600_000;
