@@ -83,6 +83,10 @@ function inExtendedSession(now = new Date()): boolean {
 
 export interface SnapshotQuote {
   ticker: string;
+  /** Company name (FMP quote); null from Polygon. */
+  name?: string | null;
+  /** Live market capitalisation — the vendor's price × shares (FMP quote); null from Polygon. */
+  marketCap?: number | null;
   price: number | null;
   change: number | null;
   changePct: number | null;
@@ -218,6 +222,11 @@ export function mapFmpQuote(
   const session = fmpSession(q, now);
   const base: SnapshotQuote = {
     ticker: q.symbol,
+    name: q.name ?? null,
+    marketCap:
+      q.marketCap != null && Number.isFinite(q.marketCap) && q.marketCap > 0
+        ? q.marketCap
+        : null,
     price: q.price,
     change: q.change,
     changePct: q.changePercentage,
