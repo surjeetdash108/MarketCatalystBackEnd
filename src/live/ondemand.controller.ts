@@ -222,16 +222,16 @@ export class OnDemandController {
   }
 
   @Post("copilot")
-  @UseGuards(FirebaseAuthGuard)
   async copilotChat(
     @Body()
     body: {
       ticker?: string;
-      question: string;
+      question?: string;
+      query?: string;
       context?: Record<string, unknown>;
     },
   ) {
-    const question = (body?.question ?? "").trim();
+    const question = (body?.question || body?.query || "").trim();
     if (!question) {
       throw new BadRequestException("question is required");
     }
