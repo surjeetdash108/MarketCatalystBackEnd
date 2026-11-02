@@ -9,6 +9,7 @@ import {
   moneyFlow,
   referenceFromGrouped,
   regularSessionBars,
+  rejectVolumeOutliers,
   vwapOf,
   type RawBar,
   type StockIn,
@@ -237,6 +238,28 @@ describe("money flow — board", () => {
       expect(s.stop).toBe(bull ? s.zone.lo : s.zone.hi);
       if (s.target != null) expect(bull ? s.target > s.entry! : s.target < s.entry!).toBe(true);
     }
+  });
+
+  it("rejects single-bar volume outliers where one feed bar carries whole day volume", () => {
+    const normalBars = [
+      { t: 1000, v: 10_000 },
+      { t: 2000, v: 12_000 },
+      { t: 3000, v: 11_000 },
+      { t: 4000, v: 13_000 },
+      { t: 5000, v: 10_000 },
+      { t: 6000, v: 12_000 },
+    ];
+    // Feed glitch on bar 3 carries 5,000,000 shares
+    const corrupted = [
+      ...normalBars.slice(0, 2),
+      { t: 2500, v: 5_000_000 },
+      ...normalBars.slice(2),
+    ];
+    const cleaned = rejectVolumeOutliers(corrupted);
+    const outlierBar = cleaned.find((b) => b.t === 2500);
+    expect(outlierBar).toBeDefined();
+    // Replaced with neighbor median (around 11,000) rather than 5,000,000
+    expect(outlierBar!.v).toBeLessThan(20_000);
   });
 });
 

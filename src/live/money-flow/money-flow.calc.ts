@@ -72,6 +72,25 @@ const finite = (n: unknown): n is number => typeof n === "number" && Number.isFi
 const round = (n: number, dp = 2) => Math.round(n * 10 ** dp) / 10 ** dp;
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
+/**
+ * Detects and mitigates single-bar feed anomalies where a feed error reports
+ * the whole day's volume in a single minute bar. Replaces outlier with neighbor median.
+ */
+export function rejectVolumeOutliers<T extends { v: number }>(bars: T[]): T[] {
+  if (bars.length < 5) return bars;
+  const vols = bars.map((b) => b.v).filter((v) => finite(v) && v > 0).sort((a, b) => a - b);
+  if (!vols.length) return bars;
+  const median = vols[Math.floor(vols.length / 2)];
+  if (median <= 0) return bars;
+  const total = bars.reduce((s, b) => s + (finite(b.v) ? b.v : 0), 0);
+  return bars.map((b) => {
+    if (finite(b.v) && b.v > 10 * median && b.v > 0.4 * total) {
+      return { ...b, v: median };
+    }
+    return b;
+  });
+}
+
 /** Bars of `sessionDate`'s regular session, with the running session VWAP. */
 export function regularSessionBars(bars: RawBar[], sessionDate: string): SessionBar[] {
   const out: SessionBar[] = [];
@@ -532,8 +551,9 @@ export function buildBoard(input: BoardIn): MoneyFlowBoard {
     const q = s.quote;
     if (!q || !finite(q.price) || q.price <= 0 || !finite(q.previousClose) || q.previousClose <= 0) continue;
     const pct = finite(q.changePercentage) ? q.changePercentage : ((q.price - q.previousClose) / q.previousClose) * 100;
-    const reg = regularSessionBars(s.bars, input.sessionDate);
-    const sessionAll = s.bars.filter((b) => etClock(b.t).date === input.sessionDate && finite(b.v));
+    const cleanedBars = rejectVolumeOutliers(s.bars);
+    const reg = regularSessionBars(cleanedBars, input.sessionDate);
+    const sessionAll = cleanedBars.filter((b) => etClock(b.t).date === input.sessionDate && finite(b.v));
     const dayVolume = sessionAll.length ? sessionAll.reduce((a, b) => a + b.v, 0) : null;
     if (reg.length) {
       const end = reg[reg.length - 1].t + BAR_MINUTES * 60_000;
