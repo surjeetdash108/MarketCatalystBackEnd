@@ -419,6 +419,8 @@ export function runRules(bars, spec, cfg = {}) {
   }
   const exposure = eq.length ? eq.filter((x) => x.inMkt).length / eq.length : 0;
   let bh = bars.slice(start).map((x) => ({ date: x.date, v: (10000 * x.close) / bars[start].close })), eqo = eq;
+  // Per-bar curves (the same as eq/bh on daily and weekly candles) for windows shorter than a session.
+  const eqBar = eq, bhBar = bh;
   if (S) {
     const daily = (a) => a.filter((x, k) => k === a.length - 1 || String(a[k + 1].date).slice(0, 10) !== String(x.date).slice(0, 10)).map((x) => ({ ...x, date: String(x.date).slice(0, 10) }));
     // Daily points, starting from the opening capital on the first session so
@@ -427,7 +429,7 @@ export function runRules(bars, spec, cfg = {}) {
     eqo = [{ date: d0, v: 10000, inMkt: false }, ...daily(eq)];
     bh = [{ date: d0, v: 10000 }, ...daily(bh)];
   }
-  return { eq: eqo, bh, trades, start, warm: hc.warm, tf, m: metrics(eqo, trades, tf, exposure), mb: metrics(bh, [], tf, 1) };
+  return { eq: eqo, bh, eqBar, bhBar, trades, start, warm: hc.warm, tf, m: metrics(eqo, trades, tf, exposure), mb: metrics(bh, [], tf, 1) };
 }
 
 const LOOKL = { 20: '20D', 50: '50D', 63: '3M', 126: '6M', 252: '52W' };
