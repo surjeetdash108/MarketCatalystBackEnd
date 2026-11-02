@@ -74,6 +74,8 @@ describe("Strategy Lab universe (shared by the browser scan and the jobs)", () =
       {} as never,
       { enabled: false } as never,
       svc,
+      {} as never,
+      { get: () => "" } as never,
     );
     const a = (await lab.universe()).stocks.map((s) => s.t);
     const b = (await store.universe()).map((s) => s.t);

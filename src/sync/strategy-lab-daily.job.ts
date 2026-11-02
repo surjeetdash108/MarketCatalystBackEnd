@@ -27,6 +27,13 @@ import {
   type UniverseRow,
 } from "../live/strategy-lab/universe-runner";
 import { LAB_STRATEGIES } from "../live/strategy-lab/strategies";
+import {
+  etDay,
+  isWeekday,
+  lastCompletedSession,
+} from "../live/strategy-lab/sessions";
+
+export { lastCompletedSession };
 
 const JOB_NAME = "strategy-lab-daily";
 /** A stored pack further behind than this is re-fetched whole instead of patched from bulk files. */
@@ -34,22 +41,6 @@ const MAX_BULK_DAYS = 10;
 const FETCH_CONCURRENCY = 8;
 const CHUNK = 100;
 const DAY = 86_400_000;
-
-const etDay = (ms: number) =>
-  new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(
-    new Date(ms),
-  );
-const etHm = (ms: number) =>
-  new Intl.DateTimeFormat("en-GB", {
-    timeZone: "America/New_York",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(ms));
-const isWeekday = (day: string) => {
-  const d = new Date(`${day}T12:00:00Z`).getUTCDay();
-  return d >= 1 && d <= 5;
-};
 
 /** Weekdays strictly after `after` up to and including `upTo` (ET dates), oldest first. */
 export function weekdaysBetween(after: string, upTo: string): string[] {
@@ -63,19 +54,6 @@ export function weekdaysBetween(after: string, upTo: string): string[] {
     if (isWeekday(day)) out.push(day);
   }
   return out;
-}
-
-/** Latest session whose daily bar is final: today after 16:15 ET on a weekday, else the previous weekday. */
-export function lastCompletedSession(now = Date.now()): string {
-  let day = etDay(now);
-  if (!(isWeekday(day) && etHm(now) >= "16:15")) {
-    do
-      day = new Date(Date.parse(`${day}T12:00:00Z`) - DAY)
-        .toISOString()
-        .slice(0, 10);
-    while (!isWeekday(day));
-  }
-  return day;
 }
 
 /** Parse FMP's eod-bulk CSV (columns by header name — its order is open, low, high, close). */

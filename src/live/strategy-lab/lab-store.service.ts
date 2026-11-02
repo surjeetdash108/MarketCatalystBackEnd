@@ -58,9 +58,20 @@ export class LabStoreService {
   // ── Daily packs ──────────────────────────────────────────────────────────
   async readDaily(t: string): Promise<BarPack | null> {
     const snap = await this.db.collection(DAILY_COL).doc(t).get();
-    return snap.exists
-      ? decodePack(snap.data() as Record<string, unknown>)
-      : null;
+    return snap.exists ? decodePack(snap.data()) : null;
+  }
+
+  /** Daily packs for several stocks in one batched read; stocks without a pack are absent. */
+  async readDailyMany(tickers: string[]): Promise<Map<string, BarPack>> {
+    const out = new Map<string, BarPack>();
+    if (!tickers.length) return out;
+    const snaps = await this.db.getAll(
+      ...tickers.map((t) => this.db.collection(DAILY_COL).doc(t)),
+    );
+    snaps.forEach((s, k) => {
+      if (s.exists) out.set(tickers[k], decodePack(s.data()));
+    });
+    return out;
   }
 
   async writeDaily(t: string, p: BarPack): Promise<void> {
@@ -114,9 +125,7 @@ export class LabStoreService {
       .collection(INTRADAY_COL)
       .doc(this.intraId(t, tf))
       .get();
-    return snap.exists
-      ? decodePack(snap.data() as Record<string, unknown>)
-      : null;
+    return snap.exists ? decodePack(snap.data()) : null;
   }
 
   async writeIntraday(
@@ -176,8 +185,7 @@ export class LabStoreService {
       const refs = chunk.map((t) => this.db.collection(col).doc(idOf(t)));
       const snaps = await this.db.getAll(...refs);
       snaps.forEach((s, k) => {
-        if (s.exists)
-          out.set(chunk[k], decodePack(s.data() as Record<string, unknown>));
+        if (s.exists) out.set(chunk[k], decodePack(s.data()));
       });
     }
     this.logger.log(

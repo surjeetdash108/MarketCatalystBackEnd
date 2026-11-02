@@ -1,7 +1,18 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { FmpService } from "../vendors/fmp/fmp.service";
 import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { toFmpSymbol } from "../vendors/market-data/fmp-mapping.util";
+import { BarsLru } from "./strategy-lab/bars-cache";
+import {
+  encodeTime,
+  indexAtOrAfter,
+  lastDate,
+  packToRows,
+  type BarPack,
+} from "./strategy-lab/bar-pack";
+import { DAILY_YEARS, LabStoreService } from "./strategy-lab/lab-store.service";
+import { lastCompletedSession } from "./strategy-lab/sessions";
 import {
   LabUniverseService,
   universeFor,
@@ -24,6 +35,8 @@ export const LAB_INTRADAY: Record<string, string> = {
 const DAY = 86_400_000;
 const DAILY_TTL_MS = 6 * 3_600_000;
 const INTRADAY_TTL_MS = 5 * 60_000;
+/** Bars the in-memory cache may hold across all entries (~100 B each in memory, est.) before evicting the least recently used. */
+const DEFAULT_CACHE_MAX_BARS = 1_500_000;
 /** Safety cap on backwards paging for one intraday request. */
 const MAX_PAGES = 40;
 
@@ -82,13 +95,21 @@ const OPS = [">", "<", "≥", "≤", "crosses above", "crosses below"];
 @Injectable()
 export class StrategyLabService {
   private readonly logger = new Logger(StrategyLabService.name);
-  private readonly cache = new Map<string, { rows: LabBar[]; at: number }>();
+  private readonly cache: BarsLru;
+  /** Daily bars from the stored packs (lab_bars) first — on only after the evidence check (LAB_BARS_FROM_STORE=1). */
+  private readonly fromStore: boolean;
   private readonly inflight = new Map<string, Promise<LabBar[]>>();
   constructor(
     private readonly fmp: FmpService,
     private readonly llm: LlmGatewayService,
     private readonly labUniverse: LabUniverseService,
-  ) {}
+    private readonly store: LabStoreService,
+    config: ConfigService,
+  ) {
+    this.fromStore = config.get("LAB_BARS_FROM_STORE") === "1";
+    const max = Number(config.get("LAB_BARS_CACHE_MAX_BARS"));
+    this.cache = new BarsLru(max > 0 ? max : DEFAULT_CACHE_MAX_BARS);
+  }
 
   /**
    * The test universe for a candle: the shared Strategy Lab universe
@@ -116,7 +137,9 @@ export class StrategyLabService {
   }> {
     const out: Record<string, LabBar[]> = {};
     const missing: string[] = [];
-    const queue = [...symbols];
+    const stored = await this.fromStoredPacks(symbols, tf, span);
+    Object.assign(out, stored);
+    const queue = symbols.filter((s) => !stored[s]);
     const work = async () => {
       while (queue.length) {
         const sym = queue.shift() as string;
@@ -141,21 +164,65 @@ export class StrategyLabService {
     return { asOf, bars: out, missing };
   }
 
+  private key(
+    sym: string,
+    tf: string,
+    span: { years?: number; days?: number },
+  ) {
+    return LAB_INTRADAY[tf]
+      ? `${sym}|${tf}|${span.days}`
+      : `${sym}|d|${span.days != null ? span.days + "d" : span.years}|${etDay(Date.now())}`;
+  }
+
+  /**
+   * Daily bars from the stored packs for stocks whose pack holds the last
+   * completed session and reaches back far enough; the rest come from FMP.
+   * Same rows as fetchDaily: completed sessions from the same start date.
+   */
+  private async fromStoredPacks(
+    symbols: string[],
+    tf: string,
+    span: { years?: number; days?: number },
+  ): Promise<Record<string, LabBar[]>> {
+    const out: Record<string, LabBar[]> = {};
+    if (!this.fromStore || LAB_INTRADAY[tf]) return out;
+    const now = Date.now();
+    const years = span.days != null ? span.days / 365.25 : (span.years ?? 6);
+    if (years > DAILY_YEARS) return out;
+    const from = etDay(now - Math.round(years * 365.25 * DAY));
+    const want = symbols.filter(
+      (s) => !this.cache.get(this.key(s, tf, span), DAILY_TTL_MS),
+    );
+    let packs = new Map<string, BarPack>();
+    try {
+      packs = await this.store.readDailyMany(want);
+    } catch (err) {
+      this.logger.warn(
+        `lab_bars read failed: ${(err as Error)?.message ?? err}`,
+      );
+      return out;
+    }
+    const session = lastCompletedSession(now);
+    for (const [sym, pack] of packs) {
+      const last = lastDate(pack);
+      if (!last || last < session) continue;
+      const rows = packToRows(pack, indexAtOrAfter(pack, encodeTime(from)));
+      if (!rows.length) continue;
+      this.cache.set(this.key(sym, tf, span), rows);
+      out[sym] = rows;
+    }
+    return out;
+  }
+
   private one(
     sym: string,
     tf: string,
     span: { years?: number; days?: number },
   ): Promise<LabBar[]> {
     const intraday = LAB_INTRADAY[tf];
-    const key = intraday
-      ? `${sym}|${tf}|${span.days}`
-      : `${sym}|d|${span.days != null ? span.days + "d" : span.years}|${etDay(Date.now())}`;
-    const hit = this.cache.get(key);
-    if (
-      hit &&
-      Date.now() - hit.at < (intraday ? INTRADAY_TTL_MS : DAILY_TTL_MS)
-    )
-      return Promise.resolve(hit.rows);
+    const key = this.key(sym, tf, span);
+    const hit = this.cache.get(key, intraday ? INTRADAY_TTL_MS : DAILY_TTL_MS);
+    if (hit) return Promise.resolve(hit);
     const pending = this.inflight.get(key);
     if (pending) return pending;
     const p = (
@@ -167,7 +234,7 @@ export class StrategyLabService {
           )
     )
       .then((rows) => {
-        this.cache.set(key, { rows, at: Date.now() });
+        this.cache.set(key, rows);
         return rows;
       })
       .finally(() => this.inflight.delete(key));

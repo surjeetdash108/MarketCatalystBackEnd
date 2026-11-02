@@ -93,6 +93,8 @@ describe("Strategy Lab bars", () => {
       { request } as never,
       { enabled: false } as never,
       {} as never,
+      {} as never,
+      { get: () => "" } as never,
     );
     const { bars } = await svc.bars(["AAPL"], "5m", { days: 7 });
     expect(bars.AAPL.map((b) => b[0])).toEqual([
@@ -124,6 +126,8 @@ describe("Strategy Lab bars", () => {
       { request } as never,
       { enabled: false } as never,
       {} as never,
+      {} as never,
+      { get: () => "" } as never,
     );
     const r = await svc.bars(["AAPL", "ZZZZ"], "d", { years: 6 });
     expect(Object.keys(r.bars)).toEqual(["AAPL"]);
@@ -137,6 +141,8 @@ describe("Strategy Lab bars", () => {
       { request: jest.fn() } as never,
       { enabled: false } as never,
       {} as never,
+      {} as never,
+      { get: () => "" } as never,
     );
     await expect(svc.aiRules("buy when RSI(2) < 10")).resolves.toBeNull();
   });
