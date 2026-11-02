@@ -49,12 +49,23 @@ export class StrategyLabController {
     private readonly firebase: FirebaseAdminService,
   ) {}
 
-  /** GET /live/strategy-lab/universe — the stocks a strategy is tested on. */
+  /** GET /live/strategy-lab/universe?tf=d&size=all — the stocks a strategy is tested on (largest market cap first). */
   @Get("universe")
   @Header("Cache-Control", "private, max-age=3600")
-  async universe() {
+  async universe(
+    @Query("tf") tf: string | undefined,
+    @Query("size") size: string | undefined,
+  ) {
+    const t = tf ?? "d";
+    if (!LAB_TFS.has(t))
+      throw new BadRequestException(
+        "tf must be one of " + [...LAB_TFS].join(", "),
+      );
+    const n = size == null || size === "" || size === "all" ? 0 : Number(size);
+    if (!Number.isInteger(n) || n < 0)
+      throw new BadRequestException("size must be a whole number or 'all'");
     try {
-      return await this.lab.universe();
+      return await this.lab.universe(t, n);
     } catch (err) {
       throw new ServiceUnavailableException(
         `Strategy Lab universe unavailable: ${(err as Error)?.message ?? err}`,

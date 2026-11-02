@@ -40,6 +40,7 @@ import { NewsWireController } from "./news-wire.controller";
 import { StrategyLabService } from "./strategy-lab.service";
 import { StrategyLabController } from "./strategy-lab.controller";
 import { LabStoreService } from "./strategy-lab/lab-store.service";
+import { LabUniverseService } from "./strategy-lab/lab-universe";
 import { LabResultsService } from "./strategy-lab/lab-results.service";
 import { MoneyFlowController } from "./money-flow/money-flow.controller";
 import { MoneyFlowService } from "./money-flow/money-flow.service";
@@ -102,6 +103,7 @@ import { MoneyFlowService } from "./money-flow/money-flow.service";
     EarningsWireService,
     StrategyLabService,
     LabStoreService,
+    LabUniverseService,
     LabResultsService,
     MoneyFlowService,
   ],
@@ -129,6 +131,7 @@ import { MoneyFlowService } from "./money-flow/money-flow.service";
     StockDetailsService,
     StrategyLabService,
     LabStoreService,
+    LabUniverseService,
     LabResultsService,
   ],
 })

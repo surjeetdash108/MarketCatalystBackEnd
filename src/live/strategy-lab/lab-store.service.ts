@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { FirebaseAdminService } from "../../common/firebase-admin.provider";
-import { activeUniverse } from "../../common/ticker-universe";
+import { LabUniverseService } from "./lab-universe";
 import { decodePack, encodePack, type BarPack } from "./bar-pack";
 
 /** Candle sizes kept as stored intraday packs (the library's intraday strategies use these). */
@@ -41,28 +41,18 @@ export class LabStoreService {
     string,
     { at: number; asOf: string; packs: Map<string, BarPack> }
   >();
-  private universeMem: { at: number; list: UniverseEntry[] } | null = null;
-
-  constructor(private readonly firebase: FirebaseAdminService) {}
+  constructor(
+    private readonly firebase: FirebaseAdminService,
+    private readonly labUniverse: LabUniverseService,
+  ) {}
 
   private get db() {
     return this.firebase.firestore;
   }
 
-  /** The tracked universe (same list every per-ticker job uses) with display names. */
+  /** The Strategy Lab universe (lab-universe.ts) — the same list the browser scan uses. */
   async universe(): Promise<UniverseEntry[]> {
-    if (this.universeMem && Date.now() - this.universeMem.at < 3_600_000)
-      return this.universeMem.list;
-    const [tickers, names] = await Promise.all([
-      activeUniverse(this.db),
-      this.db.collection("companies").select("name").get(),
-    ]);
-    const nameOf = new Map(
-      names.docs.map((d) => [d.id, String(d.get("name") ?? d.id)]),
-    );
-    const list = tickers.map((t) => ({ t, n: nameOf.get(t) ?? t }));
-    this.universeMem = { at: Date.now(), list };
-    return list;
+    return (await this.labUniverse.get()).stocks.map(({ t, n }) => ({ t, n }));
   }
 
   // ── Daily packs ──────────────────────────────────────────────────────────
