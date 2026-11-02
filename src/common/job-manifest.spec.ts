@@ -42,13 +42,21 @@ describe("JOB_MANIFEST", () => {
   it("carries the jobs the manifest used to be missing", () => {
     expect(jobManifest("analyst-firm-stats")).toMatchObject({ trigger: "premarket", schedules: ["0 8 * * 1-5"] });
     expect(jobManifest("strategy-lab-daily")).toMatchObject({ trigger: "scheduler", schedules: ["30 17 * * 1-5"] });
-    expect(jobManifest("strategy-lab-intraday")).toMatchObject({ trigger: "scheduler", schedules: ["*/5 9-16 * * 1-5"] });
+    expect(jobManifest("strategy-lab-intraday")).toMatchObject({ trigger: "none", schedules: [] }); // untriggered by decision (2026-11-02)
   });
 
   it("writes the two Central-time schedules in Central time", () => {
     expect(jobManifest("analyst-actions")?.timeZone).toBe("America/Chicago");
     expect(jobManifest("premarket-post")?.timeZone).toBe("America/Chicago");
     expect(jobManifest("news")?.timeZone).toBeUndefined();
+  });
+});
+
+describe("Strategy Lab jobs", () => {
+  it("runs the daily job from its own scheduler entry and leaves the intraday job untriggered", () => {
+    const by = (n: string) => JOB_MANIFEST.find((j) => j.name === n);
+    expect(by("strategy-lab-daily")).toMatchObject({ trigger: "scheduler", schedules: ["30 17 * * 1-5"] });
+    expect(by("strategy-lab-intraday")).toMatchObject({ trigger: "none", schedules: [] });
   });
 });
 

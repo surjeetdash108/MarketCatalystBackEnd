@@ -111,8 +111,7 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "companies-financials-backfill", trigger: "scheduler", schedules: ["0 12 * * 6"], note: "a cursor backfill with no deadline of its own" },
   { name: "market-glance-weekly", trigger: "scheduler", schedules: ["0 12 * * 5"], note: "Fridays 12:00 ET: builds and stores the current week's 'Week at a glance' digest (Live Feed > Weekly Summary) ahead of any viewer. Cloud Scheduler entry sync-market-glance-weekly (deploy/create-glance-weekly-scheduler.sh)" },
   { name: "volume-leaders", trigger: "scheduler", schedules: ["30 20 * * 1-5"], note: "ranks the whole US market by relative volume from ONE grouped-daily call; 20:30 ET, after the after-hours session closes at 20:00, so the day's volume is complete" },
-  { name: "strategy-lab-daily", trigger: "scheduler", schedules: ["30 17 * * 1-5"], note: "Strategy Lab: after the close, appends the session to every stock's bar pack (one FMP bulk EOD call) and precomputes the daily library strategies. The entry sync-strategy-lab-daily is created only by deploy/create-scheduler-jobs.sh, which DEPLOY.md marks stale — confirm it is live with gcloud scheduler jobs list" },
-  { name: "strategy-lab-intraday", trigger: "scheduler", schedules: ["*/5 9-16 * * 1-5"], note: "Strategy Lab: every 5 minutes in-session, refreshes the 5-minute bar packs and reruns the intraday library strategies. The entry sync-strategy-lab-intraday is created only by deploy/create-scheduler-jobs.sh, which DEPLOY.md marks stale — confirm it is live with gcloud scheduler jobs list" },
+  { name: "strategy-lab-daily", trigger: "scheduler", schedules: ["30 17 * * 1-5"], note: "Strategy Lab: after the close, appends the session to every Strategy Lab universe stock's bar pack (lab_bars; one FMP bulk EOD call) and precomputes the daily library strategies. Cloud Scheduler entry sync-strategy-lab-daily (create it with the single command in DEPLOY.md / the Strategy Lab section) — confirm with gcloud scheduler jobs list" },
   { name: "premarket", trigger: "scheduler", schedules: ["0 8 * * 1-5"], note: "Cloud Run JOB premarket-job, not an HTTP POST — it orchestrates the phases below" },
   { name: "staleness-check", trigger: "scheduler", schedules: ["0 * * * *"], note: "hourly sweep: logs an ERROR for every job whose last success is older than two of its scheduled runs (a job that stops running never records itself)" },
 ];
@@ -195,6 +194,7 @@ const VIA_PREMARKET: string[] = [
  * have no scheduling mechanism at all.
  */
 const NOT_TRIGGERED: JobManifestEntry[] = [
+  { name: "strategy-lab-intraday", trigger: "none", schedules: [], note: "deliberately untriggered: intraday Strategy Lab scans run in the browser on live FMP bars; enable only with its own decision (it would refresh lab_ibars every 5 minutes)" },
   { name: "auto-purge", trigger: "none", schedules: [], note: "@Cron 0 0 * * * cannot fire on a CPU-throttled, scale-to-zero worker" },
   { name: "monthly-news-cleanup", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },
   { name: "ticker-weekly-ai", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },

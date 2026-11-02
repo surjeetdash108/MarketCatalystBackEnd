@@ -99,7 +99,9 @@ upsert_lab_job() {
     --attempt-deadline="${deadline}"
 }
 upsert_lab_job "sync-strategy-lab-daily" "30 17 * * 1-5" "${SERVICE_URL}/sync/strategy-lab-daily/run" "900s"
-upsert_lab_job "sync-strategy-lab-intraday" "*/5 9-16 * * 1-5" "${SERVICE_URL}/sync/strategy-lab-intraday/run" "600s"
+# strategy-lab-intraday is deliberately NOT scheduled (2026-11-02): intraday Strategy Lab
+# scans run in the browser. See src/common/job-manifest.ts before enabling it.
+# upsert_lab_job "sync-strategy-lab-intraday" "*/5 9-16 * * 1-5" "${SERVICE_URL}/sync/strategy-lab-intraday/run" "600s"
 
 # Intraday refreshes. The live service cannot run sync jobs (they are only
 # registered on the worker), so a stale-on-read refresh never fires in

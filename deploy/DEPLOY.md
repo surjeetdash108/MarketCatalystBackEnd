@@ -682,3 +682,30 @@ users collapse to ~1 origin request per interval per edge.
   (LiveModule; no /sync//purge//admin routes exist there), and per-user
   responses (`/live/whoami`) are `no-store` so the CDN never caches them.
 - Ships automatically with any `firebase deploy --only hosting`.
+
+
+## Strategy Lab daily job (`sync-strategy-lab-daily`)
+
+Runs on the **worker** after the close (17:30 ET, weekdays): updates one bar
+pack per Strategy Lab universe stock in `lab_bars` (the shared S&P 500 list,
+`src/live/strategy-lab/lab-universe.ts`) and precomputes the daily library
+strategies into `lab_results`. `strategy-lab-intraday` is intentionally not
+scheduled.
+
+Create only this one entry (the full `create-scheduler-jobs.sh` upserts many):
+
+```bash
+gcloud scheduler jobs create http sync-strategy-lab-daily \
+  --project=market-catalyst-502415 --location=us-central1 \
+  --schedule="30 17 * * 1-5" --time-zone="America/New_York" \
+  --uri="https://market-catalyst-backend-741318166823.us-central1.run.app/sync/strategy-lab-daily/run" \
+  --http-method=POST \
+  --oidc-service-account-email="scheduler-invoker@market-catalyst-502415.iam.gserviceaccount.com" \
+  --oidc-token-audience="https://market-catalyst-backend-741318166823.us-central1.run.app" \
+  --attempt-deadline=900s
+```
+
+The first run downloads ~11 years of daily bars per stock (no packs exist yet);
+later runs append one session from FMP's bulk EOD file. `/bars` reads these
+packs only when the live service has `LAB_BARS_FROM_STORE=1`, which is switched
+on after the packs have been checked against FMP.
