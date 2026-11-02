@@ -20,7 +20,7 @@ import {
 } from "./money-flow.calc";
 
 /** Board rebuild interval; a request inside it gets the cached board. */
-const BOARD_TTL_MS = 30_000;
+export const BOARD_TTL_MS = 15_000;
 /** 5-minute bars are re-pulled at most this often while the session runs. */
 const BARS_TTL_MS = 2 * 60_000;
 const CONSTITUENTS_TTL_MS = 12 * 60 * 60_000;
