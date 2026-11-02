@@ -35,8 +35,8 @@ export const LAB_INTRADAY: Record<string, string> = {
 const DAY = 86_400_000;
 const DAILY_TTL_MS = 6 * 3_600_000;
 const INTRADAY_TTL_MS = 5 * 60_000;
-/** Bars the in-memory cache may hold across all entries (~180 B each in memory, est.) before evicting the least recently used. */
-const DEFAULT_CACHE_MAX_BARS = 800_000;
+/** Bars the in-memory cache may hold across all entries (~100 B each in memory, est.) before evicting the least recently used. */
+export const DEFAULT_CACHE_MAX_BARS = 1_500_000;
 /** Safety cap on backwards paging for one intraday request. */
 const MAX_PAGES = 40;
 

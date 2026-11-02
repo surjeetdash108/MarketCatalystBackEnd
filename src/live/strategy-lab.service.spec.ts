@@ -1,4 +1,5 @@
 import {
+  DEFAULT_CACHE_MAX_BARS,
   StrategyLabService,
   dropUnfinishedDay,
   toBars,
@@ -23,6 +24,10 @@ describe("Strategy Lab bars", () => {
       ["2026-10-19", 1, 2, 1, 1.5, 5],
       ["2026-10-20", 2, 3, 1, 2.5, 7],
     ]);
+  });
+
+  it("in-memory bars cache cap defaults to 1.5M bars", () => {
+    expect(DEFAULT_CACHE_MAX_BARS).toBe(1_500_000);
   });
 
   it("drops today's still-forming daily bar until 16:15 ET, keeps it after", () => {

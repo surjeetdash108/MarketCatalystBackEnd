@@ -54,9 +54,10 @@ describe("Strategy Lab universe (shared by the browser scan and the jobs)", () =
     expect(Object.keys(LAB_UNIVERSE_CAP).sort()).toEqual(
       ["1h", "1m", "1w", "4h", "5m", "15m", "30m", "d"].sort(),
     );
+    expect(Object.values(LAB_UNIVERSE_CAP).every((v) => v === null)).toBe(true);
     expect(universeFor(u.stocks, "d")).toHaveLength(u.stocks.length);
-    expect(universeFor(u.stocks, "5m")).toHaveLength(100);
-    expect(universeFor(u.stocks, "1m")).toHaveLength(50);
+    expect(universeFor(u.stocks, "5m")).toHaveLength(u.stocks.length);
+    expect(universeFor(u.stocks, "1m")).toHaveLength(u.stocks.length);
     const top = universeFor(u.stocks, "5m", 100);
     expect(top).toHaveLength(100);
     expect(top).toEqual(u.stocks.slice(0, 100));
