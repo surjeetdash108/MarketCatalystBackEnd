@@ -322,7 +322,9 @@ export const AVG_VOLUME_SESSIONS = 20;
  * (latest date before `sessionDate` with rows), each ticker's bar on it, and the
  * mean daily volume of the 20 sessions before `sessionDate` (the companies
  * `avgVolume20` basis). A ticker missing from any of those sessions gets no
- * average rather than one over fewer days.
+ * average rather than one over fewer days. `sessionDay` is each ticker's bar on
+ * `sessionDate` itself, present only once that session has closed and Polygon
+ * has published it; it is the basis for the next session's pivots.
  */
 export function referenceFromGrouped(
   grouped: Record<string, GroupedRow[]>,
@@ -330,6 +332,7 @@ export function referenceFromGrouped(
 ): {
   prevSessionDate: string | null;
   prevDay: Map<string, { h: number; l: number; c: number }>;
+  sessionDay: Map<string, { h: number; l: number; c: number }>;
   avgVolume20: Map<string, number>;
 } {
   const dates = Object.keys(grouped)
@@ -340,6 +343,10 @@ export function referenceFromGrouped(
   const prevDay = new Map<string, { h: number; l: number; c: number }>();
   for (const r of prevSessionDate ? grouped[prevSessionDate] : []) {
     if ([r.h, r.l, r.c].every(finite)) prevDay.set(r.T, { h: r.h, l: r.l, c: r.c });
+  }
+  const sessionDay = new Map<string, { h: number; l: number; c: number }>();
+  for (const r of grouped[sessionDate] ?? []) {
+    if ([r.h, r.l, r.c].every(finite)) sessionDay.set(r.T, { h: r.h, l: r.l, c: r.c });
   }
   const sums = new Map<string, { v: number; n: number }>();
   for (const d of dates) {
@@ -355,7 +362,7 @@ export function referenceFromGrouped(
   if (dates.length === AVG_VOLUME_SESSIONS) {
     for (const [t, s] of sums) if (s.n === AVG_VOLUME_SESSIONS) avgVolume20.set(t, s.v / s.n);
   }
-  return { prevSessionDate, prevDay, avgVolume20 };
+  return { prevSessionDate, prevDay, sessionDay, avgVolume20 };
 }
 
 /** FMP writes share classes with a dash (BRK-B); Polygon and the app use a dot (BRK.B). */
@@ -387,6 +394,8 @@ export interface StockIn {
   bars: RawBar[];
   /** Previous session's daily bar (Polygon). */
   prevDay: { h: number; l: number; c: number } | null;
+  /** The session date's own daily bar (Polygon), once that session has closed. */
+  sessionDay?: { h: number; l: number; c: number } | null;
   /** Mean daily volume of the 20 sessions before the session date. */
   avgVolume20: number | null;
   marketCap: number | null;
@@ -458,6 +467,14 @@ export interface MoneyFlowBoard {
   sessionDate: string;
   prevSessionDate: string | null;
   sessionComplete: boolean;
+  /**
+   * Which session the pivots (R1/R2/S1/S2) are for: "current" = the board's
+   * session, from the previous session's bar; "next" = after the close, the
+   * coming session, from the board's own session bar.
+   */
+  pivotsFor: "current" | "next";
+  /** Date of the daily bar the pivots are built from. */
+  pivotBasisDate: string | null;
   /** End of the latest regular-session bar (epoch ms), null before any. */
   barsThrough: number | null;
   delayMinutes: number;
@@ -481,7 +498,8 @@ export const BASIS: Record<string, string> = {
   rvol: "Day volume ÷ (20-session average daily volume × share of the regular session elapsed).",
   vwap: "Regular-session VWAP from the 5-minute bars.",
   m30: "Change over the last 30 minutes (six 5-minute bars), in % of the previous close.",
-  pivots: "Classic pivots from the previous session's high/low (Polygon daily bar) and official close.",
+  pivots:
+    "Classic pivots from the last completed session's high/low/close (Polygon daily bar). During a session that is the previous session; once the session has closed it is that session, giving the next session's levels.",
   zone: "Most recent unmitigated order block on the side of the move (5-minute bars).",
   levels: "Entry = zone edge nearest price, stop = far edge, target = first pivot beyond entry and price; R:R = |target − entry| ÷ |entry − stop|.",
   marketCap: "Polygon weighted shares outstanding × price (as Stock Detail).",
@@ -496,6 +514,9 @@ export function isSessionComplete(sessionDate: string, now: number): boolean {
 
 export function buildBoard(input: BoardIn): MoneyFlowBoard {
   const complete = isSessionComplete(input.sessionDate, input.now);
+  // After the close, levels roll forward to the next session as soon as the
+  // session's own daily bars are published; until then they stay on the previous one.
+  const pivotsFor: "current" | "next" = complete && input.stocks.some((s) => s.sessionDay) ? "next" : "current";
   type Work = {
     s: StockIn;
     price: number;
@@ -567,7 +588,14 @@ export function buildBoard(input: BoardIn): MoneyFlowBoard {
         ? round(w.dayVolume / (w.s.avgVolume20 * fraction), 2)
         : null;
     const chop = Math.abs(w.pct) < chopThr || (rvol != null && rvol < 1.05);
-    const piv = w.s.prevDay ? pivotLevels(w.s.prevDay.h, w.s.prevDay.l, w.prevClose) : null;
+    const piv =
+      pivotsFor === "next"
+        ? w.s.sessionDay
+          ? pivotLevels(w.s.sessionDay.h, w.s.sessionDay.l, w.s.sessionDay.c)
+          : null
+        : w.s.prevDay
+          ? pivotLevels(w.s.prevDay.h, w.s.prevDay.l, w.prevClose)
+          : null;
     const last = w.reg[w.reg.length - 1];
     const blocks = orderBlocks(w.reg);
     const lv = tradeLevels(bull, blocks, piv, w.price);
@@ -634,6 +662,8 @@ export function buildBoard(input: BoardIn): MoneyFlowBoard {
     asOf: new Date(input.now).toISOString(),
     sessionDate: input.sessionDate,
     prevSessionDate: input.prevSessionDate,
+    pivotsFor,
+    pivotBasisDate: pivotsFor === "next" ? input.sessionDate : input.prevSessionDate,
     sessionComplete: complete,
     barsThrough,
     delayMinutes: DATA_DELAY_MINUTES,

@@ -26,6 +26,8 @@ const BARS_TTL_MS = 2 * 60_000;
 const CONSTITUENTS_TTL_MS = 12 * 60 * 60_000;
 const DETAILS_TTL_MS = 24 * 60 * 60_000;
 const REFERENCE_TTL_MS = 12 * 60 * 60_000;
+/** After the close, how often to look again for the session's own grouped bars. */
+const SESSION_DAY_RETRY_MS = 5 * 60_000;
 const FMP_QUOTE_CHUNK = 100;
 const POLYGON_CONCURRENCY = 32;
 /** Market proxy whose bars and quote date the board's session. */
@@ -44,6 +46,10 @@ interface Reference {
   at: number;
   prevSessionDate: string | null;
   prevDay: Map<string, { h: number; l: number; c: number }>;
+  /** The session's own daily bars, once it has closed and Polygon has them. */
+  sessionDay: Map<string, { h: number; l: number; c: number }>;
+  /** When the session's own grouped bars were last requested (epoch ms). */
+  sessionDayTried: number;
   avgVolume20: Map<string, number>;
   companies: Map<string, { sector: string | null; name: string | null }>;
 }
@@ -128,7 +134,7 @@ export class MoneyFlowService {
     lap("quotes");
     const sessionDate = await this.sessionDate(quotes.get(SESSION_PROXY) ?? null, now);
     lap("session");
-    const ref = await this.loadReference(sessionDate, universe);
+    const ref = await this.loadReference(sessionDate, universe, now);
     lap("reference");
     const bars = await this.loadBars(sessionDate, universe, now);
     lap("bars");
@@ -150,6 +156,7 @@ export class MoneyFlowService {
         quote: q ? { price: q.price, previousClose: q.previousClose, changePercentage: q.changePercentage } : null,
         bars: bars.get(t) ?? [],
         prevDay: ref.prevDay.get(t) ?? null,
+        sessionDay: ref.sessionDay.get(t) ?? null,
         avgVolume20: ref.avgVolume20.get(t) ?? null,
         marketCap: null,
       };
@@ -231,16 +238,38 @@ export class MoneyFlowService {
     return d;
   }
 
-  private async loadReference(sessionDate: string, universe: string[]): Promise<Reference> {
+  private async loadReference(sessionDate: string, universe: string[], now: number): Promise<Reference> {
     const r = this.reference;
-    if (r && r.sessionDate === sessionDate && Date.now() - r.at < REFERENCE_TTL_MS) return r;
     const want = new Set([...universe, SESSION_PROXY]);
+    if (r && r.sessionDate === sessionDate && Date.now() - r.at < REFERENCE_TTL_MS) {
+      // Once the session has closed, pick up its own daily bars (the next
+      // session's pivot basis) as soon as Polygon publishes them.
+      if (isSessionComplete(sessionDate, now) && r.sessionDay.size === 0 && now - r.sessionDayTried >= SESSION_DAY_RETRY_MS) {
+        r.sessionDayTried = now;
+        const rows = await this.polygon.getGroupedDaily(sessionDate).catch(() => []);
+        for (const x of rows) {
+          if (x.T && want.has(x.T) && [x.h, x.l, x.c].every((v) => Number.isFinite(v))) {
+            r.sessionDay.set(x.T, { h: x.h, l: x.l, c: x.c });
+          }
+        }
+      }
+      return r;
+    }
     // Weekdays back from the session, all at once; holidays come back empty and
     // drop out, and a further batch is fetched only if they left too few.
     const grouped: Record<string, GroupedRow[]> = {};
+    if (isSessionComplete(sessionDate, now)) {
+      const rows = await this.polygon.getGroupedDaily(sessionDate).catch(() => []);
+      const kept = rows
+        .filter((x) => x.T && want.has(x.T))
+        .map((x) => ({ T: x.T as string, h: x.h, l: x.l, c: x.c, v: x.v }));
+      if (kept.length) grouped[sessionDate] = kept;
+    }
     let from = sessionDate;
-    for (let round = 0; Object.keys(grouped).length < AVG_VOLUME_SESSIONS && round < 3; round++) {
-      const need = AVG_VOLUME_SESSIONS - Object.keys(grouped).length + 2;
+    // Count only sessions before the board's own (which may be in `grouped` after the close).
+    const prior = () => Object.keys(grouped).filter((d) => d < sessionDate).length;
+    for (let round = 0; prior() < AVG_VOLUME_SESSIONS && round < 3; round++) {
+      const need = AVG_VOLUME_SESSIONS - prior() + 2;
       const batch: string[] = [];
       for (let d = addDays(from, -1); batch.length < need; d = addDays(d, -1)) {
         const wd = new Date(`${d}T12:00:00Z`).getUTCDay();
@@ -255,7 +284,7 @@ export class MoneyFlowService {
         if (kept.length) grouped[d] = kept;
       });
     }
-    const { prevSessionDate, prevDay, avgVolume20 } = referenceFromGrouped(grouped, sessionDate);
+    const { prevSessionDate, prevDay, sessionDay, avgVolume20 } = referenceFromGrouped(grouped, sessionDate);
 
     const companies = new Map<string, { sector: string | null; name: string | null }>();
     const db = this.firebase.firestore;
@@ -270,7 +299,16 @@ export class MoneyFlowService {
         });
       }
     }
-    this.reference = { sessionDate, at: Date.now(), prevSessionDate, prevDay, avgVolume20, companies };
+    this.reference = {
+      sessionDate,
+      at: Date.now(),
+      prevSessionDate,
+      prevDay,
+      sessionDay,
+      sessionDayTried: now,
+      avgVolume20,
+      companies,
+    };
     return this.reference;
   }
 

@@ -113,6 +113,50 @@ describe("money flow — previous-session reference", () => {
   });
 });
 
+describe("money flow — levels roll to the next session after the close", () => {
+  // Polygon grouped-daily rows for the Oct 29 session, fetched after it closed,
+  // plus Polygon's official regular-session open-close bar as the independent truth.
+  const closeFx = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "../fixtures/money-flow-2026-10-29-close.json"), "utf-8"),
+  );
+  const grouped = { ...fx.groupedDaily, [SESSION]: closeFx.groupedDaily };
+  const after = referenceFromGrouped(grouped, SESSION);
+  const AFTER_CLOSE = Date.parse("2026-10-29T21:00:00Z"); // 17:00 ET
+  const done = buildBoard({
+    sessionDate: SESSION,
+    prevSessionDate: after.prevSessionDate,
+    now: AFTER_CLOSE,
+    stocks: tickers.map((t) => ({ ...stockIn(t), sessionDay: after.sessionDay.get(t) ?? null })),
+  });
+  const doneT = (t: string) => [...done.gainers, ...done.losers].find((s) => s.t === t)!;
+  const classic = (h: number, l: number, c: number) => {
+    const p = (h + l + c) / 3;
+    return { pivot: p, r1: 2 * p - l, s1: 2 * p - h, r2: p + h - l, s2: p - (h - l) };
+  };
+
+  it("the session's own bar is kept apart from the previous session", () => {
+    expect(after.prevSessionDate).toBe("2026-10-28");
+    expect(after.sessionDay.size).toBe(closeFx.groupedDaily.length);
+  });
+
+  it.each(["AAPL", "NOW", "CAT", "KLAC", "MRVL", "XOM", "JPM"])(
+    "%s: after the close, R1/R2/S1/S2 are the next session's (from the Oct 29 official bar)",
+    (t) => {
+      const o = closeFx.officialOpenClose[t];
+      const want = classic(o.high, o.low, o.close);
+      const got = doneT(t).pivots!;
+      for (const k of ["pivot", "r1", "r2", "s1", "s2"] as const) expect(got[k]).toBeCloseTo(want[k], 2);
+      expect(done.pivotsFor).toBe("next");
+      expect(done.pivotBasisDate).toBe(SESSION);
+    },
+  );
+
+  it("during the session the levels stay on the previous session", () => {
+    expect(board.pivotsFor).toBe("current");
+    expect(board.pivotBasisDate).toBe("2026-10-28");
+  });
+});
+
 describe("money flow — flow arithmetic", () => {
   it("signs each bar by its typical price vs the previous bar (first bar vs prior close)", () => {
     const reg = regularSessionBars(fx.bars5m.AAPL, SESSION).slice(0, 3);
