@@ -239,8 +239,8 @@ export interface LadderLevel { name: string; v: number }
 /**
  * Every pivot level, low to high: the classic P, R1–R3 and S1–S3, plus R4/R5
  * and S4/S5 (TradingView "Pivot Points Standard", Traditional) from the
- * session's high and low, recovered as H = 2P − S1, L = 2P − R1. The same
- * ladder the chart draws, so a target is always a level shown there.
+ * session's high and low, recovered as H = 2P − S1, L = 2P − R1. The chart's
+ * R1/R2/S1/S2 are the two of these (P aside) nearest above and below price.
  */
 export function levelLadder(p: PivotLevels): LadderLevel[] {
   const P = p.pivot;
