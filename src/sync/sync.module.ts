@@ -53,6 +53,7 @@ import { StockHistoryJob } from "./stock-history.job";
 import { SyncController } from "./sync.controller";
 import { AnthropicModule } from "../vendors/anthropic/anthropic.module";
 import { EodRecapJob } from "./eod-recap.job";
+import { WebSubPingJob } from "./websub-ping.job";
 import { TickerUniverseJob } from "./ticker-universe.job";
 import { PremarketJob } from "./premarket.job";
 import { PremarketPostJob } from "./premarket-post.job";
@@ -128,6 +129,7 @@ import { MarketDataModule } from "../market-data/market-data.module";
     RecapsJob,
     PremarketJob,
     EodRecapJob,
+    WebSubPingJob,
     PremarketPostJob,
     D03PremarketMoversJob,
     D04AnalystCallsJob,

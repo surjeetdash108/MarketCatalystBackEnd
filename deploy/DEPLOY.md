@@ -617,6 +617,24 @@ PROJECT_ID=$PROJECT_ID REGION=$REGION SERVICE_URL=$SERVICE_URL INVOKER_SA=$INVOK
 gcloud scheduler jobs run sync-market-glance-weekly --project="$PROJECT_ID" --location="$REGION"  # verify once
 ```
 
+**(e) `sync-websub-ping` — tells the WebSub hub the RSS feed changed.** Fires every
+10 minutes, all week (`*/10 * * * *`), OIDC POST to `/sync/websub-ping/run` (same
+pattern as (b)). Each run looks for posts that went live at least 6 minutes ago
+and have not been announced, and POSTs `hub.mode=publish` for
+`https://marketcatalyst.ai/feed.xml` to `https://pubsubhubbub.appspot.com/` if there
+are any. The 6-minute lag is deliberate: the website caches its post list for 5, so
+an earlier ping would make the hub fetch a feed without the new post. Optional env
+on the worker: `WEBSUB_HUB_URL`, `WEBSUB_FEED_URL` (the second must equal the feed's
+own `rel="self"` URL). A code deploy does **not** create this entry — run once,
+**after** the worker revision containing the job is live (before that the POST is a
+404, and the staleness sweep will log an ERROR for the job after ~50 minutes):
+
+```bash
+PROJECT_ID=$PROJECT_ID REGION=$REGION SERVICE_URL=$SERVICE_URL INVOKER_SA=$INVOKER_SA \
+  ./deploy/create-websub-scheduler.sh
+gcloud scheduler jobs run sync-websub-ping --project="$PROJECT_ID" --location="$REGION"  # first run only sets the baseline
+```
+
 > ⚠ `deploy/create-scheduler-jobs.sh` is **stale** — it still creates the retired
 > single `sync-premarket` HTTP job and points at `/sync/premarket/run`. Use the
 > commands above instead until that script is updated.
