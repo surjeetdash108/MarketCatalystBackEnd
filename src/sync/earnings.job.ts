@@ -8,6 +8,7 @@ import { EARNINGS_ESTIMATES_ADAPTER } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { addDays, daysBetween, isoDate } from "../common/date.util";
 import { etDate } from "../common/market-calendar.util";
+import { pickYearAgoByReportDate, type YearAgoQuarter } from "./earnings-year-ago.util";
 
 const JOB_NAME = "earnings";
 // Reported quarters come from Polygon SEC financials keyed on `filing_date`
@@ -337,6 +338,10 @@ export class EarningsJob implements OnModuleInit {
         );
       }
 
+      // FMP calendar rows have no fiscal period/year, so the fiscal-key join
+      // above never reaches them. Fill their year-ago comparables by date.
+      const yearAgoFilled = await this.fillYearAgoByDate(docs);
+
       await chunkedBatchSet(this.firebase.firestore, "earnings_events", docs);
 
       // Full refresh: the collection must hold exactly this run's rows (reported
@@ -372,7 +377,7 @@ export class EarningsJob implements OnModuleInit {
         ? `, ${estimateMatches} with ${this.estimates.sourceName} estimates, ${forwardCount} upcoming`
         : "";
       this.logger.log(
-        `earnings: wrote ${docs.length} rows (${from}..${to})${estNote}, removed ${stale.length} stale`,
+        `earnings: wrote ${docs.length} rows (${from}..${to})${estNote}, ${yearAgoFilled} year-ago filled by date, removed ${stale.length} stale`,
       );
       return {
         count: docs.length,
@@ -387,6 +392,53 @@ export class EarningsJob implements OnModuleInit {
       });
       throw err;
     }
+  }
+
+  /**
+   * Year-ago EPS / revenue for rows the fiscal-key join could not reach (no
+   * fiscalPeriod/fiscalYear — every FMP calendar row). Only rows that already
+   * have an actual need one; upcoming rows have nothing to compare yet. Reads
+   * each ticker's stored `financials` quarters and matches by report date, see
+   * pickYearAgoByReportDate. Mutates `docs`; returns how many rows were filled.
+   */
+  private async fillYearAgoByDate(
+    docs: Array<{ id: string; data: Record<string, unknown> }>,
+  ): Promise<number> {
+    const need = docs.filter(
+      (d) =>
+        d.data.epsActualYearAgo == null &&
+        d.data.revenueYearAgo == null &&
+        (d.data.epsActual != null || d.data.revenueActual != null),
+    );
+    if (need.length === 0) return 0;
+
+    const tickers = [...new Set(need.map((d) => d.data.ticker as string))];
+    const quartersByTicker = new Map<string, YearAgoQuarter[]>();
+    for (let i = 0; i < tickers.length; i += 300) {
+      const refs = tickers
+        .slice(i, i + 300)
+        .map((t) => this.firebase.firestore.collection("financials").doc(t));
+      const snaps = await this.firebase.firestore.getAll(...refs);
+      for (const s of snaps) {
+        if (!s.exists) continue;
+        quartersByTicker.set(
+          s.id,
+          (s.data()?.quarters ?? []) as YearAgoQuarter[],
+        );
+      }
+    }
+
+    let filled = 0;
+    for (const d of need) {
+      const qs = quartersByTicker.get(d.data.ticker as string);
+      if (!qs) continue;
+      const ya = pickYearAgoByReportDate(qs, d.data.date as string);
+      if (!ya) continue;
+      d.data.epsActualYearAgo = ya.eps;
+      d.data.revenueYearAgo = ya.rev;
+      filled++;
+    }
+    return filled;
   }
 
   /** ticker → display name from the `companies` collection (doc id is ticker),
