@@ -9,6 +9,7 @@ import {
   moneyFlow,
   orderBlocks,
   tradeLevels,
+  levelLadder,
   referenceFromGrouped,
   regularSessionBars,
   rejectVolumeOutliers,
@@ -336,5 +337,24 @@ describe("money flow — relative volume counts the regular session only", () =>
     const b = buildBoard({ sessionDate: "2026-10-29", prevSessionDate: "2026-10-28", now: Date.parse("2026-10-29T14:20:00Z"), stocks: [synthStock([pre, ...reg])] });
     // 6,000 regular-session shares ÷ (78,000 × 30/390 of the session) = 1.0
     expect(b.gainers[0].rvol).toBeCloseTo(1, 5);
+  });
+});
+
+describe("money flow — one level ladder for targets", () => {
+  const piv = { pivot: 100, r1: 102, s1: 98, r2: 104, s2: 96, r3: 106, s3: 94 };
+  it("holds the pivot and R1–R5 / S1–S5, low to high", () => {
+    const l = levelLadder(piv);
+    expect(l.map((x) => x.name)).toEqual(["S5", "S4", "S3", "S2", "S1", "P", "R1", "R2", "R3", "R4", "R5"]);
+    expect(l.every((x, i) => i === 0 || x.v > l[i - 1].v)).toBe(true);
+  });
+  it("a long past R3 targets R4 instead of having no target", () => {
+    const blocks = [{ i: 0, t: 0, lo: 106.2, hi: 106.5, bull: true, mitigated: false }];
+    const lv = tradeLevels(true, blocks, piv, 107);
+    expect(lv.target).toBe(levelLadder(piv).find((x) => x.name === "R4")!.v);
+    expect(lv.rr).not.toBeNull();
+  });
+  it("a long below the pivot targets the pivot, the first level above", () => {
+    const blocks = [{ i: 0, t: 0, lo: 98.8, hi: 99, bull: true, mitigated: false }];
+    expect(tradeLevels(true, blocks, piv, 99.4).target).toBe(100);
   });
 });
