@@ -10,6 +10,7 @@ import {
   orderBlocks,
   tradeLevels,
   levelLadder,
+  BASIS,
   referenceFromGrouped,
   regularSessionBars,
   rejectVolumeOutliers,
@@ -369,5 +370,14 @@ describe("money flow — confidence's VWAP part uses the live price", () => {
     const b = buildBoard({ sessionDate: "2026-10-29", prevSessionDate: "2026-10-28", now: Date.parse("2026-10-29T14:00:00Z"), stocks: [s] });
     const vwapPart = b.gainers[0].confidence!.parts.find((p) => p[0] === "VWAP")!;
     expect(vwapPart[1]).toBeGreaterThanOrEqual(9);
+  });
+});
+
+describe("money flow — data notes name the feed the code uses", () => {
+  it("bars and daily data come FMP-first, Polygon as fallback", () => {
+    expect(BASIS.bars).toMatch(/FMP/);
+    expect(BASIS.bars).toMatch(/Polygon/);
+    expect(BASIS.bars).not.toMatch(/15 minutes delayed/);
+    expect(BASIS.pivots).toMatch(/R5/);
   });
 });

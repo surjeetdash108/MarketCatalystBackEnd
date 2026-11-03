@@ -9,7 +9,10 @@ import { sessionFraction } from "../../sync/company-quotes.job";
  * 87-name list. Here:
  *   - universe     S&P 500 ∪ Nasdaq-100 constituents (FMP)
  *   - price / %    FMP quote, the live quote source the rest of the app uses
- *   - candles      Polygon 5-minute bars, regular session (09:30–16:00 ET)
+ *   - candles      5-minute bars, regular session (09:30–16:00 ET), through the
+ *                  PolygonService token, which MarketDataService answers FMP-first
+ *                  (Polygon as fallback); likewise the grouped daily bars behind
+ *                  the 20-session volume average and the previous day's range
  *   - money flow   Money Flow Index method on those bars (see moneyFlow)
  *   - pivots       classic pivots, previous session's high/low + official close
  *   - RVOL         regular-session volume ÷ (20-session average × share of the
@@ -44,7 +47,10 @@ export interface SessionBar {
 export const BAR_MINUTES = 5;
 const OPEN_MIN = 9 * 60 + 30;
 const CLOSE_MIN = 16 * 60;
-/** Polygon Stocks Starter delay. */
+/**
+ * Assumed bar lag, used only to decide when a session's bars are complete
+ * (Polygon Stocks Starter's delay; a conservative bound for the FMP feed).
+ */
 export const DATA_DELAY_MINUTES = 15;
 /** Gainer / loser boards: the 15 biggest movers each side. */
 export const BOARD_SIZE = 15;
@@ -535,7 +541,7 @@ export interface MoneyFlowBoard {
 export const BASIS: Record<string, string> = {
   universe: "S&P 500 and Nasdaq-100 constituents (FMP); a stock in both counts once.",
   price: "FMP quote: last price and % change from the previous official close.",
-  bars: "Polygon 5-minute bars, regular session 09:30–16:00 ET, 15 minutes delayed.",
+  bars: "5-minute bars, regular session 09:30–16:00 ET, from FMP (Polygon as fallback) through the app's market-data service; they can lag the live price.",
   moneyFlow:
     "Money Flow Index method: typical price (H+L+C)/3 × volume per 5-minute bar, inflow when the typical price rose from the prior bar, outflow when it fell. Net = inflow − outflow; sector = sum of its stocks.",
   buyPct: "Inflow ÷ (inflow + outflow).",
