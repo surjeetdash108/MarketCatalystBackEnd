@@ -12,8 +12,8 @@ import { sessionFraction } from "../../sync/company-quotes.job";
  *   - candles      Polygon 5-minute bars, regular session (09:30–16:00 ET)
  *   - money flow   Money Flow Index method on those bars (see moneyFlow)
  *   - pivots       classic pivots, previous session's high/low + official close
- *   - RVOL         day volume ÷ (20-session average × share of session elapsed),
- *                  the company-quotes job's definition
+ *   - RVOL         regular-session volume ÷ (20-session average × share of the
+ *                  regular session elapsed)
  *
  * Pure: the service fetches, this file computes, so the spec can run it on
  * saved vendor responses.
@@ -515,7 +515,7 @@ export const BASIS: Record<string, string> = {
   buyPct: "Inflow ÷ (inflow + outflow).",
   sectorPct: "Equal-weighted average % move of the sector's stocks.",
   breadth: "S&P 500 constituents up / down / unchanged vs the previous close.",
-  rvol: "Day volume ÷ (20-session average daily volume × share of the regular session elapsed).",
+  rvol: "Regular-session volume so far ÷ (20-session average daily volume × share of the regular session elapsed).",
   vwap: "Regular-session VWAP from the 5-minute bars.",
   m30: "Change over the last 30 minutes (six 5-minute bars), in % of the previous close.",
   pivots:
@@ -604,9 +604,13 @@ export function buildBoard(input: BoardIn): MoneyFlowBoard {
 
   const toStock = (w: Work): BoardStock => {
     const bull = w.pct >= 0;
+    // Regular-session volume only: `fraction` is the share of the REGULAR session
+    // elapsed, so pre-market volume on top would inflate RVOL, most of all early
+    // in the day (at 09:45 the whole pre-market is divided by 5% of a day).
+    const regVolume = w.reg.length ? w.reg.reduce((a, b) => a + b.v, 0) : null;
     const rvol =
-      w.dayVolume != null && finite(w.s.avgVolume20) && w.s.avgVolume20 > 0 && fraction != null
-        ? round(w.dayVolume / (w.s.avgVolume20 * fraction), 2)
+      regVolume != null && finite(w.s.avgVolume20) && w.s.avgVolume20 > 0 && fraction != null
+        ? round(regVolume / (w.s.avgVolume20 * fraction), 2)
         : null;
     const chop = Math.abs(w.pct) < chopThr || (rvol != null && rvol < 1.05);
     const piv =

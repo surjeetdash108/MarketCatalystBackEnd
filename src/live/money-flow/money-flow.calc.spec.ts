@@ -205,10 +205,15 @@ describe("money flow — board", () => {
     expect(net).toEqual([...net].sort((a, b) => b - a));
   });
 
-  it.each(tickers)("%s: RVOL = Polygon day volume ÷ (avgVolume20 × session share)", (t) => {
+  it.each(tickers)("%s: RVOL = regular-session volume ÷ (avgVolume20 × session share)", (t) => {
     const s = byT(t);
     const fraction = (etClock(board.barsThrough!).minutes - 570) / 390;
-    const expected = fx.polygonSnapshot[t].day.v / (ref.avgVolume20.get(t)! * fraction);
+    // 09:30–16:00 ET volume of the session's 5-minute bars; pre-market is left out.
+    const regVol = (fx.bars5m[t] as RawBar[])
+      .filter((b) => { const c = etClock(b.t); return c.date === SESSION && c.minutes >= 570 && c.minutes < 960; })
+      .reduce((a, b) => a + b.v, 0);
+    expect(regVol).toBeLessThan(fx.polygonSnapshot[t].day.v); // the snapshot's day volume includes pre-market
+    const expected = regVol / (ref.avgVolume20.get(t)! * fraction);
     expect(Math.abs(s.rvol! / expected - 1)).toBeLessThan(0.02);
   });
 
@@ -321,5 +326,15 @@ describe("money flow — order blocks: every block counts, not just the newest s
     expect(lv.zone).toMatchObject({ lo: 99.7, hi: 100 });
     expect(lv.entry).toBe(100);
     expect(lv.stop).toBe(99.7);
+  });
+});
+
+describe("money flow — relative volume counts the regular session only", () => {
+  it("pre-market volume does not inflate RVOL early in the day", () => {
+    const pre: RawBar = { t: ET930 - 90 * 60_000, o: 100, h: 100, l: 100, c: 100, v: 1_000_000 }; // 08:00 ET
+    const reg = Array.from({ length: 6 }, (_, k) => bar5(k, 100, 100.5, 99.9, 100.2 + k * 0.1, 1000)); // 09:30–10:00
+    const b = buildBoard({ sessionDate: "2026-10-29", prevSessionDate: "2026-10-28", now: Date.parse("2026-10-29T14:20:00Z"), stocks: [synthStock([pre, ...reg])] });
+    // 6,000 regular-session shares ÷ (78,000 × 30/390 of the session) = 1.0
+    expect(b.gainers[0].rvol).toBeCloseTo(1, 5);
   });
 });
