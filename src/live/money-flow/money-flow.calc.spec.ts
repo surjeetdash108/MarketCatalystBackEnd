@@ -358,3 +358,16 @@ describe("money flow — one level ladder for targets", () => {
     expect(tradeLevels(true, blocks, piv, 99.4).target).toBe(100);
   });
 });
+
+describe("money flow — confidence's VWAP part uses the live price", () => {
+  it("live price above VWAP scores the right side even when the last delayed bar closed below it", () => {
+    const reg = [
+      bar5(0, 100, 101, 99, 100, 5000), bar5(1, 100, 101, 99.5, 100.5, 5000),
+      bar5(2, 100.5, 100.6, 99.3, 99.4, 5000), // last bar closes under the ~100 VWAP
+    ];
+    const s = synthStock(reg, { quote: { price: 101.5, previousClose: 100, changePercentage: 1.5 } });
+    const b = buildBoard({ sessionDate: "2026-10-29", prevSessionDate: "2026-10-28", now: Date.parse("2026-10-29T14:00:00Z"), stocks: [s] });
+    const vwapPart = b.gainers[0].confidence!.parts.find((p) => p[0] === "VWAP")!;
+    expect(vwapPart[1]).toBeGreaterThanOrEqual(9);
+  });
+});

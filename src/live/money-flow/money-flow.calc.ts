@@ -656,7 +656,9 @@ export function buildBoard(input: BoardIn): MoneyFlowBoard {
           pctChange: w.pct,
           sameSideMoves: bull ? upMoves : downMoves,
           rvol,
-          lastClose: last.c,
+          // The live quote, as the board shows it (price, Δ's VWAP side); the last
+          // bar can lag it, which made the score and "above / below VWAP" disagree.
+          lastClose: w.price,
           vwap: last.vwap,
           m30,
           bars: w.reg,
