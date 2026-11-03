@@ -7,6 +7,8 @@ import {
   fmpTicker,
   isSessionComplete,
   moneyFlow,
+  orderBlocks,
+  tradeLevels,
   referenceFromGrouped,
   regularSessionBars,
   rejectVolumeOutliers,
@@ -279,5 +281,45 @@ describe("money flow — session clock and symbols", () => {
     expect(canonicalTicker("BRK-B")).toBe("BRK.B");
     expect(fmpTicker("BRK.B")).toBe("BRK-B");
     expect(canonicalTicker("AAPL")).toBe("AAPL");
+  });
+});
+
+// ── Synthetic sessions for the audit fixes (2026-10-29, EDT: 09:30 ET = 13:30Z) ──
+const ET930 = Date.parse("2026-10-29T13:30:00Z");
+const bar5 = (k: number, o: number, h: number, l: number, c: number, v = 1000): RawBar => ({ t: ET930 + k * 300_000, o, h, l, c, v });
+function synthStock(bars: RawBar[], over: Partial<StockIn> = {}): StockIn {
+  return {
+    ticker: "AAA", name: "Test", sector: "Tech", inSp500: true, inNasdaq100: false,
+    quote: { price: 101, previousClose: 100, changePercentage: 1 },
+    bars, prevDay: { h: 101, l: 99, c: 100 }, avgVolume20: 78_000, marketCap: null, ...over,
+  };
+}
+
+describe("money flow — order blocks: every block counts, not just the newest six", () => {
+  // An intact bullish block early on, then six bearish blocks higher up.
+  const bars: RawBar[] = [
+    bar5(0, 100, 100.1, 99.9, 100), bar5(1, 100, 100.1, 99.9, 100),
+    bar5(2, 100, 100, 99.7, 99.8), bar5(3, 99.8, 100.1, 99.8, 100), bar5(4, 100, 100.5, 100, 100.4), // bull block at 2
+    bar5(5, 100.4, 101, 100.4, 101), bar5(6, 101, 101.6, 101, 101.6), bar5(7, 101.6, 102, 101.6, 102),
+  ];
+  for (let c = 0; c < 6; c++) {
+    const k = 8 + c * 4;
+    bars.push(
+      bar5(k, 102, 102.2, 101.95, 102.15), // up
+      bar5(k + 1, 102.15, 102.2, 101.9, 102), // down
+      bar5(k + 2, 102, 102, 101.6, 101.7), // displacement down → bear block at k
+      bar5(k + 3, 101.7, 102.1, 101.7, 102), // recover
+    );
+  }
+  it("finds more than six blocks", () => {
+    const b = orderBlocks(bars);
+    expect(b.length).toBeGreaterThan(6);
+    expect(b[0]).toMatchObject({ bull: true, lo: 99.7, hi: 100, mitigated: false });
+  });
+  it("the intact bullish block is the zone even with six newer bearish ones", () => {
+    const lv = tradeLevels(true, orderBlocks(bars), null, 102);
+    expect(lv.zone).toMatchObject({ lo: 99.7, hi: 100 });
+    expect(lv.entry).toBe(100);
+    expect(lv.stop).toBe(99.7);
   });
 });

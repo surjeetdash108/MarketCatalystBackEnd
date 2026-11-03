@@ -188,7 +188,8 @@ export interface OrderBlock {
  * Order blocks: the last opposite candle before a displacement — a down candle,
  * then an up candle, then a close more than 0.18% above the down candle's high
  * (bullish); mirrored for bearish. Mitigated once a later bar trades back
- * through the block's far side. The six most recent.
+ * through the block's far side. Every block of the session: callers pick the
+ * latest intact one on their side, which may be older than the newest few.
  */
 export function orderBlocks(c: Array<Pick<RawBar, "t" | "o" | "h" | "l" | "c">>): OrderBlock[] {
   const out: OrderBlock[] = [];
@@ -208,7 +209,7 @@ export function orderBlocks(c: Array<Pick<RawBar, "t" | "o" | "h" | "l" | "c">>)
     }
     out.push({ i, t: bar.t, hi: bar.h, lo: bar.l, bull, mitigated });
   }
-  return out.slice(-6);
+  return out;
 }
 
 /** Change over the last 30 minutes (six 5-minute bars), in % of the previous close. */
