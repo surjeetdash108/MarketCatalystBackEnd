@@ -11,6 +11,7 @@ import { composeArticle, type ComposedArticle } from "./earnings-article.compose
 import {
   buildFacts,
   pickReaction,
+  shortCompanyName,
   type ArticleFacts,
   type EstimateRow,
   type ReportRow,
@@ -128,6 +129,9 @@ export function universeReason(quote: FmpFullQuote | undefined, profile: Profile
   if (quote.marketCap < MIN_MARKET_CAP) return "under-1b";
   if (!profile) return "no-profile";
   if (profile.isEtf || profile.isFund) return "fund";
+  // Warrants, units, rights, preferreds and notes carry the issuer's figures in
+  // FMP's calendar under their own symbols; only the common stock is written up.
+  if (/\b(warrants?|units?|rights?|preferred|depositary|notes?|debentures?)\b/i.test(profile.companyName)) return "not-common-stock";
   if (profile.isActivelyTrading === false) return "inactive";
   if (!US_EXCHANGES.has(String(profile.exchange ?? "").toUpperCase())) return "non-us-listing";
   return null;
@@ -158,12 +162,20 @@ export function onePerCompany(cands: Candidate[]): { keep: Candidate[]; dropped:
   return { keep, dropped };
 }
 
-/** True when a recent post already covers this ticker (for example one written by hand). */
-export function coveredBy(posts: RecentPost[], symbol: string, nowMs: number): RecentPost | null {
+/**
+ * True when a recent post already covers this company (for example one
+ * written by hand): its ticker in the page, or a title that starts with the
+ * company's name — which also catches a second symbol of the same issuer.
+ */
+export function coveredBy(posts: RecentPost[], symbol: string, nowMs: number, shortName = ""): RecentPost | null {
   const tick = new RegExp(`"tickerSymbol"\\s*:\\s*"${symbol}"|\\(${symbol.replace("-", "\\-")}\\)`);
+  const name = shortName.trim().toLowerCase();
   return (
     posts.find(
-      (p) => p.type === "earnings" && nowMs - p.createdMs <= 3 * 86_400_000 && (tick.test(p.content) || tick.test(p.title)),
+      (p) =>
+        p.type === "earnings" &&
+        nowMs - p.createdMs <= 3 * 86_400_000 &&
+        (tick.test(p.content) || tick.test(p.title) || (name.length >= 3 && p.title.toLowerCase().startsWith(`${name} `))),
     ) ?? null
   );
 }
@@ -319,7 +331,7 @@ export class EarningsArticleJob implements OnModuleInit {
       const recent = keep.length ? await this.recentPosts() : [];
       const todo: Candidate[] = [];
       for (const c of keep) {
-        const existing = coveredBy(recent, c.row.symbol, Date.now());
+        const existing = coveredBy(recent, c.row.symbol, Date.now(), shortCompanyName(c.profile.companyName));
         if (existing && mode !== "dry") skip(c.row, `existing-post:${existing.slug}`);
         else todo.push(c);
       }

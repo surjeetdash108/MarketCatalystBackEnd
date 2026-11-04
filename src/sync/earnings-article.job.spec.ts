@@ -76,6 +76,9 @@ describe("detection", () => {
     expect(universeReason(q(2e9), { ...p, isEtf: true })).toBe("fund");
     expect(universeReason(q(2e9), { ...p, exchange: "OTC" })).toBe("non-us-listing");
     expect(universeReason(undefined, p)).toBe("no-quote");
+    // FMP lists warrants under their own symbols with the issuer's figures.
+    expect(universeReason(q(2e9), { ...p, companyName: "Revolution Medicines, Inc. Warrant" })).toBe("not-common-stock");
+    expect(universeReason(q(2e9), { ...p, companyName: "Dave Inc. Warrants" })).toBe("not-common-stock");
   });
 
   it("one article per company across share classes", () => {
@@ -97,6 +100,9 @@ describe("detection", () => {
     expect(coveredBy(posts, "FIG", now)?.slug).toBe("figma");
     expect(coveredBy(posts, "FIGS", now)).toBeNull();
     expect(coveredBy(posts, "FIG", now + 4 * 86_400_000)).toBeNull();
+    // Another symbol of the same issuer: the title starts with the company's name.
+    expect(coveredBy(posts, "FIGW", now, "Figma")?.slug).toBe("figma");
+    expect(coveredBy(posts, "FIGW", now, "Fig")).toBeNull();
   });
 
   it("related cards: same ticker first, then earnings, only live posts", () => {
