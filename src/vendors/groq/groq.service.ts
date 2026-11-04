@@ -140,7 +140,18 @@ export class GroqService {
   /** One completion. Returns the assistant text, or null on any failure. */
   async chat(
     messages: ChatMessage[],
-    opts: { model?: string; timeoutMs?: number; jsonMode?: boolean; maxTokens?: number } = {},
+    opts: {
+      model?: string;
+      timeoutMs?: number;
+      jsonMode?: boolean;
+      maxTokens?: number;
+      /**
+       * How long a reasoning model may think before answering. Only sent to
+       * gpt-oss models, which are the ones that accept it — other models reject
+       * the parameter. "low" is the fast setting for short conversational answers.
+       */
+      reasoningEffort?: "low" | "medium" | "high";
+    } = {},
   ): Promise<string | null> {
     if (!this.apiKey) return null;
     const model = opts.model?.trim() || (await this.pickModel());
@@ -156,6 +167,9 @@ export class GroqService {
     };
     if (opts.jsonMode !== false) {
       body.response_format = { type: "json_object" };
+    }
+    if (opts.reasoningEffort && /gpt-oss/i.test(model)) {
+      body.reasoning_effort = opts.reasoningEffort;
     }
     try {
       const res = await fetchJson<GroqChatResponse>(GROQ_URL, {

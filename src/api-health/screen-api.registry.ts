@@ -191,7 +191,7 @@ export const API_CATALOG = {
   },
   "POST /live/copilot": {
     summary: "Chat reply for the Stock Intelligence 'Ask AI' box.",
-    params: "body: ticker, query, context",
+    params: "body: ticker, question (or query), context, history",
     vendors: LLM,
   },
   "GET /live/bars": {

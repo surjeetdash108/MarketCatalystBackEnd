@@ -104,7 +104,14 @@ export class OpenRouterService {
    */
   async chat(
     messages: ChatMessage[],
-    opts: { web?: boolean; model?: string; timeoutMs?: number } = {},
+    opts: {
+      web?: boolean;
+      model?: string;
+      timeoutMs?: number;
+      /** false = free-form prose; the default asks for a JSON object. */
+      jsonMode?: boolean;
+      maxTokens?: number;
+    } = {},
   ): Promise<string | null> {
     if (!this.apiKey) return null;
     const base = opts.model?.trim() || this.model;
@@ -127,10 +134,10 @@ export class OpenRouterService {
           // answer after its thinking tokens — an exhausted budget returns an
           // empty `content` and the read silently degrades to "unavailable".
           // The answer itself is ~200 tokens; the rest is thinking headroom.
-          max_tokens: 4000,
+          max_tokens: opts.maxTokens ?? 4000,
           // Best-effort structured output; we still parse defensively because
           // free models don't reliably honour response_format.
-          response_format: { type: "json_object" },
+          ...(opts.jsonMode === false ? {} : { response_format: { type: "json_object" } }),
         }),
         // HARD CONSTRAINT: this route is reached through a Firebase Hosting
         // rewrite, which kills the request at 60s and hands the browser a 503

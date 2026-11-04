@@ -57,6 +57,19 @@ import { StockDetailsService } from "./stock-details.service";
 
 const TICKER_RE = /^[A-Z][A-Z0-9.-]{0,9}$/;
 
+/**
+ * Copilot limits. The route is public, and each call spends model quota, so the
+ * question, the page-supplied context and the chat history are all capped.
+ *
+ * The LLM budget is per provider (Groq, then OpenRouter), so two attempts must
+ * still finish inside the browser's 20 s request limit.
+ */
+const COPILOT_LLM_TIMEOUT_MS = 8_000;
+const COPILOT_QUESTION_MAX_CHARS = 600;
+const COPILOT_CONTEXT_MAX_CHARS = 8_000;
+const COPILOT_HISTORY_TURNS = 6;
+const COPILOT_HISTORY_TURN_MAX_CHARS = 800;
+
 function etagFor(obj: unknown): string {
   return `"${createHash("sha1").update(JSON.stringify(obj)).digest("hex").slice(0, 20)}"`;
 }
@@ -229,41 +242,63 @@ export class OnDemandController {
       question?: string;
       query?: string;
       context?: Record<string, unknown>;
+      /** Earlier turns of this chat, oldest first, so a follow-up ("why?") has its subject. */
+      history?: Array<{ role?: string; text?: string }>;
     },
   ) {
-    const question = (body?.question || body?.query || "").trim();
+    const question = String(body?.question || body?.query || "")
+      .trim()
+      .slice(0, COPILOT_QUESTION_MAX_CHARS);
     if (!question) {
       throw new BadRequestException("question is required");
     }
     const ticker = (body?.ticker ?? "").toUpperCase().trim();
     const ctx = body?.context ?? {};
+    const history = (Array.isArray(body?.history) ? body.history : [])
+      .filter((h) => (h?.role === "user" || h?.role === "assistant") && typeof h?.text === "string" && h.text.trim())
+      .slice(-COPILOT_HISTORY_TURNS)
+      .map((h) => ({
+        role: h.role as "user" | "assistant",
+        content: String(h.text).trim().slice(0, COPILOT_HISTORY_TURN_MAX_CHARS),
+      }));
 
     if (this.llmGateway.enabled) {
       const messages = [
         {
           role: "system" as const,
-          content: `You are an institutional financial analyst assistant for MarketCatalyst Stock Intelligence.
-You answer questions about ${ticker || "stocks"} using ONLY verified facts, derived calculations, and analyst estimates provided in the context below.
-Strict Rules:
-- Distinguish verified facts (current price, reported revenue, EPS actuals) from derived metrics (P/E, margins, RSI) and analyst consensus estimates.
-- Never invent quotes, financial filings, news, or timestamps.
-- If evidence or data is missing from the context, state explicitly that it is unavailable.
-- Answer in structured, clear markdown bullets with bold key terms.
-- Keep responses factual, quantitative, and concise (under 200 words).
-- Conclude with a brief grounding citation line noting data sources used and timestamp.
+          content: `You are the research analyst inside MarketCatalyst Stock Intelligence, answering a question about ${ticker || "a stock"}.
 
-Context:
-${JSON.stringify(ctx, null, 2)}`,
+How to answer:
+- Open with a direct answer to the exact question asked, in one sentence. For buy / sell / hold questions do not refuse and do not give personal advice: say what the data points to right now (bullish, bearish or mixed), then the levels and events that would change that view.
+- Follow with 3 to 5 short bullets of evidence, each quoting a specific figure from the context (price against the 9, 21, 50 and 200 DMA, RSI, support and resistance, analyst consensus and target, growth, valuation, the next catalyst, the invalidation levels).
+- Use ONLY the context below. If a figure you need is not there, say it is unavailable. Never invent figures, news, quotes or dates.
+- Write plain markdown: **bold** the key figures and use "- " bullets. No italics, headings or tables. Under 180 words. No preamble, do not repeat the question, and end with at most one short line noting this is not personalised advice.
+
+Context (verified page data):
+${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
         },
+        ...history,
         {
           role: "user" as const,
           content: question,
         },
       ];
 
+      const started = Date.now();
       try {
-        const reply = await this.llmGateway.chat(messages, { timeoutMs: 20_000 });
+        // A chat answer is a few sentences, so: prose (the gateway's default JSON
+        // mode made Groq reject the reply and re-run the whole call), a short
+        // thinking budget and token cap, and a timeout small enough that Groq plus
+        // the OpenRouter fallback still finish inside the browser's 20 s limit.
+        const reply = await this.llmGateway.chat(messages, {
+          timeoutMs: COPILOT_LLM_TIMEOUT_MS,
+          jsonMode: false,
+          maxTokens: 1_000,
+          reasoningEffort: "low",
+        });
+        const ms = Date.now() - started;
         if (reply?.trim()) {
+          this.logger.log(`copilot ${ticker || "-"}: ${this.llmGateway.primaryName} replied in ${ms}ms`);
           return {
             reply: reply.trim(),
             grounded: true,
@@ -271,26 +306,40 @@ ${JSON.stringify(ctx, null, 2)}`,
             asOf: new Date().toISOString(),
           };
         }
+        this.logger.warn(`copilot ${ticker || "-"}: no model reply after ${ms}ms, using the deterministic summary`);
       } catch (err) {
-        this.logger.warn(`copilot LLM chat failed: ${err}`);
+        this.logger.warn(`copilot LLM chat failed after ${Date.now() - started}ms: ${err}`);
       }
     }
 
-    // Deterministic factual fallback grounded strictly in verified context
-    const priceStr =
-      ctx.price != null ? `$${Number(ctx.price).toFixed(2)}` : "Unavailable";
+    // Deterministic factual fallback grounded strictly in verified context.
+    // Stock Intelligence names these fields change / pe / fpe / mcap; other
+    // callers use pctChange / peRatio / forwardPe / marketCap. Read either.
+    const num = (...keys: string[]): number | null => {
+      for (const k of keys) {
+        const v = ctx[k];
+        if (v != null && v !== "" && Number.isFinite(Number(v))) return Number(v);
+      }
+      return null;
+    };
+    const price = num("price");
+    const change = num("pctChange", "change", "changePct");
+    const pe = num("peRatio", "pe");
+    const fpe = num("forwardPe", "fpe");
+    const mcap = num("marketCap");
+    const priceStr = price != null ? `$${price.toFixed(2)}` : "Unavailable";
     const changeStr =
-      ctx.pctChange != null
-        ? `${Number(ctx.pctChange) >= 0 ? "+" : ""}${Number(ctx.pctChange).toFixed(2)}%`
-        : "Unavailable";
-    const peStr =
-      ctx.peRatio != null ? `${Number(ctx.peRatio).toFixed(1)}×` : "N/A";
-    const fpeStr =
-      ctx.forwardPe != null ? `${Number(ctx.forwardPe).toFixed(1)}×` : "N/A";
+      change != null ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}%` : "Unavailable";
+    const peStr = pe != null ? `${pe.toFixed(1)}×` : "N/A";
+    const fpeStr = fpe != null ? `${fpe.toFixed(1)}×` : "N/A";
     const mcapStr =
-      ctx.marketCap != null
-        ? `$${(Number(ctx.marketCap) / 1e9).toFixed(1)}B`
-        : "N/A";
+      mcap != null
+        ? `$${(mcap / 1e9).toFixed(1)}B`
+        : typeof ctx.mcap === "string" && ctx.mcap
+          ? ctx.mcap
+          : typeof ctx.marketCap === "string" && ctx.marketCap
+            ? ctx.marketCap
+            : "N/A";
 
     let answer = `**${ticker || "Stock"} Intelligence Synthesis:**\n`;
     answer += `• **Market Price**: ${priceStr} (${changeStr}) | **Market Cap**: ${mcapStr}\n`;

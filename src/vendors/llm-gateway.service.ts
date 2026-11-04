@@ -45,7 +45,14 @@ export class LlmGatewayService {
    */
   async chat(
     messages: ChatMessage[],
-    opts: { timeoutMs?: number; jsonMode?: boolean; maxTokens?: number } = {},
+    opts: {
+      timeoutMs?: number;
+      /** false = free-form prose (the default asks the model for a JSON object). */
+      jsonMode?: boolean;
+      maxTokens?: number;
+      /** Thinking budget for reasoning models; ignored by providers/models without one. */
+      reasoningEffort?: "low" | "medium" | "high";
+    } = {},
   ): Promise<string | null> {
     if (this.groq.enabled) {
       const out = await this.groq.chat(messages, opts);
@@ -53,6 +60,10 @@ export class LlmGatewayService {
       this.logger.warn("Groq returned nothing usable — falling back to OpenRouter");
     }
     if (!this.openrouter.enabled) return null;
-    return this.openrouter.chat(messages, { timeoutMs: opts.timeoutMs });
+    return this.openrouter.chat(messages, {
+      timeoutMs: opts.timeoutMs,
+      jsonMode: opts.jsonMode,
+      maxTokens: opts.maxTokens,
+    });
   }
 }

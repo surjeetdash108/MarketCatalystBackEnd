@@ -33,6 +33,20 @@ describe("LlmGatewayService", () => {
     expect(await g.chat([])).toBe("fallback");
   });
 
+  it("passes prose / token / reasoning options through, and the shared ones to OpenRouter", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const recording = (reply: string | null) => ({
+      enabled: true,
+      modelName: "m",
+      chat: async (_messages: unknown, opts: Record<string, unknown>) => { seen.push(opts); return reply; },
+    });
+    const opts = { timeoutMs: 8_000, jsonMode: false, maxTokens: 900, reasoningEffort: "low" as const };
+    // Groq answers nothing, so both providers are called.
+    await svc(recording(null), recording("fallback")).chat([], opts);
+    expect(seen[0]).toEqual(opts);
+    expect(seen[1]).toEqual({ timeoutMs: 8_000, jsonMode: false, maxTokens: 900 });
+  });
+
   it("returns null when neither provider can serve", async () => {
     const g = svc(provider(false, null), provider(false, null));
     expect(await g.chat([])).toBeNull();
