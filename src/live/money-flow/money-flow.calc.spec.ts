@@ -453,3 +453,20 @@ describe("money flow — relative volume from the live quote", () => {
     expect(b.gainers[0].rvol).toBeCloseTo(1, 5); // 6,000 ÷ (78,000 × 30/390)
   });
 });
+
+describe("money flow — the closing auction counts as part of the regular session", () => {
+  // 15:55 ET on 2026-11-03 (EST); the closing cross prints in a 16:00 minute bar.
+  const T1555 = Date.parse("2026-11-03T20:55:00Z");
+  const m = (min: number, c: number, v: number): RawBar => ({ t: T1555 + min * 60_000, o: c, h: c, l: c, c, v });
+  const minutes = [m(0, 59.9, 100_000), m(1, 59.95, 100_000), m(2, 60, 100_000), m(3, 60.05, 100_000), m(4, 60.1, 528_273), m(5, 60.2, 1_265_694), m(6, 60.25, 5_000)];
+  it("the 16:00 minute (closing print) joins the 15:55 bar; later minutes stay after-hours", () => {
+    const five = toFiveMinuteBars(minutes);
+    expect(five[0]).toMatchObject({ t: T1555, c: 60.2, v: 4 * 100_000 + 528_273 + 1_265_694 });
+    expect(five[1]).toMatchObject({ t: T1555 + 5 * 60_000, v: 5_000 });
+  });
+  it("so the session's bars carry the closing volume into VWAP and money flow", () => {
+    const reg = regularSessionBars(toFiveMinuteBars(minutes), "2026-11-03");
+    expect(reg).toHaveLength(1);
+    expect(reg[0].v).toBe(4 * 100_000 + 528_273 + 1_265_694);
+  });
+});

@@ -127,7 +127,9 @@ export function reconcileMinuteBars(polygon: RawBar[], fmp: RawBar[]): RawBar[] 
  * 1-minute bars grouped into BAR_MINUTES bars on the clock (09:30, 09:35, …):
  * open of the first, highest high, lowest low, close of the last, summed
  * volume, and a volume-weighted VWAP of the minutes (each minute's own VWAP, or
- * its typical price).
+ * its typical price). The 16:00 ET minute holds the closing auction print
+ * (FISV 1.27M shares on 3 Nov), so it joins the 15:55 bar — part of the
+ * regular session — rather than opening an after-hours one.
  */
 export function toFiveMinuteBars(bars: RawBar[]): RawBar[] {
   const ms = BAR_MINUTES * 60_000;
@@ -135,7 +137,8 @@ export function toFiveMinuteBars(bars: RawBar[]): RawBar[] {
   let pv = 0;
   for (const b of [...bars].sort((a, z) => a.t - z.t)) {
     if (![b.o, b.h, b.l, b.c].every(finite) || !finite(b.v)) continue;
-    const t = Math.floor(b.t / ms) * ms;
+    const closingPrint = etClock(b.t).minutes === CLOSE_MIN;
+    const t = Math.floor((closingPrint ? b.t - 60_000 : b.t) / ms) * ms;
     const px = finite(b.vw) ? b.vw : (b.h + b.l + b.c) / 3;
     const cur = out[out.length - 1];
     if (!cur || cur.t !== t) {
@@ -628,7 +631,7 @@ export interface MoneyFlowBoard {
 export const BASIS: Record<string, string> = {
   universe: "S&P 500 and Nasdaq-100 constituents (FMP); a stock in both counts once.",
   price: "FMP quote: last price and % change from the previous official close.",
-  bars: "5-minute bars, regular session 09:30–16:00 ET, grouped from 1-minute bars: Polygon's prices with each minute's volume topped up from FMP (Polygon's aggregates leave out the opening auction; FMP's drop volume in some minutes), FMP alone for minutes Polygon has not published yet. They can lag the live price.",
+  bars: "5-minute bars, regular session 09:30–16:00 ET, grouped from 1-minute bars: Polygon's prices with each minute's volume topped up from FMP (Polygon's aggregates leave out the opening auction; FMP's drop volume in some minutes), FMP alone for minutes Polygon has not published yet; the 16:00 closing-auction minute counts in the 15:55 bar. They can lag the live price.",
   moneyFlow:
     "Money Flow Index method: typical price (H+L+C)/3 × volume per 5-minute bar, inflow when the typical price rose from the prior bar, outflow when it fell. Net = inflow − outflow; sector = sum of its stocks.",
   buyPct: "Inflow ÷ (inflow + outflow).",
