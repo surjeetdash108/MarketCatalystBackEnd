@@ -278,6 +278,11 @@ export class SyncController {
         ),
         HttpStatus.BAD_GATEWAY,
       );
+    } finally {
+      // Give the lease back as soon as the run ends, as the detached path does.
+      // Holding it for the full TTL refused every run of a job scheduled more
+      // often than that TTL ("already-running") until the lease lapsed.
+      await releaseLock(this.firebase.firestore, job, ownerId);
     }
   }
 
