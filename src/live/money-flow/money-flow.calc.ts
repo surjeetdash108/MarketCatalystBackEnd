@@ -317,20 +317,47 @@ export function levelLadder(p: PivotLevels): LadderLevel[] {
 }
 
 /**
+ * Level n on one side of the classic ladder — the same rule the chart's R / S
+ * rows use (UI money-flow/engine pivotLevel). R1–R3 / S1–S3 are the session's
+ * own; beyond them the Traditional formulas follow one rule, R_n = H + (n − 1)(P − L)
+ * from R2 up and S_n = L − (n − 1)(H − P) from S2 down, which gives R4 / R5 and
+ * S4 / S5 and keeps going at the same step. Null when the inputs are missing.
+ */
+export function pivotLevel(p: PivotLevels, side: "R" | "S", n: number): number | null {
+  const own = side === "R" ? [p.r1, p.r2, p.r3][n - 1] : [p.s1, p.s2, p.s3][n - 1];
+  if (own != null && finite(own)) return own;
+  const P = p.pivot;
+  if (![P, p.r1, p.s1].every(finite)) return null;
+  const H = 2 * P - p.s1, L = 2 * P - p.r1;
+  if (n === 1) return side === "R" ? 2 * P - L : 2 * P - H;
+  return round(side === "R" ? H + (n - 1) * (P - L) : L - (n - 1) * (H - P));
+}
+
+/** How far along one side of the ladder to look for a target. */
+const MAX_LEVEL = 400;
+
+/**
  * Trade levels from the most recent unmitigated order block on the stock's side
  * of the move: entry at the block's near edge, stop at its far edge, target at
- * the first level of the ladder (levelLadder: S5…P…R5) beyond both entry and
- * price. No block → no levels.
+ * the first level on the trade's side of the ladder (R1, R2, … for a long; S1,
+ * S2, … for a short) beyond both the entry and the current price — i.e. the
+ * first R / S the chart shows past the entry. Levels price has already passed
+ * are skipped. No block → no levels.
  */
 export function tradeLevels(bull: boolean, blocks: OrderBlock[], piv: PivotLevels | null, price: number): TradeLevels {
   const ob = blocks.filter((b) => !b.mitigated && b.bull === bull).slice(-1)[0];
   if (!ob) return { zone: null, entry: null, stop: null, target: null, rr: null };
   const entry = bull ? ob.hi : ob.lo;
   const stop = bull ? ob.lo : ob.hi;
-  const ladder = piv ? levelLadder(piv).map((l) => l.v) : [];
-  const target = bull
-    ? (ladder.find((v) => v > Math.max(entry, price)) ?? null)
-    : ([...ladder].reverse().find((v) => v < Math.min(entry, price)) ?? null);
+  let target: number | null = null;
+  if (piv) {
+    const beyond = bull ? Math.max(entry, price) : Math.min(entry, price);
+    for (let n = 1; n <= MAX_LEVEL; n++) {
+      const v = pivotLevel(piv, bull ? "R" : "S", n);
+      if (v == null || v <= 0) break;
+      if (bull ? v > beyond : v < beyond) { target = v; break; }
+    }
+  }
   const risk = Math.abs(entry - stop);
   const rr = target != null && risk > 0 ? Math.abs(target - entry) / risk : null;
   return { zone: { lo: ob.lo, hi: ob.hi, startT: ob.t }, entry, stop, target, rr };
@@ -613,7 +640,7 @@ export const BASIS: Record<string, string> = {
   pivots:
     "Classic pivots (P, R1–R5, S1–S5) from the last completed session's high/low and official close. During a session that is the previous session; once the session has closed it is that session, giving the next session's levels.",
   zone: "Most recent unmitigated order block on the side of the move (5-minute bars).",
-  levels: "Entry = zone edge nearest price, stop = far edge, target = first pivot level (S5…P…R5) beyond entry and price; R:R = |target − entry| ÷ |entry − stop|.",
+  levels: "Entry = zone edge nearest price, stop = far edge, target = the first level on the trade's side (R1, R2, … long; S1, S2, … short; past R5 / S5 the ladder continues at the same step) beyond both entry and price, so levels price has passed are skipped; R:R = |target − entry| ÷ |entry − stop|.",
   marketCap: "Polygon weighted shares outstanding × price (as Stock Detail).",
   sector: "App sector (companies), else SIC-derived like Stock Detail.",
 };

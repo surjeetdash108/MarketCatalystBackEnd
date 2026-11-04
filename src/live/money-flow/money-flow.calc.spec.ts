@@ -353,9 +353,32 @@ describe("money flow — one level ladder for targets", () => {
     expect(lv.target).toBe(levelLadder(piv).find((x) => x.name === "R4")!.v);
     expect(lv.rr).not.toBeNull();
   });
-  it("a long below the pivot targets the pivot, the first level above", () => {
-    const blocks = [{ i: 0, t: 0, lo: 98.8, hi: 99, bull: true, mitigated: false }];
-    expect(tradeLevels(true, blocks, piv, 99.4).target).toBe(100);
+});
+
+describe("money flow — R:R target = the first shown level on the trade's side, beyond entry and price", () => {
+  // Pivots P 100, H 102, L 98: R1 102, R2 104, R3 106, R4 108, R5 110, R6 112…; S1 98, S2 96, S3 94, S4 92, S5 90, S6 88…
+  const piv = { pivot: 100, r1: 102, s1: 98, r2: 104, s2: 96, r3: 106, s3: 94 };
+  const bull = (lo: number, hi: number) => [{ i: 0, t: 0, lo, hi, bull: true, mitigated: false }];
+  const bear = (lo: number, hi: number) => [{ i: 0, t: 0, lo, hi, bull: false, mitigated: false }];
+  it("a short past S3 targets S4, the S1 the chart shows (ZBRA: S4 332.31 → 1:7.2)", () => {
+    const lv = tradeLevels(false, bear(92.6, 93.0), piv, 92.9); // entry 92.6, stop 93.0, price below S3 94
+    expect(lv.target).toBe(92);
+    expect(lv.rr).toBeCloseTo(0.6 / 0.4, 9);
+  });
+  it("a long below the pivot targets R1 (the chart's R1), not the pivot", () => {
+    expect(tradeLevels(true, bull(98.8, 99), piv, 99.4).target).toBe(102);
+  });
+  it("levels price has already passed are skipped (ETN / HSIC): the target is beyond the price too", () => {
+    // Long entry 105.5 but price already 106.5, past R3 106 → target R4 108, not R3.
+    expect(tradeLevels(true, bull(105, 105.5), piv, 106.5).target).toBe(108);
+  });
+  it("past R5 / S5 the ladder continues at the same step, so a target still exists", () => {
+    expect(tradeLevels(true, bull(110.5, 111), piv, 111.2).target).toBe(112); // R6
+    expect(tradeLevels(false, bear(89.0, 89.4), piv, 89.1).target).toBe(88); // S6
+  });
+  it("never targets a level on the other side of the ladder", () => {
+    // A short above the pivot: the first S below entry is S1 98, not the pivot 100.
+    expect(tradeLevels(false, bear(100.8, 101.2), piv, 101).target).toBe(98);
   });
 });
 
