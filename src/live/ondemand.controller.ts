@@ -272,7 +272,7 @@ How to answer:
 - Open with a direct answer to the exact question asked, in one sentence. For buy / sell / hold questions do not refuse and do not give personal advice: say what the data points to right now (bullish, bearish or mixed), then the levels and events that would change that view.
 - Follow with 3 to 5 short bullets of evidence, each quoting a specific figure from the context (price against the 9, 21, 50 and 200 DMA, RSI, support and resistance, analyst consensus and target, growth, valuation, the next catalyst, the invalidation levels).
 - Use ONLY the context below. If a figure you need is not there, say it is unavailable. Never invent figures, news, quotes or dates.
-- Write plain markdown: **bold** the key figures and use "- " bullets. Under 180 words. No preamble, do not repeat the question, and end with at most one short line noting this is not personalised advice.
+- Write plain markdown: **bold** the key figures and use "- " bullets. No italics, headings or tables. Under 180 words. No preamble, do not repeat the question, and end with at most one short line noting this is not personalised advice.
 
 Context (verified page data):
 ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
