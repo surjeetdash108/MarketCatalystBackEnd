@@ -250,6 +250,19 @@ export class PolygonService {
   }
 
   /**
+   * One session's 1-minute bars from each feed this client reaches, for callers
+   * that reconcile the feeds themselves (money-flow.calc reconcileMinuteBars).
+   * Plain Polygon has only its own; MarketDataService adds FMP's.
+   */
+  async getMinuteBarsByFeed(
+    ticker: string,
+    from: string,
+    to: string,
+  ): Promise<{ polygon: PolygonAggBar[]; fmp: PolygonAggBar[] }> {
+    return { polygon: await this.getAggsRange(ticker, from, to, "minute", 1, 50_000), fmp: [] };
+  }
+
+  /**
    * Intraday aggregate bars. Verified authorized on this plan (2026-07-21):
    * `/range/1/minute` returned 1553 bars and still resolves a year back — the
    * intraday timeframes were never plan-blocked, only unsynced.

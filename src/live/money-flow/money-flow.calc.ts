@@ -97,6 +97,64 @@ export function rejectVolumeOutliers<T extends { v: number }>(bars: T[]): T[] {
   });
 }
 
+/**
+ * One session's 1-minute bars from two feeds, reconciled minute by minute.
+ * Each feed under-counts in its own way: Polygon's aggregates leave the opening
+ * auction print out of the 09:30 bar (FISV 367K vs 1.04M shares on 3 Nov), and
+ * FMP's drop volume in some minutes (ORCL 09:32 61K vs 657K). So each minute
+ * keeps Polygon's prices — one consistent price series for the flow and VWAP —
+ * with the larger of the two volumes. A minute whose volume came from FMP drops
+ * Polygon's own VWAP, which no longer describes that volume (typical price is
+ * used instead). Minutes only FMP has (Polygon's last ~15 delayed minutes, or a
+ * gap) are taken whole.
+ */
+export function reconcileMinuteBars(polygon: RawBar[], fmp: RawBar[]): RawBar[] {
+  if (!fmp.length) return polygon;
+  const byT = new Map(fmp.map((b) => [b.t, b]));
+  const out: RawBar[] = polygon.map((p) => {
+    const f = byT.get(p.t);
+    byT.delete(p.t);
+    if (!f || !finite(f.v) || f.v <= p.v) return p;
+    const { vw: _drop, ...rest } = p;
+    void _drop;
+    return { ...rest, v: f.v };
+  });
+  for (const f of byT.values()) out.push(f);
+  return out.sort((a, b) => a.t - b.t);
+}
+
+/**
+ * 1-minute bars grouped into BAR_MINUTES bars on the clock (09:30, 09:35, …):
+ * open of the first, highest high, lowest low, close of the last, summed
+ * volume, and a volume-weighted VWAP of the minutes (each minute's own VWAP, or
+ * its typical price).
+ */
+export function toFiveMinuteBars(bars: RawBar[]): RawBar[] {
+  const ms = BAR_MINUTES * 60_000;
+  const out: RawBar[] = [];
+  let pv = 0;
+  for (const b of [...bars].sort((a, z) => a.t - z.t)) {
+    if (![b.o, b.h, b.l, b.c].every(finite) || !finite(b.v)) continue;
+    const t = Math.floor(b.t / ms) * ms;
+    const px = finite(b.vw) ? b.vw : (b.h + b.l + b.c) / 3;
+    const cur = out[out.length - 1];
+    if (!cur || cur.t !== t) {
+      if (cur) cur.vw = cur.v > 0 ? pv / cur.v : cur.c;
+      out.push({ t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v });
+      pv = px * b.v;
+    } else {
+      cur.h = Math.max(cur.h, b.h);
+      cur.l = Math.min(cur.l, b.l);
+      cur.c = b.c;
+      cur.v += b.v;
+      pv += px * b.v;
+    }
+  }
+  const last = out[out.length - 1];
+  if (last) last.vw = last.v > 0 ? pv / last.v : last.c;
+  return out;
+}
+
 /** Bars of `sessionDate`'s regular session, with the running session VWAP. */
 export function regularSessionBars(bars: RawBar[], sessionDate: string): SessionBar[] {
   const out: SessionBar[] = [];
@@ -433,6 +491,8 @@ export interface QuoteIn {
   price: number | null;
   previousClose: number | null;
   changePercentage: number | null;
+  /** The regular session's volume so far (FMP quote), opening auction included. */
+  volume?: number | null;
 }
 
 export interface StockIn {
@@ -541,13 +601,13 @@ export interface MoneyFlowBoard {
 export const BASIS: Record<string, string> = {
   universe: "S&P 500 and Nasdaq-100 constituents (FMP); a stock in both counts once.",
   price: "FMP quote: last price and % change from the previous official close.",
-  bars: "5-minute bars, regular session 09:30–16:00 ET, from FMP (Polygon as fallback) through the app's market-data service; they can lag the live price.",
+  bars: "5-minute bars, regular session 09:30–16:00 ET, grouped from 1-minute bars: Polygon's prices with each minute's volume topped up from FMP (Polygon's aggregates leave out the opening auction; FMP's drop volume in some minutes), FMP alone for minutes Polygon has not published yet. They can lag the live price.",
   moneyFlow:
     "Money Flow Index method: typical price (H+L+C)/3 × volume per 5-minute bar, inflow when the typical price rose from the prior bar, outflow when it fell. Net = inflow − outflow; sector = sum of its stocks.",
   buyPct: "Inflow ÷ (inflow + outflow).",
   sectorPct: "Equal-weighted average % move of the sector's stocks.",
   breadth: "S&P 500 constituents up / down / unchanged vs the previous close.",
-  rvol: "Regular-session volume so far ÷ (20-session average daily volume × share of the regular session elapsed).",
+  rvol: "Regular-session volume so far (the live quote's day volume, opening auction included) ÷ (20-session average daily volume × share of the regular session elapsed).",
   vwap: "Regular-session VWAP from the 5-minute bars.",
   m30: "Change over the last 30 minutes (six 5-minute bars), in % of the previous close.",
   pivots:
@@ -605,6 +665,9 @@ export function buildBoard(input: BoardIn): MoneyFlowBoard {
 
   // Elapsed share for RVOL and the chop threshold, at the data's own time.
   const fraction = complete ? 1 : barsThrough != null ? sessionFraction(barsThrough) : null;
+  // The live quote's volume is current, so it is measured against the session
+  // elapsed at build time, not at the last bar.
+  const liveFraction = complete ? 1 : sessionFraction(input.now);
 
   const sectorMap = new Map<string, { inflow: number; outflow: number; pcts: number[] }>();
   for (const w of work) {
@@ -636,14 +699,21 @@ export function buildBoard(input: BoardIn): MoneyFlowBoard {
 
   const toStock = (w: Work): BoardStock => {
     const bull = w.pct >= 0;
-    // Regular-session volume only: `fraction` is the share of the REGULAR session
-    // elapsed, so pre-market volume on top would inflate RVOL, most of all early
-    // in the day (at 09:45 the whole pre-market is divided by 5% of a day).
+    // Regular-session volume only (pre-market on top would inflate it, most of all
+    // early in the day). Preferably the live quote's day volume, which includes the
+    // opening auction and does not depend on every bar having arrived complete;
+    // else the bars' own volume against the session elapsed at the last bar.
+    const quoteVol = w.s.quote?.volume;
     const regVolume = w.reg.length ? w.reg.reduce((a, b) => a + b.v, 0) : null;
+    const avg20 = finite(w.s.avgVolume20) && w.s.avgVolume20 > 0 ? w.s.avgVolume20 : null;
     const rvol =
-      regVolume != null && finite(w.s.avgVolume20) && w.s.avgVolume20 > 0 && fraction != null
-        ? round(regVolume / (w.s.avgVolume20 * fraction), 2)
-        : null;
+      avg20 == null
+        ? null
+        : finite(quoteVol) && quoteVol > 0 && liveFraction != null
+          ? round(quoteVol / (avg20 * liveFraction), 2)
+          : regVolume != null && fraction != null
+            ? round(regVolume / (avg20 * fraction), 2)
+            : null;
     const chop = Math.abs(w.pct) < chopThr || (rvol != null && rvol < 1.05);
     const piv =
       pivotsFor === "next"

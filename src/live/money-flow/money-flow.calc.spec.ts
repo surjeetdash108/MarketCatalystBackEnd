@@ -7,6 +7,8 @@ import {
   fmpTicker,
   isSessionComplete,
   moneyFlow,
+  reconcileMinuteBars,
+  toFiveMinuteBars,
   orderBlocks,
   tradeLevels,
   levelLadder,
@@ -45,7 +47,7 @@ function stockIn(t: string): StockIn {
     sector: fx.companies[t]?.sector ?? null,
     inSp500: sp.has(t),
     inNasdaq100: nd.has(t),
-    quote: { price: q.price, previousClose: q.previousClose, changePercentage: q.changePercentage },
+    quote: { price: q.price, previousClose: q.previousClose, changePercentage: q.changePercentage, volume: q.volume },
     bars: fx.bars5m[t],
     prevDay: ref.prevDay.get(t) ?? null,
     avgVolume20: ref.avgVolume20.get(t) ?? null,
@@ -207,16 +209,13 @@ describe("money flow — board", () => {
     expect(net).toEqual([...net].sort((a, b) => b - a));
   });
 
-  it.each(tickers)("%s: RVOL = regular-session volume ÷ (avgVolume20 × session share)", (t) => {
+  it.each(tickers)("%s: RVOL = the live quote's day volume ÷ (avgVolume20 × share of the session elapsed now)", (t) => {
     const s = byT(t);
-    const fraction = (etClock(board.barsThrough!).minutes - 570) / 390;
-    // 09:30–16:00 ET volume of the session's 5-minute bars; pre-market is left out.
-    const regVol = (fx.bars5m[t] as RawBar[])
-      .filter((b) => { const c = etClock(b.t); return c.date === SESSION && c.minutes >= 570 && c.minutes < 960; })
-      .reduce((a, b) => a + b.v, 0);
-    expect(regVol).toBeLessThan(fx.polygonSnapshot[t].day.v); // the snapshot's day volume includes pre-market
-    const expected = regVol / (ref.avgVolume20.get(t)! * fraction);
-    expect(Math.abs(s.rvol! / expected - 1)).toBeLessThan(0.02);
+    // The quote's volume is the regular session so far, opening auction included and
+    // not delayed, so it is measured against the session elapsed at the build time.
+    const fraction = (etClock(NOW).minutes - 570) / 390;
+    const expected = quote(t).volume / (ref.avgVolume20.get(t)! * fraction);
+    expect(Math.abs(s.rvol! / expected - 1)).toBeLessThan(0.01);
   });
 
   it("breadth counts only S&P 500 members", () => {
@@ -379,5 +378,55 @@ describe("money flow — data notes name the feed the code uses", () => {
     expect(BASIS.bars).toMatch(/Polygon/);
     expect(BASIS.bars).not.toMatch(/15 minutes delayed/);
     expect(BASIS.pivots).toMatch(/R5/);
+  });
+});
+
+describe("money flow — bars reconciled across feeds (full regular session)", () => {
+  // 09:30 ET on 2026-11-03 (EST), as epoch ms; minute k = 09:30 + k.
+  const T0 = Date.parse("2026-11-03T14:30:00Z");
+  const m = (k: number, o: number, h: number, l: number, c: number, v: number, vw?: number): RawBar => ({ t: T0 + k * 60_000, o, h, l, c, v, vw });
+  // Polygon leaves the opening auction out of the 09:30 bar; FMP drops volume in some minutes.
+  const polygon = [m(0, 56.59, 56.8, 55.2, 55.44, 367_223, 55.9), m(1, 55.44, 55.5, 54.8, 54.87, 80_082, 55.1), m(2, 54.87, 55.3, 54.8, 55.16, 82_081, 55.0)];
+  const fmp = [m(0, 56.59, 56.8, 55.2, 55.44, 1_042_078), m(1, 55.4, 55.5, 54.8, 54.85, 79_994), m(2, 54.9, 55.3, 54.8, 54.99, 8_000), m(3, 55.0, 56.1, 55.0, 55.99, 178_124)];
+  const r = reconcileMinuteBars(polygon, fmp);
+
+  it("keeps Polygon's prices and takes the larger volume of the two per minute", () => {
+    expect(r.map((b) => b.v)).toEqual([1_042_078, 80_082, 82_081, 178_124]);
+    expect(r.slice(0, 3).map((b) => b.c)).toEqual([55.44, 54.87, 55.16]); // Polygon's closes, not FMP's
+  });
+  it("a minute whose volume came from FMP drops Polygon's VWAP (it no longer describes that volume); the others keep it", () => {
+    expect(r[0].vw).toBeUndefined();
+    expect(r[1].vw).toBe(55.1);
+  });
+  it("minutes only FMP has (Polygon's last ~15 minutes) are taken whole", () => {
+    expect(r[3]).toMatchObject({ o: 55.0, c: 55.99, v: 178_124 });
+  });
+  it("with no FMP bars it is just Polygon's", () => {
+    expect(reconcileMinuteBars(polygon, [])).toEqual(polygon);
+  });
+  it("groups 1-minute bars into 5-minute bars: open first, high max, low min, close last, volume sum, VWAP volume-weighted", () => {
+    const five = toFiveMinuteBars([...r, m(4, 56, 56.1, 55.9, 56.06, 159_054, 56.0), m(5, 56.1, 56.5, 56, 56.31, 115_039, 56.3)]);
+    expect(five).toHaveLength(2);
+    expect(five[0]).toMatchObject({ t: T0, o: 56.59, h: 56.8, l: 54.8, c: 56.06, v: 1_042_078 + 80_082 + 82_081 + 178_124 + 159_054 });
+    const tp = (b: RawBar) => b.vw ?? (b.h + b.l + b.c) / 3;
+    const first5 = [...r, m(4, 56, 56.1, 55.9, 56.06, 159_054, 56.0)];
+    const vw = first5.reduce((a, b) => a + tp(b) * b.v, 0) / first5.reduce((a, b) => a + b.v, 0);
+    expect(five[0].vw).toBeCloseTo(vw, 9);
+    expect(five[1]).toMatchObject({ t: T0 + 5 * 60_000, o: 56.1, c: 56.31, v: 115_039 });
+  });
+});
+
+describe("money flow — relative volume from the live quote", () => {
+  it("counts the whole regular session so far (opening auction included), not just the bars that arrived", () => {
+    const reg = Array.from({ length: 6 }, (_, k) => bar5(k, 100, 100.5, 99.9, 100.2 + k * 0.1, 1000)); // bars hold 6,000 shares
+    const s = synthStock(reg, { quote: { price: 101, previousClose: 100, changePercentage: 1, volume: 12_000 } });
+    const now = Date.parse("2026-10-29T14:30:00Z"); // 10:30 ET: 60 of 390 minutes
+    const b = buildBoard({ sessionDate: "2026-10-29", prevSessionDate: "2026-10-28", now, stocks: [s] });
+    expect(b.gainers[0].rvol).toBeCloseTo(12_000 / (78_000 * (60 / 390)), 2);
+  });
+  it("falls back to the bars when the quote has no volume", () => {
+    const reg = Array.from({ length: 6 }, (_, k) => bar5(k, 100, 100.5, 99.9, 100.2 + k * 0.1, 1000));
+    const b = buildBoard({ sessionDate: "2026-10-29", prevSessionDate: "2026-10-28", now: Date.parse("2026-10-29T14:20:00Z"), stocks: [synthStock(reg)] });
+    expect(b.gainers[0].rvol).toBeCloseTo(1, 5); // 6,000 ÷ (78,000 × 30/390)
   });
 });

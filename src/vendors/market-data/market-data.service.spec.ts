@@ -42,6 +42,18 @@ describe("MarketDataService (FMP primary, Polygon fallback)", () => {
     expect(poly).toHaveBeenCalledTimes(2);
   });
 
+  it("gives both feeds' 1-minute bars for reconciliation, each best-effort (not FMP-first)", async () => {
+    const poly = jest.spyOn(PolygonService.prototype, "getAggsRange").mockResolvedValue([{ T: "X", t: 1, o: 1, h: 1, l: 1, c: 1, v: 367 }]);
+    const svc = make(jest.fn().mockResolvedValue([{ date: "2026-11-03 09:30:00", open: 1, high: 1, low: 1, close: 1, volume: 1042 }]));
+    const both = await svc.getMinuteBarsByFeed("X", "2026-11-03", "2026-11-03");
+    expect(poly).toHaveBeenCalledWith("X", "2026-11-03", "2026-11-03", "minute", 1, 50_000);
+    expect(both.polygon.map((b) => b.v)).toEqual([367]);
+    expect(both.fmp.map((b) => b.v)).toEqual([1042]); // FMP asked even though Polygon answered
+    // A failing feed gives [] instead of failing the other.
+    const broken = make(jest.fn().mockRejectedValue(new Error("503")));
+    await expect(broken.getMinuteBarsByFeed("X", "a", "b")).resolves.toMatchObject({ polygon: [{ v: 367 }], fmp: [] });
+  });
+
   it("routes Polygon-only tickers and unsupported sizes straight to Polygon", async () => {
     const poly = jest.spyOn(PolygonService.prototype, "getAggsRange").mockResolvedValue([]);
     const request = jest.fn();

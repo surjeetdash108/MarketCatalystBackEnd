@@ -12,7 +12,9 @@ import {
   etClock,
   fmpTicker,
   isSessionComplete,
+  reconcileMinuteBars,
   referenceFromGrouped,
+  toFiveMinuteBars,
   type GroupedRow,
   type MoneyFlowBoard,
   type RawBar,
@@ -153,7 +155,7 @@ export class MoneyFlowService {
         sector: co?.sector ?? (det ? classifyFromSic(det.sic, t).sector : null) ?? null,
         inSp500: sp500.has(t),
         inNasdaq100: nasdaq100.has(t),
-        quote: q ? { price: q.price, previousClose: q.previousClose, changePercentage: q.changePercentage } : null,
+        quote: q ? { price: q.price, previousClose: q.previousClose, changePercentage: q.changePercentage, volume: q.volume } : null,
         bars: bars.get(t) ?? [],
         prevDay: ref.prevDay.get(t) ?? null,
         sessionDay: ref.sessionDay.get(t) ?? null,
@@ -319,7 +321,12 @@ export class MoneyFlowService {
     const map = new Map<string, RawBar[]>();
     await mapLimit(universe, POLYGON_CONCURRENCY, async (t) => {
       try {
-        map.set(t, await this.polygon.getIntradayBars(t, BAR_MINUTES, "minute", sessionDate, sessionDate));
+        // Both feeds' minutes, reconciled (each drops volume in its own way), then
+        // grouped into the board's 5-minute bars — see reconcileMinuteBars.
+        const { polygon, fmp } = await this.polygon.getMinuteBarsByFeed(t, sessionDate, sessionDate);
+        const bars = toFiveMinuteBars(reconcileMinuteBars(polygon, fmp));
+        if (!bars.length) throw new Error("no bars from either feed");
+        map.set(t, bars);
       } catch (err) {
         const keep = sameSession ? prev!.map.get(t) : undefined;
         if (keep) map.set(t, keep);

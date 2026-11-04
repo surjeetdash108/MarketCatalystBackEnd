@@ -148,6 +148,25 @@ export class MarketDataService extends PolygonService {
     );
   }
 
+  /**
+   * Both feeds' 1-minute bars for one session, each best-effort (a failed feed
+   * gives []). Not FMP-first: each feed under-counts volume differently, so the
+   * caller reconciles them (money-flow).
+   */
+  override async getMinuteBarsByFeed(
+    ticker: string,
+    from: string,
+    to: string,
+  ): Promise<{ polygon: PolygonAggBar[]; fmp: PolygonAggBar[] }> {
+    const [polygon, fmp] = await Promise.all([
+      super.getAggsRange(ticker, from, to, "minute", 1, 50_000).catch(() => [] as PolygonAggBar[]),
+      this.fmpApi.enabled && !isPolygonOnlyTicker(ticker)
+        ? this.fmpIntradayBars(ticker, "1min", from, to).catch(() => [] as PolygonAggBar[])
+        : Promise.resolve([] as PolygonAggBar[]),
+    ]);
+    return { polygon, fmp };
+  }
+
   private async fmpDailyBars(ticker: string, from: string, to: string): Promise<PolygonAggBar[]> {
     const rows = (await this.fmpApi.request(
       `historical-price-eod/full?symbol=${encodeURIComponent(toFmpSymbol(ticker))}&from=${from}&to=${to}`,
