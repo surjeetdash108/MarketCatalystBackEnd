@@ -6,8 +6,20 @@ import { etDate } from "../common/market-calendar.util";
 import { TickerAiAnalysisService } from "../live/ticker-ai-analysis.service";
 import { EARNINGS_ESTIMATES_ADAPTER } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
+import {
+  needsYearAgo,
+  pickYearAgoByReportDate,
+  type YearAgoQuarter,
+  type YearAgoRow,
+} from "./earnings-year-ago.util";
 
 const JOB_NAME = "earnings-actuals";
+
+/** The slice of a stored `earnings_events` row this job reads. */
+interface StoredRow extends YearAgoRow {
+  ticker?: string;
+  date?: string;
+}
 
 /**
  * Fills in actuals for the tickers reporting TODAY, nothing else.
@@ -21,9 +33,15 @@ const JOB_NAME = "earnings-actuals";
  *
  * This job instead reads only the rows already dated today, pulls that single
  * calendar day from the vendor (one call, covering exactly those reporters),
- * and writes ONLY rows whose actuals have appeared or changed. A typical run
- * is one vendor call and zero writes; the run that matters is the one right
- * after a company reports.
+ * and writes ONLY rows whose actuals have appeared or changed, or that have
+ * reported but still lack year-ago comparables (see below). A typical run is
+ * one vendor call and zero writes; the run that matters is the one right after
+ * a company reports.
+ *
+ * Year-ago EPS / revenue (the EPS % and Sales % columns) are filled here too,
+ * the moment a row has an actual. The `earnings` job only does it at 06:00 and
+ * 21:00 and skips rows with no actual, so without this a same-day reporter
+ * showed "—" in both columns until that evening.
  *
  * It never creates rows and never touches dates or estimates — the nightly
  * `earnings` job remains the sole owner of calendar shape.
@@ -153,36 +171,58 @@ export class EarningsActualsJob implements OnModuleInit {
       const rows = await this.estimates.getUpcoming(today, today);
       const byTicker = new Map(rows.map((r) => [r.ticker.toUpperCase(), r]));
 
+      const pending = snap.docs.map((d) => {
+        const cur = d.data() as StoredRow;
+        const t = String(cur.ticker ?? "").toUpperCase();
+        const fresh = byTicker.get(t);
+        const patch: Record<string, unknown> = {};
+        // Only ever FILL or correct. A vendor momentarily returning null for a
+        // value we already hold must never blank it back out.
+        if (fresh?.epsActual != null && fresh.epsActual !== cur.epsActual) {
+          patch.epsActual = fresh.epsActual;
+        }
+        if (
+          fresh?.revenueActual != null &&
+          fresh.revenueActual !== cur.revenueActual
+        ) {
+          patch.revenueActual = fresh.revenueActual;
+        }
+        return { d, cur, t, patch };
+      });
+
+      // Year-ago comparables for EPS % / Sales %. The `earnings` job fills them,
+      // but it only runs at 06:00 and 21:00 and skips rows that haven't reported
+      // — so a row whose actuals land HERE sat at "—" until the 21:00 run. Fill
+      // them in the same write, judged on the row as it will be stored.
+      const needYearAgo = pending.filter(
+        (p) => p.cur.ticker && needsYearAgo({ ...p.cur, ...p.patch }),
+      );
+      if (needYearAgo.length) {
+        const quarters = await this.loadQuarters([
+          ...new Set(needYearAgo.map((p) => p.cur.ticker)),
+        ]);
+        for (const p of needYearAgo) {
+          const ya = pickYearAgoByReportDate(
+            quarters.get(p.cur.ticker) ?? [],
+            p.cur.date ?? today,
+          );
+          if (!ya) continue;
+          p.patch.epsActualYearAgo = ya.eps;
+          p.patch.revenueYearAgo = ya.rev;
+        }
+      }
+
       const batch = this.firebase.firestore.batch();
       let updated = 0;
       const filled: string[] = [];
       // Each row as stored AFTER this run's patch, for the announcement read.
       const merged = new Map<string, Record<string, unknown>>();
-      for (const d of snap.docs) {
-        const cur = d.data() as {
-          ticker?: string;
-          epsActual?: number | null;
-          revenueActual?: number | null;
-        };
-        const t = String(cur.ticker ?? "").toUpperCase();
-        const fresh = byTicker.get(t);
-        if (!fresh) continue;
-
-        const patch: Record<string, unknown> = {};
-        // Only ever FILL or correct. A vendor momentarily returning null for a
-        // value we already hold must never blank it back out.
-        if (fresh.epsActual != null && fresh.epsActual !== cur.epsActual) {
-          patch.epsActual = fresh.epsActual;
-        }
-        if (
-          fresh.revenueActual != null &&
-          fresh.revenueActual !== cur.revenueActual
-        ) {
-          patch.revenueActual = fresh.revenueActual;
-        }
+      for (const { d, cur, t, patch } of pending) {
         if (!Object.keys(patch).length) continue;
 
-        patch.actualsUpdatedAt = new Date().toISOString();
+        if ("epsActual" in patch || "revenueActual" in patch) {
+          patch.actualsUpdatedAt = new Date().toISOString();
+        }
         merged.set(t, { ...d.data(), ...patch });
         batch.set(d.ref, patch, { merge: true });
         updated++;
@@ -208,5 +248,23 @@ export class EarningsActualsJob implements OnModuleInit {
       });
       throw err;
     }
+  }
+
+  /** ticker → stored `financials/{ticker}` quarters, for the year-ago lookup. */
+  private async loadQuarters(
+    tickers: string[],
+  ): Promise<Map<string, YearAgoQuarter[]>> {
+    const out = new Map<string, YearAgoQuarter[]>();
+    for (let i = 0; i < tickers.length; i += 300) {
+      const refs = tickers
+        .slice(i, i + 300)
+        .map((t) => this.firebase.firestore.collection("financials").doc(t));
+      const snaps = await this.firebase.firestore.getAll(...refs);
+      for (const s of snaps) {
+        if (!s.exists) continue;
+        out.set(s.id, (s.data()?.quarters ?? []) as YearAgoQuarter[]);
+      }
+    }
+    return out;
   }
 }
