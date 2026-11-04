@@ -1,65 +1,50 @@
+/**
+ * Runs one pass of the earnings-article job locally.
+ *
+ * Defaults to --mode=dry: builds the articles from live FMP data and writes
+ * each full page to --out (if given) without claiming, marking or posting
+ * anything. --mode=draft|publish runs the real pass against the configured
+ * Firestore — the same thing the per-minute scheduler does.
+ *
+ *   npm run sync:earnings-articles -- --dates=2026-11-04 --tickers=FIG,CVS --out=/tmp/ea
+ */
 import "dotenv/config";
+import * as fs from "fs";
+import * as path from "path";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "../src/app.module";
 import { EarningsArticleJob } from "../src/sync/earnings-article.job";
-import { etDate } from "../src/common/market-calendar.util";
 
 async function main() {
-  console.log("==================================================");
-  console.log(" MarketCatalyst Earnings Article Automation");
-  console.log("==================================================");
-
-  // Parse command line arguments
   const args = process.argv.slice(2);
-  const getArg = (prefix: string) => {
-    const found = args.find((a) => a.startsWith(prefix));
-    return found ? found.split("=")[1] : undefined;
-  };
+  const arg = (name: string) => args.find((a) => a.startsWith(`--${name}=`))?.split("=").slice(1).join("=");
+  const mode = arg("mode") ?? "dry";
+  const out = arg("out");
 
-  const dateArg = getArg("--date") || process.env.EARNINGS_DATE || etDate();
-  const tickersArg = getArg("--tickers") || process.env.EARNINGS_TICKERS;
-  const limitArg = getArg("--limit") || "5";
-  // Safe-by-default: only save draft to firestore if requested, otherwise generate & download preview HTML
-  const saveDraftArg = getArg("--saveDraft") ?? "false";
-
-  console.log(`Target Date: ${dateArg}`);
-  if (tickersArg) console.log(`Selected Tickers: ${tickersArg}`);
-  console.log(`Limit: ${limitArg}`);
-  console.log(`Save to Firestore Draft: ${saveDraftArg}`);
-  console.log("==================================================");
-
-  const app = await NestFactory.createApplicationContext(AppModule, {
-    logger: ["log", "warn", "error"],
-  });
-
+  const app = await NestFactory.createApplicationContext(AppModule, { logger: ["log", "warn", "error"] });
   try {
     const job = app.get(EarningsArticleJob);
-    console.log(`\nExecuting EarningsArticleJob for ${dateArg}...`);
     const result = await job.run({
-      date: dateArg,
-      tickers: tickersArg,
-      limit: limitArg,
-      saveDraft: saveDraftArg,
+      mode,
+      ...(arg("dates") ? { dates: arg("dates")! } : {}),
+      ...(arg("tickers") ? { tickers: arg("tickers")! } : {}),
     });
-
-    console.log("\n==================================================");
-    console.log(" EXECUTION COMPLETED SUCCESSFULLY");
-    console.log(` Generated ${result.count} Earnings Article HTML files:`);
-    result.files.forEach((file: string, idx: number) => {
-      console.log(`  ${idx + 1}. ${file}`);
-    });
-    console.log("==================================================");
-  } catch (err: unknown) {
-    console.error("\nExecution failed:", (err as Error).message);
-    if ((err as Error).stack) console.error((err as Error).stack);
-    process.exit(1);
+    if (out && result.previews?.length) {
+      fs.mkdirSync(out, { recursive: true });
+      for (const p of result.previews) {
+        const file = path.join(out, `${p.symbol}.html`);
+        fs.writeFileSync(file, p.documentHtml, "utf-8");
+        console.log(`preview ${p.symbol}: ${file}  "${p.title}"  model: ${p.fromModel.join(",") || "none"}`);
+      }
+    }
+    const { previews, ...summary } = result;
+    console.log(JSON.stringify(summary, null, 2));
   } finally {
     await app.close();
   }
 }
 
 main().catch((err) => {
-  console.error("Fatal error:", err);
+  console.error(err);
   process.exit(1);
 });
-

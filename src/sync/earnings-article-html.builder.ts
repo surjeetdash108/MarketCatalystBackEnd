@@ -19,7 +19,7 @@ export interface EarningsScorecardRow {
 
 export interface EarningsChangeRow {
   metric: string; // "Adjusted EPS", "Revenue"
-  yoyText: string; // "&#9650; 31%" or "&#9660; 19%"
+  yoyText: string | null; // "&#9650; 31%" or "&#9660; 19%"
   yoyClass: "pos" | "dn" | "";
   qoqText?: string | null; // "&#9650; 14%" or null
   qoqClass?: "pos" | "dn" | "";
@@ -34,6 +34,8 @@ export interface EarningsStatBox {
 export interface RelatedCard {
   pill: "News" | "Earnings" | "Research" | "Recap";
   title: string;
+  /** Short link text for the "Related coverage" sentence, e.g. the company name. */
+  linkText?: string;
   url: string;
   readTime: string;
 }
@@ -45,6 +47,8 @@ export interface EarningsArticleInput {
   priorPeriod?: string; // e.g. "Q2 2026"
   announcedDateFormatted: string; // e.g. "Nov. 4, 2026"
   announcedIsoDate: string; // e.g. "2026-11-04T12:00:00-05:00"
+  /** Set on a later edit; datePublished stays announcedIsoDate (skill §7). */
+  modifiedIsoDate?: string;
   slug: string;
   stripCode: string; // e.g. "ubr", "emr", "khc"
 
@@ -56,11 +60,18 @@ export interface EarningsArticleInput {
 
   // Body Content
   lede: string; // Two sentences, <=60 words
+  /** "Shares fell 7.0% in after-hours trading as of 4:40 p.m. ET, …" — only with a time (skill rule 7). */
+  stockMove?: string | null;
+  /** Colour of the share-move callout: green up, red down. */
+  stockMoveTone?: "pos" | "dn";
   statBoxes: [EarningsStatBox, EarningsStatBox, EarningsStatBox];
   scorecardRows: EarningsScorecardRow[];
   changeRows: EarningsChangeRow[];
   hasQoq?: boolean;
-  byOurCalculation: string; // Paragraph starting with "By our calculation,"
+  /** false drops the YoY column (no verified year-ago quarter). */
+  hasYoy?: boolean;
+  /** Empty or absent leaves the paragraph out. */
+  byOurCalculation?: string; // Paragraph starting with "By our calculation,"
   industrySections: Array<{
     title: string;
     bullets: Array<{
@@ -68,7 +79,8 @@ export interface EarningsArticleInput {
       text: string;
     }>;
   }>;
-  profitOutlookSection: {
+  /** Left out of the page when it has no bullets — a section is complete or absent. */
+  profitOutlookSection?: {
     title?: string;
     bullets: Array<{
       label: string;
@@ -115,7 +127,7 @@ export function buildEarningsJsonLd(input: EarningsArticleInput): string {
       },
     },
     datePublished: input.announcedIsoDate,
-    dateModified: input.announcedIsoDate,
+    dateModified: input.modifiedIsoDate ?? input.announcedIsoDate,
   };
   return JSON.stringify(data, null, 2);
 }
@@ -137,18 +149,43 @@ export function buildEarningsBodyHtml(input: EarningsArticleInput): string {
     })
     .join("\n");
 
-  const hasQoq = input.hasQoq !== false && input.changeRows.some((r) => r.qoqText != null);
+  // A column is shown only when every row has it, so no cell is ever blank.
+  const hasQoq = input.hasQoq !== false && input.changeRows.length > 0 && input.changeRows.every((r) => r.qoqText != null);
+  const hasYoy = input.hasYoy !== false && input.changeRows.length > 0 && input.changeRows.every((r) => r.yoyText != null);
   const changeRowsHtml = input.changeRows
     .map((r) => {
-      const yoyCls = r.yoyClass ? ` class="${r.yoyClass}"` : "";
-      const qoqTd = hasQoq
-        ? `<td${r.qoqClass ? ` class="${r.qoqClass}"` : ""}>${r.qoqText ?? "—"}</td>`
-        : "";
-      return `    <tr><td class="metric">${esc(r.metric)}</td><td${yoyCls}>${r.yoyText}</td>${qoqTd}</tr>`;
+      const yoyTd = hasYoy ? `<td${r.yoyClass ? ` class="${r.yoyClass}"` : ""}>${r.yoyText}</td>` : "";
+      const qoqTd = hasQoq ? `<td${r.qoqClass ? ` class="${r.qoqClass}"` : ""}>${r.qoqText}</td>` : "";
+      return `    <tr><td class="metric">${esc(r.metric)}</td>${yoyTd}${qoqTd}</tr>`;
     })
     .join("\n");
+  const changeGridHtml =
+    hasYoy || hasQoq
+      ? `<div class="yoy-wrap">
+<div class="table-scroll"><div class="post-doc-scroll">
+<table>
+  <thead><tr><th>Change</th>${hasYoy ? "<th>YoY</th>" : ""}${hasQoq ? "<th>QoQ</th>" : ""}</tr></thead>
+  <tbody>
+${changeRowsHtml}
+  </tbody>
+</table>
+</div></div>
+</div>`
+      : "";
+  const scorecardHtml = input.scorecardRows.length
+    ? `<h2 id="scorecard">${esc(input.period)} scorecard</h2>
+<div class="table-scroll"><div class="post-doc-scroll">
+<table>
+  <thead><tr><th>Parameters</th><th>Expected</th><th>Actual</th><th>Beat/Miss</th></tr></thead>
+  <tbody>
+${scorecardRowsHtml}
+  </tbody>
+</table>
+</div></div>`
+    : "";
 
   const industrySectionsHtml = input.industrySections
+    .filter((sec) => sec.bullets.length > 0)
     .map((sec, i) => {
       const bulletsHtml = sec.bullets
         .map((b) => `  <li><b>${esc(b.label)}.</b> ${esc(b.text)}</li>`)
@@ -157,9 +194,12 @@ export function buildEarningsBodyHtml(input: EarningsArticleInput): string {
     })
     .join("\n\n");
 
-  const profitBulletsHtml = input.profitOutlookSection.bullets
-    .map((b) => `  <li><b>${esc(b.label)}.</b> ${esc(b.text)}</li>`)
-    .join("\n");
+  const profitBullets = input.profitOutlookSection?.bullets ?? [];
+  const profitHtml = profitBullets.length
+    ? `<h2 id="profit">${esc(input.profitOutlookSection?.title || "Profit, cash flow and outlook")}</h2>\n<ul>\n${profitBullets
+        .map((b) => `  <li><b>${esc(b.label)}.</b> ${esc(b.text)}</li>`)
+        .join("\n")}\n</ul>`
+    : "";
 
   const watchBulletsHtml = input.whatToWatchBullets
     .map((b) => `  <li><b>${esc(b.label)}.</b> ${esc(b.text)}</li>`)
@@ -175,47 +215,29 @@ export function buildEarningsBodyHtml(input: EarningsArticleInput): string {
     )
     .join("\n");
 
-  const relatedLinksSentence = input.relatedCards
-    .map((c) => `<a href="${esc(c.url)}">${esc(c.title.split(":")[0].trim())}</a>`)
-    .join(", ");
+  const links = input.relatedCards.map(
+    (c) => `<a href="${esc(c.url)}">${esc(c.linkText ?? c.title.split(":")[0].trim())}</a>`,
+  );
+  const relatedLinksSentence =
+    links.length > 1 ? `${links.slice(0, -1).join(", ")} and ${links[links.length - 1]}` : links.join("");
 
   return `<script type="application/ld+json">
 ${jsonLd}
 </script>
 
 <p>${esc(input.lede)}</p>
-
+${input.stockMove ? `\n<p class="stock-move">${esc(input.stockMove)}</p>\n` : ""}
 <div class="stat-strip" id="${input.stripCode}-strip">
 ${statBoxesHtml}
 </div>
 
-<h2 id="scorecard">${esc(input.period)} scorecard</h2>
-<div class="table-scroll"><div class="post-doc-scroll">
-<table>
-  <thead><tr><th>Parameters</th><th>Expected</th><th>Actual</th><th>Beat/Miss</th></tr></thead>
-  <tbody>
-${scorecardRowsHtml}
-  </tbody>
-</table>
-</div></div>
-<div class="yoy-wrap">
-<div class="table-scroll"><div class="post-doc-scroll">
-<table>
-  <thead><tr><th>Change</th><th>YoY</th>${hasQoq ? "<th>QoQ</th>" : ""}</tr></thead>
-  <tbody>
-${changeRowsHtml}
-  </tbody>
-</table>
-</div></div>
-</div>
-<p>${esc(input.byOurCalculation)}</p>
+${scorecardHtml}
+${changeGridHtml}
+${input.byOurCalculation ? `<p>${esc(input.byOurCalculation)}</p>` : ""}
 
 ${industrySectionsHtml}
 
-<h2 id="profit">${esc(input.profitOutlookSection.title || "Profit, cash flow and outlook")}</h2>
-<ul>
-${profitBulletsHtml}
-</ul>
+${profitHtml}
 
 <h2 id="watch">What to watch</h2>
 <ul>
@@ -231,7 +253,7 @@ ${watchBulletsHtml}
   .post-doc td.dn { color: #C0392B; font-weight: 700; }
   .post-doc td.pos { color: #1E8449; font-weight: 700; }
   .post-doc .yoy-wrap { margin-top: 32px; margin-bottom: 8px; }
-  #${input.stripCode}-strip .stat-box:nth-child(1) .num { color: ${input.statBoxes[0].color} !important; }
+${input.stockMove ? `  .post-doc .stock-move { margin: 4px 0 22px; padding: 10px 14px; background: ${input.stockMoveTone === "pos" ? "#EEF7F1" : "#FDF2F0"}; border-left: 4px solid ${input.stockMoveTone === "pos" ? "#1E8449" : "#C0392B"}; border-radius: 6px; }\n` : ""}  #${input.stripCode}-strip .stat-box:nth-child(1) .num { color: ${input.statBoxes[0].color} !important; }
   #${input.stripCode}-strip .stat-box:nth-child(2) .num { color: ${input.statBoxes[1].color} !important; }
   #${input.stripCode}-strip .stat-box:nth-child(3) .num { color: ${input.statBoxes[2].color} !important; }
   .mc-ra { margin: 40px 0 8px; padding-top: 24px; border-top: 1px solid var(--border, #E4DFD3); }

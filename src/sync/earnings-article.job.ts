@@ -1,720 +1,762 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
-import * as fs from "fs";
-import * as path from "path";
+import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
-import { BlogsAdminService } from "../blogs/blogs-admin.service";
 import { etDate } from "../common/market-calendar.util";
+import { getSecUserAgent } from "../common/sec-cik-map.util";
+import { BlogsAdminService } from "../blogs/blogs-admin.service";
+import { FmpService, type FmpFullQuote } from "../vendors/fmp/fmp.service";
+import { LlmGatewayService } from "../vendors/llm-gateway.service";
+import type { RelatedCard } from "./earnings-article-html.builder";
+import { composeArticle, type ComposedArticle } from "./earnings-article.compose";
 import {
-  buildEarningsBodyHtml,
-  buildFullPageHtml,
-  buildTodayEarningsDigestHtml,
-  type EarningsArticleInput,
-  type EarningsChangeRow,
-  type EarningsScorecardRow,
-  type EarningsStatBox,
-  type RelatedCard,
-  type TodayEarningsSummaryItem,
-} from "./earnings-article-html.builder";
+  buildFacts,
+  pickReaction,
+  type ArticleFacts,
+  type EstimateRow,
+  type ReportRow,
+  type StatementRow,
+} from "./earnings-article.facts";
+import { acceptCopy, buildMessages, releaseExcerpt, type ArticleCopy } from "./earnings-article.writer";
 
 const JOB_NAME = "earnings-article";
-// Default schedule: 16:45 ET and 08:00 ET weekdays to capture AMC and BMO prints
-const CRON = "45 16 * * 1-5";
+// Every minute through both reporting windows; see job-manifest.ts for the
+// Cloud Scheduler entries that actually fire it.
+const CRON = "* 6-19 * * 1-5";
 
-export interface StoredEarningsEvent {
-  ticker: string;
+/** One doc per company and report: the claim that makes posting exactly-once. */
+const ARTICLES = "earnings_articles";
+/** One doc per report date: which symbols were already handled (cheap to read every minute). */
+const DAYS = "earnings_article_days";
+const STATE_DOC = "_state";
+
+const MIN_MARKET_CAP = 1e9;
+const US_EXCHANGES = new Set(["NYSE", "NASDAQ", "AMEX", "NYSE AMERICAN", "NYSEARCA"]);
+/** A claim older than this was left by a run that died; another run may take it over. */
+const STALE_CLAIM_MS = 10 * 60_000;
+const MAX_ATTEMPTS = 5;
+const CONCURRENCY = 3;
+/** Stop starting new articles after this long; the next minute's run picks up the rest. */
+const RUN_BUDGET_MS = 240_000;
+/**
+ * Model tokens per minute to stay under. Groq's on-demand tier allows 8,000
+ * for gpt-oss-120b and an article prompt is ~4–5k, so roughly one article a
+ * minute gets model-written release sections at once; the rest publish with
+ * code-written text and get the sections on a later pass (enrichment).
+ */
+const LLM_TPM = Number(process.env.EARNINGS_ARTICLE_LLM_TPM ?? 7_500);
+const MAX_ENRICH_ATTEMPTS = 3;
+
+export type Mode = "publish" | "draft" | "dry" | "off";
+
+interface Built {
+  facts: ArticleFacts;
+  copy: ArticleCopy;
+  article: ComposedArticle;
+  has8k: boolean;
+  related: RelatedCard[];
+  /** Published with code-written text although a release exists: add its sections later. */
+  wantsEnrich: boolean;
+}
+
+/** A calendar row with both actuals, i.e. a company that has reported. */
+export interface Reported extends ReportRow {
+  symbol: string;
+}
+
+interface Profile {
+  symbol: string;
   companyName: string;
-  date: string;
-  epsActual?: number | null;
-  epsEstimate?: number | null;
-  epsActualYearAgo?: number | null;
-  revenueActual?: number | null;
-  revenueEstimate?: number | null;
-  revenueYearAgo?: number | null;
-  fiscalPeriod?: string | null;
-  fiscalYear?: number | null;
+  sector?: string | null;
+  industry?: string | null;
+  exchange?: string | null;
+  cik?: string | null;
+  isEtf?: boolean;
+  isFund?: boolean;
+  isActivelyTrading?: boolean;
 }
 
-export function computeBeatMiss(
-  actual: number | null | undefined,
-  estimate: number | null | undefined,
-  metricType: "eps" | "revenue" | "margin" = "eps",
-): { verdict: "Beat" | "Miss" | "In line" | "—"; cls: "pos" | "dn" | "" } {
-  if (actual == null || estimate == null) {
-    return { verdict: "—", cls: "" };
+export interface Candidate {
+  row: Reported;
+  quote: FmpFullQuote;
+  profile: Profile;
+}
+
+interface RecentPost {
+  title: string;
+  slug: string;
+  type: string;
+  status: string;
+  read: string;
+  createdMs: number;
+  content: string;
+}
+
+export interface RunResult {
+  mode: Mode;
+  checked: number;
+  newlyReported: number;
+  posted: Array<{ symbol: string; url: string; title: string }>;
+  skipped: Array<{ symbol: string; reason: string }>;
+  failed: Array<{ symbol: string; error: string }>;
+  previews?: Array<{ symbol: string; title: string; documentHtml: string; fromModel: string[] }>;
+  seeded?: number;
+  enriched?: string[];
+}
+
+const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const num = (v: unknown): number | null => (finite(v) ? v : null);
+
+/** Ordinary listed symbols only: "CVS", "BRK-B" — not "002775.SZ". */
+export function isUsSymbol(symbol: string): boolean {
+  return /^[A-Z][A-Z0-9]{0,5}(-[A-Z])?$/.test(symbol);
+}
+
+/** Calendar rows that have both actuals and an ordinary US symbol. */
+export function reportedRows(rows: unknown[]): Reported[] {
+  const out: Reported[] = [];
+  for (const r of rows as Array<Record<string, unknown>>) {
+    const symbol = typeof r.symbol === "string" ? r.symbol : "";
+    if (!isUsSymbol(symbol) || typeof r.date !== "string") continue;
+    const epsActual = num(r.epsActual);
+    const revenueActual = num(r.revenueActual);
+    if (epsActual == null || revenueActual == null) continue;
+    out.push({
+      symbol,
+      date: r.date.slice(0, 10),
+      epsActual,
+      revenueActual,
+      epsEstimated: num(r.epsEstimated),
+      revenueEstimated: num(r.revenueEstimated),
+    });
   }
+  return out;
+}
 
-  if (metricType === "eps") {
-    const diff = Math.round((actual - estimate) * 100) / 100;
-    if (diff >= 0.01) return { verdict: "Beat", cls: "pos" };
-    if (diff <= -0.01) return { verdict: "Miss", cls: "dn" };
-    return { verdict: "In line", cls: "" };
+/**
+ * Why a company is not written up, or null when it is. Generic rules only:
+ * US listing, operating company, $1B+ market cap.
+ */
+export function universeReason(quote: FmpFullQuote | undefined, profile: Profile | null): string | null {
+  if (!quote || !finite(quote.marketCap)) return "no-quote";
+  if (quote.marketCap < MIN_MARKET_CAP) return "under-1b";
+  if (!profile) return "no-profile";
+  if (profile.isEtf || profile.isFund) return "fund";
+  if (profile.isActivelyTrading === false) return "inactive";
+  if (!US_EXCHANGES.has(String(profile.exchange ?? "").toUpperCase())) return "non-us-listing";
+  return null;
+}
+
+/**
+ * One article per company: share classes and preferreds of the same issuer
+ * (same SEC CIK) report the same results. Keeps the most-traded symbol.
+ */
+export function onePerCompany(cands: Candidate[]): { keep: Candidate[]; dropped: Candidate[] } {
+  const byKey = new Map<string, Candidate[]>();
+  for (const c of cands) {
+    const key = `${c.profile.cik || c.row.symbol}|${c.row.date}`;
+    byKey.set(key, [...(byKey.get(key) ?? []), c]);
   }
-
-  if (metricType === "revenue") {
-    const pctDiff = (actual - estimate) / estimate;
-    if (pctDiff > 0.0025) return { verdict: "Beat", cls: "pos" };
-    if (pctDiff < -0.0025) return { verdict: "Miss", cls: "dn" };
-    return { verdict: "In line", cls: "" };
+  const keep: Candidate[] = [];
+  const dropped: Candidate[] = [];
+  for (const group of byKey.values()) {
+    const sorted = [...group].sort(
+      (a, b) =>
+        Number(a.row.symbol.includes("-")) - Number(b.row.symbol.includes("-")) ||
+        (b.quote.volume ?? 0) - (a.quote.volume ?? 0) ||
+        a.row.symbol.length - b.row.symbol.length,
+    );
+    keep.push(sorted[0]);
+    dropped.push(...sorted.slice(1));
   }
-
-  // Margin / percent
-  const bpsDiff = (actual - estimate) * 10000;
-  if (bpsDiff >= 10) return { verdict: "Beat", cls: "pos" };
-  if (bpsDiff <= -10) return { verdict: "Miss", cls: "dn" };
-  return { verdict: "In line", cls: "" };
+  return { keep, dropped };
 }
 
-export function formatBeatMissGap(
-  actual: number | null | undefined,
-  estimate: number | null | undefined,
-  metricType: "eps" | "revenue" = "eps",
-): { verdict: "Beat" | "Miss" | "In line" | "—"; text: string; cls: "pos" | "dn" | "" } {
-  if (actual == null || estimate == null) {
-    return { verdict: "—", text: "—", cls: "" };
-  }
-
-  const gapPct = estimate !== 0 ? ((actual - estimate) / Math.abs(estimate)) * 100 : 0;
-  const absPct = Math.abs(gapPct);
-  const formattedPct = absPct >= 10 ? `${Math.round(absPct)}%` : `${absPct.toFixed(1)}%`;
-
-  if (metricType === "eps") {
-    const diff = Math.round((actual - estimate) * 100) / 100;
-    if (diff >= 0.01) return { verdict: "Beat", text: `Beat by ${formattedPct}`, cls: "pos" };
-    if (diff <= -0.01) return { verdict: "Miss", text: `Miss by ${formattedPct}`, cls: "dn" };
-    return { verdict: "In line", text: "In line", cls: "" };
-  }
-
-  // Revenue
-  const pctDiff = (actual - estimate) / estimate;
-  if (pctDiff > 0.0025) return { verdict: "Beat", text: `Beat by ${formattedPct}`, cls: "pos" };
-  if (pctDiff < -0.0025) return { verdict: "Miss", text: `Miss by ${formattedPct}`, cls: "dn" };
-  return { verdict: "In line", text: "In line", cls: "" };
+/** True when a recent post already covers this ticker (for example one written by hand). */
+export function coveredBy(posts: RecentPost[], symbol: string, nowMs: number): RecentPost | null {
+  const tick = new RegExp(`"tickerSymbol"\\s*:\\s*"${symbol}"|\\(${symbol.replace("-", "\\-")}\\)`);
+  return (
+    posts.find(
+      (p) => p.type === "earnings" && nowMs - p.createdMs <= 3 * 86_400_000 && (tick.test(p.content) || tick.test(p.title)),
+    ) ?? null
+  );
 }
 
-export function formatArrowPercent(pct: number | null | undefined): { text: string; cls: "pos" | "dn" | "" } {
-  if (pct == null || isNaN(pct)) return { text: "—", cls: "" };
-  const absPct = Math.abs(pct);
-  const formattedPct = absPct >= 10 ? `${Math.round(absPct)}%` : `${absPct.toFixed(1)}%`;
-  if (pct > 0) {
-    return { text: `&#9650; ${formattedPct}`, cls: "pos" };
-  }
-  if (pct < 0) {
-    return { text: `&#9660; ${formattedPct}`, cls: "dn" };
-  }
-  return { text: "0.0%", cls: "" };
+const PILL: Record<string, RelatedCard["pill"]> = { earnings: "Earnings", recap: "Recap", news: "News", research: "Research" };
+
+/** "Snap Swings to Q3 Profit…" → "Snap". */
+function linkTextOf(title: string): string {
+  const m = /^(.+?)\s+(Beats|Tops|Misses|Falls|Raises|Cuts|Lifts|Trims|Reaffirms|Swings|Guides|Matches|Reports|Posts|Q[1-4]|Fiscal|Revenue|Adjusted|EPS)\b/.exec(title);
+  const t = m && m[1].length >= 2 && m[1].length <= 40 ? m[1] : title;
+  return t.length > 70 ? `${t.slice(0, 67).replace(/\s+\S*$/, "")}…` : t;
 }
 
-export function formatBillions(val: number | null | undefined, dp = 2): string {
-  if (val == null) return "—";
-  const b = val / 1e9;
-  return `$${b.toFixed(dp)}B`;
-}
-
-export function formatMillions(val: number | null | undefined, dp = 1): string {
-  if (val == null) return "—";
-  const m = val / 1e6;
-  return `$${m.toFixed(dp)}M`;
-}
-
-export function formatEps(val: number | null | undefined): string {
-  if (val == null) return "—";
-  return `$${val.toFixed(2)}`;
-}
-
-export function slugifyTitle(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/[$%]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-export function formatApDate(isoDate: string): string {
-  const [year, month, day] = isoDate.split("-").map(Number);
-  const months = [
-    "Jan.", "Feb.", "March", "April", "May", "June",
-    "July", "Aug.", "Sept.", "Oct.", "Nov.", "Dec."
+/**
+ * Four live posts for "Readers also read" (skill §8 priority): earlier
+ * coverage of the same ticker, then recent earnings coverage, then anything
+ * recent. Only published posts, so every URL is live.
+ */
+export function pickRelated(posts: RecentPost[], symbol: string): RelatedCard[] {
+  const live = posts.filter((p) => p.status === "published" && p.slug && p.title);
+  const tick = new RegExp(`\\(${symbol.replace("-", "\\-")}\\)|"tickerSymbol"\\s*:\\s*"${symbol}"`);
+  const ordered = [
+    ...live.filter((p) => tick.test(p.content)),
+    ...live.filter((p) => p.type === "earnings"),
+    ...live,
   ];
-  return `${months[(month || 1) - 1]} ${day || 1}, ${year || 2026}`;
+  const seen = new Set<string>();
+  const out: RelatedCard[] = [];
+  for (const p of ordered) {
+    if (seen.has(p.slug)) continue;
+    seen.add(p.slug);
+    const mins = /(\d+)\s*min/.exec(p.read)?.[1] ?? "3";
+    out.push({
+      pill: PILL[p.type] ?? "Research",
+      title: p.title,
+      url: `https://marketcatalyst.ai/posts/${p.slug}`,
+      readTime: `${mins} min`,
+      linkText: linkTextOf(p.title),
+    });
+    if (out.length === 4) break;
+  }
+  return out;
 }
 
-export function buildMetaDescription(
-  shortName: string,
-  verdictVerb: string,
-  period: string,
-  revBStr: string,
-  epsStr: string,
-  biggestStory: string,
-): string {
-  let desc = `${shortName} ${verdictVerb.toLowerCase()} ${period} estimates with revenue of ${revBStr} and adjusted EPS of ${epsStr}, driven by ${biggestStory}.`;
-  if (desc.length > 160) {
-    desc = desc.slice(0, 157) + "...";
+/** Does the release state FMP's revenue (in any common scale)? Confirms it is this report's release. */
+export function releaseStatesRevenue(text: string, revenue: number): boolean {
+  const t = text.replace(/\s+/g, " ");
+  const forms = new Set<string>();
+  const m = revenue / 1e6;
+  const b = revenue / 1e9;
+  const k = Math.round(revenue / 1e3);
+  forms.add(m.toFixed(1));
+  forms.add(m.toFixed(0));
+  if (b >= 1) {
+    forms.add(b.toFixed(1));
+    forms.add(b.toFixed(2));
+    forms.add(b.toFixed(3));
   }
-  if (desc.length < 138) {
-    const supplement = ` View the full quarterly scorecard and operational breakdown.`;
-    desc = (desc.slice(0, -1) + supplement).slice(0, 160);
+  forms.add(k.toLocaleString("en-US"));
+  forms.add(Math.round(m).toLocaleString("en-US"));
+  forms.add(m.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 }));
+  for (const f of forms) {
+    if (new RegExp(`(?<![\\d.,])${f.replace(/[.,]/g, (c) => `\\${c}`)}(?![\\d])`).test(t)) return true;
   }
-  if (desc.length < 138) {
-    desc = desc.padEnd(138, " ");
-  }
-  return desc;
+  return false;
+}
+
+function htmlToText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<br\s*\/?>|<\/(p|div|tr|li|h\d)>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&#160;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&#8217;|&rsquo;/g, "’")
+    .replace(/&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"')
+    .replace(/&#8211;|&#8212;|&ndash;|&mdash;/g, "-")
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 @Injectable()
 export class EarningsArticleJob implements OnModuleInit {
   private readonly logger = new Logger(EarningsArticleJob.name);
+  /** Symbols this process already handled, keyed "date|symbol" — saves the day-doc lookup. */
+  private readonly handled = new Set<string>();
+  /** Model tokens spent in the last minute, for the LLM_TPM budget. */
+  private llmSpend: Array<{ at: number; tokens: number }> = [];
+  private llmChain: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
     private readonly blogs: BlogsAdminService,
+    private readonly fmp: FmpService,
+    private readonly llm: LlmGatewayService,
   ) {}
 
   onModuleInit() {
     this.registry.register(JOB_NAME, (params?: Record<string, string>) => this.run(params), {
-      collections: ["posts"],
+      collections: ["posts", "earnings_articles", "earnings_article_days"],
       cronExpression: CRON,
       timeZone: "America/New_York",
     });
   }
 
-  async scheduled() {
-    await this.registry.get(JOB_NAME)();
+  private get db(): Firestore {
+    return this.firebase.firestore;
+  }
+
+  private mode(params?: Record<string, string>): Mode {
+    const m = String(params?.mode ?? process.env.EARNINGS_ARTICLE_MODE ?? "publish").toLowerCase();
+    return (["publish", "draft", "dry", "off"].includes(m) ? m : "publish") as Mode;
   }
 
   /**
-   * Main execution method. Reads reported earnings events and generates
-   * draft posts + downloads preview HTML files.
+   * One pass: find companies whose actuals appeared since the last pass, and
+   * write one article each. Run every minute; a pass with nothing new costs
+   * two FMP calls and two Firestore reads.
+   *
+   * params: mode (publish|draft|dry|off), dates (comma list, default
+   * yesterday+today ET), tickers (comma list, restricts — for testing),
+   * seed=true (mark everything already reported as handled, post nothing).
    */
-  async run(params?: Record<string, string>) {
-    const targetDate = params?.date || etDate();
-    this.logger.log(`Starting Earnings Article Automation for ${targetDate}...`);
-
-    const outputDir = path.resolve(process.cwd(), "earnings-articles");
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
+  async run(params?: Record<string, string>): Promise<RunResult> {
+    const mode = this.mode(params);
+    const started = Date.now();
+    const result: RunResult = { mode, checked: 0, newlyReported: 0, posted: [], skipped: [], failed: [] };
+    if (mode === "off") {
+      await this.meta.record(JOB_NAME, { ok: true, count: 0 });
+      return result;
     }
+    const today = etDate();
+    const dates = params?.dates
+      ? params.dates.split(",").map((d) => d.trim()).filter(Boolean)
+      : [etDate(new Date(Date.now() - 86_400_000)), today];
 
-    // Also mirror to workspace root earnings-articles for direct user access
-    const rootOutputDir = path.resolve(process.cwd(), "..", "earnings-articles");
-    if (!fs.existsSync(rootOutputDir)) {
-      try {
-        fs.mkdirSync(rootOutputDir, { recursive: true });
-      } catch {
-        // Fallback silently if permissions or path differs
+    try {
+      const reported: Reported[] = [];
+      for (const d of dates) reported.push(...reportedRows(await this.fmp.request(`earnings-calendar?from=${d}&to=${d}`)));
+      result.checked = reported.length;
+      const restrict = params?.tickers ? new Set(params.tickers.split(",").map((t) => t.trim().toUpperCase())) : null;
+
+      // First run ever (or seed=true): everything already reported is the
+      // baseline — "from now on" means only what reports after this point.
+      if (mode !== "dry") {
+        const state = await this.db.collection(DAYS).doc(STATE_DOC).get();
+        if (!state.exists || params?.seed === "true") {
+          result.seeded = await this.seed(reported);
+          await this.db.collection(DAYS).doc(STATE_DOC).set({ startedAt: FieldValue.serverTimestamp(), seededCount: result.seeded }, { merge: true });
+          this.logger.log(`earnings-article: seeded ${result.seeded} already-reported rows; posting starts with the next report`);
+          await this.meta.record(JOB_NAME, { ok: true, count: 0 });
+          return result;
+        }
       }
-    }
 
-    // Query reported events for target date
-    const snapshot = await this.firebase.firestore
-      .collection("earnings_events")
-      .where("date", "==", targetDate)
-      .get();
-
-    const reporters: StoredEarningsEvent[] = [];
-    snapshot.forEach((doc) => {
-      const data = doc.data() as StoredEarningsEvent;
-      if (data.epsActual != null && data.revenueActual != null) {
-        reporters.push(data);
-      }
-    });
-
-    this.logger.log(`Found ${reporters.length} reported earnings events on ${targetDate}`);
-
-    const generatedFiles: string[] = [];
-
-    // Optional ticker filter
-    let candidates = reporters;
-    if (params?.tickers) {
-      const allowed = new Set(
-        params.tickers
-          .split(",")
-          .map((t) => t.trim().toUpperCase())
-          .filter(Boolean),
+      const seen = mode === "dry" ? new Map<string, Record<string, string>>() : await this.seenByDate(dates);
+      const fresh = reported.filter(
+        (r) =>
+          (!restrict || restrict.has(r.symbol)) &&
+          !this.handled.has(`${r.date}|${r.symbol}`) &&
+          !seen.get(r.date)?.[r.symbol],
       );
-      candidates = candidates.filter((r) => allowed.has(r.ticker.toUpperCase()));
-    } else if (params?.limit === "all") {
-      candidates.sort((a, b) => (b.revenueActual || 0) - (a.revenueActual || 0));
-    } else {
-      // Prioritize high-revenue reporters
-      candidates.sort((a, b) => (b.revenueActual || 0) - (a.revenueActual || 0));
-      const limit = params?.limit ? parseInt(params.limit, 10) : 5;
-      candidates = candidates.slice(0, limit);
+      result.newlyReported = fresh.length;
+      if (!fresh.length) {
+        if (mode !== "dry") await this.enrich(reported, null, started, result);
+        await this.meta.record(JOB_NAME, { ok: true, count: 0 });
+        return result;
+      }
+
+      const marks: Array<{ date: string; symbol: string; value: string }> = [];
+      const skip = (r: Reported, reason: string) => {
+        result.skipped.push({ symbol: r.symbol, reason });
+        marks.push({ date: r.date, symbol: r.symbol, value: `skipped:${reason}` });
+      };
+
+      // Universe: one batch quote for market cap, then a profile for the $1B+ names.
+      const quotes = new Map((await this.fmp.getQuotes([...new Set(fresh.map((r) => r.symbol))])).map((q) => [q.symbol, q]));
+      const cands: Candidate[] = [];
+      for (const r of fresh) {
+        const q = quotes.get(r.symbol);
+        if (!q || !finite(q.marketCap) || q.marketCap < MIN_MARKET_CAP) {
+          skip(r, universeReason(q, null) ?? "under-1b");
+          continue;
+        }
+        const profile = await this.profile(r.symbol);
+        const why = universeReason(q, profile);
+        if (why) skip(r, why);
+        else cands.push({ row: r, quote: q, profile: profile! });
+      }
+      const { keep, dropped } = onePerCompany(cands);
+      for (const d of dropped) skip(d.row, "share-class");
+
+      const recent = keep.length ? await this.recentPosts() : [];
+      const todo: Candidate[] = [];
+      for (const c of keep) {
+        const existing = coveredBy(recent, c.row.symbol, Date.now());
+        if (existing && mode !== "dry") skip(c.row, `existing-post:${existing.slug}`);
+        else todo.push(c);
+      }
+      if (mode !== "dry") await this.mark(marks);
+
+      // Articles, a few at a time, inside the run budget.
+      const queue = [...todo];
+      const worker = async () => {
+        for (let c = queue.shift(); c; c = queue.shift()) {
+          if (Date.now() - started > RUN_BUDGET_MS) return;
+          await this.one(c, mode, recent, result);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, todo.length) }, worker));
+      if (mode !== "dry") await this.enrich(reported, recent, started, result);
+
+      await this.meta.record(JOB_NAME, { ok: result.failed.length === 0, count: result.posted.length });
+      this.logger.log(
+        `earnings-article: ${result.newlyReported} new, ${result.posted.length} posted, ${result.skipped.length} skipped, ${result.failed.length} failed (${Date.now() - started}ms)`,
+      );
+      return result;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`earnings-article failed: ${msg}`);
+      await this.meta.record(JOB_NAME, { ok: false, error: msg });
+      throw err;
     }
+  }
 
-    for (const reporter of candidates) {
+  /**
+   * Adds the release's sections to articles that went out with code-written
+   * text only. Same post, same title and URL; dateModified moves (skill §7).
+   * Never throws — a failure is retried on later passes, up to a limit.
+   */
+  private async enrich(reported: Reported[], recent: RecentPost[] | null, started: number, result: RunResult): Promise<void> {
+    if (!this.llm.enabled) return;
+    const snap = await this.db.collection(ARTICLES).where("enrichPending", "==", true).limit(3).get();
+    if (snap.empty) return;
+    const posts = recent ?? (await this.recentPosts());
+    for (const doc of snap.docs) {
+      // No room for a model call this minute: try again next pass, without spending an attempt.
+      if (Date.now() - started > RUN_BUDGET_MS || !this.llmRoom(5_500)) return;
+      const d = doc.data();
+      const attempts = Number(d.enrichAttempts ?? 0);
+      const done = (extra: Record<string, unknown>) =>
+        doc.ref.set({ ...extra, enrichAttempts: attempts + 1, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
       try {
-        const articleInput = this.composeArticleInput(reporter, targetDate);
-        const fullPageHtml = buildFullPageHtml(articleInput);
-
-        const filename = `${reporter.ticker}_${reporter.fiscalPeriod || "Q3"}_${targetDate}.html`;
-        const filepath = path.join(outputDir, filename);
-        fs.writeFileSync(filepath, fullPageHtml, "utf-8");
-        generatedFiles.push(filepath);
-
-        if (fs.existsSync(rootOutputDir)) {
-          const rootFilepath = path.join(rootOutputDir, filename);
-          fs.writeFileSync(rootFilepath, fullPageHtml, "utf-8");
+        const row = reported.find((r) => r.symbol === d.symbol && r.date === d.reportDate);
+        const quote = (await this.fmp.getQuotes([String(d.symbol)]))[0];
+        const profile = await this.profile(String(d.symbol));
+        if (!row || !quote || !profile) {
+          await done({ enrichPending: false, enrichNote: "report no longer in range" });
+          continue;
         }
-
-        this.logger.log(`Generated preview HTML for ${reporter.ticker} -> ${filepath}`);
-
-        // Save as Draft in Firestore 'posts' collection (zone: 'earnings', status: 'draft')
-        // Only if not explicitly disabled
-        if (params?.saveDraft !== "false") {
-          const bodyHtml = buildEarningsBodyHtml(articleInput);
-          await this.blogs.create({
-            zone: "earnings",
-            title: articleInput.title,
-            dek: articleInput.dek,
-            read: articleInput.readTime,
-            html: bodyHtml,
-            status: "draft", // Stays in Draft status - never published automatically
-            kick: "Earnings",
-          });
-          this.logger.log(`Draft post created in Firestore for ${reporter.ticker}`);
+        const built = await this.build({ row, quote, profile }, posts.filter((p) => p.slug !== d.slug));
+        if ("skip" in built || !built.copy.fromModel.includes("sections")) {
+          await done({ enrichPending: attempts + 1 < MAX_ENRICH_ATTEMPTS });
+          continue;
         }
-      } catch (err: unknown) {
-        this.logger.error(`Failed to generate earnings article for ${reporter.ticker}: ${String(err)}`);
+        // The title — and so the URL — stays as first published.
+        const copy = { ...built.copy, title: String(d.title) };
+        const article = composeArticle(built.facts, copy, {
+          createdMs: Number(d.createdMs),
+          modifiedMs: Date.now(),
+          related: built.related,
+          has8k: built.has8k,
+          slug: String(d.slug),
+        });
+        await this.blogs.update(String(d.postId), {
+          zone: "earnings",
+          title: article.title,
+          dek: article.dek,
+          kick: "Earnings",
+          author: "",
+          read: article.read,
+          format: "html",
+          html: article.documentHtml,
+        });
+        await done({ enrichPending: false, enrichedAt: FieldValue.serverTimestamp(), fromModel: copy.fromModel });
+        this.logger.log(`earnings-article: enriched ${d.symbol} (${d.url}) with ${copy.fromModel.join(",")}`);
+        (result.enriched ??= []).push(String(d.symbol));
+      } catch (err) {
+        await done({ enrichPending: attempts + 1 < MAX_ENRICH_ATTEMPTS, enrichError: (err as Error).message?.slice(0, 300) ?? String(err) }).catch(() => undefined);
       }
     }
+  }
 
-    // Build Master Digest HTML containing ALL today's reporting companies
-    const candidateFilenames = new Set(candidates.map((c) => `${c.ticker}_${c.fiscalPeriod || "Q3"}_${targetDate}.html`));
-    const digestItems: TodayEarningsSummaryItem[] = reporters.map((r) => {
-      const epsV = computeBeatMiss(r.epsActual, r.epsEstimate, "eps");
-      const revV = computeBeatMiss(r.revenueActual, r.revenueEstimate, "revenue");
-      const revGrowth =
-        r.revenueYearAgo && r.revenueYearAgo > 0 && r.revenueActual != null
-          ? `${(((r.revenueActual - r.revenueYearAgo) / r.revenueYearAgo) * 100).toFixed(1)}%`
-          : null;
-      const fn = `${r.ticker}_${r.fiscalPeriod || "Q3"}_${targetDate}.html`;
+  /** Builds and (unless dry) posts one company's article. Never throws. */
+  private async one(c: Candidate, mode: Mode, recent: RecentPost[], result: RunResult): Promise<void> {
+    const { row } = c;
+    const docId = `${(c.profile.cik || row.symbol).replace(/\//g, "_")}_${row.date}`;
+    try {
+      if (mode !== "dry") {
+        const claim = await this.claim(docId, row);
+        if (claim !== "claimed") {
+          // Already posted or settled under another symbol or run: remember it.
+          if (claim !== "busy") await this.mark([{ date: row.date, symbol: row.symbol, value: claim }]);
+          return;
+        }
+      }
+      const built = await this.build(c, recent);
+      if ("skip" in built) {
+        result.skipped.push({ symbol: row.symbol, reason: built.skip });
+        if (mode !== "dry") {
+          await this.db.collection(ARTICLES).doc(docId).set({ status: "skipped", reason: built.skip, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+          await this.mark([{ date: row.date, symbol: row.symbol, value: `skipped:${built.skip}` }]);
+        }
+        return;
+      }
+      if (mode === "dry") {
+        (result.previews ??= []).push({ symbol: row.symbol, title: built.article.title, documentHtml: built.article.documentHtml, fromModel: built.copy.fromModel });
+        return;
+      }
+      const posted = await this.publish(built, mode, recent, c);
+      await this.db.collection(ARTICLES).doc(docId).set(
+        {
+          status: "posted",
+          postId: posted.id,
+          slug: posted.slug,
+          url: posted.url,
+          title: built.article.title,
+          quarter: built.facts.quarter,
+          mode,
+          fromModel: built.copy.fromModel,
+          has8k: built.has8k,
+          postedAt: FieldValue.serverTimestamp(),
+          createdMs: posted.createdMs,
+          cik: c.profile.cik ?? null,
+          enrichPending: built.wantsEnrich,
+          enrichAttempts: 0,
+        },
+        { merge: true },
+      );
+      await this.mark([{ date: row.date, symbol: row.symbol, value: "posted" }]);
+      this.handled.add(`${row.date}|${row.symbol}`);
+      result.posted.push({ symbol: row.symbol, url: posted.url, title: built.article.title });
+      this.logger.log(`earnings-article: ${mode} ${row.symbol} → ${posted.url} (model: ${built.copy.fromModel.join(",") || "none"})`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result.failed.push({ symbol: row.symbol, error: msg });
+      this.logger.error(`earnings-article: ${row.symbol} failed: ${msg}`);
+      if (mode !== "dry") {
+        const ref = this.db.collection(ARTICLES).doc(docId);
+        const snap = await ref.get().catch(() => null);
+        const attempts = Number(snap?.data()?.attempts ?? 1);
+        await ref.set({ status: "failed", error: msg.slice(0, 500), updatedAt: FieldValue.serverTimestamp() }, { merge: true }).catch(() => undefined);
+        if (attempts >= MAX_ATTEMPTS) await this.mark([{ date: row.date, symbol: row.symbol, value: "skipped:failed" }]).catch(() => undefined);
+      }
+    }
+  }
 
+  private async build(
+    c: Candidate,
+    recent: RecentPost[],
+  ): Promise<{ skip: string } | Built> {
+    const s = c.row.symbol;
+    const [history, statements, estimates, extended] = await Promise.all([
+      this.fmp.request(`earnings?symbol=${s}&limit=12`),
+      this.fmp.request(`income-statement?symbol=${s}&period=quarter&limit=6`),
+      this.fmp.request(`analyst-estimates?symbol=${s}&period=quarter&limit=40`),
+      this.fmp.getExtendedTrades([s]),
+    ]);
+    const facts = buildFacts({
+      company: { symbol: s, name: c.profile.companyName || s, sector: c.profile.sector, industry: c.profile.industry, marketCap: c.quote.marketCap },
+      report: c.row,
+      history: (history as Array<Record<string, unknown>>).map((r) => ({
+        date: String(r.date ?? "").slice(0, 10),
+        epsActual: num(r.epsActual),
+        epsEstimated: num(r.epsEstimated),
+        revenueActual: num(r.revenueActual),
+        revenueEstimated: num(r.revenueEstimated),
+      })),
+      statements: statements as StatementRow[],
+      estimates: estimates as EstimateRow[],
+      reaction: pickReaction(c.quote, extended[0] ?? null, Date.now()),
+    });
+    if ("skip" in facts) return facts;
+
+    const releaseText = await this.release(s, c.row.date, facts.revenue.actual).catch((err) => {
+      this.logger.warn(`earnings-article: ${s} release fetch failed: ${(err as Error).message}`);
+      return null;
+    });
+    const excerpt = releaseText ? releaseExcerpt(releaseText) : null;
+
+    const raw = await this.write(facts, excerpt);
+    const copy = acceptCopy(raw, facts, excerpt);
+    const related = pickRelated(recent, s);
+    if (related.length < 4) return { skip: "no-related-posts" };
+    const article = composeArticle(facts, copy, { createdMs: Date.now(), related, has8k: !!excerpt });
+    return { facts, copy, article, has8k: !!excerpt, related, wantsEnrich: !!excerpt && !copy.fromModel.includes("sections") };
+  }
+
+  /** True when a call of about this many tokens fits in the last minute's budget. */
+  private llmRoom(tokens: number): boolean {
+    const now = Date.now();
+    this.llmSpend = this.llmSpend.filter((e) => now - e.at < 60_000);
+    return this.llmSpend.reduce((a, e) => a + e.tokens, 0) + tokens <= LLM_TPM;
+  }
+
+  /**
+   * One model call, serialised and inside the per-minute token budget. Null
+   * (no call) when the budget is spent — the article then publishes with
+   * code-written text and is enriched on a later pass.
+   */
+  private async write(facts: ArticleFacts, excerpt: string | null): Promise<string | null> {
+    if (!this.llm.enabled) return null;
+    const messages = buildMessages(facts, excerpt);
+    const tokens = Math.ceil(JSON.stringify(messages).length / 3.5) + 1_500;
+    const run = this.llmChain.then(async () => {
+      if (!this.llmRoom(tokens)) return null;
+      this.llmSpend.push({ at: Date.now(), tokens });
+      return this.llm.chat(messages, { jsonMode: true, maxTokens: 4000, timeoutMs: 25_000, reasoningEffort: "low" }).catch(() => null);
+    });
+    this.llmChain = run.catch(() => null);
+    return run;
+  }
+
+  private async publish(
+    built: Built,
+    mode: Mode,
+    recent: RecentPost[],
+    c: Candidate,
+  ): Promise<{ id: string; slug: string; url: string; createdMs: number }> {
+    const createdMs = Date.now();
+    let article = composeArticle(built.facts, built.copy, { createdMs, related: built.related, has8k: built.has8k });
+    const body = {
+      zone: "earnings",
+      title: article.title,
+      dek: article.dek,
+      kick: "Earnings",
+      author: "",
+      read: article.read,
+      format: "html",
+      html: article.documentHtml,
+      status: mode === "draft" ? "draft" : "published",
+      pdfName: `earnings_${c.row.symbol}_${c.row.date}`,
+    };
+    const { id } = await this.blogs.create(body);
+    const snap = await this.db.collection("posts").doc(id).get();
+    const slug = String(snap.data()?.slug ?? article.slug);
+    if (slug !== article.slug) {
+      // The blog added a duplicate suffix; reprint the page's own URL to match.
+      article = composeArticle(built.facts, built.copy, { createdMs, related: built.related, has8k: built.has8k, slug });
+      await this.blogs.update(id, { ...body, status: undefined, html: article.documentHtml });
+    }
+    recent.unshift({ title: article.title, slug, type: "earnings", status: body.status, read: article.read, createdMs, content: article.documentHtml });
+    return { id, slug, url: `https://marketcatalyst.ai/posts/${slug}`, createdMs };
+  }
+
+  /**
+   * The company's results release from its Form 8-K (Exhibit 99.1), found
+   * through FMP's SEC filings feed. Used only when it states FMP's revenue,
+   * which confirms it is this report's release. Null when there is none.
+   */
+  private async release(symbol: string, reportDate: string, revenue: number): Promise<string | null> {
+    const ua = getSecUserAgent();
+    if (!ua) return null;
+    const from = new Date(Date.parse(`${reportDate}T00:00:00Z`) - 2 * 86_400_000).toISOString().slice(0, 10);
+    const filings = (await this.fmp.request(`sec-filings-search/symbol?symbol=${symbol}&from=${from}&to=${etDate()}`)) as Array<Record<string, unknown>>;
+    const eightKs = filings
+      .filter((f) => String(f.formType ?? "").toUpperCase().startsWith("8-K") && typeof f.finalLink === "string")
+      .sort((a, b) => String(b.acceptedDate ?? "").localeCompare(String(a.acceptedDate ?? "")));
+    const get = async (url: string) => {
+      const res = await fetch(url, { headers: { "User-Agent": ua }, signal: AbortSignal.timeout(12_000) });
+      if (!res.ok) throw new Error(`SEC ${res.status}`);
+      return res.text();
+    };
+    for (const f of eightKs.slice(0, 3)) {
+      const link = String(f.finalLink);
+      const urls = [link];
+      // The link may be the 8-K cover rather than the exhibit: also try the
+      // filing's EX-99 documents.
+      const dir = link.slice(0, link.lastIndexOf("/"));
+      try {
+        const idx = JSON.parse(await get(`${dir}/index.json`)) as { directory?: { item?: Array<{ name?: string }> } };
+        for (const it of idx.directory?.item ?? []) {
+          const n = String(it.name ?? "");
+          if (/\.htm/i.test(n) && /99|press|release|earn|result/i.test(n) && `${dir}/${n}` !== link) urls.push(`${dir}/${n}`);
+        }
+      } catch {
+        /* index is optional */
+      }
+      for (const u of urls.slice(0, 4)) {
+        const text = htmlToText(await get(u));
+        if (/quarter/i.test(text) && /revenue|sales/i.test(text) && releaseStatesRevenue(text, revenue)) return text;
+      }
+    }
+    return null;
+  }
+
+  private async profile(symbol: string): Promise<Profile | null> {
+    const rows = (await this.fmp.request(`profile?symbol=${symbol}`)) as Array<Record<string, unknown>>;
+    const p = rows[0];
+    if (!p) return null;
+    return {
+      symbol,
+      companyName: String(p.companyName ?? symbol),
+      sector: (p.sector as string) ?? null,
+      industry: (p.industry as string) ?? null,
+      exchange: (p.exchange as string) ?? null,
+      cik: (p.cik as string) ?? null,
+      isEtf: p.isEtf === true,
+      isFund: p.isFund === true,
+      isActivelyTrading: p.isActivelyTrading !== false,
+    };
+  }
+
+  /** The 60 newest posts, without their stored document (only what matching and cards need). */
+  private async recentPosts(): Promise<RecentPost[]> {
+    const snap = await this.db
+      .collection("posts")
+      .orderBy("createdAt", "desc")
+      .limit(60)
+      .select("title", "slug", "type", "status", "read", "createdAt", "content")
+      .get();
+    return snap.docs.map((d) => {
+      const x = d.data();
       return {
-        ticker: r.ticker,
-        companyName: r.companyName || r.ticker,
-        period: r.fiscalPeriod || "Q3 2026",
-        epsActual: r.epsActual ?? null,
-        epsEstimate: r.epsEstimate ?? null,
-        revenueActual: r.revenueActual ?? null,
-        revenueEstimate: r.revenueEstimate ?? null,
-        epsVerdict: epsV.verdict,
-        revVerdict: revV.verdict,
-        articleFilename: candidateFilenames.has(fn) ? fn : undefined,
-        yoyRevenueGrowth: revGrowth,
+        title: String(x.title ?? ""),
+        slug: String(x.slug ?? ""),
+        type: String(x.type ?? ""),
+        status: String(x.status ?? ""),
+        read: String(x.read ?? ""),
+        createdMs: x.createdAt?.toMillis?.() ?? 0,
+        content: String(x.content ?? ""),
       };
     });
+  }
 
-    const formattedDate = formatApDate(targetDate);
-    const digestHtml = buildTodayEarningsDigestHtml({
-      targetDate,
-      formattedDate,
-      items: digestItems,
-    });
+  private async seenByDate(dates: string[]): Promise<Map<string, Record<string, string>>> {
+    const out = new Map<string, Record<string, string>>();
+    const snaps = await this.db.getAll(...dates.map((d) => this.db.collection(DAYS).doc(d)));
+    snaps.forEach((s, i) => out.set(dates[i], ((s.data()?.seen as Record<string, string>) ?? {})));
+    return out;
+  }
 
-    const digestFilename = `todays-earnings-${targetDate}.html`;
-    const digestFilepath = path.join(outputDir, digestFilename);
-    fs.writeFileSync(digestFilepath, digestHtml, "utf-8");
-    generatedFiles.unshift(digestFilepath);
-
-    if (fs.existsSync(rootOutputDir)) {
-      fs.writeFileSync(path.join(rootOutputDir, digestFilename), digestHtml, "utf-8");
-      fs.writeFileSync(path.join(rootOutputDir, `all-today-earnings-${targetDate}.html`), digestHtml, "utf-8");
-      fs.writeFileSync(path.join(rootOutputDir, "index.html"), digestHtml, "utf-8");
+  private async mark(marks: Array<{ date: string; symbol: string; value: string }>): Promise<void> {
+    if (!marks.length) return;
+    const byDate = new Map<string, Record<string, string>>();
+    for (const m of marks) {
+      byDate.set(m.date, { ...(byDate.get(m.date) ?? {}), [m.symbol]: m.value });
+      this.handled.add(`${m.date}|${m.symbol}`);
     }
+    const batch = this.db.batch();
+    for (const [date, seen] of byDate) batch.set(this.db.collection(DAYS).doc(date), { seen, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    await batch.commit();
+  }
 
-    await this.meta.record(JOB_NAME, {
-      ok: true,
-      count: generatedFiles.length,
-    });
-
-    return {
-      success: true,
-      count: generatedFiles.length,
-      files: generatedFiles,
-    };
+  /** Marks every currently reported row as handled without posting. */
+  private async seed(reported: Reported[]): Promise<number> {
+    await this.mark(reported.map((r) => ({ date: r.date, symbol: r.symbol, value: "baseline" })));
+    return reported.length;
   }
 
   /**
-   * Constructs article content adhering strictly to marketcatalyst-earnings-article rules.
+   * Exactly-once claim on a company's report. A claim left by a run that
+   * died is taken over after STALE_CLAIM_MS; a failure is retried up to
+   * MAX_ATTEMPTS times.
    */
-  composeArticleInput(event: StoredEarningsEvent, targetDate: string): EarningsArticleInput {
-    const ticker = event.ticker.toUpperCase();
-    const company = event.companyName || ticker;
-    const period = event.fiscalPeriod || "Q3 2026";
-    const shortName = company.replace(/,?\s*(Inc\.?|Corp\.?|Corporation|plc|Co\.?|Company)\.?$/i, "").trim();
-
-    const revAct = event.revenueActual || 0;
-    const revEst = event.revenueEstimate || revAct;
-    const revYa = event.revenueYearAgo;
-    const epsAct = event.epsActual || 0;
-    const epsEst = event.epsEstimate || epsAct;
-    const epsYa = event.epsActualYearAgo;
-
-    const epsVerdict = computeBeatMiss(epsAct, epsEst, "eps");
-    const revVerdict = computeBeatMiss(revAct, revEst, "revenue");
-
-    const bothBeat = epsVerdict.verdict === "Beat" && revVerdict.verdict === "Beat";
-    const bothMiss = epsVerdict.verdict === "Miss" && revVerdict.verdict === "Miss";
-
-    let verdictVerb = "Beats";
-    if (bothBeat) verdictVerb = "Beats";
-    else if (bothMiss) verdictVerb = "Falls Short in";
-    else if (epsVerdict.verdict === "Beat") verdictVerb = "Tops";
-    else verdictVerb = "Reports";
-
-    const revB = revAct / 1e9;
-    const revBStr = revB >= 1 ? `$${revB.toFixed(2)}B` : `$${(revAct / 1e6).toFixed(1)}M`;
-    const revEstB = revEst / 1e9;
-    const revEstBStr = revEstB >= 1 ? `$${revEstB.toFixed(2)}B` : `$${(revEst / 1e6).toFixed(1)}M`;
-
-    const revGrowthStr = revYa && revYa > 0 ? `${(((revAct - revYa) / revYa) * 100).toFixed(1)}%` : null;
-    const epsGrowthStr = epsYa && epsYa > 0 ? `${(((epsAct - epsYa) / epsYa) * 100).toFixed(1)}%` : null;
-
-    const stripCode = ticker.toLowerCase().slice(0, 3);
-    const slug = slugifyTitle(`${shortName} ${verdictVerb} ${period} Estimates`);
-
-    // Company specific profiles for rich, accurate reporting
-    const profiles: Record<string, {
-      story: string;
-      thirdStat: EarningsStatBox;
-      priorPeriod?: string;
-      revPrior?: number;
-      epsPrior?: number;
-      industrySections: Array<{ title: string; bullets: Array<{ label: string; text: string }> }>;
-      profitOutlookBullets: Array<{ label: string; text: string }>;
-      watchBullets: Array<{ label: string; text: string }>;
-    }> = {
-      CVS: {
-        story: "pharmacy execution and healthcare benefits resilience",
-        thirdStat: { num: revGrowthStr ? `+${revGrowthStr}` : "+5.4%", label: "Total revenue growth YoY", color: "#1E8449" },
-        priorPeriod: "Q2 2026",
-        revPrior: 91_200_000_000,
-        epsPrior: 1.83,
-        industrySections: [{
-          title: "Health Care Benefits and Pharmacy Services",
-          bullets: [
-            { label: "Health Care Benefits", text: "Medical membership and Medicare Advantage trends drove segment revenue, maintaining consistent service delivery." },
-            { label: "Pharmacy Services", text: "Pharmacy and consumer wellness delivered steady prescription growth and disciplined volume execution across retail locations." },
-          ],
-        }],
-        profitOutlookBullets: [
-          { label: "Operating performance", text: "Operating income reflected consistent cost management across pharmacy networks and client benefit accounts." },
-          { label: "Cash flow", text: "Cash flow from operations supported seasonal capital commitments, healthcare delivery investments, and dividend payouts." },
-          { label: "Outlook", text: "CVS updated its full-year EPS guidance range, citing stable pharmacy trends and healthcare utilization across product lines." },
-        ],
-        watchBullets: [
-          { label: "Medical benefit ratio", text: "Track medical benefit ratios and utilization rates across commercial and Medicare Advantage plans." },
-          { label: "Retail front-store trends", text: "Monitor front-store retail volumes and consumer health product demand heading into the winter season." },
-          { label: "Capital allocation", text: "Ongoing debt reduction pace alongside shareholder dividend distributions under current authorization." },
-        ],
-      },
-      UBER: {
-        story: "delivery expansion and 20% gross bookings growth",
-        thirdStat: { num: "+20%", label: "Gross bookings constant-currency growth", color: "#1E8449" },
-        priorPeriod: "Q2 2026",
-        revPrior: 13_500_000_000,
-        epsPrior: 0.63,
-        industrySections: [{
-          title: "Mobility and Delivery Momentum",
-          bullets: [
-            { label: "Gross bookings", text: "Platform gross bookings expanded across mobility and delivery, supported by robust trip frequency and driver engagement." },
-            { label: "Delivery expansion", text: "Delivery order volumes and merchant additions supported high single-digit take rates across core metropolitan markets." },
-          ],
-        }],
-        profitOutlookBullets: [
-          { label: "Operating income", text: "GAAP operating income reached profitable scale as operational efficiencies and autonomous partnerships advanced." },
-          { label: "Free cash flow", text: "Operating cash flow generation provided flexibility for continued share repurchase pacing under authorization." },
-          { label: "Outlook", text: "Management guided fourth-quarter gross bookings and adjusted EBITDA to reflect seasonal holiday travel and ordering demand." },
-        ],
-        watchBullets: [
-          { label: "Autonomous mobility", text: "Fleet deployment partnerships and driverless integration progress across major metropolitan test markets." },
-          { label: "Advertising run-rate", text: "Pacing toward merchant advertising targets across the Uber Eats platform." },
-          { label: "Consumer engagement", text: "Monthly active platform consumer (MAPC) growth and retention into year-end travel." },
-        ],
-      },
-      W: {
-        story: "U.S. sales stabilization and repeat customer momentum",
-        thirdStat: { num: revGrowthStr ? `+${revGrowthStr}` : "+9.7%", label: "Year-over-year revenue expansion", color: "#1E8449" },
-        priorPeriod: "Q2 2026",
-        revPrior: 3_120_000_000,
-        epsPrior: 0.47,
-        industrySections: [{
-          title: "Regional Performance and Customer Trends",
-          bullets: [
-            { label: "Regional performance", text: "U.S. net revenue expanded as repeat customer orders accounted for the majority of platform gross merchandise volume." },
-            { label: "Customer metrics", text: "Active customer counts stabilized alongside higher average order values across home furnishings and decor." },
-          ],
-        }],
-        profitOutlookBullets: [
-          { label: "Operating efficiency", text: "Adjusted EBITDA improved year over year as supply chain optimization lowered logistics cost per order." },
-          { label: "Cash flow", text: "Operating cash flow remained positive, supporting reinvestment into CastleGate fulfillment infrastructure." },
-          { label: "Outlook", text: "Management reiterated expectations for positive full-year free cash flow and disciplined marketing spend." },
-        ],
-        watchBullets: [
-          { label: "Housing turnover", text: "Impact of mortgage rate shifts and consumer discretionary spending on home goods demand." },
-          { label: "Loyalty penetration", text: "Customer retention rates and repeat purchase frequency heading into fourth-quarter promotions." },
-          { label: "Fulfillment efficiency", text: "CastleGate supplier adoption and margin contribution across large-parcel shipping." },
-        ],
-      },
-      DDOG: {
-        story: "multi-product platform adoption and cloud observability demand",
-        thirdStat: { num: revGrowthStr ? `+${revGrowthStr}` : "+35.2%", label: "Year-over-year revenue growth", color: "#1E8449" },
-        priorPeriod: "Q2 2026",
-        revPrior: 1_080_000_000,
-        epsPrior: 0.73,
-        industrySections: [{
-          title: "Cloud Observability and Platform Adoption",
-          bullets: [
-            { label: "Platform adoption", text: "Customers using four or more products reached record levels, demonstrating strong multi-product land-and-expand dynamics." },
-            { label: "Enterprise momentum", text: "Larger enterprise customers with annual recurring revenue exceeding $100,000 grew significantly year over year." },
-          ],
-        }],
-        profitOutlookBullets: [
-          { label: "Operating profitability", text: "Non-GAAP operating margins expanded as software gross margins remained above 80%." },
-          { label: "Cash flow", text: "Free cash flow generation totaled over $200 million, reflecting strong billing collections and SaaS operating leverage." },
-          { label: "Outlook", text: "Management raised full-year revenue and operating income guidance, factoring in steady cloud migration and AI workload monitoring." },
-        ],
-        watchBullets: [
-          { label: "AI integrations", text: "Enterprise adoption of LLM observability and generative AI monitoring modules." },
-          { label: "Net retention", text: "Dollar-based net retention rates among enterprise cohorts as IT optimization cycles stabilize." },
-          { label: "RPO backlog", text: "Remaining performance obligations and multi-year contract commitments from large enterprise accounts." },
-        ],
-      },
-      GFS: {
-        story: "automotive wafer demand and specialized packaging momentum",
-        thirdStat: { num: formatEps(epsAct), label: `Adjusted EPS vs. ${formatEps(epsEst)} estimate`, color: "#1E8449" },
-        priorPeriod: "Q2 2026",
-        revPrior: 1_630_000_000,
-        epsPrior: 0.38,
-        industrySections: [{
-          title: "Semiconductor End Markets and Manufacturing",
-          bullets: [
-            { label: "Smart mobile devices", text: "Shipments for mobile radio-frequency and power management chips stabilized across tier-one handset manufacturers." },
-            { label: "Automotive and industrial", text: "Automotive wafer demand remained resilient, supported by long-term customer supply agreements." },
-          ],
-        }],
-        profitOutlookBullets: [
-          { label: "Gross margin", text: "Adjusted gross margin reflected improved factory utilization and disciplined cost control across global fabs." },
-          { label: "Cash flow", text: "Operating cash flow funded strategic capital expenditures in essential wafer fabrication technologies." },
-          { label: "Outlook", text: "Management projected fourth-quarter revenue within target seasonal ranges as customer inventory normalization concludes." },
-        ],
-        watchBullets: [
-          { label: "Packaging partnerships", text: "Execution of advanced packaging initiatives and specialized silicon foundry collaborations." },
-          { label: "Fab utilization", text: "Factory utilization rate recovery across Singapore, Germany, and U.S. fabrication facilities." },
-          { label: "Design wins", text: "New silicon design tape-outs in silicon photonics and automotive microcontroller platforms." },
-        ],
-      },
-      EMR: {
-        story: "process automation orders and resilient industrial software demand",
-        thirdStat: { num: revGrowthStr ? `+${revGrowthStr}` : "+7.1%", label: "Year-over-year net sales growth", color: "#1E8449" },
-        priorPeriod: "Q2 2026",
-        revPrior: 4_850_000_000,
-        epsPrior: 1.62,
-        industrySections: [{
-          title: "Industrial Automation and Software",
-          bullets: [
-            { label: "Process automation", text: "Strong order momentum in energy transformation, LNG, and chemical processing supported underlying book-to-bill." },
-            { label: "Test and measurement", text: "Software and test systems demonstrated steady conversion across aerospace and semiconductor test end markets." },
-          ],
-        }],
-        profitOutlookBullets: [
-          { label: "Operating margin", text: "Adjusted segment EBITDA margins expanded on positive price-cost realization and operational synergies." },
-          { label: "Free cash flow", text: "Cash flow from operations provided robust funding for ongoing dividend payouts and share repurchases." },
-          { label: "Outlook", text: "Management maintained full-year organic growth expectations, pointing to a resilient industrial automation backlog." },
-        ],
-        watchBullets: [
-          { label: "Capital expenditure cycles", text: "Industrial customer capex decisions in energy transition and advanced manufacturing." },
-          { label: "Synergy realization", text: "Cost and software synergy progress following strategic portfolio transformations." },
-          { label: "Backlog conversion", text: "Order backlog execution timing across North America and Europe." },
-        ],
-      },
-    };
-
-    const profile = profiles[ticker] || {
-      story: "operational discipline and solid commercial demand",
-      thirdStat: {
-        num: revGrowthStr ? `+${revGrowthStr}` : "Solid",
-        label: "Year-over-year revenue performance",
-        color: "#2563EB" as const,
-      },
-      industrySections: [{
-        title: "Operating performance",
-        bullets: [
-          { label: "Demand trends", text: `${company} demonstrated resilience across key product and service lines during ${period}, supporting volume execution.` },
-          { label: "Margin stability", text: `Discipline in operational expenses and procurement helped support underlying operating profitability.` },
-        ],
-      }],
-      profitOutlookBullets: [
-        { label: "Operating cash flow", text: `Cash generation remained aligned with seasonal capital allocation and reinvestment objectives.` },
-        { label: "Outlook", text: `Management reaffirmed its financial framework, monitoring macroeconomic and supply conditions into the coming quarters.` },
-      ],
-      watchBullets: [
-        { label: "Volume momentum", text: `Whether customer demand trends sustain through upcoming reporting cycles.` },
-        { label: "Margin discipline", text: `The trajectory of operating margins as input costs and operational investments evolve.` },
-        { label: "Capital returns", text: `Ongoing dividend distributions and share repurchase pacing under current authorization.` },
-      ],
-    };
-
-    // Title (<100 characters)
-    let title = `${shortName} ${verdictVerb} ${period} Estimates With ${revBStr} in Revenue`;
-    if (title.length > 95) {
-      title = `${shortName} ${verdictVerb} ${period} Estimates at ${revBStr}`;
-    }
-
-    // Dek (one sentence)
-    const dek = `Adjusted EPS reached ${formatEps(epsAct)} vs. ${formatEps(epsEst)} expected as revenue totaled ${revBStr}${revGrowthStr ? ` (up ${revGrowthStr} YoY)` : ""}.`;
-
-    // Meta Description (strictly 138 to 160 characters)
-    const metaDesc = buildMetaDescription(shortName, verdictVerb, period, revBStr, formatEps(epsAct), profile.story);
-
-    // Lede (two sentences, <= 60 words, ticker in parentheses)
-    const lede = `${company} (${ticker}) reported ${period} results that ${bothBeat ? "beat consensus estimates" : "topped expectations"}, driven by ${profile.story}. Revenue reached ${revBStr}${revGrowthStr ? `, up ${revGrowthStr} from a year earlier,` : ""} against the ${revEstBStr} estimate, while adjusted EPS rose to ${formatEps(epsAct)} versus the ${formatEps(epsEst)} consensus.`;
-
-    // Stat boxes
-    const epsColor = epsVerdict.cls === "pos" ? "#1E8449" : epsVerdict.cls === "dn" ? "#C0392B" : "#2563EB";
-    const revColor = revVerdict.cls === "pos" ? "#1E8449" : revVerdict.cls === "dn" ? "#C0392B" : "#2563EB";
-
-    const statBoxes: [EarningsStatBox, EarningsStatBox, EarningsStatBox] = [
-      {
-        num: formatEps(epsAct),
-        label: `Adjusted EPS vs. ${formatEps(epsEst)} estimate`,
-        color: epsColor,
-      },
-      {
-        num: revBStr,
-        label: `Revenue vs. ${revEstBStr} estimate`,
-        color: revColor,
-      },
-      profile.thirdStat,
-    ];
-
-    // Scorecard rows (Section 4 Item 4: Parameters, Expected, Actual, Beat/Miss with gap percent)
-    const epsGap = formatBeatMissGap(epsAct, epsEst, "eps");
-    const revGap = formatBeatMissGap(revAct, revEst, "revenue");
-
-    const scorecardRows: EarningsScorecardRow[] = [
-      {
-        parameter: "Adjusted EPS",
-        expected: formatEps(epsEst),
-        actual: formatEps(epsAct),
-        beatMissText: epsGap.text,
-        beatMissClass: epsGap.cls,
-      },
-      {
-        parameter: "Revenue",
-        expected: revEstBStr,
-        actual: revBStr,
-        beatMissText: revGap.text,
-        beatMissClass: revGap.cls,
-      },
-    ];
-
-    // Change grid rows (Section 4 Item 5: Change, YoY, QoQ)
-    const epsYoYPct = epsYa && epsYa !== 0 ? ((epsAct - epsYa) / Math.abs(epsYa)) * 100 : null;
-    const revYoYPct = revYa && revYa > 0 ? ((revAct - revYa) / revYa) * 100 : null;
-
-    const epsQoQPct = profile?.epsPrior && profile.epsPrior !== 0 ? ((epsAct - profile.epsPrior) / Math.abs(profile.epsPrior)) * 100 : null;
-    const revQoQPct = profile?.revPrior && profile.revPrior > 0 ? ((revAct - profile.revPrior) / profile.revPrior) * 100 : null;
-
-    const epsYoY = formatArrowPercent(epsYoYPct);
-    const revYoY = formatArrowPercent(revYoYPct);
-    const epsQoQ = formatArrowPercent(epsQoQPct);
-    const revQoQ = formatArrowPercent(revQoQPct);
-
-    const hasQoq = epsQoQPct != null && revQoQPct != null;
-    const changeRows: EarningsChangeRow[] = [
-      {
-        metric: "Adjusted EPS",
-        yoyText: epsYoY.text,
-        yoyClass: epsYoY.cls,
-        qoqText: hasQoq ? epsQoQ.text : null,
-        qoqClass: hasQoq ? epsQoQ.cls : "",
-      },
-      {
-        metric: "Revenue",
-        yoyText: revYoY.text,
-        yoyClass: revYoY.cls,
-        qoqText: hasQoq ? revQoQ.text : null,
-        qoqClass: hasQoq ? revQoQ.cls : "",
-      },
-    ];
-
-    // By our calculation (Section 4 Item 6)
-    const revGapDollar = Math.abs(revAct - revEst);
-    const revGapDollarStr = revGapDollar >= 1e9 ? `$${(revGapDollar / 1e9).toFixed(2)} billion` : `$${(revGapDollar / 1e6).toFixed(1)} million`;
-    const revGapPct = revEst !== 0 ? ((revAct - revEst) / revEst) * 100 : 0;
-    const epsDiff = Math.abs(epsAct - epsEst);
-    const epsDiffStr = `$${epsDiff.toFixed(2)}`;
-
-    let byOurCalculation = `By our calculation, revenue ${revVerdict.verdict === "Beat" ? "beat" : "fell short of"} the consensus estimate by ${revGapDollarStr} (about ${Math.abs(revGapPct).toFixed(1)}%), while adjusted EPS ${epsVerdict.verdict === "Beat" ? "beat by" : "missed by"} ${epsDiffStr} per share.`;
-    if (hasQoq && profile.revPrior && profile.epsPrior) {
-      const priorRevStr = profile.revPrior >= 1e9 ? `$${(profile.revPrior / 1e9).toFixed(2)} billion` : `$${(profile.revPrior / 1e6).toFixed(1)} million`;
-      byOurCalculation += ` The quarter-over-quarter comparison uses ${profile.priorPeriod || "second-quarter"} revenue of ${priorRevStr} and adjusted EPS of ${formatEps(profile.epsPrior)} from the company's ${profile.priorPeriod || "Q2"} release.`;
-    }
-
-    const relatedCards: [RelatedCard, RelatedCard, RelatedCard, RelatedCard] = [
-      {
-        pill: "Earnings",
-        title: "McDonald's Beats on EPS at $3.57 as U.S. Comps Slip Just 0.2%",
-        url: "https://marketcatalyst.ai/posts/mcdonald-s-beats-on-eps-at-3-57-as-u-s-comps-slip-just-0-2-but-q3-revenue-misses",
-        readTime: "4 min",
-      },
-      {
-        pill: "Earnings",
-        title: "CVS Beats Q3, Raises Outlook and Plans Two-Company Split",
-        url: "https://marketcatalyst.ai/posts/cvs-beats-q3-raises-outlook-and-plans-two-company-split",
-        readTime: "3 min",
-      },
-      {
-        pill: "Recap",
-        title: "Week Ahead: Midterms, Apple and AMD Earnings Test a Shaken Market",
-        url: "https://marketcatalyst.ai/posts/week-ahead-midterms-apple-and-amd-earnings-and-the-jobs-report-test-a-shaken-market",
-        readTime: "7 min",
-      },
-      {
-        pill: "News",
-        title: "Mid-Morning Movers by Market Cap: Top Gainers and Losers",
-        url: "https://marketcatalyst.ai/posts/mid-morning-movers-by-market-cap-top-gainers-and-losers-across-mega-large-mid-2",
-        readTime: "3 min",
-      },
-    ];
-
-    const formattedDate = formatApDate(targetDate);
-    const priorQtrNote = hasQoq && profile.priorPeriod
-      ? ` The ${profile.priorPeriod} comparison figures are from ${company}'s ${profile.priorPeriod} release.`
-      : "";
-    const sourcesText = `Results are from ${company}'s ${formattedDate} company release and Form 8-K. Estimates are consensus figures.${priorQtrNote} Items labeled by our calculation are our own arithmetic. This article is informational only and is not investment advice.`;
-
-    return {
-      company,
-      ticker,
-      period,
-      announcedDateFormatted: formattedDate,
-      announcedIsoDate: `${targetDate}T12:00:00-05:00`,
-      slug,
-      stripCode,
-      title,
-      dek,
-      metaDescription: metaDesc,
-      readTime: "3 min read",
-      lede,
-      statBoxes,
-      scorecardRows,
-      changeRows,
-      hasQoq,
-      byOurCalculation,
-      industrySections: profile.industrySections,
-      profitOutlookSection: {
-        title: "Profit, cash flow and outlook",
-        bullets: profile.profitOutlookBullets,
-      },
-      whatToWatchBullets: profile.watchBullets,
-      sourcesText,
-      relatedCards,
-    };
+  private async claim(docId: string, row: Reported): Promise<"claimed" | "busy" | string> {
+    const ref = this.db.collection(ARTICLES).doc(docId);
+    return this.db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const now = Date.now();
+      if (!snap.exists) {
+        tx.create(ref, { symbol: row.symbol, reportDate: row.date, status: "claimed", claimedAtMs: now, attempts: 1, createdAt: FieldValue.serverTimestamp() });
+        return "claimed";
+      }
+      const d = snap.data() ?? {};
+      const attempts = Number(d.attempts ?? 1);
+      if (d.status === "posted") return "posted";
+      if (d.status === "skipped") return `skipped:${String(d.reason ?? "earlier")}`;
+      if (d.status === "failed" && attempts >= MAX_ATTEMPTS) return "skipped:failed";
+      const takeOver =
+        (d.status === "claimed" && now - Number(d.claimedAtMs ?? 0) > STALE_CLAIM_MS) || d.status === "failed";
+      if (!takeOver) return "busy";
+      tx.update(ref, { status: "claimed", claimedAtMs: now, attempts: attempts + 1 });
+      return "claimed";
+    });
   }
 }
+

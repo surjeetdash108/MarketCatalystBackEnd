@@ -95,7 +95,7 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "options-chains", trigger: "scheduler", schedules: ["0 19 * * 1-5"] },
   { name: "recaps", trigger: "scheduler", schedules: ["45 18 * * 1-5"] },
   { name: "recap-blog", trigger: "scheduler", schedules: ["0 19 * * 1-5"], note: "reads the recaps snapshot, so it trails it by 15m; publishes a Draft blog post" },
-  { name: "earnings-article", trigger: "scheduler", schedules: ["45 16 * * 1-5"], note: "creates publication-ready earnings articles as Drafts in the blog earnings section for newly reported earnings" },
+  { name: "earnings-article", trigger: "scheduler", schedules: ["* 6-19 * * 1-5", "*/15 0-5,20-23 * * 1-5"], note: "every minute 6:00–19:59 ET (both reporting windows), every 15 minutes otherwise: publishes one earnings article per newly reported $1B+ US company, within a minute of FMP's calendar showing its actuals. Cloud Scheduler entries sync-earnings-article and sync-earnings-article-offhours (deploy/create-earnings-article-scheduler.sh) — a code deploy does not create them" },
   { name: "etf-holdings", trigger: "scheduler", schedules: ["0 19 * * 1-5"], note: "daily holdings snapshot for 16 popular ETFs after market close" },
   { name: "etf-market", trigger: "scheduler", schedules: ["0 0 * * 0"], note: "weekly full ETF universe sync: rotates current week to previous week, writes all discovered funds across 10 categories" },
   { name: "eod-recap", trigger: "scheduler", schedules: ["15 16 * * 1-5"], note: "EOD Recap blog post: feeds 16 ETFs + indices/commodities/crypto into Claude skill and publishes to blog 15 min after market close at 4:15 PM ET (3:15 PM CT)" },
@@ -159,7 +159,7 @@ const RISKS: Record<string, JobRisk> = {
   },
   "earnings-article": {
     level: "caution",
-    note: "Generates earnings articles conforming to marketcatalyst-earnings-article skill and saves Draft posts in the blog earnings section (never published automatically).",
+    note: "PUBLISHES earnings articles (marketcatalyst-earnings-article skill) for every company that reported since the last pass. A manual run posts real articles; use mode=dry to preview. EARNINGS_ARTICLE_MODE=draft|off on the service changes or stops it.",
   },
   "history-backfill": {
     level: "caution",
