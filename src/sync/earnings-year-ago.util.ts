@@ -7,6 +7,27 @@ export interface YearAgoQuarter {
   revenue?: number | null;
 }
 
+/** Slice of an `earnings_events` row `needsYearAgo` reads. */
+export interface YearAgoRow {
+  epsActual?: number | null;
+  revenueActual?: number | null;
+  epsActualYearAgo?: number | null;
+  revenueYearAgo?: number | null;
+}
+
+/**
+ * True when a row has reported but still carries no year-ago comparable. An
+ * upcoming row has nothing to compare yet, and a row that already has either
+ * year-ago value is left alone.
+ */
+export function needsYearAgo(row: YearAgoRow): boolean {
+  return (
+    row.epsActualYearAgo == null &&
+    row.revenueYearAgo == null &&
+    (row.epsActual != null || row.revenueActual != null)
+  );
+}
+
 // The quarter we want ended before last year's report did. Reports land ~10-90
 // days after quarter-end, so the latest quarter-end on or before (reportDate −
 // 1y) is last year's comparable. A match further back than this is a gap in the

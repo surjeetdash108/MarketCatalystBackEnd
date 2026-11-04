@@ -1,4 +1,4 @@
-import { pickYearAgoByReportDate } from "./earnings-year-ago.util";
+import { needsYearAgo, pickYearAgoByReportDate } from "./earnings-year-ago.util";
 
 const q = (endDate: string, eps: number | null, rev: number | null) => ({
   endDate,
@@ -40,5 +40,21 @@ describe("pickYearAgoByReportDate", () => {
   it("returns null for an unparseable date or empty history", () => {
     expect(pickYearAgoByReportDate(history, "not-a-date")).toBeNull();
     expect(pickYearAgoByReportDate([], "2026-10-29")).toBeNull();
+  });
+});
+
+describe("needsYearAgo", () => {
+  it("is true for a reported row with no year-ago values", () => {
+    expect(needsYearAgo({ epsActual: 0.49 })).toBe(true);
+    expect(needsYearAgo({ revenueActual: 3.68e9 })).toBe(true);
+  });
+
+  it("is false for an upcoming row with nothing to compare yet", () => {
+    expect(needsYearAgo({ epsActual: null, revenueActual: null })).toBe(false);
+  });
+
+  it("is false once either year-ago value is stored", () => {
+    expect(needsYearAgo({ epsActual: 0.49, epsActualYearAgo: 0.4 })).toBe(false);
+    expect(needsYearAgo({ epsActual: 0.49, revenueYearAgo: 3e9 })).toBe(false);
   });
 });
