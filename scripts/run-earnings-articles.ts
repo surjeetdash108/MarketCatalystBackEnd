@@ -34,7 +34,7 @@ async function main() {
       for (const p of result.previews) {
         const file = path.join(out, `${p.symbol}.html`);
         fs.writeFileSync(file, p.documentHtml, "utf-8");
-        console.log(`preview ${p.symbol}: ${file}  "${p.title}"  model: ${p.fromModel.join(",") || "none"}`);
+        console.log(`preview ${p.symbol}: ${file}  "${p.title}"`);
       }
     }
     const { previews, ...summary } = result;

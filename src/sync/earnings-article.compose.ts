@@ -1,5 +1,5 @@
 /**
- * Facts + checked copy → the article (skill §4 order), as the blog's
+ * Facts + code-written copy → the article (skill §4 order), as the blog's
  * "simple" template document — the same shell the blog tool uses for the
  * hand-written earnings posts, so automated ones look identical.
  */
@@ -136,7 +136,7 @@ function gaapSection(f: ArticleFacts): { title: string; bullets: Bullet[] } | nu
   return { title: "GAAP results", bullets };
 }
 
-function recordSection(f: ArticleFacts, includeNext: boolean): { title: string; bullets: Bullet[] } | null {
+function recordSection(f: ArticleFacts): { title: string; bullets: Bullet[] } | null {
   const bullets: Bullet[] = [];
   if (f.record.epsOf >= 2) {
     bullets.push({ label: "EPS record", text: `${epsName(f, true)} beat the estimate in ${f.record.epsBeats} of the last ${f.record.epsOf} reports, including this one.` });
@@ -151,27 +151,13 @@ function recordSection(f: ArticleFacts, includeNext: boolean): { title: string; 
       text: `Revenue over the last ${vals.length} reports, oldest first: ${vals.slice(0, -1).join(", ")} and ${vals[vals.length - 1]}.`,
     });
   }
-  if (includeNext && f.next) {
-    const parts = [
-      f.next.epsAvg != null ? `EPS of ${formatEps(f.next.epsAvg)}` : null,
-      f.next.revenueAvg != null ? `revenue of ${formatMoneyProse(f.next.revenueAvg)}` : null,
-    ].filter(Boolean);
-    if (parts.length) {
-      bullets.push({
-        label: "Next quarter",
-        text: `Consensus calls for ${parts.join(" and ")}${f.next.analysts ? ` from ${f.next.analysts} analyst${f.next.analysts === 1 ? "" : "s"}` : ""}${f.next.reportDate ? `, with the next report expected on ${apDate(f.next.reportDate)}` : ""}.`,
-      });
-    }
-  }
-  return bullets.length ? { title: "Track record and expectations", bullets } : null;
+  return bullets.length ? { title: "Track record", bullets } : null;
 }
 
 export interface ComposeOptions {
   /** Epoch ms the post is created; the article is stamped one minute earlier (skill §7). */
   createdMs: number;
   related: RelatedCard[];
-  /** True when the company's Form 8-K release was found and used. */
-  has8k: boolean;
   /** Slug override (when the blog assigned a "-2" suffix, or on a later edit). */
   slug?: string;
   /** Epoch ms of a later edit — sets dateModified only. */
@@ -198,15 +184,11 @@ const proseWords = (html: string) =>
 export function composeArticle(f: ArticleFacts, copy: ArticleCopy, opts: ComposeOptions): ComposedArticle {
   const slug = opts.slug ?? blogSlug(copy.title);
   const stamp = opts.createdMs - 60_000;
-  const sections = [
-    ...copy.sections,
-    gaapSection(f),
-    recordSection(f, copy.fromModel.includes("watch")),
-  ].filter((s): s is { title: string; bullets: Bullet[] } => !!s && s.bullets.length > 0);
+  const sections = [gaapSection(f), recordSection(f)].filter((s): s is { title: string; bullets: Bullet[] } => !!s && s.bullets.length > 0);
 
   const related = opts.related.slice(0, 4) as [RelatedCard, RelatedCard, RelatedCard, RelatedCard];
   const sources =
-    `Results are from ${f.shortName}'s ${apDate(f.reportDate)} results release${opts.has8k ? " and Form 8-K" : ""}. ` +
+    `Results are from ${f.shortName}'s ${apDate(f.reportDate)} quarterly report. ` +
     `Estimates are consensus figures. The prior-quarter and year-ago comparison figures are from ${f.shortName}'s earlier quarterly reports. ` +
     `Items labeled by our calculation are our own arithmetic. This article is informational only and is not investment advice.`;
 

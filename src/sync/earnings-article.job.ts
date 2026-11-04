@@ -4,10 +4,8 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { etDate } from "../common/market-calendar.util";
-import { getSecUserAgent } from "../common/sec-cik-map.util";
 import { BlogsAdminService } from "../blogs/blogs-admin.service";
 import { FmpService, type FmpFullQuote } from "../vendors/fmp/fmp.service";
-import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import type { RelatedCard } from "./earnings-article-html.builder";
 import { composeArticle, type ComposedArticle } from "./earnings-article.compose";
 import {
@@ -18,7 +16,7 @@ import {
   type ReportRow,
   type StatementRow,
 } from "./earnings-article.facts";
-import { acceptCopy, buildMessages, releaseExcerpt, type ArticleCopy } from "./earnings-article.writer";
+import { fallbackCopy, type ArticleCopy } from "./earnings-article.writer";
 
 const JOB_NAME = "earnings-article";
 // Every minute through both reporting windows; see job-manifest.ts for the
@@ -39,25 +37,13 @@ const MAX_ATTEMPTS = 5;
 const CONCURRENCY = 3;
 /** Stop starting new articles after this long; the next minute's run picks up the rest. */
 const RUN_BUDGET_MS = 240_000;
-/**
- * Model tokens per minute to stay under. Groq's on-demand tier allows 8,000
- * for gpt-oss-120b and an article prompt is ~4–5k, so roughly one article a
- * minute gets model-written release sections at once; the rest publish with
- * code-written text and get the sections on a later pass (enrichment).
- */
-const LLM_TPM = Number(process.env.EARNINGS_ARTICLE_LLM_TPM ?? 7_500);
-const MAX_ENRICH_ATTEMPTS = 3;
-
 export type Mode = "publish" | "draft" | "dry" | "off";
 
 interface Built {
   facts: ArticleFacts;
   copy: ArticleCopy;
   article: ComposedArticle;
-  has8k: boolean;
   related: RelatedCard[];
-  /** Published with code-written text although a release exists: add its sections later. */
-  wantsEnrich: boolean;
 }
 
 /** A calendar row with both actuals, i.e. a company that has reported. */
@@ -100,9 +86,8 @@ export interface RunResult {
   posted: Array<{ symbol: string; url: string; title: string }>;
   skipped: Array<{ symbol: string; reason: string }>;
   failed: Array<{ symbol: string; error: string }>;
-  previews?: Array<{ symbol: string; title: string; documentHtml: string; fromModel: string[] }>;
+  previews?: Array<{ symbol: string; title: string; documentHtml: string }>;
   seeded?: number;
-  enriched?: string[];
 }
 
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -223,52 +208,11 @@ export function pickRelated(posts: RecentPost[], symbol: string): RelatedCard[] 
   return out;
 }
 
-/** Does the release state FMP's revenue (in any common scale)? Confirms it is this report's release. */
-export function releaseStatesRevenue(text: string, revenue: number): boolean {
-  const t = text.replace(/\s+/g, " ");
-  const forms = new Set<string>();
-  const m = revenue / 1e6;
-  const b = revenue / 1e9;
-  const k = Math.round(revenue / 1e3);
-  forms.add(m.toFixed(1));
-  forms.add(m.toFixed(0));
-  if (b >= 1) {
-    forms.add(b.toFixed(1));
-    forms.add(b.toFixed(2));
-    forms.add(b.toFixed(3));
-  }
-  forms.add(k.toLocaleString("en-US"));
-  forms.add(Math.round(m).toLocaleString("en-US"));
-  forms.add(m.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 }));
-  for (const f of forms) {
-    if (new RegExp(`(?<![\\d.,])${f.replace(/[.,]/g, (c) => `\\${c}`)}(?![\\d])`).test(t)) return true;
-  }
-  return false;
-}
-
-function htmlToText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<br\s*\/?>|<\/(p|div|tr|li|h\d)>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;|&#160;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&#8217;|&rsquo;/g, "’")
-    .replace(/&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"')
-    .replace(/&#8211;|&#8212;|&ndash;|&mdash;/g, "-")
-    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 @Injectable()
 export class EarningsArticleJob implements OnModuleInit {
   private readonly logger = new Logger(EarningsArticleJob.name);
   /** Symbols this process already handled, keyed "date|symbol" — saves the day-doc lookup. */
   private readonly handled = new Set<string>();
-  /** Model tokens spent in the last minute, for the LLM_TPM budget. */
-  private llmSpend: Array<{ at: number; tokens: number }> = [];
-  private llmChain: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly firebase: FirebaseAdminService,
@@ -276,7 +220,6 @@ export class EarningsArticleJob implements OnModuleInit {
     private readonly registry: SyncRegistry,
     private readonly blogs: BlogsAdminService,
     private readonly fmp: FmpService,
-    private readonly llm: LlmGatewayService,
   ) {}
 
   onModuleInit() {
@@ -346,7 +289,6 @@ export class EarningsArticleJob implements OnModuleInit {
       );
       result.newlyReported = fresh.length;
       if (!fresh.length) {
-        if (mode !== "dry") await this.enrich(reported, null, started, result);
         await this.meta.record(JOB_NAME, { ok: true, count: 0 });
         return result;
       }
@@ -392,7 +334,6 @@ export class EarningsArticleJob implements OnModuleInit {
         }
       };
       await Promise.all(Array.from({ length: Math.min(CONCURRENCY, todo.length) }, worker));
-      if (mode !== "dry") await this.enrich(reported, recent, started, result);
 
       await this.meta.record(JOB_NAME, { ok: result.failed.length === 0, count: result.posted.length });
       this.logger.log(
@@ -404,64 +345,6 @@ export class EarningsArticleJob implements OnModuleInit {
       this.logger.error(`earnings-article failed: ${msg}`);
       await this.meta.record(JOB_NAME, { ok: false, error: msg });
       throw err;
-    }
-  }
-
-  /**
-   * Adds the release's sections to articles that went out with code-written
-   * text only. Same post, same title and URL; dateModified moves (skill §7).
-   * Never throws — a failure is retried on later passes, up to a limit.
-   */
-  private async enrich(reported: Reported[], recent: RecentPost[] | null, started: number, result: RunResult): Promise<void> {
-    if (!this.llm.enabled) return;
-    const snap = await this.db.collection(ARTICLES).where("enrichPending", "==", true).limit(3).get();
-    if (snap.empty) return;
-    const posts = recent ?? (await this.recentPosts());
-    for (const doc of snap.docs) {
-      // No room for a model call this minute: try again next pass, without spending an attempt.
-      if (Date.now() - started > RUN_BUDGET_MS || !this.llmRoom(5_500)) return;
-      const d = doc.data();
-      const attempts = Number(d.enrichAttempts ?? 0);
-      const done = (extra: Record<string, unknown>) =>
-        doc.ref.set({ ...extra, enrichAttempts: attempts + 1, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-      try {
-        const row = reported.find((r) => r.symbol === d.symbol && r.date === d.reportDate);
-        const quote = (await this.fmp.getQuotes([String(d.symbol)]))[0];
-        const profile = await this.profile(String(d.symbol));
-        if (!row || !quote || !profile) {
-          await done({ enrichPending: false, enrichNote: "report no longer in range" });
-          continue;
-        }
-        const built = await this.build({ row, quote, profile }, posts.filter((p) => p.slug !== d.slug));
-        if ("skip" in built || !built.copy.fromModel.includes("sections")) {
-          await done({ enrichPending: attempts + 1 < MAX_ENRICH_ATTEMPTS });
-          continue;
-        }
-        // The title — and so the URL — stays as first published.
-        const copy = { ...built.copy, title: String(d.title) };
-        const article = composeArticle(built.facts, copy, {
-          createdMs: Number(d.createdMs),
-          modifiedMs: Date.now(),
-          related: built.related,
-          has8k: built.has8k,
-          slug: String(d.slug),
-        });
-        await this.blogs.update(String(d.postId), {
-          zone: "earnings",
-          title: article.title,
-          dek: article.dek,
-          kick: "Earnings",
-          author: "",
-          read: article.read,
-          format: "html",
-          html: article.documentHtml,
-        });
-        await done({ enrichPending: false, enrichedAt: FieldValue.serverTimestamp(), fromModel: copy.fromModel });
-        this.logger.log(`earnings-article: enriched ${d.symbol} (${d.url}) with ${copy.fromModel.join(",")}`);
-        (result.enriched ??= []).push(String(d.symbol));
-      } catch (err) {
-        await done({ enrichPending: attempts + 1 < MAX_ENRICH_ATTEMPTS, enrichError: (err as Error).message?.slice(0, 300) ?? String(err) }).catch(() => undefined);
-      }
     }
   }
 
@@ -488,7 +371,7 @@ export class EarningsArticleJob implements OnModuleInit {
         return;
       }
       if (mode === "dry") {
-        (result.previews ??= []).push({ symbol: row.symbol, title: built.article.title, documentHtml: built.article.documentHtml, fromModel: built.copy.fromModel });
+        (result.previews ??= []).push({ symbol: row.symbol, title: built.article.title, documentHtml: built.article.documentHtml });
         return;
       }
       const posted = await this.publish(built, mode, recent, c);
@@ -501,20 +384,16 @@ export class EarningsArticleJob implements OnModuleInit {
           title: built.article.title,
           quarter: built.facts.quarter,
           mode,
-          fromModel: built.copy.fromModel,
-          has8k: built.has8k,
           postedAt: FieldValue.serverTimestamp(),
           createdMs: posted.createdMs,
           cik: c.profile.cik ?? null,
-          enrichPending: built.wantsEnrich,
-          enrichAttempts: 0,
         },
         { merge: true },
       );
       await this.mark([{ date: row.date, symbol: row.symbol, value: "posted" }]);
       this.handled.add(`${row.date}|${row.symbol}`);
       result.posted.push({ symbol: row.symbol, url: posted.url, title: built.article.title });
-      this.logger.log(`earnings-article: ${mode} ${row.symbol} → ${posted.url} (model: ${built.copy.fromModel.join(",") || "none"})`);
+      this.logger.log(`earnings-article: ${mode} ${row.symbol} → ${posted.url}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       result.failed.push({ symbol: row.symbol, error: msg });
@@ -556,43 +435,11 @@ export class EarningsArticleJob implements OnModuleInit {
     });
     if ("skip" in facts) return facts;
 
-    const releaseText = await this.release(s, c.row.date, facts.revenue.actual).catch((err) => {
-      this.logger.warn(`earnings-article: ${s} release fetch failed: ${(err as Error).message}`);
-      return null;
-    });
-    const excerpt = releaseText ? releaseExcerpt(releaseText) : null;
-
-    const raw = await this.write(facts, excerpt);
-    const copy = acceptCopy(raw, facts, excerpt);
+    const copy = fallbackCopy(facts);
     const related = pickRelated(recent, s);
     if (related.length < 4) return { skip: "no-related-posts" };
-    const article = composeArticle(facts, copy, { createdMs: Date.now(), related, has8k: !!excerpt });
-    return { facts, copy, article, has8k: !!excerpt, related, wantsEnrich: !!excerpt && !copy.fromModel.includes("sections") };
-  }
-
-  /** True when a call of about this many tokens fits in the last minute's budget. */
-  private llmRoom(tokens: number): boolean {
-    const now = Date.now();
-    this.llmSpend = this.llmSpend.filter((e) => now - e.at < 60_000);
-    return this.llmSpend.reduce((a, e) => a + e.tokens, 0) + tokens <= LLM_TPM;
-  }
-
-  /**
-   * One model call, serialised and inside the per-minute token budget. Null
-   * (no call) when the budget is spent — the article then publishes with
-   * code-written text and is enriched on a later pass.
-   */
-  private async write(facts: ArticleFacts, excerpt: string | null): Promise<string | null> {
-    if (!this.llm.enabled) return null;
-    const messages = buildMessages(facts, excerpt);
-    const tokens = Math.ceil(JSON.stringify(messages).length / 3.5) + 1_500;
-    const run = this.llmChain.then(async () => {
-      if (!this.llmRoom(tokens)) return null;
-      this.llmSpend.push({ at: Date.now(), tokens });
-      return this.llm.chat(messages, { jsonMode: true, maxTokens: 4000, timeoutMs: 25_000, reasoningEffort: "low" }).catch(() => null);
-    });
-    this.llmChain = run.catch(() => null);
-    return run;
+    const article = composeArticle(facts, copy, { createdMs: Date.now(), related });
+    return { facts, copy, article, related };
   }
 
   private async publish(
@@ -602,7 +449,7 @@ export class EarningsArticleJob implements OnModuleInit {
     c: Candidate,
   ): Promise<{ id: string; slug: string; url: string; createdMs: number }> {
     const createdMs = Date.now();
-    let article = composeArticle(built.facts, built.copy, { createdMs, related: built.related, has8k: built.has8k });
+    let article = composeArticle(built.facts, built.copy, { createdMs, related: built.related });
     const body = {
       zone: "earnings",
       title: article.title,
@@ -620,52 +467,11 @@ export class EarningsArticleJob implements OnModuleInit {
     const slug = String(snap.data()?.slug ?? article.slug);
     if (slug !== article.slug) {
       // The blog added a duplicate suffix; reprint the page's own URL to match.
-      article = composeArticle(built.facts, built.copy, { createdMs, related: built.related, has8k: built.has8k, slug });
+      article = composeArticle(built.facts, built.copy, { createdMs, related: built.related, slug });
       await this.blogs.update(id, { ...body, status: undefined, html: article.documentHtml });
     }
     recent.unshift({ title: article.title, slug, type: "earnings", status: body.status, read: article.read, createdMs, content: article.documentHtml });
     return { id, slug, url: `https://marketcatalyst.ai/posts/${slug}`, createdMs };
-  }
-
-  /**
-   * The company's results release from its Form 8-K (Exhibit 99.1), found
-   * through FMP's SEC filings feed. Used only when it states FMP's revenue,
-   * which confirms it is this report's release. Null when there is none.
-   */
-  private async release(symbol: string, reportDate: string, revenue: number): Promise<string | null> {
-    const ua = getSecUserAgent();
-    if (!ua) return null;
-    const from = new Date(Date.parse(`${reportDate}T00:00:00Z`) - 2 * 86_400_000).toISOString().slice(0, 10);
-    const filings = (await this.fmp.request(`sec-filings-search/symbol?symbol=${symbol}&from=${from}&to=${etDate()}`)) as Array<Record<string, unknown>>;
-    const eightKs = filings
-      .filter((f) => String(f.formType ?? "").toUpperCase().startsWith("8-K") && typeof f.finalLink === "string")
-      .sort((a, b) => String(b.acceptedDate ?? "").localeCompare(String(a.acceptedDate ?? "")));
-    const get = async (url: string) => {
-      const res = await fetch(url, { headers: { "User-Agent": ua }, signal: AbortSignal.timeout(12_000) });
-      if (!res.ok) throw new Error(`SEC ${res.status}`);
-      return res.text();
-    };
-    for (const f of eightKs.slice(0, 3)) {
-      const link = String(f.finalLink);
-      const urls = [link];
-      // The link may be the 8-K cover rather than the exhibit: also try the
-      // filing's EX-99 documents.
-      const dir = link.slice(0, link.lastIndexOf("/"));
-      try {
-        const idx = JSON.parse(await get(`${dir}/index.json`)) as { directory?: { item?: Array<{ name?: string }> } };
-        for (const it of idx.directory?.item ?? []) {
-          const n = String(it.name ?? "");
-          if (/\.htm/i.test(n) && /99|press|release|earn|result/i.test(n) && `${dir}/${n}` !== link) urls.push(`${dir}/${n}`);
-        }
-      } catch {
-        /* index is optional */
-      }
-      for (const u of urls.slice(0, 4)) {
-        const text = htmlToText(await get(u));
-        if (/quarter/i.test(text) && /revenue|sales/i.test(text) && releaseStatesRevenue(text, revenue)) return text;
-      }
-    }
-    return null;
   }
 
   private async profile(symbol: string): Promise<Profile | null> {
