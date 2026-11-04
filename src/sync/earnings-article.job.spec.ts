@@ -258,6 +258,15 @@ describe("composed article", () => {
     expect(h).toContain("Published Nov 4, 2026 · 4:41 PM ET");
   });
 
+  it("calls a GAAP-basis figure EPS, never adjusted EPS", () => {
+    const statements = [{ ...FIG.statements[0], epsDiluted: 0.1, netIncome: 50_000_000 }, FIG.statements[1]];
+    const f = facts({ ...FIG, statements });
+    const h = article(composeArticle(f, fallbackCopy(f), { createdMs: Date.now(), related: RELATED, has8k: false }).documentHtml);
+    expect(h).not.toMatch(/adjusted EPS/i);
+    expect(h).toContain('<td class="metric">EPS</td>');
+    expect(h).not.toContain("GAAP diluted EPS");
+  });
+
   it("drops a column and the scorecard row it cannot fill, instead of printing a blank", () => {
     const f = facts({ ...FIG, history: FIG.history.slice(0, 2), report: { ...FIG.report, revenueEstimated: null } });
     const h = composeArticle(f, fallbackCopy(f), { createdMs: Date.now(), related: RELATED, has8k: false }).documentHtml;

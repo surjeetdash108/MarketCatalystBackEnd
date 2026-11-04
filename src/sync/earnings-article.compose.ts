@@ -16,6 +16,7 @@ import {
 import {
   apDate,
   changeCell,
+  epsName,
   etIso,
   etTime,
   formatEps,
@@ -39,7 +40,7 @@ function statBoxes(f: ArticleFacts): [EarningsStatBox, EarningsStatBox, Earnings
   const epsComparable = f.eps.yearAgo != null && Math.sign(f.eps.actual) === Math.sign(f.eps.yearAgo);
   const eps: EarningsStatBox = {
     num: epsText(f, f.eps.actual),
-    label: `Adjusted EPS${yoyLabel(f.eps.yoyPct, epsComparable)}${f.eps.estimate != null ? ` vs. ${epsText(f, f.eps.estimate)} estimate` : ""}`,
+    label: `${epsName(f, true)}${yoyLabel(f.eps.yoyPct, epsComparable)}${f.eps.estimate != null ? ` vs. ${epsText(f, f.eps.estimate)} estimate` : ""}`,
     color: tone(f.eps.verdict),
   };
   const rev: EarningsStatBox = {
@@ -72,7 +73,7 @@ function scorecard(f: ArticleFacts): EarningsScorecardRow[] {
   const rows: EarningsScorecardRow[] = [];
   const cls = (v: Verdict) => (v === "beat" ? "pos" : v === "miss" ? "dn" : "") as "pos" | "dn" | "";
   if (f.eps.estimate != null && f.eps.gapText) {
-    rows.push({ parameter: "Adjusted EPS", expected: epsText(f, f.eps.estimate), actual: epsText(f, f.eps.actual), beatMissText: f.eps.gapText, beatMissClass: cls(f.eps.verdict) });
+    rows.push({ parameter: epsName(f, true), expected: epsText(f, f.eps.estimate), actual: epsText(f, f.eps.actual), beatMissText: f.eps.gapText, beatMissClass: cls(f.eps.verdict) });
   }
   if (f.revenue.estimate != null && f.revenue.gapText) {
     rows.push({ parameter: "Revenue", expected: revText(f, f.revenue.estimate), actual: revText(f, f.revenue.actual), beatMissText: f.revenue.gapText, beatMissClass: cls(f.revenue.verdict) });
@@ -87,7 +88,7 @@ function changeGrid(f: ArticleFacts): EarningsChangeRow[] {
     return { metric, yoyText: y?.text ?? null, yoyClass: y?.cls ?? "", qoqText: q?.text ?? null, qoqClass: q?.cls ?? "" };
   };
   return [
-    row("Adjusted EPS", f.eps.actual, f.eps.yearAgo, f.eps.prior, formatEps),
+    row(epsName(f, true), f.eps.actual, f.eps.yearAgo, f.eps.prior, formatEps),
     row("Revenue", f.revenue.actual, f.revenue.yearAgo, f.revenue.prior, (v) => revText(f, v)),
   ];
 }
@@ -98,13 +99,13 @@ export function byOurCalculation(f: ArticleFacts): string {
     parts.push(`revenue was ${formatMoneyProse(Math.abs(f.revenue.gap))} ${f.revenue.gap > 0 ? "above" : "below"} the estimate`);
   }
   if (f.eps.gap != null && f.eps.verdict !== "inline") {
-    parts.push(`adjusted EPS was ${formatEps(Math.abs(f.eps.gap))} ${f.eps.gap > 0 ? "above" : "below"} it`);
+    parts.push(`${epsName(f)} was ${formatEps(Math.abs(f.eps.gap))} ${f.eps.gap > 0 ? "above" : "below"} it`);
   }
   const sentences: string[] = [];
   if (parts.length) sentences.push(`By our calculation, ${parts.join(" and ")}.`);
   if (f.revenue.prior != null && f.eps.prior != null) {
     sentences.push(
-      `${sentences.length ? "The" : "By our calculation, the"} QoQ column compares with the previous quarter's revenue of ${revText(f, f.revenue.prior, true)} and adjusted EPS of ${formatEps(f.eps.prior)}.`,
+      `${sentences.length ? "The" : "By our calculation, the"} QoQ column compares with the previous quarter's revenue of ${revText(f, f.revenue.prior, true)} and ${epsName(f)} of ${formatEps(f.eps.prior)}.`,
     );
   }
   if (f.revenue.yearAgo != null && f.eps.yearAgo != null) {
@@ -115,30 +116,21 @@ export function byOurCalculation(f: ArticleFacts): string {
   return sentences.join(" ");
 }
 
-const pctOf = (part: number | null | undefined, whole: number | null | undefined) =>
-  part != null && whole ? (part / whole) * 100 : null;
-
 function gaapSection(f: ArticleFacts): { title: string; bullets: Bullet[] } | null {
   if (!f.gaap) return null;
   const { current: c, yearAgo: y } = f.gaap;
   const bullets: Bullet[] = [];
-  bullets.push({
-    label: "GAAP EPS",
-    text: `GAAP diluted EPS was ${formatEps(c.epsDiluted!)}${y?.epsDiluted != null ? `, against ${formatEps(y.epsDiluted)} a year earlier` : ""}.`,
-  });
+  if (f.epsBasis === "adjusted") {
+    bullets.push({
+      label: "GAAP EPS",
+      text: `GAAP diluted EPS was ${formatEps(c.epsDiluted!)}${y?.epsDiluted != null ? `, against ${formatEps(y.epsDiluted)} a year earlier` : ""}.`,
+    });
+  }
   if (c.netIncome != null) {
     const ni = (v: number) => (v < 0 ? `a net loss of ${formatMoneyProse(-v)}` : `net income of ${formatMoneyProse(v)}`);
     bullets.push({
       label: c.netIncome < 0 ? "Net loss" : "Net income",
-      text: `The company reported ${ni(c.netIncome)}${y?.netIncome != null ? `, compared with ${ni(y.netIncome)} a year earlier` : ""}.`,
-    });
-  }
-  const gm = c.grossProfit != null && c.revenue && c.grossProfit > 0 && c.grossProfit < c.revenue ? pctOf(c.grossProfit, c.revenue) : null;
-  if (gm != null) {
-    const gmY = y && y.grossProfit != null && y.revenue && y.grossProfit > 0 && y.grossProfit < y.revenue ? pctOf(y.grossProfit, y.revenue) : null;
-    bullets.push({
-      label: "Gross margin",
-      text: `GAAP gross margin was ${gm.toFixed(1)}%${gmY != null ? `, against ${gmY.toFixed(1)}% a year earlier` : ""}, by our calculation from the reported figures.`,
+      text: `The company reported ${ni(c.netIncome)} on a GAAP basis${y?.netIncome != null && y.netIncome !== 0 ? `, compared with ${ni(y.netIncome)} a year earlier` : ""}.`,
     });
   }
   return { title: "GAAP results", bullets };
@@ -147,7 +139,7 @@ function gaapSection(f: ArticleFacts): { title: string; bullets: Bullet[] } | nu
 function recordSection(f: ArticleFacts, includeNext: boolean): { title: string; bullets: Bullet[] } | null {
   const bullets: Bullet[] = [];
   if (f.record.epsOf >= 2) {
-    bullets.push({ label: "EPS record", text: `Adjusted EPS beat the estimate in ${f.record.epsBeats} of the last ${f.record.epsOf} reports, including this one.` });
+    bullets.push({ label: "EPS record", text: `${epsName(f, true)} beat the estimate in ${f.record.epsBeats} of the last ${f.record.epsOf} reports, including this one.` });
   }
   if (f.record.revOf >= 2) {
     bullets.push({ label: "Revenue record", text: `Revenue beat the estimate in ${f.record.revBeats} of the last ${f.record.revOf} reports.` });
@@ -161,7 +153,7 @@ function recordSection(f: ArticleFacts, includeNext: boolean): { title: string; 
   }
   if (includeNext && f.next) {
     const parts = [
-      f.next.epsAvg != null ? `adjusted EPS of ${formatEps(f.next.epsAvg)}` : null,
+      f.next.epsAvg != null ? `EPS of ${formatEps(f.next.epsAvg)}` : null,
       f.next.revenueAvg != null ? `revenue of ${formatMoneyProse(f.next.revenueAvg)}` : null,
     ].filter(Boolean);
     if (parts.length) {

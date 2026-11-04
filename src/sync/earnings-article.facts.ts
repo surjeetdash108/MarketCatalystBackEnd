@@ -92,6 +92,8 @@ export interface ArticleFacts {
   eps: MetricFacts;
   revenue: MetricFacts;
   overall: Overall;
+  /** "gaap" when FMP's EPS actual is the GAAP diluted figure (no adjustment to name). */
+  epsBasis: "adjusted" | "gaap";
   hasQoq: boolean;
   hasYoy: boolean;
   /** Up to 8 reports, newest first, that had both an actual and an estimate. */
@@ -123,6 +125,12 @@ const numOrNull = (v: unknown): number | null => (finite(v) ? v : null);
 export function formatGapPct(pct: number): string {
   const a = Math.abs(pct);
   return a >= 10 ? `${Math.round(a)}%` : `${a.toFixed(1)}%`;
+}
+
+/** "Adjusted EPS" / "adjusted EPS", or plain "EPS" when the figure is GAAP. */
+export function epsName(f: { epsBasis: "adjusted" | "gaap" }, capital = false): string {
+  if (f.epsBasis === "gaap") return "EPS";
+  return capital ? "Adjusted EPS" : "adjusted EPS";
 }
 
 export function epsVerdict(actual: number, estimate: number | null): Verdict {
@@ -335,9 +343,18 @@ export function quarterLabel(
 
 // ── company name ──────────────────────────────────────────────────────────────
 
+/** "Pattern Group Inc. Series A Common Stock" → "Pattern Group Inc." */
+export function issuerName(name: string): string {
+  return name
+    .trim()
+    .replace(/\s+(Series|Class)\s+[A-Z0-9]+\s+(Common Stock|Ordinary Shares|Shares|Common Shares)$/i, "")
+    .replace(/\s+(Common Stock|Ordinary Shares|Common Shares|American Depositary Shares|Depositary Shares)$/i, "")
+    .trim();
+}
+
 /** "CVS Health Corporation" → "CVS Health"; "Figma, Inc." → "Figma". */
 export function shortCompanyName(name: string): string {
-  let s = name.trim();
+  let s = issuerName(name);
   for (let i = 0; i < 3; i++) {
     const next = s
       .replace(/,?\s+(Inc|Incorporated|Corp|Corporation|Co|Company|Ltd|Limited|plc|PLC|L\.?P|LLC|N\.V|S\.A|AG|SE|Holdings?|Group|Technologies)\.?$/i, "")
@@ -434,11 +451,22 @@ export function buildFacts(input: FactsInput): ArticleFacts | { skip: SkipReason
     .reverse();
 
   let gaap: ArticleFacts["gaap"] = null;
-  if (label.current && finite(label.current.epsDiluted)) {
+  let epsBasis: ArticleFacts["epsBasis"] = "adjusted";
+  const cur = label.current;
+  // A statement fresh off the filing can be partial on FMP (net income 0, or
+  // signs that disagree): such a statement is not printed.
+  const complete =
+    !!cur &&
+    finite(cur.epsDiluted) &&
+    finite(cur.netIncome) &&
+    cur.netIncome !== 0 &&
+    Math.sign(cur.netIncome) === Math.sign(cur.epsDiluted);
+  if (cur && complete) {
     // Guard against a statement that is not this report's quarter: its revenue
     // must agree with the reported revenue within 2%.
-    const sRev = numOrNull(label.current.revenue);
+    const sRev = numOrNull(cur.revenue);
     if (sRev != null && Math.abs(sRev - revA) / Math.abs(revA) <= 0.02) {
+      if (Math.abs(cur.epsDiluted! - epsA) < 0.005) epsBasis = "gaap";
       const curEnd = label.current.date;
       const ya =
         input.statements.find((s) => {
@@ -469,7 +497,7 @@ export function buildFacts(input: FactsInput): ArticleFacts | { skip: SkipReason
 
   return {
     symbol: input.company.symbol.toUpperCase(),
-    company: input.company.name,
+    company: issuerName(input.company.name),
     shortName: shortCompanyName(input.company.name),
     reportDate: report.date,
     quarter: label.quarter,
@@ -477,6 +505,7 @@ export function buildFacts(input: FactsInput): ArticleFacts | { skip: SkipReason
     eps,
     revenue,
     overall: overallVerdict(eps.verdict, revenue.verdict),
+    epsBasis,
     hasQoq: eps.prior != null && revenue.prior != null,
     hasYoy: eps.yearAgo != null && revenue.yearAgo != null,
     record,

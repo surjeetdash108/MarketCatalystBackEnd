@@ -219,6 +219,27 @@ describe("buildFacts", () => {
     expect(f.hasQoq).toBe(true);
   });
 
+  it("does not print a statement FMP has only partly filled", () => {
+    // U-Haul's fresh Q2 FY27 statement: net income 0 while EPS is 0.71.
+    const statements = [{ ...FIG_STATEMENTS[0], netIncome: 0 }, ...FIG_STATEMENTS.slice(1)];
+    const f = facts(figInput({ statements }));
+    expect(f.gaap).toBeNull();
+    expect(f.quarter).toBe("Q3 2026");
+  });
+
+  it("names EPS plainly when FMP's actual is the GAAP figure", () => {
+    // GRAIL: EPS actual -2.21 equals GAAP diluted EPS -2.21.
+    const statements = [{ ...FIG_STATEMENTS[0], epsDiluted: 0.1, netIncome: 50_000_000 }, ...FIG_STATEMENTS.slice(1)];
+    expect(facts(figInput({ statements })).epsBasis).toBe("gaap");
+    expect(facts(figInput()).epsBasis).toBe("adjusted");
+  });
+
+  it("drops a share-class suffix from the issuer name", () => {
+    const f = facts(figInput({ company: { symbol: "PTRN", name: "Pattern Group Inc. Series A Common Stock" } }));
+    expect(f.company).toBe("Pattern Group Inc.");
+    expect(f.shortName).toBe("Pattern");
+  });
+
   it("skips reporters in another currency", () => {
     const statements = FIG_STATEMENTS.map((s) => ({ ...s, reportedCurrency: "TWD" }));
     expect(buildFacts(figInput({ statements }))).toEqual({ skip: "non-usd" });

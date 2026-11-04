@@ -23,6 +23,7 @@ import {
   formatGapPct,
   formatMoney,
   formatMoneyProse,
+  epsName,
   moneyDecimals,
   type ArticleFacts,
   type Verdict,
@@ -105,6 +106,7 @@ export function factSheet(f: ArticleFacts): Record<string, unknown> {
     quarterWords: f.quarterWords,
     reportDate: apDate(f.reportDate),
     overallVerdict: f.overall,
+    epsLabel: epsName(f),
     adjustedEps: metric("eps"),
     revenue: metric("revenue"),
     record:
@@ -312,18 +314,18 @@ export function fallbackLede(f: ArticleFacts): string {
     case "beat":
       s1 =
         f.eps.verdict === "beat" && f.revenue.verdict === "beat"
-          ? `${who} beat estimates for the ${qn} on both revenue and adjusted EPS.`
+          ? `${who} beat estimates for the ${qn} on both revenue and ${epsName(f)}.`
           : `${who} topped estimates for the ${qn}.`;
       break;
     case "miss":
       s1 =
         f.eps.verdict === "miss" && f.revenue.verdict === "miss"
-          ? `${who} missed estimates for the ${qn} on both revenue and adjusted EPS.`
+          ? `${who} missed estimates for the ${qn} on both revenue and ${epsName(f)}.`
           : `${who} fell short of estimates for the ${qn}.`;
       break;
     case "mixed":
       s1 = `${who} posted mixed ${f.quarterWords} results, with ${
-        f.eps.verdict === "beat" ? "adjusted EPS above the estimate and revenue below it" : "revenue above the estimate and adjusted EPS below it"
+        f.eps.verdict === "beat" ? `${epsName(f)} above the estimate and revenue below it` : `revenue above the estimate and ${epsName(f)} below it`
       }.`;
       break;
     case "inline":
@@ -336,13 +338,13 @@ export function fallbackLede(f: ArticleFacts): string {
     pct == null || !ok ? "" : pct === 0 ? ", unchanged from a year earlier," : `, ${pct > 0 ? "up" : "down"} ${formatGapPct(pct)} from a year earlier,`;
   const epsComparable = f.eps.yearAgo != null && Math.sign(f.eps.actual) === Math.sign(f.eps.yearAgo);
   const rev = `Revenue was ${revText(f, f.revenue.actual, true)}${change(f.revenue.yoyPct, true)}${vsEstimate("revenue", f, true)}`;
-  const eps = `adjusted EPS was ${epsText(f, f.eps.actual)}${change(f.eps.yoyPct, epsComparable)}${vsEstimate("eps", f, true)}`;
+  const eps = `${epsName(f)} was ${epsText(f, f.eps.actual)}${change(f.eps.yoyPct, epsComparable)}${vsEstimate("eps", f, true)}`;
   return `${s1} ${rev}, and ${eps}.`.replace(/,(\s*[,.])/g, "$1");
 }
 
 export function fallbackDek(f: ArticleFacts): string {
   const rev = `Revenue of ${revText(f, f.revenue.actual)}${f.revenue.estimate != null ? ` vs. ${revText(f, f.revenue.estimate)} expected` : ""}`;
-  const eps = `adjusted EPS of ${epsText(f, f.eps.actual)}${f.eps.estimate != null ? ` vs. ${epsText(f, f.eps.estimate)}` : ""}`;
+  const eps = `${epsName(f)} of ${epsText(f, f.eps.actual)}${f.eps.estimate != null ? ` vs. ${epsText(f, f.eps.estimate)}` : ""}`;
   const yoy = f.revenue.yoyPct != null && f.revenue.yoyPct !== 0 ? `; revenue ${f.revenue.yoyPct > 0 ? "up" : "down"} ${formatGapPct(f.revenue.yoyPct)} from a year earlier` : "";
   return `${rev} and ${eps}${yoy}.`;
 }
@@ -352,7 +354,7 @@ export function fallbackDescription(f: ArticleFacts): string {
   const verdict =
     f.overall === "beat" ? "beat" : f.overall === "miss" ? "missed" : f.overall === "mixed" ? "had mixed" : f.overall === "inline" ? "matched" : "reported";
   const what = f.overall === "mixed" || f.overall === "none" ? `${f.quarter} results` : `${f.quarter} estimates`;
-  const core = `${f.shortName} ${verdict} ${what}: revenue ${revText(f, f.revenue.actual)}${f.revenue.estimate != null ? ` vs. ${revText(f, f.revenue.estimate)} expected` : ""}, adjusted EPS ${epsText(f, f.eps.actual)}${f.eps.estimate != null ? ` vs. ${epsText(f, f.eps.estimate)}` : ""}.`;
+  const core = `${f.shortName} ${verdict} ${what}: revenue ${revText(f, f.revenue.actual)}${f.revenue.estimate != null ? ` vs. ${revText(f, f.revenue.estimate)} expected` : ""}, ${epsName(f)} ${epsText(f, f.eps.actual)}${f.eps.estimate != null ? ` vs. ${epsText(f, f.eps.estimate)}` : ""}.`;
   const tails = [
     "",
     f.revenue.yoyPct != null ? ` Revenue ${f.revenue.yoyPct >= 0 ? "rose" : "fell"} ${formatGapPct(f.revenue.yoyPct)} from a year earlier.` : "",
@@ -378,7 +380,7 @@ export function fallbackWatch(f: ArticleFacts): Bullet[] {
   const pool: Bullet[] = [];
   if (f.next?.revenueAvg != null || f.next?.epsAvg != null) {
     const parts = [
-      f.next.epsAvg != null ? `adjusted EPS of ${formatEps(f.next.epsAvg)}` : null,
+      f.next.epsAvg != null ? `EPS of ${formatEps(f.next.epsAvg)}` : null,
       f.next.revenueAvg != null ? `revenue of ${formatMoneyProse(f.next.revenueAvg)}` : null,
     ].filter(Boolean);
     pool.push({
@@ -389,16 +391,22 @@ export function fallbackWatch(f: ArticleFacts): Bullet[] {
   if (f.next?.reportDate) {
     pool.push({ label: "Next report", text: `${f.shortName} is next expected to report on ${apDate(f.next.reportDate)}.` });
   }
-  if (f.revenue.yoyPct != null) {
+  if (f.revenue.yoyPct != null && f.revenue.yoyPct !== 0) {
     pool.push({
       label: "Revenue growth",
-      text: `Whether revenue growth holds near the ${formatGapPct(f.revenue.yoyPct)} ${f.revenue.yoyPct >= 0 ? "gain" : "decline"} from a year earlier that this quarter's ${revText(f, f.revenue.actual, true)} represents.`,
+      text:
+        f.revenue.yoyPct > 0
+          ? `Whether revenue keeps growing from a year earlier after this quarter's ${formatGapPct(f.revenue.yoyPct)} increase to ${revText(f, f.revenue.actual, true)}.`
+          : `Whether revenue stabilizes after this quarter's ${formatGapPct(f.revenue.yoyPct)} decline from a year earlier to ${revText(f, f.revenue.actual, true)}.`,
     });
   }
   if (f.record.epsOf >= 2) {
     pool.push({
       label: "Estimate record",
-      text: `Whether ${f.shortName} extends a record of beating EPS estimates in ${f.record.epsBeats} of its last ${f.record.epsOf} reports.`,
+      text:
+        f.record.epsBeats * 2 >= f.record.epsOf
+          ? `Whether ${f.shortName} extends a record of beating EPS estimates in ${f.record.epsBeats} of its last ${f.record.epsOf} reports.`
+          : `Whether ${f.shortName} returns to beating EPS estimates, which it did in ${f.record.epsBeats} of its last ${f.record.epsOf} reports.`,
     });
   }
   if (f.reaction) {
@@ -464,7 +472,7 @@ export function buildMessages(f: ArticleFacts, release: string | null): { role: 
     "Write every number as digits. Never spell out counts or multiples (no 'three', 'doubled', 'tripled', 'fourfold').",
     "Never use quotation marks. Paraphrase management and attribute it ('the company said', 'management cited').",
     "No advice: no buy, sell, hold, price targets or 'investors should'. No hype verbs (soars, crushes, explodes, plunges).",
-    "Explain a cause only when the release states it. Label adjusted versus GAAP every time.",
+    "Explain a cause only when the release states it. Label adjusted versus GAAP every time; call the FACTS EPS figure exactly what FACTS.epsLabel says.",
     "Write for readers only: never mention data that is missing, sources, tools or these instructions.",
     "American English, active voice, no exclamation marks, no emoji. Dollars in prose as '$391.4 million'.",
     verdictRule[f.overall],
