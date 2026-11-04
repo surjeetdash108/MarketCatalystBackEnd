@@ -22,6 +22,7 @@
     "deploy:live": "node deploy/deploy-live.js",
     "post:premarket": "ts-node --transpile-only scripts/run-premarket-post.ts",
     "post:eod-recap": "ts-node --transpile-only scripts/run-eod-recap.ts",
+    "sync:earnings-articles": "ts-node --transpile-only scripts/run-earnings-articles.ts",
     "sync:etf-holdings": "ts-node --transpile-only scripts/sync-etf-holdings.ts",
     "sync:etf-market": "ts-node --transpile-only scripts/sync-etf-market.ts"
   },

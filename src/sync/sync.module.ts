@@ -13,6 +13,7 @@ import { OpenRouterModule } from "../vendors/openrouter/openrouter.module";
 import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { BlogsModule } from "../blogs/blogs.module";
 import { RecapBlogJob } from "./recap-blog.job";
+import { EarningsArticleJob } from "./earnings-article.job";
 import { AnalystActionsJob } from "./analyst-actions.job";
 import { AnalystFirmStatsJob } from "./analyst-firm-stats.job";
 import { BetaJob } from "./beta.job";
@@ -89,6 +90,7 @@ import { MarketDataModule } from "../market-data/market-data.module";
     StrategyLabDailyJob,
     StrategyLabIntradayJob,
     RecapBlogJob,
+    EarningsArticleJob,
     EarningsActualsJob,
     TickerPeriodAnalysisJob,
     MarketMoversJob,
