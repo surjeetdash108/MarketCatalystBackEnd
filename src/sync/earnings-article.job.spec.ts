@@ -165,6 +165,16 @@ describe("composed article", () => {
     expect(h).toContain("Published Nov 4, 2026 · 4:41 PM ET");
   });
 
+  it("labeled points render as cards: every list is a .rd-list, styled like the news posts", () => {
+    const h = html();
+    expect(h).not.toMatch(/<ul>/);
+    const lists = h.match(/<ul class="rd-list">/g) ?? [];
+    expect(lists.length).toBeGreaterThanOrEqual(2); // a section list and What to watch at least
+    expect(h).toMatch(/<h2 id="watch">What to watch<\/h2>\n<ul class="rd-list">/);
+    expect(h).toContain(".post-doc .rd-list li { margin: 0 0 10px; padding: 10px 14px; background: #F7F5EF; border-left: 3px solid #2563EB; border-radius: 6px; line-height: 1.55; }");
+    expect(h).toContain(".post-doc .rd-list li b { display: block; margin-bottom: 2px; }");
+  });
+
   it("calls a GAAP-basis figure EPS, never adjusted EPS", () => {
     const statements = [{ ...FIG.statements[0], epsDiluted: 0.1, netIncome: 50_000_000 }, FIG.statements[1]];
     const f = facts({ ...FIG, statements });

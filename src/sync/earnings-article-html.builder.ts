@@ -190,13 +190,13 @@ ${scorecardRowsHtml}
       const bulletsHtml = sec.bullets
         .map((b) => `  <li><b>${esc(b.label)}.</b> ${esc(b.text)}</li>`)
         .join("\n");
-      return `<h2 id="sec${i + 1}">${esc(sec.title)}</h2>\n<ul>\n${bulletsHtml}\n</ul>`;
+      return `<h2 id="sec${i + 1}">${esc(sec.title)}</h2>\n<ul class="rd-list">\n${bulletsHtml}\n</ul>`;
     })
     .join("\n\n");
 
   const profitBullets = input.profitOutlookSection?.bullets ?? [];
   const profitHtml = profitBullets.length
-    ? `<h2 id="profit">${esc(input.profitOutlookSection?.title || "Profit, cash flow and outlook")}</h2>\n<ul>\n${profitBullets
+    ? `<h2 id="profit">${esc(input.profitOutlookSection?.title || "Profit, cash flow and outlook")}</h2>\n<ul class="rd-list">\n${profitBullets
         .map((b) => `  <li><b>${esc(b.label)}.</b> ${esc(b.text)}</li>`)
         .join("\n")}\n</ul>`
     : "";
@@ -240,7 +240,7 @@ ${industrySectionsHtml}
 ${profitHtml}
 
 <h2 id="watch">What to watch</h2>
-<ul>
+<ul class="rd-list">
 ${watchBulletsHtml}
   <li><b>Related coverage.</b> See our reports on ${relatedLinksSentence}.</li>
 </ul>
@@ -253,6 +253,9 @@ ${watchBulletsHtml}
   .post-doc td.dn { color: #C0392B; font-weight: 700; }
   .post-doc td.pos { color: #1E8449; font-weight: 700; }
   .post-doc .yoy-wrap { margin-top: 32px; margin-bottom: 8px; }
+  .post-doc .rd-list { list-style: none; margin: 0 0 18px; padding: 0; }
+  .post-doc .rd-list li { margin: 0 0 10px; padding: 10px 14px; background: #F7F5EF; border-left: 3px solid #2563EB; border-radius: 6px; line-height: 1.55; }
+  .post-doc .rd-list li b { display: block; margin-bottom: 2px; }
 ${input.stockMove ? `  .post-doc .stock-move { margin: 4px 0 22px; padding: 10px 14px; background: ${input.stockMoveTone === "pos" ? "#EEF7F1" : "#FDF2F0"}; border-left: 4px solid ${input.stockMoveTone === "pos" ? "#1E8449" : "#C0392B"}; border-radius: 6px; }\n` : ""}  #${input.stripCode}-strip .stat-box:nth-child(1) .num { color: ${input.statBoxes[0].color} !important; }
   #${input.stripCode}-strip .stat-box:nth-child(2) .num { color: ${input.statBoxes[1].color} !important; }
   #${input.stripCode}-strip .stat-box:nth-child(3) .num { color: ${input.statBoxes[2].color} !important; }
