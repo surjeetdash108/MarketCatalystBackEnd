@@ -380,6 +380,29 @@ describe("money flow — R:R target = the first shown level on the trade's side,
     // A short above the pivot: the first S below entry is S1 98, not the pivot 100.
     expect(tradeLevels(false, bear(100.8, 101.2), piv, 101).target).toBe(98);
   });
+  it("does not flip-flop target and R:R when price sits on a level (buffer + 1-min rule)", () => {
+    // R1 = 102.00, buffer is max(0.01, 102 * 0.0005) = 0.051
+    // Price at 102.02 is within the buffer of R1, so target should still be 102 (R1), not jump to 104 (R2)
+    const tWithinBuf = tradeLevels(true, bull(98.8, 99), piv, 102.02);
+    expect(tWithinBuf.target).toBe(102);
+
+    // If price is 102.10 (past buffer) but bar within last minute had low < 102 (crossed back), target remains 102
+    const now = 1730000000000;
+    const barsCrossingBack = [
+      { t: now - 30_000, o: 102.15, h: 102.20, l: 101.90, c: 102.10 },
+      { t: now, o: 102.10, h: 102.15, l: 102.05, c: 102.10 },
+    ];
+    const tCrossedBack = tradeLevels(true, bull(98.8, 99), piv, 102.10, barsCrossingBack);
+    expect(tCrossedBack.target).toBe(102);
+
+    // Only once price is beyond buffer AND has not crossed back within last minute does target advance to R2 (104)
+    const barsClean = [
+      { t: now - 30_000, o: 102.10, h: 102.20, l: 102.08, c: 102.15 },
+      { t: now, o: 102.15, h: 102.25, l: 102.10, c: 102.20 },
+    ];
+    const tCleared = tradeLevels(true, bull(98.8, 99), piv, 102.20, barsClean);
+    expect(tCleared.target).toBe(104);
+  });
 });
 
 describe("money flow — confidence's VWAP part uses the live price", () => {

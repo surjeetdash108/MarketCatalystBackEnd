@@ -347,18 +347,62 @@ const MAX_LEVEL = 400;
  * first R / S the chart shows past the entry. Levels price has already passed
  * are skipped. No block → no levels.
  */
-export function tradeLevels(bull: boolean, blocks: OrderBlock[], piv: PivotLevels | null, price: number): TradeLevels {
+/**
+ * A level is only cleared if price has passed it by a small buffer (0.05% or at least
+ * 1 cent) AND has not crossed back across it within the last minute (60s). This prevents
+ * level and R:R flip-flopping when price sits on a level (item 3).
+ */
+export function isLevelCleared(
+  side: "R" | "S",
+  v: number,
+  price: number,
+  bars?: Array<Pick<RawBar, "t" | "o" | "h" | "l" | "c">>
+): boolean {
+  const buf = Math.max(0.01, v * 0.0005);
+  if (side === "R") {
+    if (price <= v + buf) return false;
+    if (bars && bars.length > 0) {
+      const lastT = bars[bars.length - 1].t;
+      const oneMinAgo = lastT - 60_000;
+      for (let i = bars.length - 1; i >= 0 && bars[i].t >= oneMinAgo; i--) {
+        if (bars[i].l < v) return false;
+      }
+    }
+    return true;
+  } else {
+    if (price >= v - buf) return false;
+    if (bars && bars.length > 0) {
+      const lastT = bars[bars.length - 1].t;
+      const oneMinAgo = lastT - 60_000;
+      for (let i = bars.length - 1; i >= 0 && bars[i].t >= oneMinAgo; i--) {
+        if (bars[i].h > v) return false;
+      }
+    }
+    return true;
+  }
+}
+
+export function tradeLevels(
+  bull: boolean,
+  blocks: OrderBlock[],
+  piv: PivotLevels | null,
+  price: number,
+  bars?: Array<Pick<RawBar, "t" | "o" | "h" | "l" | "c">>
+): TradeLevels {
   const ob = blocks.filter((b) => !b.mitigated && b.bull === bull).slice(-1)[0];
   if (!ob) return { zone: null, entry: null, stop: null, target: null, rr: null };
   const entry = bull ? ob.hi : ob.lo;
   const stop = bull ? ob.lo : ob.hi;
   let target: number | null = null;
   if (piv) {
-    const beyond = bull ? Math.max(entry, price) : Math.min(entry, price);
     for (let n = 1; n <= MAX_LEVEL; n++) {
       const v = pivotLevel(piv, bull ? "R" : "S", n);
       if (v == null || v <= 0) break;
-      if (bull ? v > beyond : v < beyond) { target = v; break; }
+      const beyondEntry = bull ? v > entry : v < entry;
+      if (beyondEntry && !isLevelCleared(bull ? "R" : "S", v, price, bars)) {
+        target = v;
+        break;
+      }
     }
   }
   const risk = Math.abs(entry - stop);
@@ -755,7 +799,7 @@ export function buildBoard(input: BoardIn): MoneyFlowBoard {
           : null;
     const last = w.reg[w.reg.length - 1];
     const blocks = orderBlocks(w.reg);
-    const lv = tradeLevels(bull, blocks, piv, w.price);
+    const lv = tradeLevels(bull, blocks, piv, w.price, w.reg);
     const m30 = change30m(w.reg, w.prevClose);
     const conf = last
       ? confidence({
