@@ -68,6 +68,7 @@ import { FmpService, filedThirteenFQuarters } from "../vendors/fmp/fmp.service";
 import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { isoDate } from "../common/date.util";
 import { etDate, isSessionEnded } from "../common/market-calendar.util";
+import { fetchOlderDaily, prependOlder, type DailyBar } from "./long-history";
 import {
   groupCandles,
   sliceRange,
@@ -273,6 +274,18 @@ const INTERVAL: Record<BarsInterval, IntervalSpec> = {
 };
 
 type BarsSource = "memory" | "firestore" | "vendor";
+
+/**
+ * Daily / weekly / monthly candles reach back to the stock's listing date: the
+ * stored 5-year (Polygon) doc is extended with FMP's older daily history
+ * (long-history.ts). The cap is far above any listed stock's history.
+ */
+export const FULL_HISTORY_MAX_BARS: Partial<Record<BarsInterval, number>> = { "1D": 30_000, "1W": 6_000, "1M": 1_500 };
+/** Older history is cached per ticker this long (it only changes on a split). */
+const OLDER_DAILY_TTL_MS = 24 * 60 * 60_000;
+const OLDER_DAILY_MAX_TICKERS = 150;
+/** A first (uncached) FMP fetch slower than this serves the 5 years now; the history lands in the cache for the next view. */
+const OLDER_DAILY_WAIT_MS = 6_000;
 
 export interface StoredBar {
   t: number;
@@ -625,13 +638,53 @@ export class OnDemandService implements OnModuleDestroy {
       spec.resolution,
       spec.fetchDays,
     );
+    const fullMax = FULL_HISTORY_MAX_BARS[interval];
+    const older = fullMax && doc.bars.length ? await this.olderDaily(ticker, doc.bars[0].t) : [];
     return {
       ticker,
       interval,
-      bars: this.groupedBars(doc, interval, spec),
+      bars: this.groupedBars(doc, interval, older.length ? { ...spec, maxBars: fullMax! } : spec, older),
       source,
       asOf: doc.createdAt,
     };
+  }
+
+  private readonly memOlderDaily = new Map<string, { bars: DailyBar[]; before: number; at: number }>();
+  private readonly olderDailyInflight = new Map<string, Promise<DailyBar[]>>();
+
+  /**
+   * The ticker's daily bars before `firstT` (the stored doc's first bar), from
+   * its listing date: memory cache → one coalesced FMP fetch. An uncached fetch
+   * that takes longer than OLDER_DAILY_WAIT_MS returns [] for this request (the
+   * 5-year window serves) and fills the cache when it finishes.
+   */
+  private async olderDaily(ticker: string, firstT: number): Promise<DailyBar[]> {
+    const hit = this.memOlderDaily.get(ticker);
+    if (hit && Date.now() - hit.at < OLDER_DAILY_TTL_MS && hit.before >= firstT) return hit.bars;
+    let p = this.olderDailyInflight.get(ticker);
+    if (!p) {
+      const beforeDay = etDate(new Date(firstT));
+      p = fetchOlderDaily((path) => this.fmp.request(path, { retries: 1 }), ticker, beforeDay)
+        .then((bars) => {
+          this.memOlderDaily.delete(ticker);
+          this.memOlderDaily.set(ticker, { bars, before: firstT, at: Date.now() });
+          while (this.memOlderDaily.size > OLDER_DAILY_MAX_TICKERS) {
+            const oldest = this.memOlderDaily.keys().next().value;
+            if (oldest === undefined) break;
+            this.memOlderDaily.delete(oldest);
+          }
+          return bars;
+        })
+        .finally(() => this.olderDailyInflight.delete(ticker));
+      this.olderDailyInflight.set(ticker, p);
+    }
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<DailyBar[]>((resolve) => { timer = setTimeout(() => resolve([]), OLDER_DAILY_WAIT_MS); });
+    try {
+      return await Promise.race([p, late]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /**
@@ -642,23 +695,27 @@ export class OnDemandService implements OnModuleDestroy {
    */
   private readonly grouped = new WeakMap<
     BarsDoc,
-    Map<BarsInterval, StoredBar[]>
+    Map<string, StoredBar[]>
   >();
 
   private groupedBars(
     doc: BarsDoc,
     interval: BarsInterval,
     spec: IntervalSpec,
+    older: readonly DailyBar[] = [],
   ): StoredBar[] {
     let perDoc = this.grouped.get(doc);
     if (!perDoc) {
       perDoc = new Map();
       this.grouped.set(doc, perDoc);
     }
-    let bars = perDoc.get(interval);
+    // Keyed by the older history too: the cache fills after the first answer.
+    const key = `${interval}|${older.length}`;
+    let bars = perDoc.get(key);
     if (!bars) {
-      bars = groupCandles(doc.bars, spec.grouping).slice(-spec.maxBars);
-      perDoc.set(interval, bars);
+      const all = older.length ? prependOlder(older as StoredBar[], doc.bars) : doc.bars;
+      bars = groupCandles(all, spec.grouping).slice(-spec.maxBars) as StoredBar[];
+      perDoc.set(key, bars);
     }
     return bars;
   }
