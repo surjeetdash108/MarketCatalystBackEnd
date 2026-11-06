@@ -69,6 +69,7 @@ import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
 import { isoDate } from "../common/date.util";
 import { etDate, isSessionEnded } from "../common/market-calendar.util";
 import { fetchOlderDaily, prependOlder, type DailyBar } from "./long-history";
+import { invisibleOnWhite } from "./logo-visibility";
 import {
   groupCandles,
   sliceRange,
@@ -2067,14 +2068,18 @@ export class OnDemandService implements OnModuleDestroy {
     ticker: string,
   ): Promise<{ data: Buffer; contentType: string } | null> {
     const mem = this.memLogo.get(ticker);
-    // Positive cache: 7 days. Negative cache (missing logo): 1 hour.
-    if (mem && Date.now() - mem.at < (mem.data ? 7 * 24 * 60 * 60_000 : 60 * 60_000)) {
+    // Positive cache: 1 day (a vendor that adds a logo shows within a day). Negative cache (missing logo): 1 hour.
+    if (mem && Date.now() - mem.at < (mem.data ? 24 * 60 * 60_000 : 60 * 60_000)) {
       return mem.data;
     }
     this.recordUsage(ticker);
 
+    // A white mark on a transparent background (made for dark pages) is an empty
+    // square on the app's white logo tile: skip it and try the next source.
+    const usable = (c: { data: Buffer; contentType: string } | null) => (c && !invisibleOnWhite(c.data) ? c : null);
+
     // 1. Polygon branding
-    let img = await this.polygon.getBrandingImage(ticker).catch(() => null);
+    let img = usable(await this.polygon.getBrandingImage(ticker).catch(() => null));
 
     // 2. FMP image CDN (fast public CDN, high coverage including ETFs)
     if (!img) {
@@ -2087,7 +2092,7 @@ export class OnDemandService implements OnModuleDestroy {
           const contentType =
             fmpResp.headers.get("content-type") ?? "image/png";
           const data = Buffer.from(await fmpResp.arrayBuffer());
-          img = { data, contentType };
+          img = usable({ data, contentType });
         }
       } catch {
         // Fall back to Parqet
@@ -2105,7 +2110,7 @@ export class OnDemandService implements OnModuleDestroy {
           const contentType =
             parqetResp.headers.get("content-type") ?? "image/png";
           const data = Buffer.from(await parqetResp.arrayBuffer());
-          img = { data, contentType };
+          img = usable({ data, contentType });
         }
       } catch {
         // Fall back to null
