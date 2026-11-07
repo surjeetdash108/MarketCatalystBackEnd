@@ -457,6 +457,8 @@ export class OnDemandService implements OnModuleDestroy {
   private readonly memRsRating = new Map<string, { rating: number | null; at: number }>();
   /** Close 30 calendar days back per `ticker|ET date` (peers' monthly change). */
   private readonly memMonthBase = new Map<string, { close: number | null; at: number }>();
+  /** Last close of the PRIOR calendar year per `ticker|ET date` (peers' YTD base). */
+  private readonly memYtdBase = new Map<string, { close: number | null; at: number }>();
   private readonly memCompanySummary = new Map<
     string,
     { data: Record<string, unknown>; at: number }
@@ -1765,6 +1767,8 @@ export class OnDemandService implements OnModuleDestroy {
       rsRating: number | null;
       weeklyChange: number | null;
       monthlyChange: number | null;
+      /** Last close of the prior calendar year — YTD = price / this − 1, measured by the reader against the price it shows. */
+      ytdBaseClose?: number | null;
     }>
   > {
     const syms = [
@@ -1782,6 +1786,7 @@ export class OnDemandService implements OnModuleDestroy {
       rsRating: number | null;
       weeklyChange: number | null;
       monthlyChange: number | null;
+      ytdBaseClose?: number | null;
     }>();
 
     const missing: string[] = [];
@@ -1822,7 +1827,7 @@ export class OnDemandService implements OnModuleDestroy {
     }
 
     if (missing.length === 0) {
-      return this.withRsRating(await this.withLiveMonthChange(syms.map((s) => results.get(s)!).filter(Boolean)));
+      return this.withYtdBase(await this.withRsRating(await this.withLiveMonthChange(syms.map((s) => results.get(s)!).filter(Boolean))));
     }
 
     try {
@@ -1894,7 +1899,48 @@ export class OnDemandService implements OnModuleDestroy {
       this.logger.warn(`getPeersSummary error: ${(err as Error)?.message ?? err}`);
     }
 
-    return this.withRsRating(await this.withLiveMonthChange(syms.map((s) => results.get(s)!).filter(Boolean)));
+    return this.withYtdBase(await this.withRsRating(await this.withLiveMonthChange(syms.map((s) => results.get(s)!).filter(Boolean))));
+  }
+
+  /**
+   * Attach each row's YTD base: the last close on/before 31 Dec of the prior ET
+   * year. Returned as a price rather than a percentage so the reader can measure
+   * YTD to the SAME live price it displays (the stored % would end at whichever
+   * bar was last written). The base is fixed for the whole year, so it is cached
+   * for hours. A ticker with no bar in the window (listed this year, no data)
+   * gets null — the UI shows a dash rather than a made-up figure.
+   */
+  private async withYtdBase<T extends { ticker: string; ytdBaseClose?: number | null }>(rows: T[]): Promise<T[]> {
+    if (rows.length === 0) return rows;
+    const etIso = (ms: number) =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ms));
+    const now = Date.now();
+    const year = Number(etIso(now).slice(0, 4));
+    const target = `${year - 1}-12-31`;
+    const from = `${year - 1}-12-15`;
+
+    const baseClose = async (sym: string): Promise<number | null> => {
+      const key = `${sym}|${target}`;
+      const hit = this.memYtdBase.get(key);
+      if (hit && now - hit.at < 6 * 3_600_000) return hit.close;
+      const bars = await this.polygon.getAggsRange(sym, from, target).catch(() => [] as PolygonAggBar[]);
+      const base = bars
+        .filter((b) => b.c != null && b.c > 0 && etIso(b.t) <= target)
+        .sort((a, b) => a.t - b.t)
+        .at(-1);
+      const close = base?.c ?? null;
+      this.memYtdBase.set(key, { close, at: now });
+      return close;
+    };
+
+    for (let i = 0; i < rows.length; i += 5) {
+      await Promise.all(
+        rows.slice(i, i + 5).map(async (r) => {
+          r.ytdBaseClose = await baseClose(r.ticker);
+        }),
+      );
+    }
+    return rows;
   }
 
   /**

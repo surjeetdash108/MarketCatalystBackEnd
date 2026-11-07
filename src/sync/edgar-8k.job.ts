@@ -69,6 +69,13 @@ const MATCH_WINDOW_DAYS = 3;
  * its previous report, which is the forward view for the one coming.
  */
 const PRIOR_FILING_DAYS = 120;
+/**
+ * How long an after-close announcement with no price reaction yet keeps being
+ * re-read. Kept within WEEKDAY_LOOKBACK_DAYS so the reporter is still inside the
+ * window this job scans, and short so a ticker whose next bar never arrives
+ * (halt, delisting) stops costing an SEC fetch every run.
+ */
+const REACTION_RETRY_DAYS = 4;
 
 /**
  * How far FORWARD the weekend sweep also looks.
@@ -255,20 +262,32 @@ export class Edgar8KJob implements OnModuleInit {
           .where("announceDate", ">=", annSince).where("announceDate", "<=", until).get(),
       ]);
 
+      const today = isoDate(now);
+      const days = (a: string, b: string) =>
+        Math.abs(
+          (new Date(a + "T00:00:00Z").getTime() - new Date(b + "T00:00:00Z").getTime()) / 86_400_000,
+        );
+
       const annByTicker = new Map<string, string[]>();
       for (const d of have.docs) {
         const x = d.data();
         const t = x.ticker as string | undefined;
         const a = x.announceDate as string | undefined;
         if (!t || !a) continue;
+        // An after-close report is filed the evening it prints, when the NEXT
+        // session's bar — which IS the reaction — does not exist yet, so its
+        // reactionPct is saved as null. Counting that doc as "covered" meant it
+        // was never revisited (the round-robin only returns every ~6 trading
+        // days), leaving Reaction blank. Leave it out of `filed` for a few days
+        // so the ticker is re-read and the reaction filled in once the bar lands.
+        const reactionPending =
+          x.session === "AMC" &&
+          x.reactionPct == null &&
+          a < today &&
+          days(today, a) <= REACTION_RETRY_DAYS;
+        if (reactionPending) continue;
         (annByTicker.get(t) ?? annByTicker.set(t, []).get(t)!).push(a);
       }
-
-      const today = isoDate(now);
-      const days = (a: string, b: string) =>
-        Math.abs(
-          (new Date(a + "T00:00:00Z").getTime() - new Date(b + "T00:00:00Z").getTime()) / 86_400_000,
-        );
 
       const missing = new Set<string>();
       for (const d of events.docs) {
