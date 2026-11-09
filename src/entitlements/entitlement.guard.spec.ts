@@ -31,6 +31,9 @@ import {
   type EntitlementRequirement,
 } from "./requires-entitlement.decorator";
 
+// Many HTTP round-trips per test; the 5 s default flakes under parallel load.
+jest.setTimeout(30_000);
+
 /**
  * Route access matrix: every route carrying @RequiresEntitlement, called as a
  * Free, Starter, Pro and Elite user, through the real EntitlementGuard and

@@ -55,33 +55,28 @@ function periodEnd(iso: unknown): number {
   return Date.parse(iso.length === 10 ? `${iso}T23:59:59Z` : iso);
 }
 
-/** MRR per user from SUCCESS payments covering `now` (annual ÷ 12), minor units. */
-export function mrrByUser(
-  payments: Array<Record<string, unknown>>,
-  now: number,
-): Map<string, number> {
+/**
+ * MRR per user, minor units. WHO counts comes from payments: a SUCCESS payment
+ * whose paid period covers `now`. The RATE is the catalog list price of the
+ * plan and interval that payment paid for (annual ÷ 12): a prorated upgrade
+ * charge or a one-off first-invoice discount is real revenue but not the
+ * recurring rate.
+ */
+export function mrrByUser(payments: Array<Record<string, unknown>>, now: number): Map<string, number> {
   const latest = new Map<string, Record<string, unknown>>();
   for (const p of payments) {
     const uid = typeof p.userId === "string" ? p.userId : null;
-    if (
-      !uid ||
-      p.paymentStatus !== "SUCCESS" ||
-      p.billingReason === "subscription_update"
-    )
-      continue;
+    if (!uid || p.paymentStatus !== "SUCCESS") continue;
     const end = periodEnd(p.subscriptionExpiryDate);
     if (!Number.isFinite(end) || end < now) continue;
     const prev = latest.get(uid);
-    if (!prev || String(p.paymentDate ?? "") > String(prev.paymentDate ?? ""))
-      latest.set(uid, p);
+    if (!prev || String(p.paymentDate ?? "") > String(prev.paymentDate ?? "")) latest.set(uid, p);
   }
   const out = new Map<string, number>();
   for (const [uid, p] of latest) {
-    // Use the catalog price for the paid plan/interval: a discounted first
-    // invoice is real revenue but not the recurring amount.
-    const interval = String(p.billingCycle ?? "monthly") as BillingInterval;
-    const amount = typeof p.amount === "number" ? p.amount : 0;
-    out.set(uid, interval === "annual" ? Math.round(amount / 12) : amount);
+    const interval = (p.billingCycle === "annual" ? "annual" : "monthly") as BillingInterval;
+    const list = catalogPrice(typeof p.planId === "string" ? p.planId : "", interval)?.amount ?? 0;
+    out.set(uid, interval === "annual" ? Math.round(list / 12) : list);
   }
   return out;
 }

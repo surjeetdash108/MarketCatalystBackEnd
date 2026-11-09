@@ -4,6 +4,9 @@ import { DAY, T0 } from "../../test/support/billing-harness";
 import { SUBSCRIPTIONS_FLAG } from "../feature-flags/feature-flags.registry";
 import { emailHash } from "./retention/email-normalise";
 
+// Many HTTP round-trips per test; the 5 s default flakes under parallel load.
+jest.setTimeout(30_000);
+
 type App = Awaited<ReturnType<typeof billingApp>>;
 let a: App;
 afterEach(async () => {

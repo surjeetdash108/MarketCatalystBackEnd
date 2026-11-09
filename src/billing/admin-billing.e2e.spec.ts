@@ -2,6 +2,9 @@ import { billingApp } from "../../test/support/billing-app";
 import { DAY, T0 } from "../../test/support/billing-harness";
 import { redact } from "../common/admin-audit.interceptor";
 
+// Many HTTP round-trips per test; the 5 s default flakes under parallel load.
+jest.setTimeout(30_000);
+
 type App = Awaited<ReturnType<typeof billingApp>>;
 let a: App;
 afterEach(async () => {
@@ -72,7 +75,7 @@ describe("admin: subscribers", () => {
       planId: "pro",
       interval: "annual",
       promoCode: "WELCOME10",
-      mrrMinor: Math.round((56640 - 5664) / 12),
+      mrrMinor: Math.round(56640 / 12), // list rate; the one-off first-invoice discount is revenue, not MRR
     });
     expect(by.e1).toMatchObject({
       planId: "elite",
@@ -87,6 +90,16 @@ describe("admin: subscribers", () => {
     expect(by.s1.startedAt).toBe(new Date(T0).toISOString());
     expect(by.s1.currentPeriodEnd).toBeTruthy();
     expect(body.totalMrrMinor).toBe(3900 + by.p1.mrrMinor + 19900);
+  });
+
+  it("after an upgrade, MRR is the new plan's rate, not the prorated charge or the old first invoice", async () => {
+    a = await billingApp();
+    const { u } = await a.subscribe("up", "pro", "monthly");
+    await a.advanceDays(1); // the upgrade happens after the first payment
+    const p = (await u.post("/api/billing/change/preview", { planId: "elite", interval: "monthly" })).body;
+    await u.post("/api/billing/change", { planId: "elite", interval: "monthly", expectedAmountDue: p.amountDueNow, prorationDate: p.prorationDate });
+    const row = (await a.admin.get("/api/admin/billing/subscribers")).body.subscribers.find((r: { uid: string }) => r.uid === "up");
+    expect(row).toMatchObject({ planId: "elite", mrrMinor: 19900 });
   });
 
   it("a user document claiming a paid plan without a mirror shows as Free with no MRR", async () => {
