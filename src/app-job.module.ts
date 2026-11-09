@@ -14,6 +14,7 @@ import { SyncModule } from "./sync/sync.module";
 import { ApiHealthModule } from "./api-health/api-health.module";
 import { BlogsModule } from "./blogs/blogs.module";
 import { BillingCoreModule } from "./billing/billing-core.module";
+import { AccountCoreModule } from "./account/account-core.module";
 import { EntitlementsModule } from "./entitlements/entitlements.module";
 
 /**
@@ -42,6 +43,7 @@ import { EntitlementsModule } from "./entitlements/entitlements.module";
     // MarketData/Live declare EntitlementGuard, so the job context needs them
     // to resolve even though it serves no HTTP.
     BillingCoreModule,
+    AccountCoreModule,
     EntitlementsModule,
     LiveModule,
     MarketDataModule,

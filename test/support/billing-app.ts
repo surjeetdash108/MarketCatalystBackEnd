@@ -34,13 +34,27 @@ import { FakeBillingProvider } from "../../src/billing/provider/fake/fake-billin
 import { BillingReconcileJob } from "../../src/billing/reconcile.job";
 import { RetentionService } from "../../src/billing/retention/retention.service";
 import { FakeAuth, T0, configOf } from "./billing-harness";
+import type { AuthTokenInfo } from "../../src/common/auth-token";
+import { EmailVerificationService } from "../../src/account/email-verification.service";
+import { AccountController } from "../../src/account/account.controller";
 import { FakeFirestore } from "./fake-firestore";
 
+/** Test auth: `x-test-uid` header; the token info mirrors the FakeAuth record (as a fresh ID token would). */
+let currentAuth: FakeAuth | null = null;
 class HeaderAuthGuard implements CanActivate {
   canActivate(ctx: ExecutionContext): boolean {
-    const req = ctx.switchToHttp().getRequest<{ headers: Record<string, string>; uid?: string }>();
-    if (!req.headers["x-test-uid"]) return false;
-    req.uid = req.headers["x-test-uid"];
+    const req = ctx.switchToHttp().getRequest<{ headers: Record<string, string>; uid?: string; authToken?: AuthTokenInfo }>();
+    const uid = req.headers["x-test-uid"];
+    if (!uid) return false;
+    req.uid = uid;
+    const u = currentAuth?.users.get(uid);
+    req.authToken = {
+      uid,
+      email: u?.email ?? null,
+      emailVerified: u?.emailVerified === true,
+      claims: { ...(u?.customClaims ?? {}) },
+      signInProvider: u?.provider ?? "password",
+    };
     return true;
   }
 }
@@ -63,6 +77,7 @@ export interface BillingAppOptions {
 export async function billingApp(opts: BillingAppOptions = {}) {
   const fs = new FakeFirestore();
   const auth = new FakeAuth();
+  currentAuth = auth;
   const firebase = { firestore: fs, auth } as unknown as FirebaseAdminService;
   const clock = new AppClock();
   const env = { APP_URL: "http://app.test", FIREBASE_PROJECT_ID: "demo-billing", ...(opts.env ?? {}) };
@@ -72,7 +87,7 @@ export async function billingApp(opts: BillingAppOptions = {}) {
   const sender = new ConsoleEmailSender();
 
   const moduleRef = await Test.createTestingModule({
-    controllers: [BillingController, BillingWebhookController, MeEntitlementsController, FakeBillingController, AdminBillingController],
+    controllers: [BillingController, BillingWebhookController, MeEntitlementsController, FakeBillingController, AdminBillingController, AccountController],
     providers: [
       { provide: FirebaseAdminService, useValue: firebase },
       { provide: ConfigService, useValue: config },
@@ -94,6 +109,7 @@ export async function billingApp(opts: BillingAppOptions = {}) {
       RetentionService,
       AdminBillingService,
       BillingReconcileJob,
+      EmailVerificationService,
     ],
   })
     .overrideGuard(FirebaseAuthGuard)
@@ -117,8 +133,8 @@ export async function billingApp(opts: BillingAppOptions = {}) {
   };
 
   /** Signs up a user (auth record + email) the way the app would. */
-  function user(uid: string, email = `${uid}@example.com`) {
-    auth.add(uid, email);
+  function user(uid: string, email = `${uid}@example.com`, opts: { emailVerified?: boolean; provider?: string } = {}) {
+    auth.add(uid, email, opts);
     return as(uid);
   }
 

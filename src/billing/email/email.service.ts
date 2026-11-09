@@ -266,4 +266,23 @@ export class EmailService {
       `Your one-time code for your first year: ${p.code}`,
     ]);
   }
+
+  /** 6-digit email verification code (no billing footer). */
+  async verificationCode(
+    to: string,
+    code: string,
+    minutes: number,
+  ): Promise<void> {
+    await this.sender.send({
+      tag: "verification_code",
+      to,
+      from: this.from,
+      replyTo: this.replyTo,
+      subject: `Your MarketCatalyst verification code: ${code}`,
+      text: [
+        `Your verification code is ${code}.`,
+        `It expires in ${minutes} minutes. If you didn't ask for it, ignore this email.`,
+      ].join("\n"),
+    });
+  }
 }

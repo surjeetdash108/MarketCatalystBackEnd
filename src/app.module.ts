@@ -18,6 +18,8 @@ import { ApiHealthModule } from "./api-health/api-health.module";
 import { BlogsModule } from "./blogs/blogs.module";
 import { McpModule } from "./mcp/mcp.module";
 import { BillingCoreModule } from "./billing/billing-core.module";
+import { AccountCoreModule } from "./account/account-core.module";
+import { AccountModule } from "./account/account.module";
 import { BillingModule } from "./billing/billing.module";
 import { EntitlementsModule } from "./entitlements/entitlements.module";
 
@@ -105,6 +107,8 @@ const workerModules = isLiveRole
     // webhook. Both roles — the live service serves /api/billing/* and
     // /api/me/entitlements; the worker runs the reconcile job.
     BillingCoreModule,
+    AccountCoreModule,
+    AccountModule,
     EntitlementsModule,
     BillingModule,
     ...workerModules,

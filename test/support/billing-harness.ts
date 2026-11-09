@@ -20,9 +20,15 @@ export const T0 = Date.parse("2026-11-10T12:00:00Z");
 export const DAY = 86_400_000;
 
 export class FakeAuth {
-  readonly users = new Map<string, { uid: string; email: string | null; customClaims: Record<string, unknown>; emailVerified?: boolean }>();
-  add(uid: string, email: string | null) {
-    this.users.set(uid, { uid, email, customClaims: {} });
+  readonly users = new Map<string, { uid: string; email: string | null; customClaims: Record<string, unknown>; emailVerified?: boolean; provider?: string }>();
+  add(uid: string, email: string | null, opts: { emailVerified?: boolean; provider?: string } = {}) {
+    this.users.set(uid, { uid, email, customClaims: {}, emailVerified: opts.emailVerified ?? true, provider: opts.provider ?? "password" });
+  }
+  updateUser(uid: string, patch: { emailVerified?: boolean; email?: string }) {
+    const u = this.users.get(uid);
+    if (!u) return Promise.reject(new Error("auth/user-not-found"));
+    Object.assign(u, patch);
+    return Promise.resolve(u);
   }
   getUser(uid: string) {
     const u = this.users.get(uid);
