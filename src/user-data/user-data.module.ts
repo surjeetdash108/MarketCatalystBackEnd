@@ -4,6 +4,7 @@ import { AiUserController } from "./ai-user.controller";
 import { FeatureRequestsController } from "./feature-requests.controller";
 import { NotificationsController } from "./notifications.controller";
 import { PortfolioController } from "./portfolio.controller";
+import { StreamTicketController } from "./stream-ticket.controller";
 import { ProfileController } from "./profile.controller";
 import { SessionController } from "./session.controller";
 import { SettingsController } from "./settings.controller";
@@ -31,6 +32,7 @@ import { WhoamiUserController } from "./whoami-user.controller";
     ProfileController,
     NotificationsController,
     FeatureRequestsController,
+    StreamTicketController,
   ],
 })
 export class UserDataModule {}

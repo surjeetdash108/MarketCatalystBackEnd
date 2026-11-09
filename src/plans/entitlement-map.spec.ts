@@ -25,13 +25,20 @@ function catalogKeysInUi(): Set<string> {
   return new Set([...src.matchAll(/\{ key: "([a-zA-Z]+)"/g)].map((m) => m[1]));
 }
 
+/**
+ * Parses SLUG_ENTITLEMENT out of the UI gate file. Throws — never returns an
+ * empty list — when the file or the map is missing: an empty list made every
+ * assertion below pass vacuously while the UI had no gate at all.
+ */
 function slugMappings(): Array<{ slug: string; key: string }> {
   if (!existsSync(UI_GATE_FILE)) {
-    return [];
+    throw new Error(`UI gate file missing: ${UI_GATE_FILE}`);
   }
   const src = readFileSync(UI_GATE_FILE, "utf8");
   const start = src.indexOf("SLUG_ENTITLEMENT");
-  if (start === -1) return [];
+  if (start === -1) {
+    throw new Error(`SLUG_ENTITLEMENT not found in ${UI_GATE_FILE}`);
+  }
   const block = src.slice(start, src.indexOf("};", start));
   return [...block.matchAll(/"?([a-zA-Z-]+)"?: "([a-zA-Z]+)"/g)]
     .map((m) => ({ slug: m[1], key: m[2] }))
@@ -90,6 +97,13 @@ describe("frontend catalog mirror", () => {
 });
 
 describe("SLUG_ENTITLEMENT", () => {
+  it("exists in the UI and maps at least the core screens", () => {
+    const slugs = new Set(slugMappings().map((m) => m.slug));
+    for (const s of ["dashboard", "screener", "portfolio", "insider"]) {
+      expect(slugs.has(s)).toBe(true);
+    }
+  });
+
   it("maps every screen to a key that exists", () => {
     const valid = new Set(ENTITLEMENTS.map((e) => e.key));
     const bad = slugMappings().filter((m) => !valid.has(m.key));

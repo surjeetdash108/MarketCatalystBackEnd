@@ -89,6 +89,7 @@ export class SyncController {
     private readonly firebase: FirebaseAdminService,
   ) {}
 
+  @UseGuards(AdminGuard)
   @Get("jobs")
   async jobs() {
     const registered = this.registry.list();
@@ -152,6 +153,7 @@ export class SyncController {
     });
   }
 
+  @UseGuards(AdminGuard)
   @Get("status")
   async status() {
     try {
@@ -168,6 +170,7 @@ export class SyncController {
     }
   }
 
+  @UseGuards(AdminGuard)
   @Get(":job/status")
   async jobStatus(@Param("job") job: string) {
     try {

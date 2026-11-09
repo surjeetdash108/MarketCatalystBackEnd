@@ -1,5 +1,6 @@
 import { Controller, Get, Header } from "@nestjs/common";
 import { LandingTapeService, type LandingTape } from "./landing-tape.service";
+import { Public } from "../common/public.decorator";
 
 /**
  * Public, anonymous market figures for the marketing site's hero.
@@ -17,6 +18,7 @@ export class LandingTapeController {
   constructor(private readonly landing: LandingTapeService) {}
 
   /** GET /public/landing-tape */
+  @Public("marketing-site ticker tape of delayed index prices, read before sign-in")
   @Get("landing-tape")
   @Header(
     "Cache-Control",

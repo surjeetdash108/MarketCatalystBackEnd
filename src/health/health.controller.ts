@@ -2,6 +2,7 @@ import { Controller, Get } from "@nestjs/common";
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { Public } from "../common/public.decorator";
 
 function resolveBuildInfo(): { commit: string; buildTime: string } {
   let commit =
@@ -61,6 +62,7 @@ const BUILD_INFO = resolveBuildInfo();
 
 @Controller("health")
 export class HealthController {
+  @Public("Cloud Run startup and liveness probes")
   @Get()
   check() {
     return {

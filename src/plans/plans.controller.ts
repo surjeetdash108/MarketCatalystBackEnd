@@ -15,6 +15,7 @@ import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
 import { PlansService } from "./plans.service";
 import { SubscriptionsService } from "./subscriptions.service";
 import { ENTITLEMENT_KEYS, type EntitlementKey } from "./plans.registry";
+import { Public } from "../common/public.decorator";
 
 /**
  * Which FF_* release flag governs each entitlement.
@@ -69,6 +70,7 @@ export class PlansController {
   ) {}
 
   /** Public pricing table. Amounts are MINOR units (cents), matching Stripe. */
+  @Public("pricing table; the marketing site and signup read it before sign-in")
   @Get("plans")
   async listPlans() {
     return { plans: await this.plans.list() };

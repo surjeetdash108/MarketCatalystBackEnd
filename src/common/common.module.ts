@@ -11,6 +11,8 @@ import { NotificationsService } from "./notifications.service";
 import { SyncMetaService } from "./sync-meta.service";
 import { SyncRegistry } from "./sync-registry.service";
 import { UserSessionService } from "./user-session.service";
+import { StreamTicketService } from "./stream-ticket.service";
+import { StreamTicketGuard } from "./stream-ticket.guard";
 
 @Global()
 @Module({
@@ -21,6 +23,8 @@ import { UserSessionService } from "./user-session.service";
     FirebaseAuthGuard,
     FirebaseAdminService,
     UserSessionService,
+    StreamTicketService,
+    StreamTicketGuard,
     SyncRegistry,
     SyncMetaService,
     NotificationsService,
@@ -36,6 +40,8 @@ import { UserSessionService } from "./user-session.service";
     FirebaseAuthGuard,
     FirebaseAdminService,
     UserSessionService,
+    StreamTicketService,
+    StreamTicketGuard,
     SyncRegistry,
     SyncMetaService,
     NotificationsService,

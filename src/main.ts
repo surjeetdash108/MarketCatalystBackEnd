@@ -3,6 +3,7 @@ import { Logger } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import * as Sentry from "@sentry/node";
 import { json, urlencoded } from "express";
+import { createGlobalValidationPipe } from "./common/validation";
 import { AppModule } from "./app.module";
 
 Sentry.init({
@@ -78,6 +79,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
   app.use(json({ limit: "32mb" }));
   app.use(urlencoded({ limit: "32mb", extended: true }));
+  app.useGlobalPipes(createGlobalValidationPipe());
   app.enableCors(corsOptions());
   app.enableShutdownHooks();
   const port = Number(process.env.PORT ?? 4400);
