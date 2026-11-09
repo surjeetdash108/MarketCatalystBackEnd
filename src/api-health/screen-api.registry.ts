@@ -797,6 +797,23 @@ export const API_CATALOG = {
     store: ["promo_codes"],
     check: { skip: "needs the billing provider" },
   },
+  "GET /api/billing/contact": {
+    summary:
+      "The user's mobile number and product-updates opt-in (backend-only customer record).",
+    store: ["customers"],
+  },
+  "POST /api/billing/contact": {
+    summary:
+      "Edits the mobile number (E.164; sent to the billing provider) and the product-updates opt-in.",
+    store: ["customers"],
+    check: { skip: "user write" },
+  },
+  "POST /api/admin/billing/subscribers/:uid/phone/reveal": {
+    summary:
+      "Reveals a subscriber's full mobile number (admin; every reveal is audited).",
+    store: ["customers", "admin_audit"],
+    check: { skip: "admin write (audited)" },
+  },
   "GET /api/billing/fake/clock": {
     summary: "Fake provider: the simulated clock.",
     store: ["backend-only billing collections"],

@@ -30,6 +30,7 @@ import {
   ChangePlanDto,
   CheckoutDto,
   CheckoutPreviewDto,
+  ContactDto,
   PlanTargetDto,
   PromoPreviewDto,
 } from "./billing.dto";
@@ -176,6 +177,17 @@ export class BillingController {
   ) {
     await this.refuseStaff(token);
     return this.retention.accept(uid);
+  }
+
+  @Get("contact")
+  contact(@CurrentUser() uid: string) {
+    return this.billing.contact(uid);
+  }
+
+  @Post("contact")
+  @HttpCode(200)
+  updateContact(@CurrentUser() uid: string, @Body() body: ContactDto) {
+    return this.billing.updateContact(uid, body);
   }
 
   @Get("summary")

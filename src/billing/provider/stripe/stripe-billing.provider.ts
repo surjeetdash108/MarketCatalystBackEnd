@@ -89,6 +89,14 @@ export class StripeBillingProvider implements BillingProvider {
     return this.todo("setCustomerMetadata");
   }
 
+  updateCustomerContact(
+    _customerId: string,
+    _contact: { phone: string },
+  ): Promise<void> {
+    // TODO stripe.customers.update(customerId, { phone })
+    return this.todo("updateCustomerContact");
+  }
+
   previewCheckout(_input: {
     price: PriceRef;
     discount: AppliedDiscount | null;

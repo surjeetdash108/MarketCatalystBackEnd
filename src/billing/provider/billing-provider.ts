@@ -58,6 +58,11 @@ export interface BillingProvider {
     customerId: string,
     metadata: Record<string, string>,
   ): Promise<void>;
+  /** The customer's phone on the provider's record (no verification). */
+  updateCustomerContact(
+    customerId: string,
+    contact: { phone: string },
+  ): Promise<void>;
 
   // ── checkout ───────────────────────────────────────────────────────────
   /** Price of a new subscription incl. tax for the billing region (Stripe: automatic tax). */

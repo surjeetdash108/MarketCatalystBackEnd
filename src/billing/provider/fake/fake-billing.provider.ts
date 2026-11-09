@@ -90,6 +90,7 @@ interface FakeCustomer {
   createdAt: string;
   /** Full billing details (name, address, phone) — kept by the provider only. */
   billing?: BillingDetails;
+  phone?: string;
 }
 
 interface FakeAction {
@@ -352,6 +353,16 @@ export class FakeBillingProvider implements BillingProvider {
     await this.write(C.customers, c);
   }
 
+  async updateCustomerContact(
+    customerId: string,
+    contact: { phone: string },
+  ): Promise<void> {
+    const c = await this.mustCustomer(customerId);
+    c.phone = contact.phone;
+    if (c.billing) c.billing.phone = contact.phone;
+    await this.write(C.customers, c);
+  }
+
   async getCustomer(customerId: string): Promise<FakeCustomer | null> {
     return this.read<FakeCustomer>(C.customers, customerId);
   }
@@ -448,6 +459,7 @@ export class FakeBillingProvider implements BillingProvider {
       // The provider (not us) keeps the full billing details.
       const c = await this.mustCustomer(input.customerId);
       c.billing = JSON.parse(JSON.stringify(input.billing)) as BillingDetails;
+      c.phone = input.billing.phone;
       await this.write(C.customers, c);
     }
     const session: CheckoutSession & {

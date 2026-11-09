@@ -120,3 +120,8 @@ export class PriceChangeNoticeDto extends PlanTargetDto {
   @IsInt() @Min(1) newAmount: number;
   @IsISO8601() effectiveAt: string;
 }
+
+export class ContactDto {
+  @IsOptional() @IsString() @MaxLength(32) phone?: string;
+  @IsOptional() @IsBoolean() marketingOptIn?: boolean;
+}

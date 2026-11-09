@@ -58,12 +58,10 @@ describe("checkout preview (step 2 summary)", () => {
   it("returns the renewal date/price, consent text+version and the refund policy", async () => {
     a = await billingApp();
     const p = (
-      await a
-        .user("p2")
-        .post("/api/billing/checkout/preview", {
-          planId: "elite",
-          interval: "annual",
-        })
+      await a.user("p2").post("/api/billing/checkout/preview", {
+        planId: "elite",
+        interval: "annual",
+      })
     ).body;
     expect(p.renewalAmount).toBe(179100);
     expect(p.renewsAt).toBe("2027-11-10T12:00:00.000Z");

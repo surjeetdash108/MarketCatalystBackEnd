@@ -765,4 +765,57 @@ export class BillingService {
     this.priceRef(input.planId, input.interval);
     return this.promos.preview({ ...input, uid, ip });
   }
+
+  // ── contact (mobile number) ───────────────────────────────────────────
+
+  /** The user's own billing contact (backend-only customer record). */
+  async contact(uid: string) {
+    const c =
+      (await this.db.collection("customers").doc(uid).get()).data() ?? {};
+    return {
+      phone: (c.phone as string) ?? null,
+      marketingOptIn: (c.marketingOptIn as
+        { optedIn: boolean; at: string } | undefined) ?? {
+        optedIn: false,
+        at: null,
+      },
+    };
+  }
+
+  /** Edits the mobile number / product-updates opt-in; the phone is sent to the provider as the customer phone. */
+  async updateContact(
+    uid: string,
+    input: { phone?: string; marketingOptIn?: boolean },
+  ) {
+    const ref = this.db.collection("customers").doc(uid);
+    const c = (await ref.get()).data() ?? {};
+    const now = this.clock.nowIso();
+    const patch: Record<string, unknown> = { uid };
+    if (input.phone !== undefined) {
+      const phone = normaliseE164(input.phone);
+      if (!phone)
+        throw new BadRequestException({
+          statusCode: 400,
+          code: "phone_invalid",
+          message: "Enter a valid mobile number.",
+        });
+      patch.phone = phone;
+      patch.phoneUpdatedAt = now;
+      const provider = this.access.configuredProvider;
+      if (
+        provider &&
+        c.customerId &&
+        (c.provider == null || c.provider === provider.name)
+      ) {
+        await provider.updateCustomerContact(String(c.customerId), { phone });
+      }
+    }
+    if (input.marketingOptIn !== undefined)
+      patch.marketingOptIn = {
+        optedIn: input.marketingOptIn === true,
+        at: now,
+      };
+    await ref.set(patch, { merge: true });
+    return this.contact(uid);
+  }
 }

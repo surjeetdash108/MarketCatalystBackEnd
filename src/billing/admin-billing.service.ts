@@ -1,4 +1,5 @@
 import { StaffAccessService } from "../account/staff-access.service";
+import { maskPhone } from "./checkout/phone";
 import {
   BadRequestException,
   Injectable,
@@ -222,7 +223,7 @@ export class AdminBillingService {
   async subscriber(uid: string) {
     const row = (await this.subscribers()).find((r) => r.uid === uid);
     if (!row) throw new NotFoundException("subscriber not found");
-    const [payments, history, effective, mirror] = await Promise.all([
+    const [payments, history, effective, mirror, customer] = await Promise.all([
       this.firebase.firestore
         .collection("payments")
         .where("userId", "==", uid)
@@ -233,10 +234,21 @@ export class AdminBillingService {
         .get(),
       this.subscriptions.forUser(uid),
       this.firebase.firestore.collection("subscriptions").doc(uid).get(),
+      this.firebase.firestore.collection("customers").doc(uid).get(),
     ]);
+    const c = customer.data() ?? {};
     return {
       ...row,
       mirror: mirror.exists ? mirror.data() : null,
+      // Renewal consent recorded at checkout (time, text version, plan, interval, price, IP).
+      consent:
+        (mirror.data()?.consent as Record<string, unknown> | undefined) ?? null,
+      // Masked except the last 4 digits; the full number only via the audited reveal.
+      phoneMasked: maskPhone((c.phone as string) ?? null),
+      marketingOptIn:
+        (c.marketingOptIn as Record<string, unknown> | undefined) ?? null,
+      billingRegion:
+        (c.billingRegion as Record<string, unknown> | undefined) ?? null,
       invoices: payments.docs
         .map((d) => d.data())
         .sort((a, b) =>
@@ -247,6 +259,15 @@ export class AdminBillingService {
         .sort((a, b) => String(b.at).localeCompare(String(a.at))),
       entitlements: effective.entitlements,
     };
+  }
+
+  /** Full mobile number for an admin who clicked "reveal" (the POST is audited by AdminAuditInterceptor). */
+  async revealPhone(uid: string): Promise<{ phone: string | null }> {
+    const c = (
+      await this.firebase.firestore.collection("customers").doc(uid).get()
+    ).data();
+    if (!c) throw new NotFoundException("no customer record");
+    return { phone: (c.phone as string) ?? null };
   }
 
   async audit(limit = 200) {
