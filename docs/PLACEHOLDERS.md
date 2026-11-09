@@ -1,6 +1,6 @@
 # Placeholders
 
-Every value below is a stand-in that must be replaced before paid plans go live. One marker throughout: the value contains `PLACEHOLDER` or is an `example.com` address. `node scripts/check-placeholders.mjs` lists what remains; `--production` exits 1 while any would ship.
+Every value below is a stand-in that must be replaced before paid plans go live. One marker throughout: the value contains `PLACEHOLDER` or is an `example.com` address. `node scripts/check-placeholders.mjs` lists what remains; `--production` exits 1 while any would ship. Add `--cloud-run` to count settings already configured on the Cloud Run services (secret references by name; values are never read).
 
 Generated from the checker's output on 2026-11-10; regenerate the file references if lines move.
 
@@ -51,7 +51,7 @@ Generated from the checker's output on 2026-11-10; regenerate the file reference
 | --- | --- | --- | --- | --- | --- |
 | LAUNCH_PROMO_PREFIX | `LAUNCH_PLACEHOLDER` | Prefix of the one-time launch codes (e.g. LAUNCH26) | `MarketCatalystBackEnd/.env.example:40`, `MarketCatalystBackEnd/scripts/launch-migration.ts:37` | Plain config | production (migration run) |
 | LAUNCH_PROMO_PERCENT | `__PLACEHOLDER__` | Discount of the first-year launch code (whole %) | `MarketCatalystBackEnd/.env.example:41`, `MarketCatalystBackEnd/scripts/launch-migration.ts:38` | Plain config | production (migration run) |
-| STREAM_TICKET_SECRET | `__PLACEHOLDER__` | ≥32 random characters, same on every live instance (M0) | `MarketCatalystBackEnd/.env.example:44` | Secret (Secret Manager) | staging, production |
+| STREAM_TICKET_SECRET | `__PLACEHOLDER__` | ≥32 random characters, same on every live instance. Added in M0 (before this branch); **already set in production** on market-catalyst-live as a Secret Manager reference (`STREAM_TICKET_SECRET:latest`) — `check-placeholders --production --cloud-run` reports it satisfied | `MarketCatalystBackEnd/.env.example:44` | Secret (Secret Manager) | staging, production (live only) |
 | SEC_USER_AGENT | `MarketCatalyst [PLACEHOLDER] contact@example.com` | SEC EDGAR contact string (company + monitored email) | `MarketCatalystBackEnd/.env.example:47` | Plain config | all |
 
 ## Full list (check-placeholders output)
