@@ -1,3 +1,5 @@
+import { StaffAccessService } from "../account/staff-access.service";
+import type { AuthTokenInfo } from "../common/auth-token";
 import {
   CanActivate,
   ExecutionContext,
@@ -30,6 +32,7 @@ export class EntitlementGuard implements CanActivate {
     private readonly access: BillingAccessService,
     private readonly subscriptions: SubscriptionsService,
     private readonly auth: FirebaseAuthGuard,
+    private readonly staff: StaffAccessService,
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -39,6 +42,7 @@ export class EntitlementGuard implements CanActivate {
     if (!requirement) return true;
     const req = ctx.switchToHttp().getRequest<{
       uid?: string;
+      authToken?: AuthTokenInfo;
       query?: Record<string, unknown>;
       params?: Record<string, unknown>;
     }>();
@@ -47,6 +51,7 @@ export class EntitlementGuard implements CanActivate {
     if (!key) return true;
     if (!(await this.access.subscriptionsLive())) return true; // flag off or no provider: today's behaviour
     if (!req.uid) await this.auth.canActivate(ctx); // guard order independent: authenticate first
+    if (await this.staff.isStaff(req.authToken)) return true; // staff: every route group
     const effective = await this.effective(req.uid);
     if (effective.entitlements[key] === true) return true;
     const plan = lowestPlanFor(key);

@@ -13,6 +13,7 @@ import { clientIp } from "../common/client-ip";
 import { CurrentUser } from "../common/current-user.decorator";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 import { EmailVerificationService } from "./email-verification.service";
+import { StaffAccessService } from "./staff-access.service";
 
 export class VerifyCodeDto {
   @IsString()
@@ -23,7 +24,22 @@ export class VerifyCodeDto {
 @Controller("api/account")
 @UseGuards(FirebaseAuthGuard)
 export class AccountController {
-  constructor(private readonly verification: EmailVerificationService) {}
+  constructor(
+    private readonly verification: EmailVerificationService,
+    private readonly staff: StaffAccessService,
+  ) {}
+
+  /**
+   * Called by the app after sign-in and on token refresh: sets/clears the
+   * `staff` custom claim. refreshToken=true → the client must fetch a fresh ID
+   * token so Firestore rules see the change.
+   */
+  @Post("sync-claims")
+  @HttpCode(200)
+  async syncClaims(@CurrentUser() uid: string) {
+    const r = await this.staff.syncClaim(uid);
+    return { staff: r.staff, refreshToken: r.changed };
+  }
 
   @Get("email-verification")
   status(@CurrentUser() uid: string) {

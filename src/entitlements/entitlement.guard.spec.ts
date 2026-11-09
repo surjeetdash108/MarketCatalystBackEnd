@@ -1,6 +1,8 @@
 // blogs-admin imports the ESM-only `marked`; this spec reads route metadata only.
 jest.mock("marked", () => ({ marked: { parse: (s: string) => s } }));
 
+import { StaffAccessService } from "../account/staff-access.service";
+import type { AuthTokenInfo } from "../common/auth-token";
 import { readdirSync, statSync } from "fs";
 import { join } from "path";
 import {
@@ -128,13 +130,25 @@ function ctxFor(
   uid: string,
   query: Record<string, unknown> = {},
 ): ExecutionContext {
-  const req = { uid, query, params: {}, headers: {} };
+  const req = { uid, query, params: {}, headers: {}, authToken: TOKENS[uid] };
   return {
     getHandler: () => route.handler,
     getClass: () => route.cls,
     switchToHttp: () => ({ getRequest: () => req }),
   } as unknown as ExecutionContext;
 }
+
+/** Token info per test uid (what FirebaseAuthGuard would attach). */
+const TOKENS: Record<string, AuthTokenInfo> = {};
+const tokenFor = (uid: string, email: string, emailVerified: boolean) => {
+  TOKENS[uid] = {
+    uid,
+    email,
+    emailVerified,
+    claims: {},
+    signInProvider: emailVerified ? "google.com" : "password",
+  };
+};
 
 async function guardWith(env: Record<string, string>, providerOn = true) {
   const h = billingHarness(env);
@@ -147,17 +161,25 @@ async function guardWith(env: Record<string, string>, providerOn = true) {
     canActivate: () =>
       Promise.reject(new Error("should not be needed: uid already set")),
   } as unknown as FirebaseAuthGuard;
+  const staff = () => new StaffAccessService(h.firebase);
   const guard = new EntitlementGuard(
     new Reflector(),
     access,
     h.subscriptions,
     auth,
+    staff(),
   );
   await h.buy("starter-user", "starter", "monthly");
   await h.buy("pro-user", "pro", "monthly");
   await h.buy("elite-user", "elite", "annual");
   const fresh = () =>
-    new EntitlementGuard(new Reflector(), access, h.subscriptions, auth);
+    new EntitlementGuard(
+      new Reflector(),
+      access,
+      h.subscriptions,
+      auth,
+      staff(),
+    );
   return { h, guard, fresh };
 }
 
@@ -261,6 +283,54 @@ describe("route access matrix (SUBSCRIPTIONS_ENABLED on, provider configured)", 
   });
 });
 
+describe("staff full access", () => {
+  const routes = gatedRoutes();
+  const seedStaff = async (
+    h: {
+      firebase: {
+        firestore: {
+          doc: (p: string) => { set: (d: object) => Promise<unknown> };
+        };
+      };
+    },
+    emails: string[],
+  ) => h.firebase.firestore.doc("config/staff_access").set({ emails });
+
+  it.each([["true"], ["false"]])(
+    "a verified staff email passes every gated route group (SUBSCRIPTIONS_ENABLED=%s)",
+    async (flag) => {
+      const g = await guardWith({ SUBSCRIPTIONS_ENABLED: flag });
+      await seedStaff(g.h, ["ops-staff@example.com"]);
+      tokenFor("staffer", "Ops-Staff@Example.com", true);
+      const guard = g.fresh();
+      for (const r of routes) {
+        expect([
+          r.key,
+          await verdict(guard, r, "staffer", { tf: "1D", interval: "5min" }),
+        ]).toEqual([r.key, 200]);
+      }
+    },
+  );
+
+  it("an UNVERIFIED account using a staff email gets nothing extra (Free)", async () => {
+    const g = await guardWith({ SUBSCRIPTIONS_ENABLED: "true" });
+    await seedStaff(g.h, ["ops-staff@example.com"]);
+    tokenFor("impostor", "ops-staff@example.com", false);
+    const moneyFlow = routes.find((r) => r.key === "GET /live/money-flow");
+    expect(await verdict(g.fresh(), moneyFlow, "impostor")).toBe(403);
+  });
+
+  it("removed from the list → access drops", async () => {
+    const g = await guardWith({ SUBSCRIPTIONS_ENABLED: "true" });
+    await seedStaff(g.h, ["ops-staff@example.com"]);
+    tokenFor("leaver", "ops-staff@example.com", true);
+    const moneyFlow = routes.find((r) => r.key === "GET /live/money-flow");
+    expect(await verdict(g.fresh(), moneyFlow, "leaver")).toBe(200);
+    await seedStaff(g.h, []);
+    expect(await verdict(g.fresh(), moneyFlow, "leaver")).toBe(403);
+  });
+});
+
 describe("enforcement switches", () => {
   const route = gatedRoutes().find(
     (r) => r.key === "GET /live/strategy-lab/universe",
@@ -305,6 +375,10 @@ describe("403 response body", () => {
           useValue: new BillingAccessService(flags, h.provider),
         },
         { provide: SubscriptionsService, useValue: h.subscriptions },
+        {
+          provide: StaffAccessService,
+          useValue: new StaffAccessService(h.firebase),
+        },
         {
           provide: FirebaseAuthGuard,
           useValue: {

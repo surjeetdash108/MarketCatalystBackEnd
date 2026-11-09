@@ -48,6 +48,9 @@ export class AdminBillingController {
     return {
       subscribers: rows,
       totalMrrMinor: rows.reduce((a, r) => a + r.mrrMinor, 0),
+      // Paying customers only: staff are never counted.
+      subscriberCount: rows.filter((r) => !r.staff && r.mrrMinor > 0).length,
+      staffCount: rows.filter((r) => r.staff).length,
     };
   }
 

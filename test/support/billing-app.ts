@@ -4,7 +4,11 @@
  * headers: `x-test-uid` (signed-in user) and `x-test-admin` (admin email).
  * Test support only.
  */
-import { CanActivate, ExecutionContext, INestApplication } from "@nestjs/common";
+import {
+  CanActivate,
+  ExecutionContext,
+  INestApplication,
+} from "@nestjs/common";
 import { APP_INTERCEPTOR } from "@nestjs/core";
 import { ConfigService } from "@nestjs/config";
 import { Test } from "@nestjs/testing";
@@ -23,9 +27,16 @@ import { AdminBillingController } from "../../src/billing/admin-billing.controll
 import { AdminBillingService } from "../../src/billing/admin-billing.service";
 import { BillingAccessService } from "../../src/billing/billing-access.service";
 import { BillingEventsService } from "../../src/billing/billing-events.service";
-import { BillingController, BillingWebhookController, MeEntitlementsController } from "../../src/billing/billing.controller";
+import {
+  BillingController,
+  BillingWebhookController,
+  MeEntitlementsController,
+} from "../../src/billing/billing.controller";
 import { BillingService } from "../../src/billing/billing.service";
-import { ConsoleEmailSender, EMAIL_SENDER } from "../../src/billing/email/email-sender";
+import {
+  ConsoleEmailSender,
+  EMAIL_SENDER,
+} from "../../src/billing/email/email-sender";
 import { EmailService } from "../../src/billing/email/email.service";
 import { FakeBillingController } from "../../src/billing/fake-billing.controller";
 import { PromoService } from "../../src/billing/promo/promo.service";
@@ -36,6 +47,8 @@ import { RetentionService } from "../../src/billing/retention/retention.service"
 import { FakeAuth, T0, configOf } from "./billing-harness";
 import type { AuthTokenInfo } from "../../src/common/auth-token";
 import { EmailVerificationService } from "../../src/account/email-verification.service";
+import { StaffAccessService } from "../../src/account/staff-access.service";
+import { AdminStaffController } from "../../src/account/admin-staff.controller";
 import { AccountController } from "../../src/account/account.controller";
 import { FakeFirestore } from "./fake-firestore";
 
@@ -43,7 +56,13 @@ import { FakeFirestore } from "./fake-firestore";
 let currentAuth: FakeAuth | null = null;
 class HeaderAuthGuard implements CanActivate {
   canActivate(ctx: ExecutionContext): boolean {
-    const req = ctx.switchToHttp().getRequest<{ headers: Record<string, string>; uid?: string; authToken?: AuthTokenInfo }>();
+    const req = ctx
+      .switchToHttp()
+      .getRequest<{
+        headers: Record<string, string>;
+        uid?: string;
+        authToken?: AuthTokenInfo;
+      }>();
     const uid = req.headers["x-test-uid"];
     if (!uid) return false;
     req.uid = uid;
@@ -61,7 +80,9 @@ class HeaderAuthGuard implements CanActivate {
 
 class HeaderAdminGuard implements CanActivate {
   canActivate(ctx: ExecutionContext): boolean {
-    const req = ctx.switchToHttp().getRequest<{ headers: Record<string, string>; adminActor?: string }>();
+    const req = ctx
+      .switchToHttp()
+      .getRequest<{ headers: Record<string, string>; adminActor?: string }>();
     if (!req.headers["x-test-admin"]) return false;
     req.adminActor = req.headers["x-test-admin"];
     return true;
@@ -80,14 +101,29 @@ export async function billingApp(opts: BillingAppOptions = {}) {
   currentAuth = auth;
   const firebase = { firestore: fs, auth } as unknown as FirebaseAdminService;
   const clock = new AppClock();
-  const env = { APP_URL: "http://app.test", FIREBASE_PROJECT_ID: "demo-billing", ...(opts.env ?? {}) };
+  const env = {
+    APP_URL: "http://app.test",
+    FIREBASE_PROJECT_ID: "demo-billing",
+    ...(opts.env ?? {}),
+  };
   const config = configOf(env);
-  const provider = opts.provider === false ? null : new FakeBillingProvider(firebase, clock, { appUrl: "http://app.test" });
+  const provider =
+    opts.provider === false
+      ? null
+      : new FakeBillingProvider(firebase, clock, { appUrl: "http://app.test" });
   if (provider) clock.freeze(T0);
   const sender = new ConsoleEmailSender();
 
   const moduleRef = await Test.createTestingModule({
-    controllers: [BillingController, BillingWebhookController, MeEntitlementsController, FakeBillingController, AdminBillingController, AccountController],
+    controllers: [
+      BillingController,
+      BillingWebhookController,
+      MeEntitlementsController,
+      FakeBillingController,
+      AdminBillingController,
+      AccountController,
+      AdminStaffController,
+    ],
     providers: [
       { provide: FirebaseAdminService, useValue: firebase },
       { provide: ConfigService, useValue: config },
@@ -110,6 +146,7 @@ export async function billingApp(opts: BillingAppOptions = {}) {
       AdminBillingService,
       BillingReconcileJob,
       EmailVerificationService,
+      StaffAccessService,
     ],
   })
     .overrideGuard(FirebaseAuthGuard)
@@ -125,25 +162,54 @@ export async function billingApp(opts: BillingAppOptions = {}) {
 
   const as = (uid: string) => ({
     get: (url: string) => request(server).get(url).set("x-test-uid", uid),
-    post: (url: string, body?: object) => request(server).post(url).set("x-test-uid", uid).send(body ?? {}),
+    post: (url: string, body?: object) =>
+      request(server)
+        .post(url)
+        .set("x-test-uid", uid)
+        .send(body ?? {}),
   });
   const admin = {
-    get: (url: string) => request(server).get(url).set("x-test-admin", "admin@example.com"),
-    post: (url: string, body?: object) => request(server).post(url).set("x-test-admin", "admin@example.com").send(body ?? {}),
+    get: (url: string) =>
+      request(server).get(url).set("x-test-admin", "admin@example.com"),
+    post: (url: string, body?: object) =>
+      request(server)
+        .post(url)
+        .set("x-test-admin", "admin@example.com")
+        .send(body ?? {}),
+    delete: (url: string) =>
+      request(server).delete(url).set("x-test-admin", "admin@example.com"),
   };
 
   /** Signs up a user (auth record + email) the way the app would. */
-  function user(uid: string, email = `${uid}@example.com`, opts: { emailVerified?: boolean; provider?: string } = {}) {
+  function user(
+    uid: string,
+    email = `${uid}@example.com`,
+    opts: { emailVerified?: boolean; provider?: string } = {},
+  ) {
     auth.add(uid, email, opts);
     return as(uid);
   }
 
   /** Full paid signup through the app API and the fake hosted checkout. */
-  async function subscribe(uid: string, planId: string, interval: "monthly" | "annual", card = "success", promoCode?: string, email?: string) {
+  async function subscribe(
+    uid: string,
+    planId: string,
+    interval: "monthly" | "annual",
+    card = "success",
+    promoCode?: string,
+    email?: string,
+  ) {
     const u = auth.users.has(uid) ? as(uid) : user(uid, email);
-    const co = await u.post("/api/billing/checkout", { planId, interval, ...(promoCode ? { promoCode } : {}) });
+    const co = await u.post("/api/billing/checkout", {
+      planId,
+      interval,
+      ...(promoCode ? { promoCode } : {}),
+    });
     if (co.status !== 200) return { checkout: co, complete: null, u };
-    const complete = await u.post(`/api/billing/fake/checkout/${co.body.sessionId}/complete`, { card });
+    const complete = await u.post(
+      `/api/billing/fake/checkout/${co.body.sessionId}/complete`,
+      { card },
+    );
     return { checkout: co, complete, u };
   }
 

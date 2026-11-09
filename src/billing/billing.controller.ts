@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   Body,
   Controller,
   Get,
@@ -32,6 +33,8 @@ import {
   PromoPreviewDto,
 } from "./billing.dto";
 import { RetentionService } from "./retention/retention.service";
+import { AuthToken, type AuthTokenInfo } from "../common/auth-token";
+import { StaffAccessService } from "../account/staff-access.service";
 
 function clientIp(req: Request): string | null {
   const fwd = String(req.headers["x-forwarded-for"] ?? "")
@@ -48,7 +51,19 @@ export class BillingController {
     private readonly billing: BillingService,
     private readonly retention: RetentionService,
     private readonly firebase: FirebaseAdminService,
+    private readonly staff: StaffAccessService,
   ) {}
+
+  /** Staff have full access and are never billed: no checkout, plan change or retention. */
+  private async refuseStaff(token: AuthTokenInfo | undefined): Promise<void> {
+    if (await this.staff.isStaff(token)) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: "staff_access",
+        message: "Staff accounts have full access and are never billed.",
+      });
+    }
+  }
 
   private async email(uid: string): Promise<string | null> {
     try {
@@ -60,7 +75,12 @@ export class BillingController {
 
   @Post("checkout")
   @HttpCode(200)
-  async checkout(@CurrentUser() uid: string, @Body() body: CheckoutDto) {
+  async checkout(
+    @CurrentUser() uid: string,
+    @AuthToken() token: AuthTokenInfo | undefined,
+    @Body() body: CheckoutDto,
+  ) {
+    await this.refuseStaff(token);
     return this.billing.checkout(uid, await this.email(uid), body);
   }
 
@@ -81,13 +101,23 @@ export class BillingController {
 
   @Post("change/preview")
   @HttpCode(200)
-  previewChange(@CurrentUser() uid: string, @Body() body: PlanTargetDto) {
+  async previewChange(
+    @CurrentUser() uid: string,
+    @AuthToken() token: AuthTokenInfo | undefined,
+    @Body() body: PlanTargetDto,
+  ) {
+    await this.refuseStaff(token);
     return this.billing.previewChange(uid, body);
   }
 
   @Post("change")
   @HttpCode(200)
-  change(@CurrentUser() uid: string, @Body() body: ChangePlanDto) {
+  async change(
+    @CurrentUser() uid: string,
+    @AuthToken() token: AuthTokenInfo | undefined,
+    @Body() body: ChangePlanDto,
+  ) {
+    await this.refuseStaff(token);
     return this.billing.changePlan(uid, body);
   }
 
@@ -110,13 +140,22 @@ export class BillingController {
   }
 
   @Get("retention")
-  retentionOffer(@CurrentUser() uid: string) {
+  async retentionOffer(
+    @CurrentUser() uid: string,
+    @AuthToken() token: AuthTokenInfo | undefined,
+  ) {
+    if (await this.staff.isStaff(token))
+      return { eligible: false, reason: "staff" };
     return this.retention.offerFor(uid);
   }
 
   @Post("retention/accept")
   @HttpCode(200)
-  acceptRetention(@CurrentUser() uid: string) {
+  async acceptRetention(
+    @CurrentUser() uid: string,
+    @AuthToken() token: AuthTokenInfo | undefined,
+  ) {
+    await this.refuseStaff(token);
     return this.retention.accept(uid);
   }
 
@@ -184,11 +223,16 @@ export class MeEntitlementsController {
   constructor(
     private readonly access: BillingAccessService,
     private readonly subscriptions: SubscriptionsService,
+    private readonly staff: StaffAccessService,
   ) {}
 
   @Get("entitlements")
-  async entitlements(@CurrentUser() uid: string) {
+  async entitlements(
+    @CurrentUser() uid: string,
+    @AuthToken() token?: AuthTokenInfo,
+  ) {
     const live = await this.access.subscriptionsLive();
+    if (await this.staff.isStaff(token)) return this.staffEntitlements(live);
     const effective = await this.subscriptions.forUser(uid);
     const built = ENTITLEMENTS.filter((e) => !e.unbuilt && !e.staffOnly);
     // Flag off (or no provider): everyone keeps today's access to every built feature.
@@ -219,6 +263,31 @@ export class MeEntitlementsController {
       limits: live
         ? (plan?.limits ?? { watchlistTickers: null })
         : { watchlistTickers: null },
+    };
+  }
+
+  /** Staff: every built feature (Elite and above), no limits, never billed, never admin. */
+  private staffEntitlements(live: boolean) {
+    const built = ENTITLEMENTS.filter((e) => !e.unbuilt && !e.staffOnly);
+    return {
+      subscriptionsEnabled: live,
+      paidPlansAvailable: live,
+      provider: this.access.providerName,
+      staff: true,
+      planId: "staff",
+      planName: "Staff",
+      status: "STAFF",
+      interval: null,
+      cancelAtPeriodEnd: false,
+      currentPeriodEnd: null,
+      inGrace: false,
+      graceEndsAt: null,
+      entitlements: Object.fromEntries(built.map((e) => [e.key, true])),
+      requiredPlan: Object.fromEntries(
+        built.map((e) => [e.key, lowestPlanFor(e.key)?.id ?? null]),
+      ),
+      hidden: ENTITLEMENTS.filter((e) => e.unbuilt).map((e) => e.key),
+      limits: { watchlistTickers: null },
     };
   }
 }

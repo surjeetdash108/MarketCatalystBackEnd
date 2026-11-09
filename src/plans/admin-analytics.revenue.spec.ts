@@ -30,7 +30,7 @@ function stubFirestore(collections: Record<string, Record<string, Row>>) {
   return { collection: (name: string) => query(name) };
 }
 
-function service(collections: Record<string, Record<string, Row>>) {
+function service(collections: Record<string, Record<string, Row>>, staffList: string[] = []) {
   const firebase = {
     firestore: stubFirestore(collections),
   } as unknown as FirebaseAdminService;
@@ -49,6 +49,7 @@ function service(collections: Record<string, Record<string, Row>>) {
     plans,
     new SubscriptionsService(firebase, plans),
     config,
+    { list: () => Promise.resolve(staffList) } as never,
   );
 }
 
@@ -127,5 +128,18 @@ describe("AdminAnalyticsService.revenue", () => {
     }).revenue();
     expect(r.totalUsers).toBe(1);
     expect(r.activeSubscriptions).toBe(0);
+  });
+
+  it("staff on the allowlist are excluded from subscriber counts, MRR and revenue", async () => {
+    const r = await service(
+      {
+        users: { u1: { email: "a@example.com" }, s1: { email: "ops-staff@example.com" } },
+        payments: { p1: payment({}), p2: payment({ userId: "s1", amount: 19900 }) },
+      },
+      ["ops-staff@example.com"],
+    ).revenue();
+    expect(r.activeSubscriptions).toBe(1);
+    expect(r.mrrMinor).toBe(5900);
+    expect(r.totalMinor).toBe(5900);
   });
 });

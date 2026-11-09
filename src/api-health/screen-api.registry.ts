@@ -664,6 +664,44 @@ export const API_CATALOG = {
     params: "body: card",
     store: ["backend-only billing collections"],
   },
+  "POST /api/account/sync-claims": {
+    summary: "Sets or clears the staff custom claim from the verified email and the staff allowlist; tells the client to refresh its token.",
+    store: ["config/staff_access", "Firebase Auth custom claims"],
+    check: { skip: "writes custom claims" },
+  },
+  "GET /api/account/email-verification": {
+    summary: "Whether the signed-in user's email is verified.",
+    store: ["Firebase Auth"],
+  },
+  "POST /api/account/email-verification/send": {
+    summary: "Emails a 6-digit verification code (10-minute expiry, resend cooldown, rate limited).",
+    store: ["email_verifications"],
+    check: { skip: "sends email" },
+  },
+  "POST /api/account/email-verification/verify": {
+    summary: "Checks the 6-digit code and marks the account's email verified.",
+    store: ["email_verifications", "Firebase Auth"],
+    check: { skip: "needs a code" },
+  },
+  "GET /api/admin/staff-access": {
+    summary: "The staff allowlist (admin).",
+    store: ["config/staff_access"],
+  },
+  "POST /api/admin/staff-access": {
+    summary: "Adds an email to the staff allowlist (admin; audited).",
+    store: ["config/staff_access", "admin_audit"],
+    check: { skip: "admin write" },
+  },
+  "DELETE /api/admin/staff-access/:email": {
+    summary: "Removes an email from the staff allowlist (admin; audited).",
+    store: ["config/staff_access", "admin_audit"],
+    check: { skip: "admin write" },
+  },
+  "GET /api/billing/fake/outbox": {
+    summary: "Fake provider (dev): emails the console sender would have sent to an address.",
+    store: ["in-memory"],
+    check: { skip: "fake billing provider only (404 otherwise)" },
+  },
   "GET /api/billing/fake/clock": {
     summary: "Fake provider: the simulated clock.",
     store: ["backend-only billing collections"],
