@@ -568,6 +568,11 @@ export const API_CATALOG = {
     params: "body: sessionId",
     notes: "Added after the Oct 24 audit; every authenticated call then carries X-Session-Id and is refused if it is not the claimed one.",
   },
+  "POST /api/stream-ticket": {
+    summary: "Issues a 10-minute signed ticket the browser's live price streams present as ?ticket=, since EventSource cannot send a token.",
+    params: "header: X-Session-Id",
+    notes: "Ticket names the uid and session and is HMAC-signed with STREAM_TICKET_SECRET; /live/stream and /live/tape/stream reject requests without a valid one.",
+  },
   "GET /api/watchlists": {
     summary: "All the user's watchlists with their tickers, and the plan's ticker limit.",
     store: ["per-user Firestore documents"],

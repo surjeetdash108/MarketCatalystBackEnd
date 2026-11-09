@@ -31,6 +31,7 @@ import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 import { DelistedTickerGuard } from "../common/delisted-ticker.guard";
 import { DelistedTickersService } from "../common/delisted-tickers.service";
 import { StockDetailsService } from "./stock-details.service";
+import { Public } from "../common/public.decorator";
 
 /**
  * On-demand data endpoints (see ondemand.service.ts for the caching design).
@@ -234,6 +235,7 @@ export class OnDemandController {
     sendWithEtag(req, res, doc);
   }
 
+  @UseGuards(FirebaseAuthGuard)
   @Post("copilot")
   async copilotChat(
     @Body()
@@ -523,6 +525,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
   // Deliberately unauthenticated: this is loaded as an <img src>, and an
   // image request cannot carry an Authorization header. It proxies the
   // vendor so the API key stays server-side; it returns an image, not data.
+  @Public("company logo images loaded by <img src>, which cannot send a token")
   @Get("logo")
   async logo(
     @Query("ticker") ticker: string | undefined,
@@ -864,6 +867,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
    * Largest, Equity, Bitcoin, Ethereum, Gold, Fixed Income, Real Estate, Total Market,
    * Commodities, Leveraged.
    */
+  @UseGuards(FirebaseAuthGuard)
   @Get("etf-market")
   @Header("Cache-Control", "public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400")
   async etfMarket(
@@ -880,6 +884,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
     sendWithEtag(req, res, data);
   }
 
+  @UseGuards(FirebaseAuthGuard)
   @Get("etfs/market-funds")
   @Header("Cache-Control", "public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400")
   async etfMarketFundsAlias(

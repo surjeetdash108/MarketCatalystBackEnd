@@ -1,7 +1,9 @@
-import { Controller, Get, Header, Query, NotFoundException } from "@nestjs/common";
+import { UseGuards, Controller, Get, Header, Query, NotFoundException } from "@nestjs/common";
 import { EtfHoldingsService, type EtfHoldingsDoc } from "./etf-holdings.service";
+import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 
 @Controller("market-data")
+@UseGuards(FirebaseAuthGuard)
 export class EtfHoldingsController {
   constructor(private readonly etfService: EtfHoldingsService) {}
 
@@ -10,7 +12,9 @@ export class EtfHoldingsController {
    * Returns full ETF holdings document for the requested ETF.
    */
   @Get("etf-holdings")
-  @Header("Cache-Control", "public, max-age=300, s-maxage=900, stale-while-revalidate=1800")
+  // private: the response is per-authenticated-request; a shared CDN copy
+  // would hand it to callers who never presented a token.
+  @Header("Cache-Control", "private, max-age=300")
   async getEtfHoldings(@Query("symbol") symbolParam?: string): Promise<EtfHoldingsDoc> {
     const symbol = String(symbolParam ?? "SPY").trim().toUpperCase();
     if (!symbol) {

@@ -12,6 +12,7 @@ import { Observable, interval, map, merge } from "rxjs";
 import { TapeService, type TapeFrame } from "./tape.service";
 import { capStreamLifetime } from "../common/sse-lifetime.util";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
+import { StreamTicketGuard } from "../common/stream-ticket.guard";
 
 /**
  * Header ticker tape, streamed from our origin.
@@ -61,6 +62,7 @@ export class TapeController {
   // an SSE stream can never carry a bearer token. Guarding it did not secure
   // anything — it just made the stream fail and the client fall back to
   // polling /live/tape, which is guarded and does carry a token.
+  @UseGuards(StreamTicketGuard)
   @Sse("tape/stream")
   stream(): Observable<SseEvent> {
     // Ref counting is tied to the CLIENT's subscription, not to this handler
@@ -129,6 +131,7 @@ export class TapeController {
    * each other, the broadcast has broken and every viewer is costing a vendor
    * request.
    */
+  @UseGuards(FirebaseAuthGuard)
   @Get("tape/stats")
   stats() {
     return {

@@ -4,6 +4,7 @@ import {
   Logger,
   Query,
   Sse,
+  UseGuards,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
@@ -27,6 +28,7 @@ import {
   type SnapshotQuote,
 } from "./snapshot-cache.service";
 import { capStreamLifetime } from "../common/sse-lifetime.util";
+import { StreamTicketGuard } from "../common/stream-ticket.guard";
 
 /**
  * Server-Sent Events bridge: browser <- our origin <- upstream price source.
@@ -97,6 +99,7 @@ export class LiveController {
    *   event: status    on every upstream connection-state change
    *   event: tick      per aggregate window (~1/sec while the market is active)
    */
+  @UseGuards(StreamTicketGuard)
   @Sse("stream")
   stream(@Query("ticker") ticker?: string): Observable<SseEvent> {
     const sym = (ticker ?? "").toUpperCase().trim();
