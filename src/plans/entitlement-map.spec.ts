@@ -70,11 +70,12 @@ describe("entitlement catalog", () => {
   });
 
   it("keeps the tier ladder cumulative", () => {
-    const [free, plus, pro] = PLAN_DEFINITIONS;
-    for (const e of ENTITLEMENTS) {
-      // An upgrade must never remove a capability the customer already had.
-      if (free.featureFlags[e.key]) expect(plus.featureFlags[e.key]).toBe(true);
-      if (plus.featureFlags[e.key]) expect(pro.featureFlags[e.key]).toBe(true);
+    for (let i = 1; i < PLAN_DEFINITIONS.length; i++) {
+      const [lower, higher] = [PLAN_DEFINITIONS[i - 1], PLAN_DEFINITIONS[i]];
+      for (const e of ENTITLEMENTS) {
+        // An upgrade must never remove a capability the customer already had.
+        if (lower.featureFlags[e.key]) expect(higher.featureFlags[e.key]).toBe(true);
+      }
     }
   });
 

@@ -25,7 +25,7 @@
  * Flags (all optional):
  *   --email=<address>     default test.user@marketcatalyst.test
  *   --password=<pw>       default TestUser@12345 (Firebase minimum is 6 chars)
- *   --plan=free|plus|pro  default free — the plan a real signup lands on
+ *   --plan=<catalog id>   free|starter|pro|elite (from plans.registry); default free
  *   --project=<id>        default FIREBASE_PROJECT_ID from .env
  *   --database=<id>       default FIRESTORE_DATABASE_ID from .env
  *   --reset               delete this user's existing seeded docs first, so a
@@ -39,6 +39,7 @@ import "dotenv/config";
 import { getApps, initializeApp, cert, applicationDefault } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, Firestore, Timestamp } from "firebase-admin/firestore";
+import { PLAN_DEFINITIONS } from "../src/plans/plans.registry";
 
 function arg(name: string): string | undefined {
   const found = process.argv.find((a) => a.startsWith(`--${name}=`));
@@ -57,8 +58,9 @@ if (!PROJECT) {
   console.error("No project: pass --project=<id> or set FIREBASE_PROJECT_ID in .env.");
   process.exit(1);
 }
-if (!["free", "plus", "pro"].includes(PLAN)) {
-  console.error(`--plan must be one of free|plus|pro (got "${PLAN}").`);
+const PLAN_IDS = PLAN_DEFINITIONS.map((p) => p.id);
+if (!PLAN_IDS.includes(PLAN)) {
+  console.error(`--plan must be one of ${PLAN_IDS.join("|")} (got "${PLAN}").`);
   process.exit(1);
 }
 

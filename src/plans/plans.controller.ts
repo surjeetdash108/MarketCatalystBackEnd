@@ -14,7 +14,11 @@ import { AdminGuard } from "../common/admin.guard";
 import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
 import { PlansService } from "./plans.service";
 import { SubscriptionsService } from "./subscriptions.service";
-import { ENTITLEMENT_KEYS, type EntitlementKey } from "./plans.registry";
+import {
+  ENTITLEMENTS,
+  ENTITLEMENT_KEYS,
+  type EntitlementKey,
+} from "./plans.registry";
 import { Public } from "../common/public.decorator";
 
 /**
@@ -45,7 +49,9 @@ const RELEASE_FLAG_FOR: Partial<Record<EntitlementKey, string>> = {
  * plan, so the UI says "coming soon" instead of "upgrade to unlock" — charging
  * for something unbuilt is the failure mode this list prevents.
  */
-const UNBUILT: EntitlementKey[] = ["backtesting", "paperTrading"];
+const UNBUILT: EntitlementKey[] = ENTITLEMENTS.filter((e) => e.unbuilt).map(
+  (e) => e.key,
+);
 
 export interface ResolvedEntitlement {
   key: EntitlementKey;
@@ -73,7 +79,7 @@ export class PlansController {
   @Public("pricing table; the marketing site and signup read it before sign-in")
   @Get("plans")
   async listPlans() {
-    return { plans: await this.plans.list() };
+    return { plans: await this.plans.listActive() };
   }
 
   @UseGuards(AdminGuard)

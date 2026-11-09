@@ -35,8 +35,10 @@ export interface EntitlementDef {
   group: string;
   /** Staff capability — never sold with a plan. */
   staffOnly?: boolean;
-  /** No implementation exists yet; shown as "coming soon", never as a paywall. */
+  /** No implementation exists yet; hidden in the app and never sold. */
   unbuilt?: boolean;
+  /** Short qualifier shown next to the label, e.g. "some data simulated". */
+  note?: string;
 }
 
 /**
@@ -49,7 +51,7 @@ export interface EntitlementDef {
  * could plausibly be given or denied on its own.
  */
 export const ENTITLEMENTS: EntitlementDef[] = [
-  // ── Core market data ──────────────────────────────────────────────────────
+  // ── Core market data (Free) ───────────────────────────────────────────────
   {
     key: "marketCatalyst",
     label: "Market Dashboard",
@@ -87,13 +89,26 @@ export const ENTITLEMENTS: EntitlementDef[] = [
     group: "Core",
     description: "Browse upcoming and recent IPOs with offer prices.",
   },
-
-  // ── Charting ──────────────────────────────────────────────────────────────
   {
     key: "chartsDaily",
     label: "Daily Charts",
     group: "Charting",
     description: "View 3-month, 6-month and 1-year price charts.",
+  },
+  {
+    key: "watchlist",
+    label: "Watchlist",
+    group: "My Money",
+    description: "Build and track a personal watchlist of stocks.",
+  },
+
+  // ── Starter ───────────────────────────────────────────────────────────────
+  {
+    key: "workspaces",
+    label: "All 15 Workspaces",
+    group: "Core",
+    description:
+      "Open every Market Desk workspace, including Analyst Actions, Recaps, ETF Corner and AI Companies.",
   },
   {
     key: "chartsIntraday",
@@ -120,8 +135,19 @@ export const ENTITLEMENTS: EntitlementDef[] = [
     group: "Charting",
     description: "Save personal notes pinned to a chart.",
   },
-
-  // ── Research depth ────────────────────────────────────────────────────────
+  {
+    key: "screener",
+    label: "Stock Screener",
+    group: "Research",
+    description:
+      "Filter the universe by growth, technical and liquidity criteria.",
+  },
+  {
+    key: "ownership",
+    label: "13F & Insider",
+    group: "Research",
+    description: "See insider trades and institutional fund holdings.",
+  },
   {
     key: "technicalRatings",
     label: "Technical Ratings",
@@ -150,25 +176,25 @@ export const ENTITLEMENTS: EntitlementDef[] = [
       "See comparable companies and how the stock ranks against them.",
   },
   {
-    key: "ownership",
-    label: "Insider & 13F",
-    group: "Research",
-    description: "See insider trades and institutional fund holdings.",
-  },
-  {
     key: "earningsDetail",
     label: "Earnings Detail",
     group: "Research",
     description:
-      "See EPS history, estimate-vs-actual and the earnings calendar.",
+      "See EPS history, estimate-vs-actual, transcripts and the earnings calendar.",
   },
-
-  // ── Personal tools ────────────────────────────────────────────────────────
   {
-    key: "watchlist",
-    label: "Watchlist",
+    key: "aiAssistant",
+    label: "AI Research",
+    group: "Research",
+    description:
+      "Ask the AI copilot questions and read AI-generated stock research.",
+  },
+  {
+    key: "tradeTracker",
+    label: "Trade Builder & Tracker",
     group: "My Money",
-    description: "Build and track a personal watchlist of stocks.",
+    description:
+      "Build trades with entry, stop and target and track them over time.",
   },
   {
     key: "portfolio",
@@ -177,67 +203,77 @@ export const ENTITLEMENTS: EntitlementDef[] = [
     description: "Track holdings with live prices and profit/loss.",
   },
   {
-    key: "screener",
-    label: "Stock Screener",
-    group: "My Money",
-    description:
-      "Filter the universe by growth, technical and liquidity criteria.",
-  },
-  {
     key: "themes",
     label: "Sector Themes",
     group: "My Money",
     description: "Browse curated theme baskets such as Mag7 and AI & Semis.",
   },
+
+  // ── Pro ───────────────────────────────────────────────────────────────────
+  {
+    key: "moneyFlow",
+    label: "Money Flow",
+    group: "Institutional",
+    description: "See where institutional money is moving, by sector.",
+  },
+  {
+    key: "institutionalMovers",
+    label: "Institutional Movers",
+    group: "Institutional",
+    description: "See the biggest institutional gainers and losers.",
+  },
+  {
+    key: "optionsChain",
+    label: "Options Chain",
+    group: "Institutional",
+    description:
+      "View the options chain with strikes, expirations and traded prices.",
+    note: "some data simulated",
+  },
+
+  // ── Elite ─────────────────────────────────────────────────────────────────
+  {
+    key: "strategyLab",
+    label: "Strategy Lab",
+    group: "Strategy",
+    description:
+      "Build strategies from presets or plain English and get entry, stop and target levels.",
+  },
+  {
+    key: "backtesting",
+    label: "Backtesting",
+    group: "Strategy",
+    description:
+      "Backtest any strategy against historical prices before you trade.",
+  },
+
+  // ── Not built: hidden everywhere, never sold ─────────────────────────────
   {
     key: "alerts",
     label: "Price Alerts",
-    group: "My Money",
+    group: "Unbuilt",
     description:
       "Create alerts that fire when a price or signal condition is met.",
     unbuilt: true,
   },
-
-  // ── Advanced / premium ────────────────────────────────────────────────────
-  {
-    key: "optionsChain",
-    label: "Options Chain",
-    group: "Advanced",
-    description:
-      "View the options chain with strikes, expirations and traded prices.",
-  },
   {
     key: "exportData",
     label: "Data Export",
-    group: "Advanced",
+    group: "Unbuilt",
     description: "Download screens and recaps as PDF or CSV.",
     unbuilt: true,
   },
   {
     key: "apiAccess",
     label: "API Access",
-    group: "Advanced",
+    group: "Unbuilt",
     description: "Call the market-data API from your own scripts with a key.",
-    unbuilt: true,
-  },
-  {
-    key: "aiAssistant",
-    label: "AI Assistant",
-    group: "Advanced",
-    description: "Ask the AI copilot questions and get generated summaries.",
-    unbuilt: true,
-  },
-  {
-    key: "backtesting",
-    label: "Backtesting",
-    group: "Advanced",
-    description: "Test a strategy against historical price data.",
     unbuilt: true,
   },
   {
     key: "paperTrading",
     label: "Paper Trading",
-    group: "Advanced",
+    group: "Unbuilt",
     description: "Place simulated trades without real money.",
     unbuilt: true,
   },
@@ -265,56 +301,62 @@ export const ENTITLEMENT_KEYS = ENTITLEMENTS.map(
 
 export type EntitlementKey = string;
 
+export type BillingInterval = "monthly" | "annual";
+export const BILLING_INTERVALS: BillingInterval[] = ["monthly", "annual"];
+
+/** Kept for the admin console's per-plan display; `prices` is authoritative. */
 export type BillingCycle = "monthly" | "yearly" | "none";
+
+export interface PlanPrice {
+  /** Minor units (cents), Stripe's convention. */
+  amount: number;
+  /** Stripe Price lookup key; the provider resolves the real Price by it. */
+  lookupKey: string;
+}
+
+export interface PlanLimits {
+  /** Tickers per watchlist; null = unlimited. */
+  watchlistTickers: number | null;
+}
 
 export interface PlanDefinition {
   id: string;
   name: string;
-  /**
-   * Minor units (cents for USD), matching Stripe's convention. Storing 4999
-   * rather than 49.99 avoids float rounding on every revenue sum, and is what
-   * Stripe will charge. Format as major units (÷100) only at display time.
-   */
+  /** Monthly list price, minor units — mirrors prices.monthly for older readers. */
   amount: number;
   currency: string;
   billingCycle: BillingCycle;
   description: string;
   featureFlags: Record<EntitlementKey, boolean>;
   active: boolean;
-  /** Display order in pricing tables; lower first. */
+  /** Display order and upgrade rank; lower first. */
   sortOrder: number;
-  /** Populated once Stripe products exist; null keeps the plan non-purchasable. */
+  /** Legacy single price id; superseded by prices[interval].lookupKey. */
   stripePriceId: string | null;
+  /** One price per billing interval; absent for Free. */
+  prices: Partial<Record<BillingInterval, PlanPrice>>;
+  limits: PlanLimits;
 }
 
-/** Every entitlement set to the same value — the requirement's starting point. */
+/**
+ * Bumped whenever the commercial catalog (plans, prices, entitlement grants)
+ * changes. PlansService.seed() rewrites plan documents stored under an older
+ * version, so a deploy is what changes production prices — never a stale doc.
+ */
+export const CATALOG_VERSION = 2;
+
+/** Plan ids that existed before and must be deactivated on seed. */
+export const RETIRED_PLAN_IDS = ["plus"];
+
 function allEntitlements(value: boolean): Record<EntitlementKey, boolean> {
   return Object.fromEntries(ENTITLEMENT_KEYS.map((k) => [k, value]));
 }
 
-/**
- * Staff capabilities. Forced false on EVERY plan: they are not purchasable, and
- * granting them to a paying customer would be privilege escalation rather than
- * an upsell. Access is gated on the admin account instead.
- */
-const STAFF_ONLY: EntitlementKey[] = ENTITLEMENTS.filter(
-  (e) => e.staffOnly,
+const NEVER_GRANTED: EntitlementKey[] = ENTITLEMENTS.filter(
+  (e) => e.staffOnly || e.unbuilt,
 ).map((e) => e.key);
 
-/**
- * The tier ladder — what each plan actually includes.
- *
- * Cumulative by design: every tier grants everything below it plus its own
- * additions, so a customer upgrading never loses a feature they were using.
- * That property is easy to break by hand-editing three independent lists, which
- * is why the sets below are composed rather than written out separately.
- *
- * The requirement's starting point was "every feature on every plan", which
- * shipped the plumbing but left the three tiers byte-identical — the admin
- * console showed the same 14 toggles whichever plan was selected, because the
- * underlying documents genuinely were the same. This is the real packaging.
- */
-/** Free: browse the market and keep a watchlist. Daily charts only. */
+/** The tier ladder (doc Step 1). Cumulative: each tier adds to the one below. */
 const FREE_GRANTS: EntitlementKey[] = [
   "marketCatalyst",
   "news",
@@ -325,52 +367,42 @@ const FREE_GRANTS: EntitlementKey[] = [
   "chartsDaily",
   "watchlist",
 ];
-
-/** Plus: the working toolkit — real charting, research depth, personal tools. */
-const PLUS_ADDS: EntitlementKey[] = [
+const STARTER_ADDS: EntitlementKey[] = [
+  "workspaces",
   "chartsIntraday",
   "chartsHistory",
   "chartIndicators",
   "chartNotes",
+  "screener",
+  "ownership",
   "technicalRatings",
+  "fundamentalRatings",
   "dividendHistory",
   "peers",
   "earningsDetail",
-  "portfolio",
-  "screener",
-  "themes",
-  "alerts",
-];
-
-/** Pro: everything customer-facing, including the not-yet-built premium tier. */
-const PRO_ADDS: EntitlementKey[] = [
-  "fundamentalRatings",
-  "ownership",
-  "optionsChain",
-  "exportData",
-  "apiAccess",
   "aiAssistant",
-  "backtesting",
-  "paperTrading",
+  "tradeTracker",
+  "portfolio",
+  "themes",
 ];
+const PRO_ADDS: EntitlementKey[] = [
+  "moneyFlow",
+  "institutionalMovers",
+  "optionsChain",
+];
+const ELITE_ADDS: EntitlementKey[] = ["strategyLab", "backtesting"];
 
-/** Builds a flag map granting exactly `granted`, with staff keys forced off. */
-function entitlementsFor(
-  granted: EntitlementKey[],
-): Record<EntitlementKey, boolean> {
+function grants(granted: EntitlementKey[]): Record<EntitlementKey, boolean> {
   const flags = allEntitlements(false);
   for (const k of granted) flags[k] = true;
-  for (const k of STAFF_ONLY) flags[k] = false;
+  for (const k of NEVER_GRANTED) flags[k] = false;
   return flags;
 }
 
-const FREE_ENTITLEMENTS = entitlementsFor(FREE_GRANTS);
-const PLUS_ENTITLEMENTS = entitlementsFor([...FREE_GRANTS, ...PLUS_ADDS]);
-const PRO_ENTITLEMENTS = entitlementsFor([
-  ...FREE_GRANTS,
-  ...PLUS_ADDS,
-  ...PRO_ADDS,
-]);
+const price = (amount: number, lookupKey: string): PlanPrice => ({
+  amount,
+  lookupKey,
+});
 
 export const PLAN_DEFINITIONS: PlanDefinition[] = [
   {
@@ -379,35 +411,71 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
     amount: 0,
     currency: "USD",
     billingCycle: "none",
-    description: "Free Plan",
-    featureFlags: FREE_ENTITLEMENTS,
+    description: "Core market screens, daily charts and a watchlist.",
+    featureFlags: grants(FREE_GRANTS),
     active: true,
     sortOrder: 0,
     stripePriceId: null,
+    prices: {},
+    limits: { watchlistTickers: 5 },
   },
   {
-    id: "plus",
-    name: "Plus",
-    amount: 2999, // $29.99
+    id: "starter",
+    name: "Starter",
+    amount: 3900,
     currency: "USD",
     billingCycle: "monthly",
-    description: "Plus Plan",
-    featureFlags: PLUS_ENTITLEMENTS,
+    description:
+      "For investors who want the daily picture and research on any stock.",
+    featureFlags: grants([...FREE_GRANTS, ...STARTER_ADDS]),
     active: true,
     sortOrder: 1,
     stripePriceId: null,
+    prices: {
+      monthly: price(3900, "starter_monthly"),
+      annual: price(37440, "starter_annual"),
+    },
+    limits: { watchlistTickers: null },
   },
   {
     id: "pro",
     name: "Pro",
-    amount: 4999, // $49.99
+    amount: 5900,
     currency: "USD",
     billingCycle: "monthly",
-    description: "Professional Plan",
-    featureFlags: PRO_ENTITLEMENTS,
+    description:
+      "For active traders who want to see where institutions are moving.",
+    featureFlags: grants([...FREE_GRANTS, ...STARTER_ADDS, ...PRO_ADDS]),
     active: true,
     sortOrder: 2,
     stripePriceId: null,
+    prices: {
+      monthly: price(5900, "pro_monthly"),
+      annual: price(56640, "pro_annual"),
+    },
+    limits: { watchlistTickers: null },
+  },
+  {
+    id: "elite",
+    name: "Elite",
+    amount: 19900,
+    currency: "USD",
+    billingCycle: "monthly",
+    description: "For traders who backtest before every trade.",
+    featureFlags: grants([
+      ...FREE_GRANTS,
+      ...STARTER_ADDS,
+      ...PRO_ADDS,
+      ...ELITE_ADDS,
+    ]),
+    active: true,
+    sortOrder: 3,
+    stripePriceId: null,
+    prices: {
+      monthly: price(19900, "elite_monthly"),
+      annual: price(179100, "elite_annual"),
+    },
+    limits: { watchlistTickers: null },
   },
 ];
 
@@ -416,3 +484,37 @@ export const DEFAULT_PLAN_ID = "free";
 
 export type SubscriptionStatus =
   "ACTIVE" | "EXPIRED" | "CANCELLED" | "PAST_DUE" | "TRIALING" | "NONE";
+
+/** Days a PAST_DUE subscription keeps paid access while payment is retried. */
+export const PAST_DUE_GRACE_DAYS = 7;
+
+export function planById(
+  id: string | null | undefined,
+): PlanDefinition | undefined {
+  return PLAN_DEFINITIONS.find((p) => p.id === id);
+}
+
+/** Upgrade rank: higher = more expensive tier. Unknown plans rank as Free. */
+export function planRank(id: string | null | undefined): number {
+  return planById(id)?.sortOrder ?? 0;
+}
+
+export function isPaidPlanId(id: string | null | undefined): boolean {
+  const p = planById(id);
+  return !!p && p.id !== DEFAULT_PLAN_ID && Object.keys(p.prices).length > 0;
+}
+
+/** The cheapest plan that grants `key`, for "Available on <plan>" messages. */
+export function lowestPlanFor(key: EntitlementKey): PlanDefinition | undefined {
+  return [...PLAN_DEFINITIONS]
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .find((p) => p.featureFlags[key] === true);
+}
+
+/** Catalog price for a plan × interval; undefined for Free or unknown. */
+export function catalogPrice(
+  planId: string,
+  interval: BillingInterval,
+): PlanPrice | undefined {
+  return planById(planId)?.prices[interval];
+}
