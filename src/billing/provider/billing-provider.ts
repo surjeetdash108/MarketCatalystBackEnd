@@ -1,3 +1,4 @@
+import type { BillingDetails, BillingRegion, CheckoutQuote } from "./types";
 import type {
   AppliedDiscount,
   ChangePreview,
@@ -59,6 +60,12 @@ export interface BillingProvider {
   ): Promise<void>;
 
   // ── checkout ───────────────────────────────────────────────────────────
+  /** Price of a new subscription incl. tax for the billing region (Stripe: automatic tax). */
+  previewCheckout(input: {
+    price: PriceRef;
+    discount: AppliedDiscount | null;
+    region: BillingRegion | null;
+  }): Promise<CheckoutQuote>;
   createCheckout(input: {
     uid: string;
     customerId: string;
@@ -67,6 +74,8 @@ export interface BillingProvider {
     successUrl: string;
     cancelUrl: string;
     idempotencyKey: string;
+    /** Name/address/phone for the provider's customer record and tax. */
+    billing?: BillingDetails | null;
   }): Promise<CheckoutSession>;
   getCheckout(sessionId: string): Promise<CheckoutSession | null>;
 

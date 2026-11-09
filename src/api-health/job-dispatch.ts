@@ -41,11 +41,7 @@ export interface DispatchResult {
 }
 
 export type DispatchErrorCode =
-  | "NOT_CONFIGURED"
-  | "PERMISSION"
-  | "NOT_FOUND"
-  | "LOCKED"
-  | "UPSTREAM";
+  "NOT_CONFIGURED" | "PERMISSION" | "NOT_FOUND" | "LOCKED" | "UPSTREAM";
 
 export class DispatchError extends Error {
   constructor(
@@ -97,14 +93,19 @@ type ConfigReader = { get(key: string): unknown };
  * is unset, and throws only for a value that cannot be a Cloud Run resource id,
  * which would otherwise be spliced into a URL.
  */
-export function readJobRunnerConfig(config: ConfigReader): JobRunnerConfig | null {
+export function readJobRunnerConfig(
+  config: ConfigReader,
+): JobRunnerConfig | null {
   const text = (key: string): string => String(config.get(key) ?? "").trim();
   const job = text("JOB_RUNNER_JOB");
   if (!job) return null;
-  const projectId = text("JOB_RUNNER_PROJECT_ID") || text("FIREBASE_PROJECT_ID");
+  const projectId =
+    text("JOB_RUNNER_PROJECT_ID") || text("FIREBASE_PROJECT_ID");
   const region = text("JOB_RUNNER_REGION") || "us-central1";
   if (!RESOURCE_ID_RE.test(job)) {
-    throw new Error(`JOB_RUNNER_JOB "${job}" is not a valid Cloud Run Job name.`);
+    throw new Error(
+      `JOB_RUNNER_JOB "${job}" is not a valid Cloud Run Job name.`,
+    );
   }
   if (!RESOURCE_ID_RE.test(region)) {
     throw new Error(`JOB_RUNNER_REGION "${region}" is not a valid region.`);
@@ -208,7 +209,11 @@ export class CloudRunJobDispatcher implements JobDispatcher {
     }
   }
 
-  private mapFailure(status: number, body: string, token: string): DispatchError {
+  private mapFailure(
+    status: number,
+    body: string,
+    token: string,
+  ): DispatchError {
     // The body is copied into a message that is logged and returned to the
     // browser. An upstream or proxy that reflected our Authorization header
     // would put the bearer token there, so scrub it.
@@ -276,7 +281,10 @@ export class InProcessDispatcher implements JobDispatcher {
   async dispatch({ job, runId }: DispatchContext): Promise<DispatchResult> {
     const runner = this.deps.registry.get(job);
     if (!runner) {
-      throw new DispatchError(`"${job}" is not registered in this process.`, "NOT_FOUND");
+      throw new DispatchError(
+        `"${job}" is not registered in this process.`,
+        "NOT_FOUND",
+      );
     }
     const firestore = this.deps.firestore();
     const owner = `admin:${runId}`;
@@ -310,11 +318,19 @@ export class InProcessDispatcher implements JobDispatcher {
       try {
         meta = await this.deps.readMeta(job);
       } catch (err) {
-        this.logger.warn(`could not read sync_meta for ${job}: ${(err as Error).message}`);
+        this.logger.warn(
+          `could not read sync_meta for ${job}: ${(err as Error).message}`,
+        );
       }
-      await reportRunFinished(firestore, runId, outcomeFromSyncMeta(startedAt, meta, result));
+      await reportRunFinished(
+        firestore,
+        runId,
+        outcomeFromSyncMeta(startedAt, meta, result),
+      );
     } catch (err) {
-      this.logger.error(`manual run of ${job} failed: ${(err as Error).message}`);
+      this.logger.error(
+        `manual run of ${job} failed: ${(err as Error).message}`,
+      );
       await reportRunFinished(firestore, runId, {
         status: "failed",
         error: (err as Error).message.slice(0, 400),
@@ -342,7 +358,10 @@ export interface DispatcherDeps {
  * worker (or a developer's machine) and can just run it. The live role registers
  * nothing, so it falls through to the Cloud Run Job.
  */
-export function pickDispatcher(job: string, deps: DispatcherDeps): JobDispatcher | null {
+export function pickDispatcher(
+  job: string,
+  deps: DispatcherDeps,
+): JobDispatcher | null {
   if (deps.registry.get(job)) return new InProcessDispatcher(deps.inProcess);
   if (deps.runnerConfig) {
     return new CloudRunJobDispatcher(

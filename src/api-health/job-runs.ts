@@ -139,7 +139,9 @@ export function outcomeFromSyncMeta(
   // The meta write and startedAtMs come from the same process clock, so a small
   // allowance only covers writes that landed in the same millisecond window.
   const recordedMs =
-    typeof meta?.lastSyncedAt === "string" ? Date.parse(meta.lastSyncedAt) : NaN;
+    typeof meta?.lastSyncedAt === "string"
+      ? Date.parse(meta.lastSyncedAt)
+      : NaN;
   if (Number.isFinite(recordedMs) && recordedMs >= startedAtMs - 2_000) {
     if (meta?.lastStatus === "error") {
       return {
@@ -164,7 +166,10 @@ export function outcomeFromSyncMeta(
       ? (runnerResult as Record<string, unknown>).reason
       : undefined;
   if (typeof reason === "string" && reason) {
-    return { status: "skipped", summary: `The job declined to run: ${reason}.` };
+    return {
+      status: "skipped",
+      summary: `The job declined to run: ${reason}.`,
+    };
   }
   return {
     status: "succeeded",
@@ -197,7 +202,9 @@ export async function reportRunStarted(
         error: null,
         summary: null,
         ...(extra.executionName ? { executionName: extra.executionName } : {}),
-        ...(typeof extra.attempt === "number" ? { attempt: extra.attempt } : {}),
+        ...(typeof extra.attempt === "number"
+          ? { attempt: extra.attempt }
+          : {}),
       });
   } catch (err) {
     logger.warn(

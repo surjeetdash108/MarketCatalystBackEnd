@@ -136,6 +136,8 @@ export interface CheckoutSession {
   subscriptionId: string | null;
   successUrl: string;
   cancelUrl: string;
+  /** Tax included in amountDueToday (provider-computed). */
+  tax?: number;
 }
 
 export interface ChangePreview {
@@ -232,3 +234,37 @@ export interface ProviderEvent {
 
 export type InvoiceDocument =
   { kind: "redirect"; url: string } | { kind: "html"; html: string };
+
+/** Where the customer is billed — the only part of the address we keep (tax region). */
+export interface BillingRegion {
+  country: string;
+  state: string | null;
+  postalCode: string | null;
+}
+
+/** Full billing details: passed to the provider, never stored by us (only the region is). */
+export interface BillingDetails {
+  name: string;
+  phone: string;
+  address: {
+    line1: string;
+    line2: string | null;
+    city: string;
+    state: string | null;
+    postalCode: string | null;
+    country: string;
+  };
+}
+
+/** The provider's price for a new subscription: tax comes only from here. */
+export interface CheckoutQuote {
+  currency: string;
+  subtotal: number;
+  discount: number;
+  tax: number;
+  total: number;
+  /** e.g. "Sales tax (TX)"; null when no tax applies. */
+  taxLabel: string | null;
+  /** true when the provider could not compute tax yet (no region). */
+  taxPending: boolean;
+}

@@ -1,4 +1,4 @@
-import { billingApp } from "../../test/support/billing-app";
+import { billingApp, checkoutBody } from "../../test/support/billing-app";
 
 jest.setTimeout(30_000);
 type App = Awaited<ReturnType<typeof billingApp>>;
@@ -125,10 +125,10 @@ describe("staff full access", () => {
     a = await billingApp({ env: { SUBSCRIPTIONS_ENABLED: "true" } });
     await withStaffList(a, [STAFF]);
     const u = a.user("s3", STAFF, { emailVerified: true });
-    const co = await u.post("/api/billing/checkout", {
-      planId: "pro",
-      interval: "monthly",
-    });
+    const co = await u.post(
+      "/api/billing/checkout",
+      checkoutBody("pro", "monthly"),
+    );
     expect(co.status).toBe(409);
     expect(co.body.code).toBe("staff_access");
     expect(

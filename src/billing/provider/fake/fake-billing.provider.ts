@@ -1,3 +1,5 @@
+import { simulatedTax } from "./fake-tax.config";
+import type { BillingDetails, BillingRegion, CheckoutQuote } from "../types";
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { Logger } from "@nestjs/common";
 import type { AppClock } from "../../../common/app-clock";
@@ -86,6 +88,8 @@ interface FakeCustomer {
   creditBalance: number;
   metadata: Record<string, string>;
   createdAt: string;
+  /** Full billing details (name, address, phone) — kept by the provider only. */
+  billing?: BillingDetails;
 }
 
 interface FakeAction {
@@ -381,6 +385,32 @@ export class FakeBillingProvider implements BillingProvider {
 
   // ── checkout ──────────────────────────────────────────────────────────
 
+  /** SIMULATED tax from the billing region (fake-tax.config.ts). */
+  async previewCheckout(input: {
+    price: PriceRef;
+    discount: AppliedDiscount | null;
+    region: BillingRegion | null;
+  }): Promise<CheckoutQuote> {
+    const now = this.clock.now();
+    const discount = input.discount
+      ? normaliseDiscount(input.discount, input.price.interval, now)
+      : null;
+    const off = discountAmountFor(discount, input.price.amount);
+    const taxable = input.price.amount - off;
+    const t = input.region
+      ? simulatedTax(input.region.country, input.region.state, taxable)
+      : { tax: 0, label: null };
+    return Promise.resolve({
+      currency: input.price.currency,
+      subtotal: input.price.amount,
+      discount: off,
+      tax: t.tax,
+      total: taxable + t.tax,
+      taxLabel: t.label,
+      taxPending: !input.region,
+    });
+  }
+
   async createCheckout(input: {
     uid: string;
     customerId: string;
@@ -389,6 +419,7 @@ export class FakeBillingProvider implements BillingProvider {
     successUrl: string;
     cancelUrl: string;
     idempotencyKey: string;
+    billing?: BillingDetails | null;
   }): Promise<CheckoutSession> {
     // Idempotent: the same key returns the same open session.
     const existing = (
@@ -402,6 +433,23 @@ export class FakeBillingProvider implements BillingProvider {
       ? normaliseDiscount(input.discount, input.price.interval, now)
       : null;
     const id = this.id("cs");
+    const taxed = await this.previewCheckout({
+      price: input.price,
+      discount: input.discount,
+      region: input.billing
+        ? {
+            country: input.billing.address.country,
+            state: input.billing.address.state,
+            postalCode: input.billing.address.postalCode,
+          }
+        : null,
+    });
+    if (input.billing) {
+      // The provider (not us) keeps the full billing details.
+      const c = await this.mustCustomer(input.customerId);
+      c.billing = JSON.parse(JSON.stringify(input.billing)) as BillingDetails;
+      await this.write(C.customers, c);
+    }
     const session: CheckoutSession & {
       idempotencyKey: string;
       lookupKey: string;
@@ -415,8 +463,8 @@ export class FakeBillingProvider implements BillingProvider {
       planId: input.price.planId,
       interval: input.price.interval,
       discount,
-      amountDueToday:
-        input.price.amount - discountAmountFor(discount, input.price.amount),
+      amountDueToday: taxed.total,
+      tax: taxed.tax,
       currency: input.price.currency,
       expiresAt: iso(now + FAKE_CHECKOUT_TTL_MS),
       subscriptionId: null,

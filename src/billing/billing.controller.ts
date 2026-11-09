@@ -29,6 +29,7 @@ import { BillingService } from "./billing.service";
 import {
   ChangePlanDto,
   CheckoutDto,
+  CheckoutPreviewDto,
   PlanTargetDto,
   PromoPreviewDto,
 } from "./billing.dto";
@@ -79,9 +80,27 @@ export class BillingController {
     @CurrentUser() uid: string,
     @AuthToken() token: AuthTokenInfo | undefined,
     @Body() body: CheckoutDto,
+    @Req() req: Request,
   ) {
     await this.refuseStaff(token);
-    return this.billing.checkout(uid, await this.email(uid), body);
+    return this.billing.checkout(
+      uid,
+      await this.email(uid),
+      body,
+      clientIp(req),
+    );
+  }
+
+  @Post("checkout/preview")
+  @HttpCode(200)
+  async checkoutPreview(
+    @CurrentUser() uid: string,
+    @AuthToken() token: AuthTokenInfo | undefined,
+    @Body() body: CheckoutPreviewDto,
+    @Req() req: Request,
+  ) {
+    await this.refuseStaff(token);
+    return this.billing.checkoutPreview(uid, clientIp(req), body);
   }
 
   @Get("checkout/:id")

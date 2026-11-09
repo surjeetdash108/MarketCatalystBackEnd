@@ -140,8 +140,8 @@ export class ApiHealthService {
           (g) =>
             typeof g === "function"
               ? g.name
-              : ((g as { constructor?: { name?: string } })?.constructor?.name ??
-                "guard"),
+              : ((g as { constructor?: { name?: string } })?.constructor
+                  ?.name ?? "guard"),
         );
         rows.push({
           method: RequestMethod[httpMethod] ?? String(httpMethod),

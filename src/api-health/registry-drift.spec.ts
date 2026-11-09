@@ -1,6 +1,10 @@
 import * as fs from "fs";
 import * as path from "path";
-import { JOB_MANIFEST, jobManifest, manifestDrift } from "../common/job-manifest";
+import {
+  JOB_MANIFEST,
+  jobManifest,
+  manifestDrift,
+} from "../common/job-manifest";
 import {
   API_CATALOG,
   API_DOCS,
@@ -42,7 +46,11 @@ function withoutComments(source: string): string {
 }
 
 const join = (...parts: string[]): string =>
-  "/" + parts.map((p) => p.replace(/^\/+|\/+$/g, "")).filter(Boolean).join("/");
+  "/" +
+  parts
+    .map((p) => p.replace(/^\/+|\/+$/g, ""))
+    .filter(Boolean)
+    .join("/");
 
 // ── routes, read from the controllers' decorators ────────────────────────────
 
@@ -57,7 +65,11 @@ function controllerRoutes(): Map<string, string> {
 
     // The scanner understands string-literal decorators only. If a controller
     // starts using another form, fail loudly rather than quietly miss routes.
-    const anyDecorator = (source.match(/@(Controller|Get|Post|Put|Patch|Delete|Sse|All|Head|Options)\(/g) ?? []).length;
+    const anyDecorator = (
+      source.match(
+        /@(Controller|Get|Post|Put|Patch|Delete|Sse|All|Head|Options)\(/g,
+      ) ?? []
+    ).length;
     const re =
       /@Controller\(\s*(?:["'`]([^"'`]*)["'`])?\s*\)|@(Get|Post|Put|Patch|Delete|Sse)\(\s*(?:["'`]([^"'`]*)["'`])?\s*\)/g;
     let understood = 0;
@@ -107,19 +119,35 @@ function callArguments(source: string, start: number): string {
 
 function registeredJobs(): RegisteredJob[] {
   const jobs: RegisteredJob[] = [];
-  for (const file of sourceFiles(SRC, (f) => f.endsWith(".ts") && !f.endsWith(".spec.ts"))) {
+  for (const file of sourceFiles(
+    SRC,
+    (f) => f.endsWith(".ts") && !f.endsWith(".spec.ts"),
+  )) {
     const source = withoutComments(fs.readFileSync(file, "utf8"));
     if (!source.includes("registry.register(")) continue;
     const consts: Record<string, string> = {};
-    for (const m of source.matchAll(/const\s+([A-Z0-9_]+)\s*=\s*"([a-z0-9-]+)"/g)) consts[m[1]] = m[2];
-    for (const m of source.matchAll(/registry\.register\(\s*([A-Z0-9_]+)\s*,/g)) {
+    for (const m of source.matchAll(
+      /const\s+([A-Z0-9_]+)\s*=\s*"([a-z0-9-]+)"/g,
+    ))
+      consts[m[1]] = m[2];
+    for (const m of source.matchAll(
+      /registry\.register\(\s*([A-Z0-9_]+)\s*,/g,
+    )) {
       const name = consts[m[1]];
-      if (!name) throw new Error(`${file}: cannot resolve job name constant ${m[1]}`);
-      const call = callArguments(source, m.index! + "registry.register(".length);
+      if (!name)
+        throw new Error(`${file}: cannot resolve job name constant ${m[1]}`);
+      const call = callArguments(
+        source,
+        m.index! + "registry.register(".length,
+      );
       const list = call.match(/collections:\s*\[([^\]]*)\]/)?.[1] ?? "";
       const literals = [...list.matchAll(/"([^"]+)"/g)].map((x) => x[1]);
-      const onlyLiterals = list.replace(/"[^"]*"/g, "").replace(/[\s,]/g, "") === "";
-      jobs.push({ name, collections: onlyLiterals && literals.length ? literals : null });
+      const onlyLiterals =
+        list.replace(/"[^"]*"/g, "").replace(/[\s,]/g, "") === "";
+      jobs.push({
+        name,
+        collections: onlyLiterals && literals.length ? literals : null,
+      });
     }
   }
   return jobs;
@@ -173,7 +201,11 @@ describe("screen/API catalogue", () => {
   });
 
   it("gives every API a real sentence of description", () => {
-    for (const doc of API_DOCS) expect({ key: doc.key, ok: doc.summary.length >= 12 }).toEqual({ key: doc.key, ok: true });
+    for (const doc of API_DOCS)
+      expect({ key: doc.key, ok: doc.summary.length >= 12 }).toEqual({
+        key: doc.key,
+        ok: true,
+      });
   });
 
   it("has unique screen ids, known groups, and no API listed twice on a screen", () => {
@@ -189,17 +221,29 @@ describe("screen/API catalogue", () => {
 
   it("refers only to jobs the manifest knows", () => {
     for (const doc of API_DOCS) {
-      for (const job of [...(doc.producers ?? []), ...(doc.alsoWrittenBy ?? [])]) {
-        expect({ api: doc.key, job, known: manifestNames.has(job) }).toEqual({ api: doc.key, job, known: true });
+      for (const job of [
+        ...(doc.producers ?? []),
+        ...(doc.alsoWrittenBy ?? []),
+      ]) {
+        expect({ api: doc.key, job, known: manifestNames.has(job) }).toEqual({
+          api: doc.key,
+          job,
+          known: true,
+        });
       }
     }
   });
 
   it("only names a job a producer if that job declares writing the data", () => {
-    const declared = new Map(registeredJobs().map((j) => [j.name, j.collections] as const));
+    const declared = new Map(
+      registeredJobs().map((j) => [j.name, j.collections] as const),
+    );
 
     // Jobs whose registration lists no plain collections (computed in code).
-    const notChecked = [...declared.entries()].filter(([, c]) => c === null).map(([n]) => n).sort();
+    const notChecked = [...declared.entries()]
+      .filter(([, c]) => c === null)
+      .map(([n]) => n)
+      .sort();
     expect(notChecked).toEqual(["auto-purge", "volume-leaders"]);
 
     // Jobs that write a collection their registration does not mention. The
@@ -224,7 +268,9 @@ describe("screen/API catalogue", () => {
       for (const job of doc.producers ?? []) {
         const cols = declared.get(job);
         if (!cols) continue; // computed in code — see notChecked
-        const writes = [...cols, ...(writesBeyondDeclaration[job] ?? [])].map(topLevel);
+        const writes = [...cols, ...(writesBeyondDeclaration[job] ?? [])].map(
+          topLevel,
+        );
         const store = (doc.store ?? []).map(topLevel);
         if (!store.some((s) => writes.includes(s))) {
           mismatches.push(
@@ -250,7 +296,9 @@ describe("screen/API catalogue", () => {
       "GET /market-data/insider-transactions",
     ] as const;
     for (const key of expectsProducer) {
-      const n = (API_CATALOG[key] as { producers?: readonly string[] }).producers?.length ?? 0;
+      const n =
+        (API_CATALOG[key] as { producers?: readonly string[] }).producers
+          ?.length ?? 0;
       expect({ key, hasProducers: n > 0 }).toEqual({ key, hasProducers: true });
     }
   });
@@ -261,7 +309,11 @@ describe("screen/API catalogue", () => {
     const unused = API_DOCS.filter((d) => !users.get(d.key)).map((d) => d.key);
     expect(unused.length).toBeGreaterThan(0); // diagnostics, legacy and ops routes exist
     // …and the UI-facing core is not among them.
-    for (const core of ["GET /market-data/companies", "GET /live/snapshot", "GET /api/portfolio"]) {
+    for (const core of [
+      "GET /market-data/companies",
+      "GET /live/snapshot",
+      "GET /api/portfolio",
+    ]) {
       expect(users.get(core)?.length ?? 0).toBeGreaterThan(3);
     }
   });
@@ -269,35 +321,56 @@ describe("screen/API catalogue", () => {
 
 describe("checkRequest", () => {
   const doc = (over: Record<string, unknown>) =>
-    ({ method: "GET", path: "/x", ...over }) as Parameters<typeof checkRequest>[0];
+    ({ method: "GET", path: "/x", ...over }) as Parameters<
+      typeof checkRequest
+    >[0];
 
   it("calls a parameterless GET as is", () => {
     expect(checkRequest(doc({}))).toEqual({ url: "/x" });
   });
 
   it("appends a sample query when one is defined", () => {
-    expect(checkRequest(doc({ params: "ticker", check: { query: "?ticker=AAPL" } }))).toEqual({ url: "/x?ticker=AAPL" });
+    expect(
+      checkRequest(doc({ params: "ticker", check: { query: "?ticker=AAPL" } })),
+    ).toEqual({ url: "/x?ticker=AAPL" });
   });
 
   it("will not guess at parameters it has no sample for", () => {
-    expect(checkRequest(doc({ params: "ticker" }))).toEqual({ skip: "needs parameters, and no sample is defined" });
-    expect(checkRequest(doc({ path: "/x/:id" }))).toEqual({ skip: "needs a path parameter" });
+    expect(checkRequest(doc({ params: "ticker" }))).toEqual({
+      skip: "needs parameters, and no sample is defined",
+    });
+    expect(checkRequest(doc({ path: "/x/:id" }))).toEqual({
+      skip: "needs a path parameter",
+    });
   });
 
   it("never checks a write, a stream, or something marked skip", () => {
-    expect(checkRequest(doc({ method: "POST" }))).toEqual({ skip: "changes data" });
-    expect(checkRequest(doc({ method: "DELETE" }))).toEqual({ skip: "changes data" });
-    expect(checkRequest(doc({ sse: true }))).toEqual({ skip: "a Server-Sent Events stream" });
-    expect(checkRequest(doc({ check: { skip: "costs money" } }))).toEqual({ skip: "costs money" });
+    expect(checkRequest(doc({ method: "POST" }))).toEqual({
+      skip: "changes data",
+    });
+    expect(checkRequest(doc({ method: "DELETE" }))).toEqual({
+      skip: "changes data",
+    });
+    expect(checkRequest(doc({ sse: true }))).toEqual({
+      skip: "a Server-Sent Events stream",
+    });
+    expect(checkRequest(doc({ check: { skip: "costs money" } }))).toEqual({
+      skip: "costs money",
+    });
   });
 
   it("only ever proposes GETs that are safe to repeat", () => {
     for (const d of API_DOCS) {
       const plan = checkRequest(d);
       if ("url" in plan) {
-        expect({ key: d.key, method: d.method }).toEqual({ key: d.key, method: "GET" });
+        expect({ key: d.key, method: d.method }).toEqual({
+          key: d.key,
+          method: "GET",
+        });
         // Anything that can start an LLM generation must have opted out.
-        expect({ key: d.key, llm: (d.vendors ?? []).includes("Groq") }).toEqual({ key: d.key, llm: false });
+        expect({ key: d.key, llm: (d.vendors ?? []).includes("Groq") }).toEqual(
+          { key: d.key, llm: false },
+        );
       }
     }
     expect(jobManifest("news")).toBeDefined();

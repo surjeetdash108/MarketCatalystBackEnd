@@ -89,7 +89,11 @@ export class ApiHealthController {
   ) {
     // AdminGuard sets adminEmail from a verified Firebase token. A caller that
     // got in on the IAM-trust path (worker only) has no email to record.
-    return this.jobsAdmin.requestRun(name, req.adminEmail ?? "iam-caller", body ?? {});
+    return this.jobsAdmin.requestRun(
+      name,
+      req.adminEmail ?? "iam-caller",
+      body ?? {},
+    );
   }
 
   /**

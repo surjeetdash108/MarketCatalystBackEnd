@@ -46,6 +46,7 @@ import { BillingReconcileJob } from "../../src/billing/reconcile.job";
 import { RetentionService } from "../../src/billing/retention/retention.service";
 import { FakeAuth, T0, configOf } from "./billing-harness";
 import type { AuthTokenInfo } from "../../src/common/auth-token";
+import { CONSENT_VERSION } from "../../src/billing/checkout/consent";
 import { EmailVerificationService } from "../../src/account/email-verification.service";
 import { StaffAccessService } from "../../src/account/staff-access.service";
 import { AdminStaffController } from "../../src/account/admin-staff.controller";
@@ -56,13 +57,11 @@ import { FakeFirestore } from "./fake-firestore";
 let currentAuth: FakeAuth | null = null;
 class HeaderAuthGuard implements CanActivate {
   canActivate(ctx: ExecutionContext): boolean {
-    const req = ctx
-      .switchToHttp()
-      .getRequest<{
-        headers: Record<string, string>;
-        uid?: string;
-        authToken?: AuthTokenInfo;
-      }>();
+    const req = ctx.switchToHttp().getRequest<{
+      headers: Record<string, string>;
+      uid?: string;
+      authToken?: AuthTokenInfo;
+    }>();
     const uid = req.headers["x-test-uid"];
     if (!uid) return false;
     req.uid = uid;
@@ -87,6 +86,33 @@ class HeaderAdminGuard implements CanActivate {
     req.adminActor = req.headers["x-test-admin"];
     return true;
   }
+}
+
+/** A complete checkout v2 body (consent, phone, billing address in Oregon (no sales tax)). */
+export function checkoutBody(
+  planId: string,
+  interval: "monthly" | "annual",
+  over: Record<string, unknown> = {},
+) {
+  return {
+    planId,
+    interval,
+    consent: { accepted: true, version: CONSENT_VERSION },
+    phone: "+15125550147",
+    marketingOptIn: false,
+    billing: {
+      name: "Test Buyer",
+      address: {
+        line1: "1 Main St",
+        line2: null,
+        city: "Portland",
+        state: "OR",
+        postalCode: "97201",
+        country: "US",
+      },
+    },
+    ...over,
+  };
 }
 
 export interface BillingAppOptions {
@@ -201,8 +227,7 @@ export async function billingApp(opts: BillingAppOptions = {}) {
   ) {
     const u = auth.users.has(uid) ? as(uid) : user(uid, email);
     const co = await u.post("/api/billing/checkout", {
-      planId,
-      interval,
+      ...checkoutBody(planId, interval),
       ...(promoCode ? { promoCode } : {}),
     });
     if (co.status !== 200) return { checkout: co, complete: null, u };

@@ -165,7 +165,8 @@ interface Meta {
 }
 
 const finishedMs = (m: Meta | undefined): number => {
-  const t = typeof m?.lastSyncedAt === "string" ? Date.parse(m.lastSyncedAt) : NaN;
+  const t =
+    typeof m?.lastSyncedAt === "string" ? Date.parse(m.lastSyncedAt) : NaN;
   return Number.isFinite(t) ? t : NaN;
 };
 
