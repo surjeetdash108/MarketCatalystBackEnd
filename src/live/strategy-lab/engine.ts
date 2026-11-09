@@ -678,7 +678,7 @@ export function buildEvidence(res, ctx) {
   let maxGap = 0;
   for (let i = 1; i < eq.length; i++) maxGap = Math.max(maxGap, (dateMs(eq[i].date) - dateMs(eq[i - 1].date)) / dayMs);
   const spanDays = (dateMs(eq[eq.length - 1].date) - dateMs(eq[0].date)) / dayMs;
-  const wantDays = period.days != null ? period.days : (period.years || 5) * 365.25;
+  const wantDays = period.days != null ? period.days : (period.years || 1) * 365.25;
   const intraday = isIntradayTf(tf);
   const missing = intraday ? missingSessions([...new Set(eq.map((x) => String(x.date).slice(0, 10)))]) : [];
   const gapOk = intraday ? missing.length === 0 : maxGap <= (tf === '1w' ? 10 : 5);
