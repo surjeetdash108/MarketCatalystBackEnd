@@ -37,6 +37,25 @@ describe("SUBSCRIPTIONS_ENABLED and provider safety", () => {
     expect(me.limits.watchlistTickers).toBeNull();
   });
 
+  it("flag OFF: legacy user docs (old $49.99 pro, retired plus, tier claims) keep every built feature", async () => {
+    a = await billingApp({ env: { SUBSCRIPTIONS_ENABLED: "false" } });
+    // The shapes found in production users docs on 2026-11-10 (counts only were read).
+    const legacy = {
+      legacyPro: { currentPlan: "pro", tier: "pro", subscriptionStatus: "ACTIVE" },
+      legacyProNone: { currentPlan: "pro", tier: "pro", subscriptionStatus: "NONE" },
+      legacyFree: { currentPlan: "free", tier: "free", subscriptionStatus: "NONE" },
+      retiredPlus: { currentPlan: "plus", tier: "plus", subscriptionStatus: "ACTIVE" },
+      bare: {},
+    };
+    for (const [uid, doc] of Object.entries(legacy)) {
+      a.fs.seed("users", uid, { email: `${uid}@example.com`, ...doc });
+      const me = (await a.user(uid).get("/api/me/entitlements")).body;
+      expect(me.subscriptionsEnabled).toBe(false);
+      expect(Object.values(me.entitlements).every(Boolean)).toBe(true);
+      expect(me.limits.watchlistTickers).toBeNull();
+    }
+  });
+
   it("flag toggled at runtime (admin override) takes effect without a restart", async () => {
     a = await billingApp({ env: { SUBSCRIPTIONS_ENABLED: "false" } });
     const u = a.user("u1");

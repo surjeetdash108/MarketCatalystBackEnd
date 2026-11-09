@@ -1,4 +1,6 @@
-import { readFileSync } from "fs";
+import { mkdtempSync, readFileSync, readdirSync } from "fs";
+import { tmpdir } from "os";
+import type { Firestore } from "firebase-admin/firestore";
 import { join } from "path";
 import { FakeFirestore } from "../../test/support/fake-firestore";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
@@ -11,6 +13,7 @@ import {
   planRank,
 } from "./plans.registry";
 import { PlansService } from "./plans.service";
+import { applyCatalog } from "./catalog-apply";
 import {
   uiCatalogSource,
   websiteCatalogJson,
@@ -133,21 +136,83 @@ describe("plan catalog", () => {
   });
 });
 
-describe("PlansService.seed", () => {
+describe("catalog apply (scripts/apply-catalog.ts)", () => {
+  const T = new Date("2026-11-10T12:00:00.000Z");
+  const db = (fs: FakeFirestore) => fs as unknown as Firestore;
   const service = (fs: FakeFirestore) =>
     new PlansService({ firestore: fs } as unknown as FirebaseAdminService);
-
-  it("rewrites plan docs from an older catalog (old $49.99 Pro) and deactivates plus", async () => {
-    const fs = new FakeFirestore();
+  // The production plans collection today (read-only snapshot, 2026-11-10).
+  const seedV1 = (fs: FakeFirestore) => {
+    fs.seed("plans", "free", {
+      id: "free",
+      amount: 0,
+      active: true,
+      sortOrder: 0,
+    });
+    fs.seed("plans", "plus", {
+      id: "plus",
+      amount: 2999,
+      active: true,
+      sortOrder: 1,
+    });
     fs.seed("plans", "pro", {
       id: "pro",
       amount: 4999,
+      active: true,
+      sortOrder: 2,
       featureFlags: { optionsChain: true },
     });
-    fs.seed("plans", "plus", { id: "plus", amount: 2999, active: true });
-    const r = await service(fs).seed();
-    expect(r.rewritten.sort()).toEqual(["elite", "free", "pro", "starter"]);
-    expect(r.retired).toEqual(["plus"]);
+  };
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "catalog-"));
+  });
+
+  it("booting the app never writes the catalog (no onModuleInit seed)", () => {
+    expect(
+      (PlansService.prototype as unknown as Record<string, unknown>)
+        .onModuleInit,
+    ).toBeUndefined();
+  });
+
+  it("dry run lists the exact diff against v1 and writes nothing", async () => {
+    const fs = new FakeFirestore();
+    seedV1(fs);
+    const r = await applyCatalog(db(fs), { dryRun: true, now: T });
+    expect(r.backupFile).toBeNull();
+    expect(r.changes.map((c) => `${c.op} ${c.id}`)).toEqual([
+      "rewrite free",
+      "create starter",
+      "rewrite pro",
+      "create elite",
+      "retire plus",
+    ]);
+    const pro = r.changes.find((c) => c.id === "pro")!;
+    expect(pro.fields).toEqual(
+      expect.arrayContaining([
+        { path: "amount", before: 4999, after: 5900 },
+        { path: "prices.annual.amount", before: undefined, after: 56640 },
+      ]),
+    );
+    expect(fs.read("plans", "pro").amount).toBe(4999);
+    expect(fs.read("plans", "starter")).toBeUndefined();
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("apply backs up the whole collection first, then writes; plus is retired", async () => {
+    const fs = new FakeFirestore();
+    seedV1(fs);
+    const r = await applyCatalog(db(fs), {
+      dryRun: false,
+      backupDir: dir,
+      now: T,
+    });
+    expect(r.backupFile).toBe(
+      join(dir, "plans-backup-2026-11-10T12-00-00-000Z.json"),
+    );
+    const backup = JSON.parse(readFileSync(r.backupFile!, "utf8"));
+    expect(Object.keys(backup.docs).sort()).toEqual(["free", "plus", "pro"]);
+    expect(backup.docs.pro.amount).toBe(4999);
     expect(fs.read("plans", "pro")).toMatchObject({
       amount: 5900,
       catalogVersion: CATALOG_VERSION,
@@ -156,17 +221,42 @@ describe("PlansService.seed", () => {
     expect(fs.read("plans", "plus")?.active).toBe(false);
   });
 
+  it("is idempotent: a second run changes nothing and takes no backup", async () => {
+    const fs = new FakeFirestore();
+    seedV1(fs);
+    await applyCatalog(db(fs), { dryRun: false, backupDir: dir, now: T });
+    const before = JSON.stringify(fs.read("plans", "pro"));
+    const again = await applyCatalog(db(fs), {
+      dryRun: false,
+      backupDir: dir,
+      now: new Date(T.getTime() + 60_000),
+    });
+    expect(again.writes).toEqual([]);
+    expect(again.changes.every((c) => c.op === "unchanged")).toBe(true);
+    expect(again.backupFile).toBeNull();
+    expect(JSON.stringify(fs.read("plans", "pro"))).toBe(before);
+    expect(readdirSync(dir)).toHaveLength(1);
+  });
+
+  it("refuses to write without a backup directory", async () => {
+    const fs = new FakeFirestore();
+    seedV1(fs);
+    await expect(
+      applyCatalog(db(fs), { dryRun: false, now: T }),
+    ).rejects.toThrow(/backupDir/);
+    expect(fs.read("plans", "pro").amount).toBe(4999);
+  });
+
   it("keeps an operator's entitlement edit within the same catalog version, but never their price", async () => {
     const fs = new FakeFirestore();
-    const svc = service(fs);
-    await svc.seed();
+    await applyCatalog(db(fs), { dryRun: false, backupDir: dir, now: T });
     const pro = fs.read("plans", "pro");
     fs.seed("plans", "pro", {
       ...pro,
       amount: 1,
       featureFlags: { ...(pro.featureFlags as object), screener: false },
     });
-    await svc.seed();
+    await applyCatalog(db(fs), { dryRun: false, backupDir: dir, now: T });
     const after = fs.read("plans", "pro");
     expect((after.featureFlags as Record<string, boolean>).screener).toBe(
       false,
@@ -174,17 +264,32 @@ describe("PlansService.seed", () => {
     expect(after.amount).toBe(5900);
   });
 
-  it("GET /plans data excludes retired plans", async () => {
+  it("before the apply, readers get the registry catalog (not the v1 docs); after it, the stored docs", async () => {
     const fs = new FakeFirestore();
-    fs.seed("plans", "plus", { id: "plus", active: true, sortOrder: 1 });
-    const svc = service(fs);
-    await svc.seed();
-    expect((await svc.listActive()).map((p) => p.id)).toEqual([
-      "free",
-      "starter",
-      "pro",
-      "elite",
+    seedV1(fs);
+    const before = await service(fs).listActive();
+    expect(before.map((p) => [p.id, p.amount])).toEqual([
+      ["free", 0],
+      ["starter", 3900],
+      ["pro", 5900],
+      ["elite", 19900],
     ]);
+    await applyCatalog(db(fs), { dryRun: false, backupDir: dir, now: T });
+    const pro = fs.read("plans", "pro");
+    fs.seed("plans", "pro", { ...pro, description: "edited after apply" });
+    const after = await service(fs).listActive();
+    expect(after.map((p) => p.id)).toEqual(["free", "starter", "pro", "elite"]);
+    expect(after.find((p) => p.id === "pro")?.description).toBe(
+      "edited after apply",
+    );
+  });
+
+  it("the admin preview is a dry run", async () => {
+    const fs = new FakeFirestore();
+    seedV1(fs);
+    const r = await service(fs).previewCatalog();
+    expect(r.changes.length).toBeGreaterThan(0);
+    expect(fs.read("plans", "pro").amount).toBe(4999);
   });
 });
 

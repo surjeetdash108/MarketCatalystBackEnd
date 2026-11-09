@@ -48,3 +48,6 @@ Thumbs.db
 
 # mcps
 .playwright-mcp
+
+# scripts/apply-catalog.ts backups (may contain production plan docs)
+catalog-backups/

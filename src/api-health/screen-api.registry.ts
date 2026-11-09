@@ -826,8 +826,9 @@ export const API_CATALOG = {
     store: ["plans"],
     notes: "Unauthenticated.",
   },
-  "POST /plans/seed": {
-    summary: "Seeds the default plans (admin).",
+  "GET /plans/catalog-preview": {
+    summary: "Dry run of scripts/apply-catalog.ts: what applying the catalog would change in plans (admin; never writes).",
+    store: ["plans"],
   },
   "GET /users/:uid/entitlements": {
     summary: "The resolved entitlements of a user (admin).",
@@ -1635,7 +1636,7 @@ export const SCREENS = [
       "GET /feature-flags/map",
       "POST /feature-flags/seed",
       "POST /feature-flags/:key",
-      "POST /plans/seed",
+      "GET /plans/catalog-preview",
       "GET /users/:uid/entitlements",
     ],
   },

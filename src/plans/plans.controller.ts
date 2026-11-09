@@ -8,7 +8,6 @@ import {
   NotFoundException,
   Param,
   Patch,
-  Post,
   UseGuards,
 } from "@nestjs/common";
 import { AdminGuard } from "../common/admin.guard";
@@ -84,14 +83,20 @@ export class PlansController {
   async listPlans() {
     // paidPlansAvailable lets signed-out pages (signup, website) show
     // "launching soon" instead of a checkout that would be refused.
-    const paidPlansAvailable = this.access ? await this.access.subscriptionsLive() : false;
+    const paidPlansAvailable = this.access
+      ? await this.access.subscriptionsLive()
+      : false;
     return { plans: await this.plans.listActive(), paidPlansAvailable };
   }
 
+  /**
+   * Dry run only: what scripts/apply-catalog.ts would change. Applying the
+   * catalog is an operator step with a backup — never an API call or a boot.
+   */
   @UseGuards(AdminGuard)
-  @Post("plans/seed")
-  async seed() {
-    return this.plans.seed();
+  @Get("plans/catalog-preview")
+  async catalogPreview() {
+    return this.plans.previewCatalog();
   }
 
   /**
