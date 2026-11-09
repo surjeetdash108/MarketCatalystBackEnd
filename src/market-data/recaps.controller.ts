@@ -2,7 +2,6 @@ import { Controller, Get, Header, UseGuards } from "@nestjs/common";
 import { CachedCollectionsService } from "../live/cached-collections.service";
 import { MarketDataService } from "./market-data.service";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
-import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
 
 /**
  * GET /market-data/recaps — backs the Recap screen's numeric fields
@@ -21,7 +20,7 @@ export class RecapsController {
     private readonly cached: CachedCollectionsService,
   ) {}
 
-  @RequiresEntitlement("workspaces")
+  // Free: the dashboard shows this to every signed-in user.
   @Get("recaps")
   @Header(
     "Cache-Control",

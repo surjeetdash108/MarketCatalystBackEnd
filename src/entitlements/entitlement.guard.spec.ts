@@ -110,7 +110,7 @@ const ROUTE_MAP: Array<[RegExp, "starter" | "pro" | "elite"]> = [
     "starter",
   ],
   [
-    /^GET \/market-data\/(analyst-|filings-wire|recaps|ai-infrastructure|etf-holdings|mover-catalyst|earnings-announcements)/,
+    /^GET \/market-data\/(analyst-|filings-wire|ai-infrastructure|etf-holdings|mover-catalyst)/,
     "starter",
   ],
   [
@@ -181,6 +181,25 @@ describe("route access matrix (SUBSCRIPTIONS_ENABLED on, provider configured)", 
   let g: Awaited<ReturnType<typeof guardWith>>;
   beforeAll(async () => {
     g = await guardWith({ SUBSCRIPTIONS_ENABLED: "true" });
+  });
+
+  it("dashboard data that is Free is not gated: recaps and earnings announcements", async () => {
+    for (const key of [
+      "GET /market-data/recaps",
+      "GET /market-data/earnings-announcements",
+    ]) {
+      expect([key, routes.some((r) => r.key === key)]).toEqual([key, false]);
+    }
+    // ...while the two Starter dashboard widgets stay gated.
+    for (const key of [
+      "GET /market-data/insider-transactions",
+      "GET /market-data/analyst-actions",
+    ]) {
+      const r = routes.find((x) => x.key === key);
+      expect(r).toBeDefined();
+      expect(await verdict(g.guard, r, "nobody")).toBe(403);
+      expect(await verdict(g.guard, r, "starter-user")).toBe(200);
+    }
   });
 
   it("finds every gated route group from the doc's route map", () => {
