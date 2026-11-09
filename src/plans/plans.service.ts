@@ -1,141 +1,46 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
-import { setWithCreatedAt } from "../common/firestore-batch.util";
 import {
+  CATALOG_VERSION,
   DEFAULT_PLAN_ID,
   ENTITLEMENT_KEYS,
   PLAN_DEFINITIONS,
   type EntitlementKey,
   type PlanDefinition,
 } from "./plans.registry";
+import { applyCatalog, isCatalogApplied } from "./catalog-apply";
+
+/** The registry catalog (what scripts/apply-catalog.ts writes). */
+function registryPlans(): PlanDefinition[] {
+  return PLAN_DEFINITIONS;
+}
 
 /**
- * Reads and seeds the `plans` collection.
+ * Reads the `plans` collection.
  *
- * Firestore is the runtime source of truth so pricing and entitlements change
- * without a redeploy. The registry is only a seed: seeding MERGES, so a plan
- * edited in the console keeps its edits when a later deploy adds a new
- * entitlement key to the registry.
+ * Nothing here writes the catalog: applying a new catalog version to Firestore
+ * is an explicit operator step (scripts/apply-catalog.ts, dry-run first, with a
+ * backup). Until the stored docs carry the current CATALOG_VERSION, readers get
+ * the registry catalog — the exact content the apply would write — so /plans,
+ * the website tiles and signup are correct before and after the apply.
  */
 @Injectable()
-export class PlansService implements OnModuleInit {
+export class PlansService {
   private readonly logger = new Logger(PlansService.name);
   /** Short cache — plans are read on nearly every entitlement resolution. */
   private cache: { plans: PlanDefinition[]; at: number } | null = null;
   private static readonly TTL_MS = 60_000;
+  private warnedStale = false;
 
   constructor(private readonly firebase: FirebaseAdminService) {}
 
-  async onModuleInit() {
-    // Seeding is the worker's job. PlansModule is also mounted on the public
-    // `live` service (so it can serve the admin console) — but that service
-    // scales to zero, so seeding there would re-run on every cold start. The
-    // worker owns the single seed; live only reads.
-    if ((process.env.APP_ROLE ?? "worker").trim().toLowerCase() === "live") {
-      return;
-    }
-    // Seed on boot so a fresh environment has plans without a manual step.
-    // Failure is logged, not thrown: the app must still start if Firestore is
-    // briefly unreachable, and entitlement resolution falls back to the
-    // registry anyway.
-    try {
-      await this.seed();
-    } catch (err) {
-      this.logger.error(`Plan seeding failed: ${(err as Error).message}`);
-    }
-  }
-
-  /**
-   * Writes each registry plan, preserving any field an operator has changed.
-   *
-   * New entitlement keys are back-filled onto existing plan documents (missing
-   * key → registry default) so adding a module to the registry does not leave
-   * older plans with an absent flag, which `resolve()` would otherwise read as
-   * "not granted" and silently hide a feature from paying users.
-   */
-  async seed(): Promise<{
-    seeded: number;
-    keysBackfilled: number;
-    keysPruned: string[];
-  }> {
-    const col = this.firebase.firestore.collection("plans");
-    let keysBackfilled = 0;
-    const keysPruned = new Set<string>();
-    const validKeys = new Set<string>(ENTITLEMENT_KEYS);
-
-    for (const def of PLAN_DEFINITIONS) {
-      const ref = col.doc(def.id);
-      const existing = (await ref.get()).data();
-
-      const featureFlags: Record<string, boolean> = { ...def.featureFlags };
-      if (existing?.featureFlags) {
-        for (const key of ENTITLEMENT_KEYS) {
-          if (typeof existing.featureFlags[key] === "boolean") {
-            // Operator's value wins over the registry default.
-            featureFlags[key] = existing.featureFlags[key];
-          } else {
-            keysBackfilled++;
-          }
-        }
-        // Record retired keys so they can be DELETED below. A plain merge can
-        // only ever add, so without this a key removed from the registry lives
-        // on in Firestore forever — and an older revision booting mid-deploy
-        // merges it straight back in. Observed exactly that: `advancedCharts`
-        // reappeared on all three plans after being split into finer keys.
-        for (const key of Object.keys(existing.featureFlags)) {
-          if (!validKeys.has(key)) keysPruned.add(key);
-        }
-      }
-
-      await setWithCreatedAt(this.firebase.firestore, ref, {
-        // Commercial fields are seeded only on first write; afterwards the
-        // console is authoritative, or a price edit would be reverted on every
-        // deploy.
-        ...(existing
-          ? {}
-          : {
-              name: def.name,
-              amount: def.amount,
-              currency: def.currency,
-              billingCycle: def.billingCycle,
-              description: def.description,
-              active: def.active,
-              sortOrder: def.sortOrder,
-              stripePriceId: def.stripePriceId,
-            }),
-        id: def.id,
-        featureFlags,
-        updatedAt: new Date().toISOString(),
-      });
-    }
-
-    // Deleting retired keys needs FieldValue.delete() on a dotted path — a
-    // merged map write cannot express removal.
-    if (keysPruned.size > 0) {
-      const { FieldValue } = await import("firebase-admin/firestore");
-      const deletes = Object.fromEntries(
-        [...keysPruned].map((k) => [`featureFlags.${k}`, FieldValue.delete()]),
-      );
-      for (const def of PLAN_DEFINITIONS) {
-        await col
-          .doc(def.id)
-          .update(deletes)
-          .catch(() => undefined);
-      }
-      this.logger.warn(
-        `Pruned retired entitlement keys from plans: ${[...keysPruned].join(", ")}`,
-      );
-    }
-
-    this.cache = null;
-    this.logger.log(
-      `Seeded ${PLAN_DEFINITIONS.length} plans ` +
-        `(${keysBackfilled} keys back-filled, ${keysPruned.size} pruned)`,
-    );
+  /** Dry run of scripts/apply-catalog.ts against this environment (no writes). */
+  async previewCatalog() {
+    const r = await applyCatalog(this.firebase.firestore, { dryRun: true });
     return {
-      seeded: PLAN_DEFINITIONS.length,
-      keysBackfilled,
-      keysPruned: [...keysPruned],
+      catalogVersion: CATALOG_VERSION,
+      changes: r.changes,
+      applyWith: "scripts/apply-catalog.ts",
     };
   }
 
@@ -147,20 +52,34 @@ export class PlansService implements OnModuleInit {
     }
     try {
       const snap = await this.firebase.firestore.collection("plans").get();
-      const plans = snap.docs
-        .map((d) => ({ ...(d.data() as PlanDefinition), id: d.id }))
-        .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
-      if (plans.length > 0) {
+      const stored = Object.fromEntries(snap.docs.map((d) => [d.id, d.data()]));
+      if (!isCatalogApplied(stored)) {
+        if (!this.warnedStale) {
+          this.warnedStale = true;
+          this.logger.warn(
+            `plans collection is not on catalog v${CATALOG_VERSION} — serving the registry catalog until scripts/apply-catalog.ts is run`,
+          );
+        }
+        const plans = registryPlans();
         this.cache = { plans, at: now };
         return plans;
       }
-      return PLAN_DEFINITIONS;
+      const plans = snap.docs
+        .map((d) => ({ ...(d.data() as PlanDefinition), id: d.id }))
+        .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+      this.cache = { plans, at: now };
+      return plans;
     } catch (err) {
       this.logger.warn(
         `plans read failed, using registry defaults: ${(err as Error).message}`,
       );
-      return PLAN_DEFINITIONS;
+      return registryPlans();
     }
+  }
+
+  /** Purchasable/listable plans only — retired plans are excluded. */
+  async listActive(): Promise<PlanDefinition[]> {
+    return (await this.list()).filter((p) => p.active !== false);
   }
 
   async get(planId: string): Promise<PlanDefinition | null> {

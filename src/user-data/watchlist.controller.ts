@@ -18,24 +18,19 @@ import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 import { AiAnalysisService } from "../live/ai-analysis.service";
 import { setWithCreatedAt } from "../common/firestore-batch.util";
 import { SubscriptionsService } from "../plans/subscriptions.service";
-import { DEFAULT_PLAN_ID } from "../plans/plans.registry";
+import { planById } from "../plans/plans.registry";
+import { BillingAccessService } from "../billing/billing-access.service";
 
 /**
- * How many tickers a FREE-tier user may add to one watchlist, or null for no
- * limit. THE ONE SWITCH for the cap: it controls both enforcement
- * (assertCanAdd) and what the app is told to display (tickerLimitFor), so the
- * two can never disagree.
+ * Watchlist ticker cap: the user's plan limit from the catalog
+ * (plans.registry → limits.watchlistTickers; Free = 5, paid = unlimited),
+ * enforced only while subscriptions are live (SUBSCRIPTIONS_ENABLED + a billing
+ * provider). Off → no cap, today's behaviour.
  *
- * Currently null — the limit was turned off in prod (Sep 30, "tickers limit is
- * removed"). Set it back to a number (it was 5) to re-enable; the app's usage
- * count and "watchlist full" notice then return automatically.
- *
- * NEW ADDITIONS ONLY when enabled. A free user who already holds more than
- * this keeps every ticker they saved — nothing is removed, hidden or truncated.
- * Re-adding a ticker the list already holds is always allowed.
+ * NEW ADDITIONS ONLY. A user who already holds more keeps every ticker they
+ * saved — nothing is removed, hidden or truncated. Re-adding a ticker the list
+ * already holds is always allowed.
  */
-const FREE_WATCHLIST_LIMIT: number | null = null;
-
 const TICKER_RE = /^[A-Z][A-Z0-9.-]{0,9}$/;
 const MAX_LISTS = 25;
 const DEFAULT_ID = "default";
@@ -65,6 +60,7 @@ export class WatchlistController {
     private readonly firebase: FirebaseAdminService,
     private readonly aiAnalysis: AiAnalysisService,
     private readonly subscriptions: SubscriptionsService,
+    private readonly access: BillingAccessService,
   ) {}
 
   /**
@@ -99,44 +95,39 @@ export class WatchlistController {
   /**
    * Refuse an add that would push a free-tier list past the cap.
    *
-   * A no-op while FREE_WATCHLIST_LIMIT is null. Otherwise silent on every paid
-   * plan, and silent when the ticker is already in the list. Any failure to
-   * resolve the plan ALLOWS the add: a billing lookup hiccup must not block
-   * someone from using their own watchlist.
+   * A no-op when the user's plan has no limit, subscriptions are not live, or
+   * the ticker is already in the list. Any failure to resolve the plan ALLOWS
+   * the add: a billing lookup hiccup must not block someone from using their
+   * own watchlist.
    */
   private async assertCanAdd(
     uid: string,
     existing: string[],
     ticker: string,
   ): Promise<void> {
-    const limit = FREE_WATCHLIST_LIMIT;
-    if (limit === null) return;
     if (existing.includes(ticker)) return;
-    if (existing.length < limit) return;
-    let planId: string;
-    try {
-      planId = (await this.subscriptions.forUser(uid)).planId;
-    } catch {
-      return; // fail open — never lock a user out of their own list
-    }
-    if (planId !== DEFAULT_PLAN_ID) return;
-    throw new ForbiddenException(
-      `The free plan holds up to ${limit} tickers per watchlist. ` +
-        `Remove one, or upgrade to add more.`,
-    );
+    const limit = await this.tickerLimitFor(uid);
+    if (limit === null || existing.length < limit) return;
+    throw new ForbiddenException({
+      statusCode: 403,
+      code: "plan_required",
+      entitlement: "watchlistTickers",
+      requiredPlan: "starter",
+      message: `The Free plan holds up to ${limit} tickers per watchlist. Remove one, or upgrade to add more.`,
+    });
   }
 
   /**
-   * Tickers allowed per watchlist for this user: the free-tier cap, or null
-   * for no limit. Sent with the lists so the client can show usage ("3 / 5")
-   * and explain a full list up front, from the same switch and plan check that
-   * enforce it. Fails open (null) like assertCanAdd.
+   * Tickers allowed per watchlist for this user, or null for no limit. Sent
+   * with the lists so the client can show usage ("3 / 5") from the same check
+   * that enforces it. Fails open (null): a billing lookup hiccup must never
+   * lock someone out of their own list.
    */
   private async tickerLimitFor(uid: string): Promise<number | null> {
-    if (FREE_WATCHLIST_LIMIT === null) return null;
     try {
+      if (!(await this.access.subscriptionsLive())) return null;
       const { planId } = await this.subscriptions.forUser(uid);
-      return planId === DEFAULT_PLAN_ID ? FREE_WATCHLIST_LIMIT : null;
+      return planById(planId)?.limits.watchlistTickers ?? null;
     } catch {
       return null;
     }

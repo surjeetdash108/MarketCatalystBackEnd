@@ -10,6 +10,7 @@ import { CachedCollectionsService } from "../live/cached-collections.service";
 import { StockDetailsService } from "../live/stock-details.service";
 import { MarketDataService } from "./market-data.service";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
+import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
 
 const TICKER_RE = /^[A-Z0-9.-]{1,10}$/;
 
@@ -38,6 +39,7 @@ export class InsiderTransactionsController {
     private readonly stockDetails: StockDetailsService,
   ) {}
 
+  @RequiresEntitlement("ownership")
   @Get("insider-transactions")
   @Header(
     "Cache-Control",

@@ -16,6 +16,7 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 import { LAB_INTRADAY, StrategyLabService } from "./strategy-lab.service";
 import { LabResultsService } from "./strategy-lab/lab-results.service";
+import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
 
 const TICKER_RE = /^[A-Z][A-Z0-9.-]{0,9}$/;
 /** Per-request cap for raw bars (single-stock backtests, charts and the Backtest step's stock list). */
@@ -41,6 +42,7 @@ const LAB_TFS = new Set(["d", "1w", ...Object.keys(LAB_INTRADAY)]);
  * key never reaches the client); POST ai-rules turns plain English into rules.
  */
 @Controller("live/strategy-lab")
+@RequiresEntitlement("strategyLab")
 @UseGuards(FirebaseAuthGuard)
 export class StrategyLabController {
   constructor(

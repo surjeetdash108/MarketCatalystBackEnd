@@ -73,6 +73,24 @@ export class AdminGuard implements CanActivate {
    * depends on remembering an env var at deploy time — a service that really
    * needs path 2 must OPT IN explicitly.
    */
+  /** Admin must have a verified email (ADMIN_REQUIRE_EMAIL_VERIFIED, default true). */
+  private get requireVerified(): boolean {
+    return (
+      String(this.config.get("ADMIN_REQUIRE_EMAIL_VERIFIED", "true"))
+        .trim()
+        .toLowerCase() !== "false"
+    );
+  }
+
+  /** Admin must have signed in with a second factor (ADMIN_REQUIRE_MFA, default true). */
+  private get requireMfa(): boolean {
+    return (
+      String(this.config.get("ADMIN_REQUIRE_MFA", "true"))
+        .trim()
+        .toLowerCase() !== "false"
+    );
+  }
+
   private get trustIam(): boolean {
     return (
       String(this.config.get("ADMIN_GUARD_TRUST_IAM", "false"))
@@ -92,7 +110,10 @@ export class AdminGuard implements CanActivate {
       // shape of an ops/monitor request. With --no-allow-unauthenticated the
       // request could not have reached this process without passing Cloud Run
       // IAM, so in IAM mode it is already authorised.
-      if (this.trustIam) return true;
+      if (this.trustIam) {
+        req.adminActor = "iam";
+        return true;
+      }
       throw new UnauthorizedException(
         "Missing Authorization token. Admin endpoints require a Firebase admin ID token.",
       );
@@ -103,9 +124,28 @@ export class AdminGuard implements CanActivate {
       const decoded = await this.firebase.auth.verifyIdToken(token);
       const email = (decoded.email ?? "").toLowerCase();
       if (email === this.adminEmail) {
+        if (this.requireVerified && decoded.email_verified !== true) {
+          throw new ForbiddenException({
+            statusCode: 403,
+            code: "admin_email_unverified",
+            message: "Verify the admin account's email address first.",
+          });
+        }
+        const secondFactor = (
+          decoded.firebase as { sign_in_second_factor?: string } | undefined
+        )?.sign_in_second_factor;
+        if (this.requireMfa && !secondFactor) {
+          throw new ForbiddenException({
+            statusCode: 403,
+            code: "admin_mfa_required",
+            message:
+              "Sign in with two-factor authentication to use admin tools.",
+          });
+        }
         // Exposed so handlers that change state can record WHO did it (the
-        // admin Jobs tab's audit trail). Only ever set from a verified token.
+        // admin Jobs tab's audit trail and admin_audit). Only ever set from a verified token.
         req.adminEmail = email;
+        req.adminActor = email;
         return true;
       }
       // A real, valid Firebase user who is NOT the admin — always refuse,
@@ -120,7 +160,10 @@ export class AdminGuard implements CanActivate {
     }
 
     // ── Path 2: Google OIDC token already vetted by Cloud Run IAM ────────────
-    if (this.trustIam) return true;
+    if (this.trustIam) {
+      req.adminActor = "iam";
+      return true;
+    }
 
     throw new UnauthorizedException("Invalid or non-admin token.");
   }

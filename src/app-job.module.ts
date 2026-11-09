@@ -13,6 +13,8 @@ import { PurgeModule } from "./purge/purge.module";
 import { SyncModule } from "./sync/sync.module";
 import { ApiHealthModule } from "./api-health/api-health.module";
 import { BlogsModule } from "./blogs/blogs.module";
+import { BillingCoreModule } from "./billing/billing-core.module";
+import { EntitlementsModule } from "./entitlements/entitlements.module";
 
 /**
  * Module graph for the Cloud Run Job entrypoint (job-entry.ts).
@@ -36,6 +38,11 @@ import { BlogsModule } from "./blogs/blogs.module";
     ConfigModule.forRoot({ isGlobal: true, envFilePath: ".env" }),
     ScheduleModule.forRoot(),
     CommonModule,
+    // Global billing access + entitlement guard: controllers in UserData/
+    // MarketData/Live declare EntitlementGuard, so the job context needs them
+    // to resolve even though it serves no HTTP.
+    BillingCoreModule,
+    EntitlementsModule,
     LiveModule,
     MarketDataModule,
     UserDataModule,

@@ -53,6 +53,19 @@ export class FakeFirestore {
     return new FakeCollection(this, name);
   }
 
+  /** `firestore.doc("a/b")` / `doc("a/b/c/d")`: last segment is the id. */
+  doc(path: string): FakeDocRef {
+    const parts = path.split("/").filter(Boolean);
+    if (parts.length < 2 || parts.length % 2 !== 0) {
+      throw new Error(`FakeFirestore: not a document path: ${path}`);
+    }
+    return new FakeDocRef(this, parts.slice(0, -1).join("/"), parts[parts.length - 1]);
+  }
+
+  batch(): FakeBatch {
+    return new FakeBatch(this);
+  }
+
   /** Transactions run one at a time, which is what serializability amounts to. */
   private txTail: Promise<unknown> = Promise.resolve();
 
@@ -72,6 +85,28 @@ export class FakeFirestore {
     this.txTail = result.catch(() => undefined);
     return result;
   }
+}
+
+function isPlainObject(v: unknown): v is Data {
+  return typeof v === "object" && v !== null && !Array.isArray(v) && !(v instanceof Date);
+}
+
+/** Real Firestore rejects `undefined` anywhere in a document; so does the fake. */
+export function assertNoUndefined(data: unknown, path = ""): void {
+  if (data === undefined) {
+    throw new Error(`Cannot use "undefined" as a Firestore value (found in field "${path}")`);
+  }
+  if (Array.isArray(data)) data.forEach((v, i) => assertNoUndefined(v, `${path}[${i}]`));
+  else if (isPlainObject(data)) for (const [k, v] of Object.entries(data)) assertNoUndefined(v, path ? `${path}.${k}` : k);
+}
+
+/** Firestore `set(..., { merge: true })` semantics: maps merge recursively. */
+export function deepMerge(base: Data, patch: Data): Data {
+  const out: Data = { ...base };
+  for (const [k, v] of Object.entries(patch)) {
+    out[k] = isPlainObject(v) && isPlainObject(out[k]) ? deepMerge(out[k] as Data, v) : v;
+  }
+  return out;
 }
 
 class FakeSnapshot {
@@ -99,13 +134,21 @@ export class FakeDocRef {
     return new FakeSnapshot(this.id, this.fs.bucket(this.collectionName).get(this.id));
   }
 
-  async set(data: Data): Promise<void> {
+  get path(): string {
+    return `${this.collectionName}/${this.id}`;
+  }
+
+  async set(data: Data, opts?: { merge?: boolean }): Promise<void> {
     this.fs.guard("set", this.collectionName);
-    this.fs.bucket(this.collectionName).set(this.id, { ...data });
+    assertNoUndefined(data);
+    const bucket = this.fs.bucket(this.collectionName);
+    const current = bucket.get(this.id);
+    bucket.set(this.id, opts?.merge && current ? deepMerge(current, data) : { ...data });
   }
 
   async update(patch: Data): Promise<void> {
     this.fs.guard("update", this.collectionName);
+    assertNoUndefined(patch);
     const bucket = this.fs.bucket(this.collectionName);
     const current = bucket.get(this.id);
     if (!current) throw new Error(`NOT_FOUND: ${this.collectionName}/${this.id}`);
@@ -130,14 +173,22 @@ export class FakeQuery {
   ) {}
 
   where(field: string, op: string, value: unknown): FakeQuery {
-    const match: Filter =
-      op === "in"
-        ? (d) => (value as unknown[]).includes(d[field])
-        : op === "=="
-          ? (d) => d[field] === value
-          : () => {
-              throw new Error(`FakeFirestore: unsupported operator ${op}`);
-            };
+    const cmp = (a: unknown, b: unknown) =>
+      typeof a === "number" && typeof b === "number"
+        ? a - b
+        : String(a ?? "").localeCompare(String(b ?? ""));
+    const ops: Record<string, Filter> = {
+      in: (d) => (value as unknown[]).includes(d[field]),
+      "==": (d) => d[field] === value,
+      "!=": (d) => d[field] !== value && d[field] !== undefined,
+      "<": (d) => d[field] !== undefined && cmp(d[field], value) < 0,
+      "<=": (d) => d[field] !== undefined && cmp(d[field], value) <= 0,
+      ">": (d) => d[field] !== undefined && cmp(d[field], value) > 0,
+      ">=": (d) => d[field] !== undefined && cmp(d[field], value) >= 0,
+      "array-contains": (d) => Array.isArray(d[field]) && (d[field] as unknown[]).includes(value),
+    };
+    const match = ops[op];
+    if (!match) throw new Error(`FakeFirestore: unsupported operator ${op}`);
     return new FakeQuery(this.fs, this.name, [...this.filters, match], this.order, this.max);
   }
 
@@ -149,7 +200,11 @@ export class FakeQuery {
     return new FakeQuery(this.fs, this.name, this.filters, this.order, n);
   }
 
-  async get(): Promise<{ docs: Array<FakeSnapshot & { ref: FakeDocRef }> }> {
+  async get(): Promise<{
+    docs: Array<FakeSnapshot & { ref: FakeDocRef }>;
+    size: number;
+    empty: boolean;
+  }> {
     this.fs.guard("query", this.name);
     let rows = [...this.fs.bucket(this.name).entries()].filter(([, d]) =>
       this.filters.every((f) => f(d)),
@@ -163,13 +218,12 @@ export class FakeQuery {
       });
     }
     if (this.max !== undefined) rows = rows.slice(0, this.max);
-    return {
-      docs: rows.map(([id, d]) => {
-        const snap = new FakeSnapshot(id, d) as FakeSnapshot & { ref: FakeDocRef };
-        snap.ref = new FakeDocRef(this.fs, this.name, id);
-        return snap;
-      }),
-    };
+    const docs = rows.map(([id, d]) => {
+      const snap = new FakeSnapshot(id, d) as FakeSnapshot & { ref: FakeDocRef };
+      snap.ref = new FakeDocRef(this.fs, this.name, id);
+      return snap;
+    });
+    return { docs, size: docs.length, empty: docs.length === 0 };
   }
 }
 
@@ -191,8 +245,23 @@ export class FakeTransaction {
     return target instanceof FakeDocRef ? target.get() : target.get();
   }
 
-  set(ref: FakeDocRef, data: Data): void {
-    this.writes.push(() => this.fs.bucket(ref.collectionName).set(ref.id, { ...data }));
+  set(ref: FakeDocRef, data: Data, opts?: { merge?: boolean }): void {
+    assertNoUndefined(data);
+    this.writes.push(() => {
+      const bucket = this.fs.bucket(ref.collectionName);
+      const current = bucket.get(ref.id);
+      bucket.set(ref.id, opts?.merge && current ? deepMerge(current, data) : { ...data });
+    });
+  }
+
+  update(ref: FakeDocRef, patch: Data): void {
+    assertNoUndefined(patch);
+    this.writes.push(() => {
+      const bucket = this.fs.bucket(ref.collectionName);
+      const current = bucket.get(ref.id);
+      if (!current) throw new Error(`NOT_FOUND: ${ref.collectionName}/${ref.id}`);
+      bucket.set(ref.id, { ...current, ...patch });
+    });
   }
 
   delete(ref: FakeDocRef): void {
@@ -201,5 +270,28 @@ export class FakeTransaction {
 
   commit(): void {
     for (const write of this.writes) write();
+  }
+}
+
+/** WriteBatch: buffered writes applied on commit(). */
+export class FakeBatch {
+  private readonly tx: FakeTransaction;
+  constructor(fs: FakeFirestore) {
+    this.tx = new FakeTransaction(fs);
+  }
+  set(ref: FakeDocRef, data: Data, opts?: { merge?: boolean }): this {
+    this.tx.set(ref, data, opts);
+    return this;
+  }
+  update(ref: FakeDocRef, patch: Data): this {
+    this.tx.update(ref, patch);
+    return this;
+  }
+  delete(ref: FakeDocRef): this {
+    this.tx.delete(ref);
+    return this;
+  }
+  async commit(): Promise<void> {
+    this.tx.commit();
   }
 }

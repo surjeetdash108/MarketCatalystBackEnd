@@ -32,6 +32,8 @@ import { DelistedTickerGuard } from "../common/delisted-ticker.guard";
 import { DelistedTickersService } from "../common/delisted-tickers.service";
 import { StockDetailsService } from "./stock-details.service";
 import { Public } from "../common/public.decorator";
+import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
+import { barsEntitlement } from "../entitlements/route-entitlements";
 
 /**
  * On-demand data endpoints (see ondemand.service.ts for the caching design).
@@ -135,6 +137,7 @@ export class OnDemandController {
     sendWithEtag(req, res, doc ?? { empty: true });
   }
 
+  @RequiresEntitlement("aiAssistant")
   @Get("ticker-analysis")
   @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "private, max-age=120")
@@ -158,6 +161,7 @@ export class OnDemandController {
    * Pure READ: never triggers model generation (that's earnings-actuals.job's
    * job when a result lands).
    */
+  @RequiresEntitlement("workspaces")
   @Get("ticker-announcements")
   @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "private, max-age=120")
@@ -204,6 +208,7 @@ export class OnDemandController {
    * Hosting-rewrite limit; the first viewer of a stale week waits for it and
    * everyone after reads this cached copy. See MarketGlanceService.
    */
+  @RequiresEntitlement("workspaces")
   @Get("glance/weekly")
   @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "public, max-age=60")
@@ -212,6 +217,7 @@ export class OnDemandController {
   }
 
   /** "Month at a glance" — same, over calendar months (24h cutoff). */
+  @RequiresEntitlement("workspaces")
   @Get("glance/monthly")
   @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "public, max-age=60")
@@ -219,6 +225,7 @@ export class OnDemandController {
     sendWithEtag(req, res, await this.marketGlance.getMonthly());
   }
 
+  @RequiresEntitlement("aiAssistant")
   @Get("ai-analysis")
   @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "private, max-age=300")
@@ -236,6 +243,7 @@ export class OnDemandController {
   }
 
   @UseGuards(FirebaseAuthGuard)
+  @RequiresEntitlement("aiAssistant")
   @Post("copilot")
   async copilotChat(
     @Body()
@@ -362,6 +370,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
     };
   }
 
+  @RequiresEntitlement(barsEntitlement)
   @Get("bars")
   @UseGuards(FirebaseAuthGuard)
   @Header(
@@ -482,6 +491,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
     sendWithEtag(req, res, data);
   }
 
+  @RequiresEntitlement("earningsDetail")
   @Get("estimates")
   @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "private, max-age=600")
@@ -500,6 +510,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
     sendWithEtag(req, res, { ticker: sym, quarterly, next });
   }
 
+  @RequiresEntitlement("peers")
   @Get("peers-summary")
   @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "public, max-age=30, s-maxage=60")
@@ -553,6 +564,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
     res.send(img.data);
   }
 
+  @RequiresEntitlement("dividendHistory")
   @Get("dividend-history")
   @UseGuards(FirebaseAuthGuard)
   @Header(
@@ -595,6 +607,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
    * Institutional ownership + top 13F holders (FMP, newest quarter past its
    * filing deadline) and FINRA short interest (Polygon — FMP has none).
    */
+  @RequiresEntitlement("ownership")
   @Get("ownership")
   @UseGuards(FirebaseAuthGuard)
   @Header(
@@ -614,6 +627,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
     sendWithEtag(req, res, doc);
   }
 
+  @RequiresEntitlement("fundamentalRatings")
   @Get("financials")
   @UseGuards(FirebaseAuthGuard)
   @Header(
@@ -646,6 +660,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
    * rate-limited SEC endpoint, so the day-long server cache does the real work
    * and the browser keeps its own copy for five minutes.
    */
+  @RequiresEntitlement("ownership")
   @Get("ownership-13dg")
   @UseGuards(FirebaseAuthGuard)
   @Header(
@@ -668,6 +683,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
   /**
    * Quarterly SEC 13F institutional ownership changes for a given stock ticker.
    */
+  @RequiresEntitlement("ownership")
   @Get("13f-filings")
   @UseGuards(FirebaseAuthGuard)
   @Header(
@@ -702,6 +718,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
    * number is immutable, so `immutable` lets the CDN and the browser hold it
    * for a day and repeat views cost nothing.
    */
+  @RequiresEntitlement("workspaces")
   @Get("filing")
   @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "public, max-age=86400, s-maxage=86400, immutable")
@@ -741,6 +758,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
     sendWithEtag(req, res, articles);
   }
 
+  @RequiresEntitlement("earningsDetail")
   @Get("earnings-transcript")
   @UseGuards(FirebaseAuthGuard)
   @Header(
@@ -760,6 +778,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
     sendWithEtag(req, res, doc);
   }
 
+  @RequiresEntitlement("earningsDetail")
   @Get("earnings-transcript-summary")
   @UseGuards(FirebaseAuthGuard)
   @Header(
@@ -779,6 +798,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
     sendWithEtag(req, res, summary);
   }
 
+  @RequiresEntitlement("optionsChain")
   @Get("options-chain")
   @UseGuards(FirebaseAuthGuard)
   @Header(
@@ -868,6 +888,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
    * Commodities, Leveraged.
    */
   @UseGuards(FirebaseAuthGuard)
+  @RequiresEntitlement("workspaces")
   @Get("etf-market")
   @Header("Cache-Control", "public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400")
   async etfMarket(
@@ -885,6 +906,7 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
   }
 
   @UseGuards(FirebaseAuthGuard)
+  @RequiresEntitlement("workspaces")
   @Get("etfs/market-funds")
   @Header("Cache-Control", "public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400")
   async etfMarketFundsAlias(

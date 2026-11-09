@@ -1,6 +1,7 @@
 import { UseGuards, Controller, Get, Header, Query, NotFoundException } from "@nestjs/common";
 import { EtfHoldingsService, type EtfHoldingsDoc } from "./etf-holdings.service";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
+import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
 
 @Controller("market-data")
 @UseGuards(FirebaseAuthGuard)
@@ -11,6 +12,7 @@ export class EtfHoldingsController {
    * GET /market-data/etf-holdings?symbol=SPY
    * Returns full ETF holdings document for the requested ETF.
    */
+  @RequiresEntitlement("workspaces")
   @Get("etf-holdings")
   // private: the response is per-authenticated-request; a shared CDN copy
   // would hand it to callers who never presented a token.

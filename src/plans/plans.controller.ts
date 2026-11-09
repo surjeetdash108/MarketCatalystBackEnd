@@ -4,17 +4,22 @@ import {
   Controller,
   Get,
   Logger,
+  Optional,
   NotFoundException,
   Param,
   Patch,
-  Post,
   UseGuards,
 } from "@nestjs/common";
 import { AdminGuard } from "../common/admin.guard";
+import { BillingAccessService } from "../billing/billing-access.service";
 import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
 import { PlansService } from "./plans.service";
 import { SubscriptionsService } from "./subscriptions.service";
-import { ENTITLEMENT_KEYS, type EntitlementKey } from "./plans.registry";
+import {
+  ENTITLEMENTS,
+  ENTITLEMENT_KEYS,
+  type EntitlementKey,
+} from "./plans.registry";
 import { Public } from "../common/public.decorator";
 
 /**
@@ -45,7 +50,9 @@ const RELEASE_FLAG_FOR: Partial<Record<EntitlementKey, string>> = {
  * plan, so the UI says "coming soon" instead of "upgrade to unlock" — charging
  * for something unbuilt is the failure mode this list prevents.
  */
-const UNBUILT: EntitlementKey[] = ["backtesting", "paperTrading"];
+const UNBUILT: EntitlementKey[] = ENTITLEMENTS.filter((e) => e.unbuilt).map(
+  (e) => e.key,
+);
 
 export interface ResolvedEntitlement {
   key: EntitlementKey;
@@ -67,19 +74,29 @@ export class PlansController {
     private readonly plans: PlansService,
     private readonly subscriptions: SubscriptionsService,
     private readonly flags: FeatureFlagsService,
+    @Optional() private readonly access?: BillingAccessService,
   ) {}
 
   /** Public pricing table. Amounts are MINOR units (cents), matching Stripe. */
   @Public("pricing table; the marketing site and signup read it before sign-in")
   @Get("plans")
   async listPlans() {
-    return { plans: await this.plans.list() };
+    // paidPlansAvailable lets signed-out pages (signup, website) show
+    // "launching soon" instead of a checkout that would be refused.
+    const paidPlansAvailable = this.access
+      ? await this.access.subscriptionsLive()
+      : false;
+    return { plans: await this.plans.listActive(), paidPlansAvailable };
   }
 
+  /**
+   * Dry run only: what scripts/apply-catalog.ts would change. Applying the
+   * catalog is an operator step with a backup — never an API call or a boot.
+   */
   @UseGuards(AdminGuard)
-  @Post("plans/seed")
-  async seed() {
-    return this.plans.seed();
+  @Get("plans/catalog-preview")
+  async catalogPreview() {
+    return this.plans.previewCatalog();
   }
 
   /**

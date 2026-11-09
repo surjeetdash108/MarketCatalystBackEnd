@@ -1,0 +1,229 @@
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  HttpCode,
+  NotFoundException,
+  Param,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+} from "@nestjs/common";
+import type { Request, Response } from "express";
+import { CurrentUser } from "../common/current-user.decorator";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
+import { Public } from "../common/public.decorator";
+import {
+  lowestPlanFor,
+  ENTITLEMENTS,
+  PLAN_DEFINITIONS,
+} from "../plans/plans.registry";
+import { SubscriptionsService } from "../plans/subscriptions.service";
+import { BillingAccessService } from "./billing-access.service";
+import { BillingEventsService } from "./billing-events.service";
+import { BillingService } from "./billing.service";
+import {
+  ChangePlanDto,
+  CheckoutDto,
+  PlanTargetDto,
+  PromoPreviewDto,
+} from "./billing.dto";
+import { RetentionService } from "./retention/retention.service";
+
+function clientIp(req: Request): string | null {
+  const fwd = String(req.headers["x-forwarded-for"] ?? "")
+    .split(",")[0]
+    .trim();
+  return fwd || req.ip || null;
+}
+
+/** Self-service billing for the signed-in user. */
+@Controller("api/billing")
+@UseGuards(FirebaseAuthGuard)
+export class BillingController {
+  constructor(
+    private readonly billing: BillingService,
+    private readonly retention: RetentionService,
+    private readonly firebase: FirebaseAdminService,
+  ) {}
+
+  private async email(uid: string): Promise<string | null> {
+    try {
+      return (await this.firebase.auth.getUser(uid)).email ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  @Post("checkout")
+  @HttpCode(200)
+  async checkout(@CurrentUser() uid: string, @Body() body: CheckoutDto) {
+    return this.billing.checkout(uid, await this.email(uid), body);
+  }
+
+  @Get("checkout/:id")
+  checkoutStatus(@CurrentUser() uid: string, @Param("id") id: string) {
+    return this.billing.checkoutStatus(uid, id);
+  }
+
+  @Post("promo/preview")
+  @HttpCode(200)
+  promoPreview(
+    @CurrentUser() uid: string,
+    @Body() body: PromoPreviewDto,
+    @Req() req: Request,
+  ) {
+    return this.billing.promoPreview(uid, clientIp(req), body);
+  }
+
+  @Post("change/preview")
+  @HttpCode(200)
+  previewChange(@CurrentUser() uid: string, @Body() body: PlanTargetDto) {
+    return this.billing.previewChange(uid, body);
+  }
+
+  @Post("change")
+  @HttpCode(200)
+  change(@CurrentUser() uid: string, @Body() body: ChangePlanDto) {
+    return this.billing.changePlan(uid, body);
+  }
+
+  @Post("change/keep")
+  @HttpCode(200)
+  keep(@CurrentUser() uid: string) {
+    return this.billing.keepCurrentPlan(uid);
+  }
+
+  @Post("cancel")
+  @HttpCode(200)
+  cancel(@CurrentUser() uid: string) {
+    return this.billing.cancel(uid);
+  }
+
+  @Post("resume")
+  @HttpCode(200)
+  resume(@CurrentUser() uid: string) {
+    return this.billing.resume(uid);
+  }
+
+  @Get("retention")
+  retentionOffer(@CurrentUser() uid: string) {
+    return this.retention.offerFor(uid);
+  }
+
+  @Post("retention/accept")
+  @HttpCode(200)
+  acceptRetention(@CurrentUser() uid: string) {
+    return this.retention.accept(uid);
+  }
+
+  @Get("summary")
+  summary(@CurrentUser() uid: string) {
+    return this.billing.summary(uid);
+  }
+
+  @Get("invoices")
+  async invoices(@CurrentUser() uid: string) {
+    return { invoices: await this.billing.invoices(uid) };
+  }
+
+  @Get("invoices/:id/document")
+  async invoiceDocument(
+    @CurrentUser() uid: string,
+    @Param("id") id: string,
+    @Res() res: Response,
+  ) {
+    const doc = await this.billing.invoiceDocument(uid, id);
+    if (doc.kind === "redirect") return res.json({ url: doc.url });
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="invoice-${id}.html"`,
+    );
+    return res.send(doc.html);
+  }
+
+  @Get("history")
+  async history(@CurrentUser() uid: string) {
+    return { history: await this.billing.history(uid) };
+  }
+
+  @Post("portal")
+  @HttpCode(200)
+  portal(@CurrentUser() uid: string) {
+    return this.billing.portal(uid);
+  }
+}
+
+/** Provider webhooks. Authenticated by the provider signature over the raw body. */
+@Controller("api/billing")
+export class BillingWebhookController {
+  constructor(private readonly events: BillingEventsService) {}
+
+  @Public("provider webhook — authenticated by the signature over the raw body")
+  @Post("webhook")
+  @HttpCode(200)
+  async webhook(
+    @Req() req: Request & { rawBody?: Buffer },
+    @Headers("stripe-signature") stripeSig?: string,
+    @Headers("x-billing-signature") genericSig?: string,
+  ) {
+    const raw = req.rawBody ?? Buffer.from(JSON.stringify(req.body ?? {}));
+    const result = await this.events.receive(raw, stripeSig ?? genericSig);
+    return { received: true, result };
+  }
+}
+
+/** What the signed-in user's plan includes — the UI renders and gates from this. */
+@Controller("api/me")
+@UseGuards(FirebaseAuthGuard)
+export class MeEntitlementsController {
+  constructor(
+    private readonly access: BillingAccessService,
+    private readonly subscriptions: SubscriptionsService,
+  ) {}
+
+  @Get("entitlements")
+  async entitlements(@CurrentUser() uid: string) {
+    const live = await this.access.subscriptionsLive();
+    const effective = await this.subscriptions.forUser(uid);
+    const built = ENTITLEMENTS.filter((e) => !e.unbuilt && !e.staffOnly);
+    // Flag off (or no provider): everyone keeps today's access to every built feature.
+    const entitlements = Object.fromEntries(
+      built.map((e) => [
+        e.key,
+        live ? effective.entitlements[e.key] === true : true,
+      ]),
+    );
+    const plan = PLAN_DEFINITIONS.find((p) => p.id === effective.planId);
+    return {
+      subscriptionsEnabled: live,
+      paidPlansAvailable: live,
+      provider: this.access.providerName,
+      planId: effective.planId,
+      planName: effective.planName,
+      status: effective.status,
+      interval: effective.interval,
+      cancelAtPeriodEnd: effective.cancelAtPeriodEnd,
+      currentPeriodEnd: effective.expiryDate,
+      inGrace: effective.inGrace,
+      graceEndsAt: effective.graceEndsAt,
+      entitlements,
+      requiredPlan: Object.fromEntries(
+        built.map((e) => [e.key, lowestPlanFor(e.key)?.id ?? null]),
+      ),
+      hidden: ENTITLEMENTS.filter((e) => e.unbuilt).map((e) => e.key),
+      limits: live
+        ? (plan?.limits ?? { watchlistTickers: null })
+        : { watchlistTickers: null },
+    };
+  }
+}
+
+/** Guards fake-only routes: 404 unless the fake provider is active. */
+export function assertFake(access: BillingAccessService): void {
+  if (access.providerName !== "fake") throw new NotFoundException();
+}

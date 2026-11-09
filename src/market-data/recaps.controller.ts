@@ -20,6 +20,7 @@ export class RecapsController {
     private readonly cached: CachedCollectionsService,
   ) {}
 
+  // Free: the dashboard shows this to every signed-in user.
   @Get("recaps")
   @Header(
     "Cache-Control",

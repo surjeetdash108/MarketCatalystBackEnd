@@ -11,6 +11,7 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { CachedCollectionsService } from "../live/cached-collections.service";
 import { MarketDataService } from "./market-data.service";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
+import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
 
 const ACCESSION_RE = /^[A-Za-z0-9.\-]{1,32}$/;
 
@@ -34,6 +35,7 @@ export class InsiderPositionsController {
     private readonly firebase: FirebaseAdminService,
   ) {}
 
+  @RequiresEntitlement("ownership")
   @Get("fund-holdings")
   @Header(
     "Cache-Control",
@@ -45,6 +47,7 @@ export class InsiderPositionsController {
     return fund_holdings;
   }
 
+  @RequiresEntitlement("ownership")
   @Get("fund-holdings/positions")
   @Header(
     "Cache-Control",

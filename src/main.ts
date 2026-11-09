@@ -77,7 +77,15 @@ async function bootstrap() {
   // with a larger cap — blog content converted from multi-page Word/PDF uploads
   // exceeds 100kb and was 413'ing on POST/PATCH /admin/blogs.
   const app = await NestFactory.create(AppModule, { bodyParser: false });
-  app.use(json({ limit: "32mb" }));
+  // rawBody: provider webhooks verify their signature over the exact bytes sent.
+  app.use(
+    json({
+      limit: "32mb",
+      verify: (req, _res, buf: Buffer) => {
+        (req as typeof req & { rawBody?: Buffer }).rawBody = buf;
+      },
+    }),
+  );
   app.use(urlencoded({ limit: "32mb", extended: true }));
   app.useGlobalPipes(createGlobalValidationPipe());
   app.enableCors(corsOptions());

@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { isProductionProject } from "../common/environment";
 import {
   FEATURE_FLAGS,
   FEATURE_FLAG_KEYS,
@@ -86,6 +87,13 @@ export class FeatureFlagsService implements OnModuleInit {
     }
     const envVal = parseFlag(this.config.get<string>(def.key));
     if (envVal !== null) return { ...def, enabled: envVal, source: "env" };
+    if (def.environmentDefault) {
+      return {
+        ...def,
+        enabled: !isProductionProject(this.config),
+        source: "default",
+      };
+    }
     return { ...def, enabled: def.defaultOn, source: "default" };
   }
 
@@ -140,6 +148,7 @@ export class FeatureFlagsService implements OnModuleInit {
     const existing = (snap.data()?.flags ?? {}) as Record<string, unknown>;
     const seed: Record<string, boolean> = {};
     for (const def of FEATURE_FLAGS) {
+      if (def.environmentDefault) continue; // never pin a per-environment flag
       if (!Object.prototype.hasOwnProperty.call(existing, def.key)) {
         seed[def.key] = def.defaultOn;
       }

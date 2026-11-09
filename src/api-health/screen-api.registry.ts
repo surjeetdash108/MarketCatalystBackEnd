@@ -568,6 +568,161 @@ export const API_CATALOG = {
     params: "body: sessionId",
     notes: "Added after the Oct 24 audit; every authenticated call then carries X-Session-Id and is refused if it is not the claimed one.",
   },
+  "POST /api/billing/checkout": {
+    summary: `Starts a paid plan: server-created hosted checkout at catalog prices (optional promo code). 503 "launching soon" when subscriptions are off.`,
+    params: "body: planId, interval, promoCode?",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/billing/checkout/:id": {
+    summary: "Status of one checkout, polled by the success page until the plan is active.",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/billing/promo/preview": {
+    summary: "Validates a promo code server-side and returns the discounted price; rate-limited, one generic error.",
+    params: "body: code, planId, interval",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/billing/change/preview": {
+    summary: "Previews a plan change: prorated amount due now (upgrade) or the period-end date (downgrade).",
+    params: "body: planId, interval",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/billing/change": {
+    summary: "Applies a plan change: immediate prorated upgrade (must match the preview) or downgrade at period end.",
+    params: "body: planId, interval, expectedAmountDue, prorationDate",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/billing/change/keep": {
+    summary: `"Keep my current plan": cancels a scheduled downgrade.`,
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/billing/cancel": {
+    summary: "Cancels at period end; access continues to the end date.",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/billing/resume": {
+    summary: "Undoes a pending cancellation before the end date.",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/billing/retention": {
+    summary: "Whether the retention offer applies (once per email, ever) and what it is.",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/billing/retention/accept": {
+    summary: "Accepts the retention offer: 50% off 2 monthly invoices, or a credit on the next annual invoice.",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/billing/summary": {
+    summary: "Billing page: plan, status, next charge, discount, renewal or end date.",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/billing/invoices": {
+    summary: "The user's invoices and payments (from the payments mirror).",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/billing/invoices/:id/document": {
+    summary: "Downloads one invoice/receipt (owner only).",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/billing/history": {
+    summary: "The user's plan-change history.",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/billing/portal": {
+    summary: "Opens the provider's customer portal for card updates.",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/billing/webhook": {
+    summary: "Provider webhook; signature-verified, idempotent; the only writer of billing state.",
+    params: "header: stripe-signature | x-billing-signature",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/me/entitlements": {
+    summary: "What the signed-in user's plan includes, the plan each locked feature needs, and limits.",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/billing/fake/checkout/:id": {
+    summary: "Fake provider: hosted checkout page data.",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/billing/fake/checkout/:id/complete": {
+    summary: "Fake provider: pay with a test card.",
+    params: "body: card",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/billing/fake/actions/:id": {
+    summary: "Fake provider: approve or fail a 3-D Secure challenge.",
+    params: "body: approve",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/billing/fake/portal/:id": {
+    summary: "Fake provider: customer portal page data.",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/billing/fake/portal/:id/card": {
+    summary: "Fake provider: update the card (retries an open invoice).",
+    params: "body: card",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/billing/fake/clock": {
+    summary: "Fake provider: the simulated clock.",
+    store: ["backend-only billing collections"],
+    check: { skip: "fake billing provider only (404 otherwise)" },
+  },
+  "POST /api/billing/fake/clock/advance": {
+    summary: "Fake provider: move the clock forward, processing renewals, retries and period ends.",
+    params: "body: days | to",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/billing/fake/events": {
+    summary: "Fake provider: every event it has emitted.",
+    store: ["backend-only billing collections"],
+    check: { skip: "fake billing provider only (404 otherwise)" },
+  },
+  "POST /api/billing/fake/invoices/:id/refund": {
+    summary: "Fake provider: refund an invoice.",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/admin/billing/subscribers": {
+    summary: "Subscribers table: plan, interval, status, dates, promo, retention, MRR from payments; filters; ?format=csv.",
+    params: "query: q, plan, status, interval, cancelAtPeriodEnd, promo, format",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/admin/billing/subscribers/:uid": {
+    summary: "One subscriber: invoices, plan history, entitlements.",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/admin/billing/promos": {
+    summary: "Every promo code with its restrictions and redemption count.",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/admin/billing/promos": {
+    summary: "Creates a promo code (percent/fixed, once/N months/forever, plan & interval limits, expiry, max redemptions, first-time only).",
+    params: "body: CreatePromoDto",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/admin/billing/promos/:id/deactivate": {
+    summary: "Deactivates a promo code.",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/admin/billing/promos/:id/redemptions": {
+    summary: "Who redeemed a promo code.",
+    store: ["backend-only billing collections"],
+  },
+  "GET /api/admin/billing/audit": {
+    summary: "The admin audit log (every admin write).",
+    params: "query: limit",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/admin/billing/price-change-notice": {
+    summary: "Emails the 30-day price-change notice to subscribers of a plan/interval.",
+    params: "body: planId, interval, newAmount, effectiveAt",
+    store: ["backend-only billing collections"],
+  },
+  "POST /api/admin/billing/reconcile": {
+    summary: "Runs the billing reconcile now (repairs mirrors that drifted from the provider).",
+    store: ["backend-only billing collections"],
+  },
   "POST /api/stream-ticket": {
     summary: "Issues a 10-minute signed ticket the browser's live price streams present as ?ticket=, since EventSource cannot send a token.",
     params: "header: X-Session-Id",
@@ -671,8 +826,9 @@ export const API_CATALOG = {
     store: ["plans"],
     notes: "Unauthenticated.",
   },
-  "POST /plans/seed": {
-    summary: "Seeds the default plans (admin).",
+  "GET /plans/catalog-preview": {
+    summary: "Dry run of scripts/apply-catalog.ts: what applying the catalog would change in plans (admin; never writes).",
+    store: ["plans"],
   },
   "GET /users/:uid/entitlements": {
     summary: "The resolved entitlements of a user (admin).",
@@ -1480,7 +1636,7 @@ export const SCREENS = [
       "GET /feature-flags/map",
       "POST /feature-flags/seed",
       "POST /feature-flags/:key",
-      "POST /plans/seed",
+      "GET /plans/catalog-preview",
       "GET /users/:uid/entitlements",
     ],
   },

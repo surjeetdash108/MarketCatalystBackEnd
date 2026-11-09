@@ -2,7 +2,11 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { PlansService } from "./plans.service";
-import { SubscriptionsService } from "./subscriptions.service";
+import { catalogPrice } from "./plans.registry";
+import {
+  SubscriptionsService,
+  type SubscriptionMirror,
+} from "./subscriptions.service";
 
 /**
  * Read-models for the admin Users / Subscriptions / Revenue screens.
@@ -79,10 +83,15 @@ export class AdminAnalyticsService {
 
   /** Users with their effective (expiry-aware) subscription. */
   async users(limit = 500) {
-    const snap = await this.firebase.firestore
-      .collection("users")
-      .limit(limit)
-      .get();
+    const [snap, mirrorSnap] = await Promise.all([
+      this.firebase.firestore.collection("users").limit(limit).get(),
+      this.firebase.firestore.collection("subscriptions").limit(5000).get(),
+    ]);
+    // Plan and status come from the subscriptions mirror (written only by the
+    // billing event handler), never from plan fields on the user document.
+    const mirrors = new Map(
+      mirrorSnap.docs.map((m) => [m.id, m.data() as SubscriptionMirror]),
+    );
 
     return Promise.all(
       snap.docs
@@ -95,7 +104,7 @@ export class AdminAnalyticsService {
           // alerts engine — R44 — writes there).
           const [sub, watchlists, holdings, apiCalls, alerts] =
             await Promise.all([
-              this.subscriptions.resolve(d.id, u),
+              this.subscriptions.resolve(d.id, u, mirrors.get(d.id) ?? null),
               this.countWatchlistTickers(d.id),
               this.countHoldings(d.id),
               this.countApiCalls(d.id),
@@ -429,13 +438,16 @@ export function subscriptionCountsFromPayments(
     }
   }
   let mrrMinor = 0;
+  // Rate = catalog list price of the plan/interval paid for (as mrrByUser in
+  // billing/admin-billing.service.ts): proration charges and one-off
+  // discounts are revenue, not the recurring rate.
   for (const p of covering.values()) {
-    const amount = typeof p.amount === "number" ? p.amount : 0;
     const cycle = String(p.billingCycle ?? "").toLowerCase();
-    mrrMinor +=
-      cycle === "annual" || cycle === "yearly"
-        ? Math.round(amount / 12)
-        : amount;
+    const annual = cycle === "annual" || cycle === "yearly";
+    const planId = typeof p.planId === "string" ? p.planId : "";
+    const fallback = typeof p.amount === "number" ? p.amount : 0;
+    const list = catalogPrice(planId, annual ? "annual" : "monthly")?.amount ?? fallback;
+    mrrMinor += annual ? Math.round(list / 12) : list;
   }
   const active = covering.size;
   const expired = [...paidEver].filter((u) => !covering.has(u)).length;
