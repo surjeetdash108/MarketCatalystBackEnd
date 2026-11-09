@@ -27,9 +27,29 @@ export interface FeatureFlagDef {
    * unbuilt ships OFF so a flag flip is the deliberate act of releasing it.
    */
   defaultOn: boolean;
+  /**
+   * When true the default depends on the deployment: OFF in the production
+   * project, ON everywhere else (`defaultOn` is ignored), and boot seeding
+   * never writes the flag — a seeded value would pin it in every environment.
+   */
+  environmentDefault?: boolean;
 }
 
+/** Release switch for the subscription system (gating, checkout, billing). */
+export const SUBSCRIPTIONS_FLAG = "SUBSCRIPTIONS_ENABLED";
+
 export const FEATURE_FLAGS: FeatureFlagDef[] = [
+  // ── Billing ──────────────────────────────────────────────────────────────
+  // OFF: plan gating is not enforced, paid flows say "launching soon", every
+  // user keeps what they have today. ON: subscriptions are live. Toggle from
+  // the admin console (Firestore override) — no deploy needed.
+  {
+    key: SUBSCRIPTIONS_FLAG,
+    row: "BILLING",
+    label: "Subscriptions & paid plans",
+    defaultOn: false,
+    environmentDefault: true,
+  },
   // ── W1 — live ────────────────────────────────────────────────────────────
   { key: "FF_MOVERS", row: "R9", label: "Market Movers", defaultOn: true },
   { key: "FF_HEATMAP", row: "R10", label: "Market Heatmap", defaultOn: true },
