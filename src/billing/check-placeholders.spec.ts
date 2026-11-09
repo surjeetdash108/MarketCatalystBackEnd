@@ -55,6 +55,7 @@ describe("scripts/check-placeholders.mjs", () => {
       LAUNCH_PROMO_PREFIX: "LAUNCH26",
       LAUNCH_PROMO_PERCENT: "20",
       ADMIN_EMAIL: "ops@mc-real.ai",
+      STRIPE_PRODUCT_TAX_CODE: "txcd_real",
     };
     const r = run(["--production"], real);
     expect(r.out).not.toMatch(/env [A-Z_]+ is missing or a placeholder/);
@@ -134,6 +135,7 @@ describe("scripts/check-placeholders.mjs", () => {
         LAUNCH_PROMO_PREFIX: "LAUNCH26",
         LAUNCH_PROMO_PERCENT: "20",
         ADMIN_EMAIL: "ops@mc-real.ai",
+        STRIPE_PRODUCT_TAX_CODE: "txcd_real",
       });
       expect(r.out).not.toMatch(/env [A-Z_]+ is not set/);
       expect(r.out).not.toMatch(/default is a placeholder/);
