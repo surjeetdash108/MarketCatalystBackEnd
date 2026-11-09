@@ -37,14 +37,8 @@ export class EmailService {
   ) {}
 
   private get from(): string {
-    const name = this.config.get<string>(
-      "EMAIL_FROM_NAME",
-      "MarketCatalyst [PLACEHOLDER]",
-    );
-    const addr = this.config.get<string>(
-      "EMAIL_FROM_ADDRESS",
-      "noreply@example.com",
-    );
+    const name = this.config.get<string>("EMAIL_FROM_NAME", "MarketCatalyst [PLACEHOLDER]"); // prettier-ignore
+    const addr = this.config.get<string>("EMAIL_FROM_ADDRESS", "noreply@example.com"); // prettier-ignore
     return `${name} <${addr}>`;
   }
 
