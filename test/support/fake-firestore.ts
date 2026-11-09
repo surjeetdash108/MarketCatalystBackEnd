@@ -91,6 +91,15 @@ function isPlainObject(v: unknown): v is Data {
   return typeof v === "object" && v !== null && !Array.isArray(v) && !(v instanceof Date);
 }
 
+/** Real Firestore rejects `undefined` anywhere in a document; so does the fake. */
+export function assertNoUndefined(data: unknown, path = ""): void {
+  if (data === undefined) {
+    throw new Error(`Cannot use "undefined" as a Firestore value (found in field "${path}")`);
+  }
+  if (Array.isArray(data)) data.forEach((v, i) => assertNoUndefined(v, `${path}[${i}]`));
+  else if (isPlainObject(data)) for (const [k, v] of Object.entries(data)) assertNoUndefined(v, path ? `${path}.${k}` : k);
+}
+
 /** Firestore `set(..., { merge: true })` semantics: maps merge recursively. */
 export function deepMerge(base: Data, patch: Data): Data {
   const out: Data = { ...base };
@@ -131,6 +140,7 @@ export class FakeDocRef {
 
   async set(data: Data, opts?: { merge?: boolean }): Promise<void> {
     this.fs.guard("set", this.collectionName);
+    assertNoUndefined(data);
     const bucket = this.fs.bucket(this.collectionName);
     const current = bucket.get(this.id);
     bucket.set(this.id, opts?.merge && current ? deepMerge(current, data) : { ...data });
@@ -138,6 +148,7 @@ export class FakeDocRef {
 
   async update(patch: Data): Promise<void> {
     this.fs.guard("update", this.collectionName);
+    assertNoUndefined(patch);
     const bucket = this.fs.bucket(this.collectionName);
     const current = bucket.get(this.id);
     if (!current) throw new Error(`NOT_FOUND: ${this.collectionName}/${this.id}`);
@@ -235,6 +246,7 @@ export class FakeTransaction {
   }
 
   set(ref: FakeDocRef, data: Data, opts?: { merge?: boolean }): void {
+    assertNoUndefined(data);
     this.writes.push(() => {
       const bucket = this.fs.bucket(ref.collectionName);
       const current = bucket.get(ref.id);
@@ -243,6 +255,7 @@ export class FakeTransaction {
   }
 
   update(ref: FakeDocRef, patch: Data): void {
+    assertNoUndefined(patch);
     this.writes.push(() => {
       const bucket = this.fs.bucket(ref.collectionName);
       const current = bucket.get(ref.id);

@@ -101,6 +101,22 @@ export interface MirrorDoc extends SubscriptionMirror {
 
 export type HandleResult = "processed" | "duplicate" | "ignored";
 
+/**
+ * Removes `undefined` (Firestore rejects it) — deep, keeping null — so a
+ * provider field that happens to be absent can never fail an event.
+ */
+export function clean<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((v: unknown) => clean(v)) as unknown as T;
+  if (value && typeof value === "object" && !(value instanceof Date)) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, clean(v)]),
+    ) as T;
+  }
+  return value;
+}
+
 @Injectable()
 export class BillingEventsService implements OnModuleInit {
   private readonly logger = new Logger(BillingEventsService.name);
@@ -311,15 +327,29 @@ export class BillingEventsService implements OnModuleInit {
     await this.db
       .collection(BILLING_COLLECTIONS.events)
       .doc()
-      .set({
-        uid,
-        type,
-        from: from ?? null,
-        to: to ?? null,
-        at: this.clock.nowIso(),
-        eventId: ctx.eventId ?? null,
-        subscriptionId: ctx.subscriptionId ?? null,
-      });
+      .set(
+        clean({
+          uid,
+          type,
+          from: from ?? null,
+          to: to ?? null,
+          at: this.clock.nowIso(),
+          eventId: ctx.eventId ?? null,
+          subscriptionId: ctx.subscriptionId ?? null,
+        }),
+      );
+  }
+
+  /** The promo code used at checkout for this subscription, if any. */
+  private async promoCodeFor(subscriptionId: string): Promise<string | null> {
+    const snap = await this.db
+      .collection(BILLING_COLLECTIONS.checkouts)
+      .where("subscriptionId", "==", subscriptionId)
+      .limit(1)
+      .get();
+    return snap.empty
+      ? null
+      : ((snap.docs[0].data().promoCode as string | null) ?? null);
   }
 
   // ── subscriptions ─────────────────────────────────────────────────────
@@ -396,10 +426,10 @@ export class BillingEventsService implements OnModuleInit {
       lastEventId: event?.id ?? prev?.lastEventId ?? null,
       lastEventCreated:
         Math.max(event?.created ?? 0, prev?.lastEventCreated ?? 0) || null,
-      promoCode: prev?.promoCode ?? null,
+      promoCode: prev?.promoCode ?? (await this.promoCodeFor(sub.id)),
       updatedAt: this.clock.nowIso(),
     };
-    await ref.set(next);
+    await ref.set(clean(next));
     await this.writeProjection(uid, next);
     await this.setPlanClaim(uid);
     await this.recordChanges(uid, prev, next, event);
@@ -420,7 +450,7 @@ export class BillingEventsService implements OnModuleInit {
       await this.addHistory(
         uid,
         "subscribed",
-        prev ? { planId: prev.planId, status: prev.status } : null,
+        prev?.planId ? { planId: prev.planId, status: prev.status ?? null } : null,
         { planId: next.planId, interval: next.interval, status: next.status },
         ctx,
       );
@@ -541,11 +571,15 @@ export class BillingEventsService implements OnModuleInit {
       .doc(sessionId);
     const record = (await ref.get()).data() ?? {};
     await ref.set(
-      {
+      clean({
         status: "complete",
         completedAt: this.clock.nowIso(),
         subscriptionId: session.subscriptionId,
-      },
+        promoCode:
+          (record.promoCode as string | undefined) ??
+          session.discount?.code ??
+          null,
+      }),
       { merge: true },
     );
 
@@ -563,16 +597,10 @@ export class BillingEventsService implements OnModuleInit {
       );
 
     if (session.subscriptionId) {
+      // The promo code reaches the mirror via checkout_sessions (promoCodeFor);
+      // a partial subscriptions doc written here would precede the real
+      // mirror and corrupt its first history entry.
       const sub = await this.provider.getSubscription(session.subscriptionId);
-      if (sub && promoId) {
-        await this.db
-          .collection(BILLING_COLLECTIONS.subscriptions)
-          .doc(session.uid)
-          .set(
-            { promoCode: session.discount?.code ?? record.promoCode ?? null },
-            { merge: true },
-          );
-      }
       await this.emails.welcome(await this.emailFor(session.uid), {
         planId: session.planId,
         interval: session.interval,
@@ -798,7 +826,7 @@ export class BillingEventsService implements OnModuleInit {
       lastEventCreated: null,
       updatedAt: now,
     };
-    await ref.set(next);
+    await ref.set(clean(next));
     await this.writeProjection(uid, next);
     await this.setPlanClaim(uid);
     await this.addHistory(
