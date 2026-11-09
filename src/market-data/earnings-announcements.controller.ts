@@ -2,6 +2,7 @@ import { Controller, Get, Header, UseGuards } from "@nestjs/common";
 import { CachedCollectionsService } from "../live/cached-collections.service";
 import { MarketDataService } from "./market-data.service";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
+import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
 
 /**
  * GET /market-data/earnings-announcements — SEC-EDGAR 8-K item-2.02 earnings
@@ -20,6 +21,7 @@ export class EarningsAnnouncementsController {
     private readonly cached: CachedCollectionsService,
   ) {}
 
+  @RequiresEntitlement("earningsDetail")
   @Get("earnings-announcements")
   @Header(
     "Cache-Control",

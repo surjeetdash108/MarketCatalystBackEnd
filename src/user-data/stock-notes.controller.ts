@@ -19,6 +19,7 @@ import {
 import { CurrentUser } from "../common/current-user.decorator";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
+import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
 
 const SYM_RE = /^[A-Z][A-Z0-9.-]{0,9}$/;
 const DEFAULT_PAGE_SIZE = 50;
@@ -58,6 +59,7 @@ function toStockNote(d: QueryDocumentSnapshot | DocumentSnapshot): StockNote {
  * explicitly as the reason the guard exists).
  */
 @Controller("api")
+@RequiresEntitlement("chartNotes")
 @UseGuards(FirebaseAuthGuard)
 export class StockNotesController {
   constructor(private readonly firebase: FirebaseAdminService) {}
