@@ -200,6 +200,7 @@ const VIA_PREMARKET: string[] = [
  * have no scheduling mechanism at all.
  */
 const NOT_TRIGGERED: JobManifestEntry[] = [
+  { name: "billing-reconcile", trigger: "none", schedules: [], note: "nightly billing mirror repair; needs its Cloud Scheduler entry (POST /sync/billing-reconcile/run, 03:30 America/New_York) — prepared, awaiting approval" },
   { name: "strategy-lab-intraday", trigger: "none", schedules: [], note: "deliberately untriggered: intraday Strategy Lab scans run in the browser on live FMP bars; enable only with its own decision (it would refresh lab_ibars every 5 minutes)" },
   { name: "auto-purge", trigger: "none", schedules: [], note: "@Cron 0 0 * * * cannot fire on a CPU-throttled, scale-to-zero worker" },
   { name: "monthly-news-cleanup", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },

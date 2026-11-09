@@ -28,7 +28,8 @@ describe("admin Jobs / API Docs endpoints", () => {
   const health = { check: jest.fn(async () => ({ endpoints: [] })) };
 
   const verifyIdToken = jest.fn(async (token: string) => {
-    if (token === "admin-token") return { email: ADMIN_EMAIL, uid: "a" };
+    // A properly secured admin: verified email, signed in with a second factor.
+    if (token === "admin-token") return { email: ADMIN_EMAIL, uid: "a", email_verified: true, firebase: { sign_in_second_factor: "totp" } };
     if (token === "user-token") return { email: "someone@example.com", uid: "u" };
     throw new Error("not a Firebase token");
   });

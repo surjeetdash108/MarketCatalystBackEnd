@@ -5,12 +5,14 @@ import { DelistedTickersService } from "./delisted-tickers.service";
 import { DelistedTickerGuard } from "./delisted-ticker.guard";
 import { ApiUsageInterceptor } from "./api-usage.interceptor";
 import { ApiUsageService } from "./api-usage.service";
+import { AdminAuditInterceptor } from "./admin-audit.interceptor";
 import { FirebaseAuthGuard } from "./firebase-auth.guard";
 import { FirebaseAdminService } from "./firebase-admin.provider";
 import { NotificationsService } from "./notifications.service";
 import { SyncMetaService } from "./sync-meta.service";
 import { SyncRegistry } from "./sync-registry.service";
 import { UserSessionService } from "./user-session.service";
+import { AppClock } from "./app-clock";
 import { StreamTicketService } from "./stream-ticket.service";
 import { StreamTicketGuard } from "./stream-ticket.guard";
 
@@ -23,6 +25,7 @@ import { StreamTicketGuard } from "./stream-ticket.guard";
     FirebaseAuthGuard,
     FirebaseAdminService,
     UserSessionService,
+    AppClock,
     StreamTicketService,
     StreamTicketGuard,
     SyncRegistry,
@@ -32,6 +35,8 @@ import { StreamTicketGuard } from "./stream-ticket.guard";
     // Global metering: every authenticated request bumps a per-user counter
     // (in-memory, batched flush) that the admin console's apiCalls column reads.
     { provide: APP_INTERCEPTOR, useClass: ApiUsageInterceptor },
+    // Every admin write is recorded in admin_audit.
+    { provide: APP_INTERCEPTOR, useClass: AdminAuditInterceptor },
   ],
   exports: [
     AdminGuard,
@@ -40,6 +45,7 @@ import { StreamTicketGuard } from "./stream-ticket.guard";
     FirebaseAuthGuard,
     FirebaseAdminService,
     UserSessionService,
+    AppClock,
     StreamTicketService,
     StreamTicketGuard,
     SyncRegistry,
