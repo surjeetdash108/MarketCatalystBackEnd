@@ -100,6 +100,13 @@ const workerModules = isLiveRole
     // this over the public internet, so it has to live on the
     // --allow-unauthenticated live service, not just the IAM-gated worker.
     McpModule,
+    // Subscriptions: provider/access/email (global), the entitlement guard
+    // (global, used by every module's paid routes) and the billing API +
+    // webhook. Both roles — the live service serves /api/billing/* and
+    // /api/me/entitlements; the worker runs the reconcile job.
+    BillingCoreModule,
+    EntitlementsModule,
+    BillingModule,
     ...workerModules,
   ],
   controllers: [HealthController],
