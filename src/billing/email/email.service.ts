@@ -278,7 +278,7 @@ export class EmailService {
       to,
       from: this.from,
       replyTo: this.replyTo,
-      subject: `Your MarketCatalyst verification code: ${code}`,
+      subject: "Your MarketCatalyst verification code", // never the code: senders log subjects
       text: [
         `Your verification code is ${code}.`,
         `It expires in ${minutes} minutes. If you didn't ask for it, ignore this email.`,

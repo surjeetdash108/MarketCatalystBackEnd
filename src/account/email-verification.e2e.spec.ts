@@ -38,6 +38,8 @@ describe("email verification code", () => {
     expect(
       JSON.stringify(a.fs.read("email_verifications", "v1")),
     ).not.toContain(code);
+    // The console sender logs subjects, so the code must never be in one.
+    expect(a.sender.outbox.at(-1)?.subject).not.toContain(code);
     expect(
       (await u.post("/api/account/email-verification/verify", { code })).body,
     ).toEqual({ verified: true });
