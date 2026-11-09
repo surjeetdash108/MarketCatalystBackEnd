@@ -114,6 +114,14 @@ export interface BillingProvider {
   listInvoices(customerId: string): Promise<ProviderInvoice[]>;
   getInvoiceDocument(invoiceId: string): Promise<InvoiceDocument>;
 
+  // ── refunds ────────────────────────────────────────────────────────────
+  /**
+   * Refunds `amount` of payment `paymentId` (an invoice id) and ends the
+   * subscription immediately. Billing state changes arrive as events
+   * (charge.refunded, subscription.deleted) for the handler to write.
+   */
+  refund(paymentId: string, amount: number): Promise<void>;
+
   // ── customer portal (card updates only) ────────────────────────────────
   createPortalSession(input: {
     customerId: string;

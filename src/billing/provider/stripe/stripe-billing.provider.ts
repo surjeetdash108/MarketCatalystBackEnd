@@ -89,6 +89,16 @@ export class StripeBillingProvider implements BillingProvider {
     return this.todo("setCustomerMetadata");
   }
 
+  refund(_paymentId: string, _amount: number): Promise<void> {
+    // TODO Refunds API:
+    //      const inv = await stripe.invoices.retrieve(paymentId, { expand: ["payments"] })
+    //      await stripe.refunds.create({ payment_intent: <inv payment intent id>, amount, metadata: { uid, reason: "refund_policy" } },
+    //        { idempotencyKey: `refund-${paymentId}` })
+    //      await stripe.subscriptions.cancel(inv.subscription, { prorate: false, invoice_now: false })  // ends now → Free
+    //      Events charge.refunded + customer.subscription.deleted reach the handler (STRIPE_EVENT_MAP).
+    return this.todo("refund");
+  }
+
   updateCustomerContact(
     _customerId: string,
     _contact: { phone: string },
