@@ -30,6 +30,7 @@ import type {
   ProviderInvoice,
   ProviderSubscription,
   ProviderSubscriptionStatus,
+  ScheduledChange,
 } from "./provider/types";
 
 /**
@@ -88,7 +89,7 @@ export interface MirrorDoc extends SubscriptionMirror {
   canceledAt: string | null;
   endedAt: string | null;
   discount: Record<string, unknown> | null;
-  scheduledChange: Record<string, unknown> | null;
+  scheduledChange: ScheduledChange | null;
   amount: number | null;
   currency: string | null;
   providerUpdatedAt: number | null;
