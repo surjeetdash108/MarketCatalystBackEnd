@@ -1,9 +1,12 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Optional } from "@nestjs/common";
+import { AppClock } from "../common/app-clock";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { PlansService } from "./plans.service";
 import {
   DEFAULT_PLAN_ID,
   ENTITLEMENT_KEYS,
+  PAST_DUE_GRACE_DAYS,
+  type BillingInterval,
   type EntitlementKey,
   type SubscriptionStatus,
 } from "./plans.registry";
@@ -11,92 +14,130 @@ import {
 /**
  * A user's effective subscription and entitlements.
  *
- * Expiry is evaluated HERE rather than trusted from the stored status. A
- * subscription that lapsed overnight still has `subscriptionStatus: "ACTIVE"`
- * on its user document until something rewrites it, and no job runs at the
- * moment a subscription expires — so a stored status alone would keep granting
- * paid access indefinitely. The stored value is treated as intent; the date is
- * treated as truth.
+ * Source of truth: `subscriptions/{uid}`, the backend-only mirror written by
+ * the billing event handler (and the launch-trial grant). Plan fields on the
+ * user document are a display projection and are never trusted here.
+ *
+ * The stored status is intent; the dates decide:
+ *   ACTIVE     entitled until currentPeriodEnd + a renewal leeway (a renewal
+ *              event can arrive a little after the period boundary)
+ *   TRIALING   entitled until currentPeriodEnd, exactly
+ *   PAST_DUE   entitled for PAST_DUE_GRACE_DAYS after the failed payment
+ *   otherwise  Free
  */
+
+/** How long after period end an ACTIVE mirror is still honoured, waiting for the renewal event. */
+export const RENEWAL_LEEWAY_MS = 2 * 86_400_000;
+const DAY = 86_400_000;
+
+export interface SubscriptionMirror {
+  uid: string;
+  planId: string;
+  interval?: BillingInterval | null;
+  status: SubscriptionStatus;
+  currentPeriodStart?: string | null;
+  currentPeriodEnd?: string | null;
+  cancelAtPeriodEnd?: boolean;
+  pastDueSince?: string | null;
+  startedAt?: string | null;
+  source?: "provider" | "launch_trial";
+}
 
 export interface EffectiveSubscription {
   userId: string;
   planId: string;
   planName: string;
-  /** Status after applying the expiry date, which may differ from the stored one. */
+  /** Status after applying dates and grace, which may differ from the stored one. */
   status: SubscriptionStatus;
   storedStatus: SubscriptionStatus | null;
+  interval: BillingInterval | null;
   startDate: string | null;
   expiryDate: string | null;
-  /** True when a stored ACTIVE has been downgraded here because the date passed. */
+  cancelAtPeriodEnd: boolean;
+  /** True when a stored ACTIVE/TRIALING/PAST_DUE was downgraded here by its dates. */
   expiredSinceLastWrite: boolean;
   daysRemaining: number | null;
+  inGrace: boolean;
+  graceEndsAt: string | null;
+  entitled: boolean;
   entitlements: Record<EntitlementKey, boolean>;
 }
 
 @Injectable()
 export class SubscriptionsService {
-  private readonly logger = new Logger(SubscriptionsService.name);
+  private readonly clock: AppClock;
 
   constructor(
     private readonly firebase: FirebaseAdminService,
     private readonly plans: PlansService,
-  ) {}
-
-  /** Whole days from now until an ISO date; negative once passed. */
-  private daysUntil(iso: string | null): number | null {
-    if (!iso) return null;
-    const t = Date.parse(iso.length === 10 ? `${iso}T23:59:59Z` : iso);
-    if (Number.isNaN(t)) return null;
-    return Math.ceil((t - Date.now()) / 86_400_000);
+    @Optional() clock?: AppClock,
+  ) {
+    this.clock = clock ?? new AppClock();
   }
 
   async forUser(userId: string): Promise<EffectiveSubscription> {
-    const snap = await this.firebase.firestore
-      .collection("users")
-      .doc(userId)
-      .get();
-    const u = snap.data() ?? {};
-    return this.resolve(userId, u);
+    const [mirrorSnap, userSnap] = await Promise.all([
+      this.firebase.firestore.collection("subscriptions").doc(userId).get(),
+      this.firebase.firestore.collection("users").doc(userId).get(),
+    ]);
+    return this.resolve(
+      userId,
+      userSnap.data() ?? {},
+      (mirrorSnap.exists
+        ? mirrorSnap.data()
+        : null) as SubscriptionMirror | null,
+    );
   }
 
   /**
-   * Pure resolution from a user document — separated from the read so the admin
-   * list can resolve hundreds of users from one query instead of N reads.
+   * Pure resolution — the admin list resolves many users from one query.
+   * `u` (the user document) contributes only admin-set per-user overrides.
    */
   async resolve(
     userId: string,
-    u: Record<string, any>,
+    u: Record<string, unknown>,
+    mirror: SubscriptionMirror | null = null,
   ): Promise<EffectiveSubscription> {
-    const storedStatus: SubscriptionStatus | null =
-      u.subscriptionStatus ?? null;
-    const expiryDate: string | null = u.subscriptionExpiryDate ?? null;
-    const daysRemaining = this.daysUntil(expiryDate);
+    const now = this.clock.now();
+    const storedStatus: SubscriptionStatus | null = mirror?.status ?? null;
+    const end = mirror?.currentPeriodEnd
+      ? Date.parse(mirror.currentPeriodEnd)
+      : NaN;
+    let entitled = false;
+    let inGrace = false;
+    let graceEndsAt: string | null = null;
+    let lapsed = false;
 
-    // A plan is only honoured while unexpired. TRIALING is treated the same
-    // way — a lapsed trial is not a paid subscription.
-    const lapsed =
-      daysRemaining != null &&
-      daysRemaining < 0 &&
-      (storedStatus === "ACTIVE" || storedStatus === "TRIALING");
+    if (storedStatus === "ACTIVE") {
+      entitled = Number.isNaN(end) || now <= end + RENEWAL_LEEWAY_MS;
+      lapsed = !entitled;
+    } else if (storedStatus === "TRIALING") {
+      entitled = !Number.isNaN(end) && now <= end;
+      lapsed = !entitled;
+    } else if (storedStatus === "PAST_DUE") {
+      const since = mirror?.pastDueSince
+        ? Date.parse(mirror.pastDueSince)
+        : NaN;
+      const graceEnd = Number.isNaN(since)
+        ? NaN
+        : since + PAST_DUE_GRACE_DAYS * DAY;
+      graceEndsAt = Number.isNaN(graceEnd)
+        ? null
+        : new Date(graceEnd).toISOString();
+      entitled = !Number.isNaN(graceEnd) && now < graceEnd;
+      inGrace = entitled;
+      lapsed = !entitled;
+    }
 
     const effectiveStatus: SubscriptionStatus = lapsed
       ? "EXPIRED"
       : (storedStatus ?? "NONE");
-
-    const entitled =
-      effectiveStatus === "ACTIVE" || effectiveStatus === "TRIALING";
-    // Anyone without a live subscription falls back to free — never to "no
-    // access", which would lock a lapsed customer out of the product entirely.
-    const planId: string = entitled
-      ? (u.currentPlan ?? DEFAULT_PLAN_ID)
-      : DEFAULT_PLAN_ID;
-
+    const planId = entitled && mirror?.planId ? mirror.planId : DEFAULT_PLAN_ID;
     const planEntitlements = await this.plans.entitlementsFor(planId);
     const plan = await this.plans.get(planId);
 
-    // Per-user overrides layer on top of the plan, enabling comped access or a
-    // targeted revocation without inventing a bespoke plan for one account.
+    // Admin-set per-user overrides (comped access, targeted revocation). The
+    // user document is not client-writable for this field (firestore.rules).
     const overrides = (u.featureFlags ?? {}) as Record<string, boolean>;
     const entitlements = Object.fromEntries(
       ENTITLEMENT_KEYS.map((k) => [
@@ -111,10 +152,15 @@ export class SubscriptionsService {
       planName: plan?.name ?? planId,
       status: effectiveStatus,
       storedStatus,
-      startDate: u.subscriptionStartDate ?? null,
-      expiryDate,
+      interval: mirror?.interval ?? null,
+      startDate: mirror?.startedAt ?? mirror?.currentPeriodStart ?? null,
+      expiryDate: mirror?.currentPeriodEnd ?? null,
+      cancelAtPeriodEnd: mirror?.cancelAtPeriodEnd === true,
       expiredSinceLastWrite: lapsed,
-      daysRemaining,
+      daysRemaining: Number.isNaN(end) ? null : Math.ceil((end - now) / DAY),
+      inGrace,
+      graceEndsAt,
+      entitled,
       entitlements,
     };
   }
