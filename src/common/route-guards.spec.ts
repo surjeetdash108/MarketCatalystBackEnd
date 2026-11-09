@@ -35,6 +35,7 @@ const EXPECTED_PUBLIC = new Set([
   "GET /health", // Cloud Run startup/liveness probes
   "GET /public/landing-tape", // marketing-site ticker tape, delayed index prices
   "GET /live/logo", // company logos loaded by <img src>, which cannot send a token
+  "POST /api/billing/webhook", // provider webhook, authenticated by its signature over the raw body
 ]);
 
 interface Route {
@@ -77,7 +78,8 @@ function routes(): Route[] {
       );
       const proto = (C as { prototype: Record<string, unknown> }).prototype;
       for (const name of Object.getOwnPropertyNames(proto)) {
-        const handler = proto[name];
+        // Descriptor, not proto[name]: reading a getter would run it.
+        const handler: unknown = Object.getOwnPropertyDescriptor(proto, name)?.value;
         if (typeof handler !== "function") continue;
         const method = Reflect.getMetadata(METHOD_METADATA, handler);
         if (method === undefined) continue;

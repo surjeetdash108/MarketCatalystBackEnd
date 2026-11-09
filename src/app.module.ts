@@ -17,6 +17,9 @@ import { SyncModule } from "./sync/sync.module";
 import { ApiHealthModule } from "./api-health/api-health.module";
 import { BlogsModule } from "./blogs/blogs.module";
 import { McpModule } from "./mcp/mcp.module";
+import { BillingCoreModule } from "./billing/billing-core.module";
+import { BillingModule } from "./billing/billing.module";
+import { EntitlementsModule } from "./entitlements/entitlements.module";
 
 /**
  * TWO DEPLOYMENTS, ONE IMAGE.
