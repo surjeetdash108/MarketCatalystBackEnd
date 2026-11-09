@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   Logger,
+  Optional,
   NotFoundException,
   Param,
   Patch,
@@ -11,6 +12,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { AdminGuard } from "../common/admin.guard";
+import { BillingAccessService } from "../billing/billing-access.service";
 import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
 import { PlansService } from "./plans.service";
 import { SubscriptionsService } from "./subscriptions.service";
@@ -73,13 +75,17 @@ export class PlansController {
     private readonly plans: PlansService,
     private readonly subscriptions: SubscriptionsService,
     private readonly flags: FeatureFlagsService,
+    @Optional() private readonly access?: BillingAccessService,
   ) {}
 
   /** Public pricing table. Amounts are MINOR units (cents), matching Stripe. */
   @Public("pricing table; the marketing site and signup read it before sign-in")
   @Get("plans")
   async listPlans() {
-    return { plans: await this.plans.listActive() };
+    // paidPlansAvailable lets signed-out pages (signup, website) show
+    // "launching soon" instead of a checkout that would be refused.
+    const paidPlansAvailable = this.access ? await this.access.subscriptionsLive() : false;
+    return { plans: await this.plans.listActive(), paidPlansAvailable };
   }
 
   @UseGuards(AdminGuard)
