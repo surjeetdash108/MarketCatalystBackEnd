@@ -25,9 +25,14 @@ export interface RevenueSummary {
     users: number;
   }>;
   byMonth: Array<{ month: string; minor: number; payments: number }>;
+  /** Customers with a SUCCESS payment whose paid period covers today. */
   activeSubscriptions: number;
+  /** Customers who have paid before but have no payment covering today. */
   expiredSubscriptions: number;
+  /** Customers with no payment covering today and none ever (never paid). */
   freeUsers: number;
+  /** Monthly recurring revenue from payments covering today; annual ÷ 12. Minor units. */
+  mrrMinor: number;
   /** Customers only — staff accounts are excluded. */
   totalUsers: number;
   /** How many staff rows were filtered out, so the exclusion is auditable. */
@@ -192,9 +197,7 @@ export class AdminAnalyticsService {
     }>
   > {
     const [adoptSnap, userSnap] = await Promise.all([
-      this.firebase.firestore
-        .collection("feature_adoption")
-        .get(),
+      this.firebase.firestore.collection("feature_adoption").get(),
       this.firebase.firestore.collection("users").get(),
     ]);
 
@@ -283,9 +286,7 @@ export class AdminAnalyticsService {
    */
   async revenue(): Promise<RevenueSummary> {
     const [paySnap, userSnap, plans] = await Promise.all([
-      this.firebase.firestore
-        .collection("payments")
-        .get(),
+      this.firebase.firestore.collection("payments").get(),
       this.firebase.firestore.collection("users").get(),
       this.plans.list(),
     ]);
@@ -344,21 +345,21 @@ export class AdminAnalyticsService {
       }
     }
 
-    // Subscription counts come from users, not payments: a user with no
-    // payment row is still a (free) user, and one with several payments is
-    // still one subscription.
-    let active = 0;
-    let expired = 0;
-    let free = 0;
+    // Subscription counts and MRR come from payments only — money the Stripe
+    // webhook recorded. A user document claiming a paid plan with no payment
+    // behind it is not a subscriber.
     const customerDocs = userSnap.docs.filter(
       (d) => !this.isStaff(d.data().email),
     );
-    for (const d of customerDocs) {
-      const sub = await this.subscriptions.resolve(d.id, d.data());
-      if (sub.status === "ACTIVE" || sub.status === "TRIALING") active++;
-      else if (sub.status === "EXPIRED") expired++;
-      if (sub.planId === "free") free++;
-    }
+    const counts = subscriptionCountsFromPayments(
+      paySnap?.docs.map((d) => d.data()) ?? [],
+      customerDocs.map((d) => d.id),
+      Date.now(),
+      primary ?? "USD",
+    );
+    const active = counts.active;
+    const expired = counts.expired;
+    const free = counts.free;
 
     // Default to USD (the plan catalog's currency) when no payments carry one,
     // rather than INR which contradicts the $-priced plans (BUG-DATA-013).
@@ -382,6 +383,7 @@ export class AdminAnalyticsService {
       activeSubscriptions: active,
       expiredSubscriptions: expired,
       freeUsers: free,
+      mrrMinor: counts.mrrMinor,
       // Customers only — staff are filtered above, so this will read one lower
       // than the Firebase console's account count. That gap is intentional.
       totalUsers: customerDocs.length,
@@ -392,4 +394,50 @@ export class AdminAnalyticsService {
       mixedCurrencies: [...currencies].filter((c) => c !== primaryCur),
     };
   }
+}
+
+function periodEndMs(iso: unknown): number {
+  if (typeof iso !== "string" || !iso) return NaN;
+  return Date.parse(iso.length === 10 ? `${iso}T23:59:59Z` : iso);
+}
+
+/**
+ * Subscription counts and MRR for `customerIds`, from payment rows only.
+ * A customer is active when their latest SUCCESS payment in `currency` covers
+ * `now`; expired when they have SUCCESS payments but none covering now; free
+ * otherwise. MRR sums each active customer's covering payment, annual ÷ 12.
+ */
+export function subscriptionCountsFromPayments(
+  payments: Array<Record<string, unknown>>,
+  customerIds: string[],
+  now: number,
+  currency: string,
+): { active: number; expired: number; free: number; mrrMinor: number } {
+  const customers = new Set(customerIds);
+  const paidEver = new Set<string>();
+  const covering = new Map<string, Record<string, unknown>>();
+  for (const p of payments) {
+    const uid = typeof p.userId === "string" ? p.userId : null;
+    if (!uid || !customers.has(uid) || p.paymentStatus !== "SUCCESS") continue;
+    if ((p.currency ?? "USD") !== currency) continue;
+    paidEver.add(uid);
+    const end = periodEndMs(p.subscriptionExpiryDate);
+    if (!Number.isFinite(end) || end < now) continue;
+    const prev = covering.get(uid);
+    if (!prev || String(p.paymentDate ?? "") > String(prev.paymentDate ?? "")) {
+      covering.set(uid, p);
+    }
+  }
+  let mrrMinor = 0;
+  for (const p of covering.values()) {
+    const amount = typeof p.amount === "number" ? p.amount : 0;
+    const cycle = String(p.billingCycle ?? "").toLowerCase();
+    mrrMinor +=
+      cycle === "annual" || cycle === "yearly"
+        ? Math.round(amount / 12)
+        : amount;
+  }
+  const active = covering.size;
+  const expired = [...paidEver].filter((u) => !covering.has(u)).length;
+  return { active, expired, free: customers.size - active - expired, mrrMinor };
 }
