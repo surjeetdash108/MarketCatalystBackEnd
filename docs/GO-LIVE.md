@@ -14,6 +14,109 @@ Commands assume project `market-catalyst-502415`, region `us-central1`, and you 
 
 ---
 
+## 0. Staff checkout preview (Stripe TEST mode on production)
+
+Staff-allowlist accounts can run the real purchase flow on production — website tile → sign in → `/checkout` → Stripe card form → success — while `SUBSCRIPTIONS_ENABLED` stays **off** for everyone else. Everyone else keeps "launching soon". Staff keep full access; a preview purchase never removes the staff claim.
+
+Guard rails (enforced in code, tested):
+- `CHECKOUT_PREVIEW` flag, default **off**; only verified staff-allowlist accounts are affected.
+- Only `sk_test_` / `pk_test_` keys run. A live key (`sk_live_`) stops the backend at startup, and the UI refuses `pk_live_`, unless `STRIPE_LIVE_APPROVED=true` / `NEXT_PUBLIC_STRIPE_LIVE_APPROVED=true` is set. **Do not set either now.**
+- Every test-mode record (`customers`, `subscriptions`, `payments`, `subscription_events`, `stripe_events`, `checkout_sessions`, `promo_redemptions`) carries `livemode:false`. These records are excluded from MRR, revenue and subscriber counts, and show a **Test** badge in `/admin/billing`.
+- The webhook accepts only events signed with `STRIPE_WEBHOOK_SECRET`. Unsigned or badly signed events get a 400. Events from the other mode are ignored.
+- Without Stripe keys, staff still get steps 1–2 (plan, interval, summary, promo, address, phone, consent). The card area says "Payment provider not connected" and Complete purchase stays disabled.
+
+### 0.1 Get the Stripe TEST keys
+
+1. Go to <https://dashboard.stripe.com> and switch **Test mode** on (top right). Everything below happens in test mode.
+2. **Developers → API keys:**
+   - **Publishable key:** copy the `pk_test_…` value.
+   - **Secret key:** click **Reveal test key** and copy the `sk_test_…` value. Don't paste it anywhere except the `read -rs` prompt below.
+3. **Developers → Webhooks → Add endpoint:**
+   - Endpoint URL: `https://app.marketcatalyst.ai/api/billing/webhook`.
+   - Events (`STRIPE_EVENT_MAP` lists these, and the seed prints the same list): `checkout.session.completed`, `checkout.session.expired`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`, `invoice.upcoming`, `charge.refunded`, `charge.dispute.created`.
+   - Save, then **Signing secret → Reveal** and copy the `whsec_…` value.
+4. Do the test-mode dashboard settings in section 2 (Stripe Tax with a Texas registration, payment methods Card + Link, customer emails off).
+
+### 0.2 Store the secrets and point production at Stripe test mode
+
+Paste the `put_secret` helper from section 1 first, then:
+
+```bash
+P=market-catalyst-502415
+put_secret STRIPE_SECRET_KEY          # paste sk_test_…, Enter (silent)
+put_secret STRIPE_WEBHOOK_SECRET      # paste whsec_…, Enter (silent)
+
+for S in market-catalyst-live market-catalyst-backend; do
+  gcloud run services update $S --region us-central1 --project $P \
+    --update-env-vars BILLING_PROVIDER=stripe,STRIPE_PAYMENT_METHOD_TYPES=card,link \
+    --update-secrets STRIPE_SECRET_KEY=STRIPE_SECRET_KEY:latest
+done
+gcloud run services update market-catalyst-live --region us-central1 --project $P \
+  --update-secrets STRIPE_WEBHOOK_SECRET=STRIPE_WEBHOOK_SECRET:latest
+# After the seed (0.3), add: --update-env-vars STRIPE_PORTAL_CONFIGURATION=bpc_FROM_SEED
+```
+
+Do **not** set `SUBSCRIPTIONS_ENABLED` or `STRIPE_LIVE_APPROVED`. Run this outside market hours, like any backend change. Each `services update` creates a new revision. To roll back, run `gcloud run services update-traffic <service> --to-revisions <previous>=100`.
+
+UI: the publishable key is public, but it is compiled in at build time:
+
+```bash
+cd ../MarketCatalystUI
+printf 'NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=%s\nNEXT_PUBLIC_STRIPE_PAYMENT_METHOD_TYPES=card,link\n' 'pk_test_PASTE' >> .env.production.local   # gitignored
+npm run build && firebase deploy --only hosting --project market-catalyst-502415
+```
+
+### 0.3 Seed Stripe (test mode), then go-live-check (test mode)
+
+```bash
+cd ../MarketCatalystBackEnd
+read -rs STRIPE_SECRET_KEY; export STRIPE_SECRET_KEY        # paste sk_test_…, Enter
+export STRIPE_PRODUCT_TAX_CODE=txcd_…  APP_URL=https://app.marketcatalyst.ai
+npx ts-node --transpile-only scripts/stripe-seed.ts         # products, prices, portal; prints STRIPE_PORTAL_CONFIGURATION
+read -rs STRIPE_WEBHOOK_SECRET; export STRIPE_WEBHOOK_SECRET  # paste whsec_…, Enter
+npm run go-live-check -- --mode=test                         # read-only; never prints values
+unset STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET
+```
+
+Set the printed `bpc_…` on the live service (see the comment in 0.2).
+
+### 0.4 Turn the preview on (and off)
+
+There is no deploy. The flag lives in Firestore `feature_flags/default`, and the services pick it up within 15 s.
+
+```bash
+gcloud run services proxy market-catalyst-backend --region us-central1 --project market-catalyst-502415 --port 8080
+```
+
+Open <http://localhost:8080>, then go to **Feature flags → "Checkout preview (staff only, test mode)" (`CHECKOUT_PREVIEW`)** and click the toggle to turn it **ON**. Click it again to turn it off.
+
+### 0.5 Walkthrough (staff account)
+
+1. Sign in at <https://app.marketcatalyst.ai> with a staff-allowlist account. A Google account works; an email/password account must be verified.
+2. Open <https://marketcatalyst.ai>, then go to **Pricing** and click the **Pro** tile. You land on `/checkout?plan=pro&interval=annual`, with the banner **"Preview: test mode, no real charges"** on every step.
+3. Step 1: pick the plan and interval, then **Continue**.
+4. Step 2:
+   - The summary card shows the price, with tax from Stripe once the address is in.
+   - Add a promo (optional), the billing address (Stripe Address Element) and a mobile number.
+   - Tick the renewal consent.
+5. In the **Stripe Payment Element**, enter card `4242 4242 4242 4242`, any future expiry, any CVC and any ZIP. Click **Complete purchase**. The `/billing/success` page appears once the webhook marks the plan active.
+6. Decline: repeat with `4000 0000 0000 0002`. You see "Your card was declined." and stay on the page; nothing is activated.
+7. 3-D Secure: repeat with `4000 0025 0000 3155`. Complete the challenge in the Stripe modal and you reach the success page. Fail the challenge and you get an error with no activation.
+8. **Manage Plan** now shows the plan picker for this staff account. Upgrades and downgrades also run in test mode.
+9. In `/admin/billing` (admin account), the purchase shows a **Test** badge and is not in MRR or subscriber counts.
+10. Signed out, or with a non-staff account, `/checkout` and Manage Plan still say "launching soon".
+
+### 0.6 Clean up test data
+
+```bash
+npm run purge-test-billing -- --project=market-catalyst-502415 --database=mc-regional --auth=gcloud                                       # dry run: counts only
+npm run purge-test-billing -- --project=market-catalyst-502415 --database=mc-regional --auth=gcloud --apply --confirm-production       # delete
+```
+
+The script deletes only `livemode:false` records, and resets the billing fields on those users' docs to Free. Stripe's own test objects are cleared under Developers → **Delete all test data** in the dashboard.
+
+---
+
 ## 1. Variables
 
 Runtime service accounts:
@@ -37,6 +140,8 @@ put_secret() {  # usage: put_secret NAME   (then paste the value, press Enter)
 
 | Name | Secret or plain | Where it goes | Where to get it | Command to set it |
 |---|---|---|---|---|
+| `STRIPE_LIVE_APPROVED` | plain | live + worker | leave **unset** until live payments are approved; `true` allows `sk_live_` keys (the backend refuses them otherwise) | `--update-env-vars STRIPE_LIVE_APPROVED=true` at launch only |
+| `NEXT_PUBLIC_STRIPE_LIVE_APPROVED` | plain | UI build | same, for `pk_live_` in the UI | `.env.production.local` at launch only |
 | `STRIPE_SECRET_KEY` | **secret** | live + worker | Stripe Dashboard → Developers → API keys → Secret key (`sk_test_…` first, `sk_live_…` at launch) | `put_secret STRIPE_SECRET_KEY` |
 | `STRIPE_WEBHOOK_SECRET` | **secret** | live | Dashboard → Developers → Webhooks → your endpoint → Signing secret (`whsec_…`) | `put_secret STRIPE_WEBHOOK_SECRET` |
 | `EMAIL_PROVIDER_API_KEY` | **secret** | live + worker | SendGrid → Settings → API Keys → Create (Restricted: **Mail Send** only) | `put_secret EMAIL_PROVIDER_API_KEY` |
