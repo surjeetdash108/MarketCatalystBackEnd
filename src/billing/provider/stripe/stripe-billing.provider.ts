@@ -30,6 +30,7 @@ import type {
   ProviderSubscription,
   ProviderSubscriptionStatus,
   RetentionDiscountInput,
+  ProviderChangeKind,
 } from "../types";
 
 /**
@@ -89,6 +90,8 @@ const ALLOWED_PAYMENT_METHODS = new Set([
 const lineOf = (l: Stripe.InvoiceLineItem): InvoiceLine => ({
   description: l.description ?? "",
   amount: l.amount,
+  periodStart: l.period?.start ? new Date(l.period.start * 1000).toISOString() : null,
+  periodEnd: l.period?.end ? new Date(l.period.end * 1000).toISOString() : null,
   proration:
     (
       l as unknown as {
@@ -579,21 +582,34 @@ export class StripeBillingProvider implements BillingProvider {
     };
   }
 
+  async getCreditBalance(customerId: string): Promise<number> {
+    const c = await this.stripe.customers.retrieve(customerId);
+    // Stripe: a negative balance is credit the customer can spend.
+    const bal = (c as Stripe.Customer).balance ?? 0;
+    return bal < 0 ? -bal : 0;
+  }
+
   async previewChange(input: {
     subscriptionId: string;
     target: PriceRef;
-    kind: "upgrade" | "downgrade";
+    kind: ProviderChangeKind;
   }): Promise<ChangePreview> {
     const sub = await this.retrieveSub(input.subscriptionId);
     const current = await this.mapSubscription(sub);
     const prorationDate = Date.now();
-    if (input.kind === "downgrade") {
+    const period = {
+      currentPeriodStart: current.currentPeriodStart,
+      currentPeriodEnd: current.currentPeriodEnd,
+    };
+    if (input.kind === "scheduled") {
       return {
-        kind: "downgrade",
+        kind: "scheduled",
         planId: input.target.planId,
         interval: input.target.interval,
         currency: input.target.currency,
         amountDueNow: 0,
+        creditToBalance: 0,
+        ...period,
         prorationDate,
         effectiveAt: current.currentPeriodEnd,
         nextRenewalAmount: input.target.amount,
@@ -621,12 +637,16 @@ export class StripeBillingProvider implements BillingProvider {
       .filter((x) => x > 0)
       .sort((a, b) => a - b)
       .at(-1);
+    // A downgrade's proration invoice totals < 0: Stripe credits the customer balance.
+    const net = inv.total;
     return {
-      kind: "upgrade",
+      kind: input.kind,
       planId: input.target.planId,
       interval: input.target.interval,
       currency: inv.currency.toUpperCase(),
-      amountDueNow: inv.amount_due,
+      amountDueNow: input.kind === "upgrade" ? Math.max(0, inv.amount_due) : 0,
+      creditToBalance: input.kind === "downgrade" ? Math.max(0, -net) : 0,
+      ...period,
       prorationDate,
       effectiveAt: new Date(prorationDate).toISOString(),
       nextRenewalAmount: input.target.amount,
@@ -638,17 +658,18 @@ export class StripeBillingProvider implements BillingProvider {
   async changePlan(input: {
     subscriptionId: string;
     target: PriceRef;
-    kind: "upgrade" | "downgrade";
+    kind: ProviderChangeKind;
     prorationDate: number;
     expectedAmountDue: number | null;
+    expectedCredit?: number | null;
   }): Promise<ChangeResult> {
     const sub = await this.retrieveSub(input.subscriptionId);
     const priceId = await this.priceId(input.target.lookupKey);
     const scheduleId = idOf(
       sub.schedule as string | Stripe.SubscriptionSchedule | null,
     );
-    if (input.kind === "downgrade") {
-      // Keep the current plan to period end, then the new price (and metadata) via a schedule.
+    if (input.kind === "scheduled") {
+      // Annual → monthly: keep the annual plan to period end, then the new price via a schedule.
       const item = sub.items.data[0];
       const schedId =
         scheduleId ??
@@ -682,19 +703,20 @@ export class StripeBillingProvider implements BillingProvider {
         effectiveAt: iso(item.current_period_end)!,
       };
     }
-    if (input.expectedAmountDue != null) {
+    // The charge (or credit) must equal the preview exactly, or nothing changes.
+    const expected =
+      input.kind === "upgrade" ? input.expectedAmountDue : (input.expectedCredit ?? null);
+    if (expected != null) {
       const fresh = await this.previewChange({
         subscriptionId: sub.id,
         target: input.target,
-        kind: "upgrade",
+        kind: input.kind,
       });
-      if (Math.abs(fresh.amountDueNow - input.expectedAmountDue) > 1)
-        throw new PreviewStaleError(
-          input.expectedAmountDue,
-          fresh.amountDueNow,
-        );
+      const actual =
+        input.kind === "upgrade" ? fresh.amountDueNow : fresh.creditToBalance;
+      if (actual !== expected) throw new PreviewStaleError(expected, actual);
     }
-    // An upgrade drops a pending downgrade and resumes a cancelling plan.
+    // A change drops a pending (scheduled) change.
     if (scheduleId) await this.stripe.subscriptionSchedules.release(scheduleId);
     const p = this.changeParams(
       sub,
@@ -704,7 +726,8 @@ export class StripeBillingProvider implements BillingProvider {
     );
     const updated = await this.stripe.subscriptions.update(sub.id, {
       ...p,
-      cancel_at_period_end: false,
+      // An upgrade resumes a cancelling plan; a downgrade keeps the cancel date.
+      ...(input.kind === "upgrade" ? { cancel_at_period_end: false } : {}),
       payment_behavior: "pending_if_incomplete",
       metadata: {
         ...sub.metadata,
@@ -722,6 +745,9 @@ export class StripeBillingProvider implements BillingProvider {
         status: "applied",
         invoiceId: inv?.id ?? null,
         amountCharged: inv?.amount_paid ?? 0,
+        ...(input.kind === "downgrade"
+          ? { creditToBalance: Math.max(0, -(inv?.total ?? 0)) }
+          : {}),
         effectiveAt: new Date().toISOString(),
       };
     }
@@ -910,7 +936,7 @@ export class StripeBillingProvider implements BillingProvider {
 
   // ── refunds ───────────────────────────────────────────────────────────
 
-  /** Refunds the invoice's payment, then ends the subscription now (→ Free via subscription.deleted). */
+  /** Refunds the invoice's payment, then ends the subscription now (→ no plan via subscription.deleted). */
   async refund(paymentId: string, amount: number): Promise<void> {
     const pays = await this.stripe.invoicePayments.list({
       invoice: paymentId,

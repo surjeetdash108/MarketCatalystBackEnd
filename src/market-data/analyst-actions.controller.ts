@@ -10,7 +10,6 @@ import { CachedCollectionsService } from "../live/cached-collections.service";
 import { StockDetailsService } from "../live/stock-details.service";
 import { MarketDataService } from "./market-data.service";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
-import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
 
 const TICKER_RE = /^[A-Z0-9.-]{1,10}$/;
 
@@ -35,7 +34,6 @@ export class AnalystActionsController {
     private readonly stockDetails: StockDetailsService,
   ) {}
 
-  @RequiresEntitlement("workspaces")
   @Get("analyst-actions")
   @Header(
     "Cache-Control",
@@ -64,7 +62,6 @@ export class AnalystActionsController {
    * firm (analyst-firm-stats job: FMP grades + price targets scored against
    * FMP prices). A figure is null when the firm has fewer than 10 samples.
    */
-  @RequiresEntitlement("workspaces")
   @Get("analyst-firm-stats")
   @Header(
     "Cache-Control",
@@ -77,7 +74,6 @@ export class AnalystActionsController {
 
   /** GET /market-data/analyst-history?ticker=SYM — every rating change on
    *  record for one stock (FMP grades), newest first. */
-  @RequiresEntitlement("workspaces")
   @Get("analyst-history")
   @Header(
     "Cache-Control",
@@ -93,7 +89,6 @@ export class AnalystActionsController {
 
   /** GET /market-data/analyst-firm-calls?firm=Name — every stored call by one
    *  firm across all measured stocks, newest first. */
-  @RequiresEntitlement("workspaces")
   @Get("analyst-firm-calls")
   @Header(
     "Cache-Control",

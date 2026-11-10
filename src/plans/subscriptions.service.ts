@@ -23,7 +23,7 @@ import {
  *              event can arrive a little after the period boundary)
  *   TRIALING   entitled until currentPeriodEnd, exactly
  *   PAST_DUE   entitled for PAST_DUE_GRACE_DAYS after the failed payment
- *   otherwise  Free
+ *   otherwise  no plan (NO_PLAN_ID): sign-in, account, Manage Plan, checkout only
  */
 
 /** How long after period end an ACTIVE mirror is still honoured, waiting for the renewal event. */

@@ -55,7 +55,7 @@ describe("purgeTestModeBilling", () => {
     expect(fs.read("users", "staff1")).toMatchObject({
       email: "s@example.com",
       name: "Staff",
-      currentPlan: "free",
+      currentPlan: "none",
       subscriptionStatus: null,
     });
     expect(fs.read("users", "cust1")?.currentPlan).toBe("pro");

@@ -387,12 +387,28 @@ describe("StripeBillingProvider — subscriptions and plan changes", () => {
     });
   });
 
-  it("downgrade: keeps the plan to period end, then the new price + metadata via a subscription schedule", async () => {
+  it("downgrade: applied now with always_invoice proration (the negative total credits the balance); keeps any cancel date", async () => {
+    const { p, m } = provider();
+    await p.changePlan({
+      subscriptionId: "sub_1",
+      target: STARTER_M,
+      kind: "downgrade",
+      prorationDate: T * 1000,
+      expectedAmountDue: null,
+    });
+    const [id, args] = m.calls["subscriptions.update"].at(-1) as [string, Record<string, unknown>];
+    expect(id).toBe("sub_1");
+    expect(args).toMatchObject({ proration_behavior: "always_invoice", items: [{ price: "price_starter_monthly" }] });
+    expect("cancel_at_period_end" in args).toBe(false);
+    expect(m.calls["subscriptionSchedules.create"] ?? []).toEqual([]);
+  });
+
+  it("scheduled (annual → monthly): keeps the plan to period end, then the new price + metadata via a subscription schedule", async () => {
     const { p, m } = provider();
     const r = await p.changePlan({
       subscriptionId: "sub_1",
       target: STARTER_M,
-      kind: "downgrade",
+      kind: "scheduled",
       prorationDate: Date.now(),
       expectedAmountDue: null,
     });

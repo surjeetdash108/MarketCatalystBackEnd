@@ -2,7 +2,6 @@ import { Controller, Get, Header, UseGuards } from "@nestjs/common";
 import { CachedCollectionsService } from "../live/cached-collections.service";
 import { MarketDataService } from "./market-data.service";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
-import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
 
 /**
  * GET /market-data/filings-wire — recent SEC-EDGAR 8-K filings as a filings
@@ -20,7 +19,6 @@ export class FilingsWireController {
     private readonly cached: CachedCollectionsService,
   ) {}
 
-  @RequiresEntitlement("workspaces")
   @Get("filings-wire")
   @Header(
     "Cache-Control",

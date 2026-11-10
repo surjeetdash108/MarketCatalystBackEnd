@@ -725,6 +725,16 @@ export class BillingEventsService implements OnModuleInit {
           discountAmount: inv.discountAmount,
           creditApplied: inv.creditApplied,
           amountRefunded: inv.amountRefunded,
+          // Line items (description, period, amount, proration flag), incl.
+          // discount and credit lines — what Manage Plan history and the admin
+          // detail show. Written here only (the event handler).
+          lines: (inv.lines ?? []).map((l) => ({
+            description: l.description,
+            amount: l.amount,
+            proration: l.proration === true,
+            periodStart: l.periodStart ?? null,
+            periodEnd: l.periodEnd ?? null,
+          })),
           currency: inv.currency,
           paymentStatus: status,
           billingReason: inv.billingReason,

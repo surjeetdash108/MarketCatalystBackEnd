@@ -75,6 +75,8 @@ export class PlanTargetDto {
 
 export class ChangePlanDto extends PlanTargetDto {
   @IsOptional() @IsInt() @Min(0) expectedAmountDue?: number;
+  /** Downgrades: the credit the preview showed (must match exactly). */
+  @IsOptional() @IsInt() @Min(0) expectedCredit?: number;
   @IsOptional() @IsNumber() prorationDate?: number;
 }
 

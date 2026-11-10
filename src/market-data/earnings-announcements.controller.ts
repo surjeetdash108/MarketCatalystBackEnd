@@ -20,7 +20,7 @@ export class EarningsAnnouncementsController {
     private readonly cached: CachedCollectionsService,
   ) {}
 
-  // Free: the dashboard shows this to every signed-in user.
+  // Market Desk (plans.registry ROUTE_FEATURES): Earnings Hub and the dashboard.
   @Get("earnings-announcements")
   @Header(
     "Cache-Control",

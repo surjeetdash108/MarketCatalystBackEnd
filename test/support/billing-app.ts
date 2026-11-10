@@ -32,6 +32,7 @@ import {
   BillingController,
   BillingWebhookController,
   MeEntitlementsController,
+  SignupPromoController,
 } from "../../src/billing/billing.controller";
 import { BillingService } from "../../src/billing/billing.service";
 import {
@@ -156,6 +157,7 @@ export async function billingApp(opts: BillingAppOptions = {}) {
     controllers: [
       BillingController,
       BillingWebhookController,
+      SignupPromoController,
       MeEntitlementsController,
       FakeBillingController,
       AdminBillingController,

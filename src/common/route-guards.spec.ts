@@ -36,6 +36,7 @@ const EXPECTED_PUBLIC = new Set([
   "GET /public/landing-tape", // marketing-site ticker tape, delayed index prices
   "GET /live/logo", // company logos loaded by <img src>, which cannot send a token
   "POST /api/billing/webhook", // provider webhook, authenticated by its signature over the raw body
+  "POST /api/billing/signup/promo", // signup page promo quote before sign-in; rate limited per IP
 ]);
 
 interface Route {

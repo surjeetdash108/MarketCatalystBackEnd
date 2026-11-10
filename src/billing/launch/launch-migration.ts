@@ -8,7 +8,7 @@ import type { PromoService } from "../promo/promo.service";
 
 /**
  * Launch-day migration (decision i): every existing non-paying user gets
- * 30 days of Pro (backend-written TRIALING with an expiry; Free afterwards) and
+ * 30 days of Pro (backend-written TRIALING with an expiry; no plan afterwards — "Choose a plan") and
  * a one-time, first-year promo code for the launch email.
  *
  * Idempotent: launch_offers/{uid} records what each user got; a re-run skips

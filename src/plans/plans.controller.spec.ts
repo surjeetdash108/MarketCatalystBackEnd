@@ -10,10 +10,10 @@ describe("GET /plans", () => {
     const c = new PlansController(h.plans, h.subscriptions, flags, new BillingAccessService(flags, provider ? h.provider : null));
     return c.listPlans();
   }
-  it("lists the four active plans with both prices", async () => {
+  it("lists the three active plans with both prices — no free plan", async () => {
     const r = await plans({ SUBSCRIPTIONS_ENABLED: "true" });
     expect(r.plans.map((p) => [p.id, p.prices.monthly?.amount ?? null, p.prices.annual?.amount ?? null])).toEqual([
-      ["free", null, null], ["starter", 3900, 37440], ["pro", 5900, 56640], ["elite", 19900, 179100],
+      ["starter", 3900, 37440], ["pro", 5900, 56640], ["elite", 19900, 179100],
     ]);
   });
   it("reports whether paid plans can be bought (flag on AND provider configured)", async () => {
