@@ -1,5 +1,8 @@
+import { ConfigService } from "@nestjs/config";
+import { emailDeliveryReady } from "./email/email-provider";
 import {
   Inject,
+  Optional,
   Injectable,
   ServiceUnavailableException,
 } from "@nestjs/common";
@@ -24,6 +27,7 @@ export class BillingAccessService {
   constructor(
     private readonly flags: FeatureFlagsService,
     @Inject(BILLING_PROVIDER) private readonly provider: BillingProvider | null,
+    @Optional() private readonly config?: ConfigService,
   ) {}
 
   get providerName(): "fake" | "stripe" | "none" {
@@ -36,6 +40,8 @@ export class BillingAccessService {
 
   /** True when plan gating must be enforced and paid plans can be bought. */
   async subscriptionsLive(): Promise<boolean> {
+    // Production also needs real email: buyers must receive a verification code.
+    if (this.config && !emailDeliveryReady(this.config)) return false;
     return this.provider !== null && (await this.flagEnabled());
   }
 

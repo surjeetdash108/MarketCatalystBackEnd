@@ -69,14 +69,20 @@ export class EmailService {
       `Manage your plan: ${this.appUrl}/manage-plan`,
       `Questions? Reply to this email or write to ${this.replyTo}.`,
     ].join("\n");
-    await this.sender.send({
-      tag,
-      to,
-      from: this.from,
-      replyTo: this.replyTo,
-      subject,
-      text,
-    });
+    try {
+      await this.sender.send({
+        tag,
+        to,
+        from: this.from,
+        replyTo: this.replyTo,
+        subject,
+        text,
+      });
+    } catch (err) {
+      // A failed notification must never undo or block billing state (the
+      // event handler would retry the whole event); the sender already logged it.
+      this.logger.error(`[${tag}] not delivered: ${(err as Error).message}`);
+    }
   }
 
   welcome(

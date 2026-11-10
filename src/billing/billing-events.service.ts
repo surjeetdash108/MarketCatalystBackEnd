@@ -736,15 +736,14 @@ export class BillingEventsService implements OnModuleInit {
           { firstPaidAt: inv.paidAt ?? this.clock.nowIso() },
           { merge: true },
         );
-      // Stripe sends its own receipts; the fake provider stands in for them.
-      if (this.provider instanceof FakeBillingProvider) {
-        await this.emails.receipt(email, {
-          planId: inv.planId,
-          amount: inv.amountPaid,
-          currency: inv.currency,
-          invoiceNumber: inv.number,
-        });
-      }
+      // Every receipt goes through our EmailSender (SendGrid); turn off Stripe's
+      // own customer receipt emails so customers don't get two (docs/GO-LIVE.md).
+      await this.emails.receipt(email, {
+        planId: inv.planId,
+        amount: inv.amountPaid,
+        currency: inv.currency,
+        invoiceNumber: inv.number,
+      });
     } else if (event.type === "invoice.action_required") {
       await this.emails.actionRequired(email, {
         planId: inv.planId,
