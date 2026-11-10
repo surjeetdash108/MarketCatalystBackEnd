@@ -9,7 +9,7 @@ import { isTestRecord } from "./livemode";
  * records without the field) are never touched.
  *
  * For each user whose subscription mirror is removed, the users-doc billing
- * projection is reset to Free so the purged plan doesn't linger there (a
+ * projection is reset to "none" (no plan) so the purged plan doesn't linger there (a
  * staff account keeps full access through the staff allowlist regardless).
  *
  * Dry run by default: reports what it would delete and writes nothing.
@@ -28,12 +28,12 @@ export interface PurgeResult {
   dryRun: boolean;
   /** collection → doc ids that are (or would be) deleted. */
   deleted: Record<string, string[]>;
-  /** users whose billing projection is (or would be) reset to Free. */
+  /** users whose billing projection is (or would be) reset to no plan. */
   usersReset: string[];
 }
 
 const RESET_PROJECTION = {
-  currentPlan: "free",
+  currentPlan: "none",
   subscriptionStatus: null,
   subscriptionInterval: null,
   subscriptionStartDate: null,

@@ -108,4 +108,23 @@ describe("EmailService", () => {
     expect(money(179100)).toBe("$1,791.00");
     expect(longDate(END)).toBe("10 December 2026");
   });
+
+  it("never mentions 'Free plan' in any sent email text or subject", async () => {
+    const { sender, emails } = setup();
+    const to = "user@example.com";
+    await emails.welcome(to, { planId: "pro", interval: "monthly", amount: 5900, currency: "USD", renewsAt: END });
+    await emails.upgrade(to, { fromPlanId: "starter", planId: "pro", interval: "monthly", charged: 1000, currency: "USD", renewsAt: END });
+    await emails.downgradeScheduled(to, { fromPlanId: "elite", planId: "starter", interval: "monthly", effectiveAt: END });
+    await emails.cancellation(to, { planId: "pro", endsAt: END });
+    await emails.retentionAccepted(to, { planId: "pro", description: "50% off", appliesFrom: END });
+    await emails.paymentFailed(to, { planId: "pro", amount: 5900, currency: "USD", graceEndsAt: END });
+    await emails.renewalReminder(to, { planId: "pro", interval: "annual", amount: 56640, currency: "USD", renewsAt: END });
+    await emails.priceChange(to, { planId: "pro", interval: "monthly", oldAmount: 5900, newAmount: 6900, currency: "USD", effectiveAt: END });
+    await emails.planEnded(to, { planId: "pro" });
+    await emails.receipt(to, { planId: "pro", amount: 5900, currency: "USD", invoiceNumber: "INV-1" });
+    for (const msg of sender.outbox) {
+      expect(msg.text.toLowerCase()).not.toContain("free plan");
+      expect(msg.subject.toLowerCase()).not.toContain("free plan");
+    }
+  });
 });

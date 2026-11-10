@@ -23,7 +23,6 @@ import {
   withRunningTotals,
 } from "./portfolio-lots";
 import { etDate } from "../common/market-calendar.util";
-import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
 
 const TICKER_RE = /^[A-Z][A-Z0-9.-]{0,9}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -122,7 +121,6 @@ function parseTradeDate(value: unknown): string | null {
  * live holdings + prices, nothing ever read the written fields back.
  */
 @Controller("api")
-@RequiresEntitlement("portfolio")
 @UseGuards(FirebaseAuthGuard)
 export class PortfolioController {
   constructor(private readonly firebase: FirebaseAdminService) {}

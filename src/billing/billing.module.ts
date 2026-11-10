@@ -11,6 +11,7 @@ import {
   BillingController,
   BillingWebhookController,
   MeEntitlementsController,
+  SignupPromoController,
 } from "./billing.controller";
 import { FakeBillingController } from "./fake-billing.controller";
 import { PromoService } from "./promo/promo.service";
@@ -24,6 +25,7 @@ import { BillingReconcileJob } from "./reconcile.job";
   controllers: [
     BillingController,
     BillingWebhookController,
+    SignupPromoController,
     MeEntitlementsController,
     FakeBillingController,
     AdminBillingController,

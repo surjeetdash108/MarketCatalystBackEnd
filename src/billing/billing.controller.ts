@@ -37,6 +37,7 @@ import {
 } from "./billing.dto";
 import { RetentionService } from "./retention/retention.service";
 import { RefundService } from "./refund/refund.service";
+import { PromoService } from "./promo/promo.service";
 import { AuthToken, type AuthTokenInfo } from "../common/auth-token";
 import { StaffAccessService } from "../account/staff-access.service";
 import {
@@ -250,6 +251,30 @@ export class BillingController {
   @HttpCode(200)
   portal(@CurrentUser() uid: string) {
     return this.billing.portal(uid);
+  }
+}
+
+/**
+ * Promo check on the signup page, before the account exists. Server-side,
+ * one generic error for every rejection, and the same hourly per-IP budget as
+ * signed-in checks. It only quotes: the code is applied (and re-validated) at
+ * checkout.
+ */
+@Controller("api/billing")
+export class SignupPromoController {
+  constructor(private readonly promos: PromoService) {}
+
+  @Public("signup page promo check, before sign-in; rate limited per IP")
+  @Post("signup/promo")
+  @HttpCode(200)
+  check(@Body() body: PromoPreviewDto, @Req() req: Request) {
+    return this.promos.preview({
+      code: body.code,
+      uid: null,
+      planId: body.planId,
+      interval: body.interval,
+      ip: clientIp(req),
+    });
   }
 }
 

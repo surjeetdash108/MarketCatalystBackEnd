@@ -24,7 +24,7 @@ async function seedCustomers(app: App) {
     name: "=cmd|' /C calc'!A0",
     email: "eve@example.com",
   });
-  app.fs.seed("users", "f1", { name: "Free Fran", email: "fran@example.com" });
+  app.fs.seed("users", "f1", { name: "Nora No-plan", email: "fran@example.com" });
   await app.subscribe(
     "s1",
     "starter",
@@ -83,7 +83,7 @@ describe("admin: subscribers", () => {
       mrrMinor: 19900,
     });
     expect(by.f1).toMatchObject({
-      planId: "free",
+      planId: "none",
       status: "NONE",
       mrrMinor: 0,
     });
@@ -134,7 +134,7 @@ describe("admin: subscribers", () => {
     });
   });
 
-  it("a user document claiming a paid plan without a mirror shows as Free with no MRR", async () => {
+  it("a user document claiming a paid plan without a mirror shows as no plan with no MRR", async () => {
     a = await billingApp();
     a.fs.seed("users", "faker", {
       name: "F",
@@ -146,7 +146,7 @@ describe("admin: subscribers", () => {
     const row = (
       await a.admin.get("/api/admin/billing/subscribers")
     ).body.subscribers.find((r: { uid: string }) => r.uid === "faker");
-    expect(row).toMatchObject({ planId: "free", mrrMinor: 0 });
+    expect(row).toMatchObject({ planId: "none", mrrMinor: 0 });
   });
 
   it("searches and filters by plan, status, interval, cancel flag and promo", async () => {
@@ -178,6 +178,17 @@ describe("admin: subscribers", () => {
     );
     expect(lines.length).toBe(5);
     expect(r.text).toContain("'=cmd|' /C calc'!A0");
+  });
+
+  it("per-user detail shows invoice line items and the customer credit balance", async () => {
+    a = await billingApp();
+    const { u } = await a.subscribe("d1", "elite", "monthly");
+    const p = (await u.post("/api/billing/change/preview", { planId: "starter", interval: "monthly" })).body;
+    await u.post("/api/billing/change", { planId: "starter", interval: "monthly", expectedCredit: p.creditToBalance, prorationDate: p.prorationDate });
+    const d = (await a.admin.get("/api/admin/billing/subscribers/d1")).body;
+    expect(d.creditBalance).toBe(p.creditToBalance);
+    const upd = d.invoices.find((i: { billingReason: string }) => i.billingReason === "subscription_update");
+    expect(upd.lines.map((l: { amount: number }) => l.amount)).toEqual([-19900, 3900, 16000]);
   });
 
   it("per-user detail has invoices, plan history and entitlements", async () => {

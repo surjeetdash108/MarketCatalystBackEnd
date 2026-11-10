@@ -6,7 +6,7 @@ import { REFUND_WINDOW_DAYS } from "./refund-policy.config";
  *    normalised email ever;
  *  - an ANNUAL renewal charge: full refund within the window;
  *  - a MONTHLY renewal charge: never refundable;
- *  - a refund ends the subscription immediately (the account returns to Free).
+ *  - a refund ends the subscription immediately (the account has no plan until it subscribes again).
  */
 export interface RefundPolicy {
   enabled: boolean;
@@ -42,8 +42,8 @@ export function refundPolicy(
     termsParagraph:
       `You can ask for a full refund within ${d} of your first subscription payment; this is available once per person (per email address). ` +
       `Annual renewal charges can also be refunded in full within ${d} of the renewal. Monthly renewal charges are not refundable. ` +
-      `A refund ends your subscription immediately and your account returns to the Free plan. ` +
-      `Otherwise we do not provide refunds or credits for partial billing periods, except where the law requires it.`,
+      `A refund ends your subscription immediately; to keep using MarketCatalyst you choose a plan again. ` +
+      `Otherwise we do not refund partial billing periods, except where the law requires it. When you move to a lower plan, the unused part of your current plan is credited to your account and used automatically on your next invoices; credits are not paid out to your card.`,
     managePlanLine: `Within ${d} of your first payment, or of an annual renewal, you can get a full refund. Your plan ends right away.`,
   };
 }

@@ -1,4 +1,9 @@
-import type { BillingDetails, BillingRegion, CheckoutQuote } from "./types";
+import type {
+  BillingDetails,
+  BillingRegion,
+  CheckoutQuote,
+  ProviderChangeKind,
+} from "./types";
 import type {
   AppliedDiscount,
   ChangePreview,
@@ -97,16 +102,23 @@ export interface BillingProvider {
   previewChange(input: {
     subscriptionId: string;
     target: PriceRef;
-    kind: "upgrade" | "downgrade";
+    kind: ProviderChangeKind;
   }): Promise<ChangePreview>;
-  /** Upgrade: immediate, prorated, charged now. Downgrade: scheduled for period end. */
+  /**
+   * upgrade: immediate, prorated, charged now (must equal expectedAmountDue).
+   * downgrade: immediate, prorated, credited to the balance (must equal expectedCredit).
+   * scheduled: annual → monthly at the end of the annual period.
+   */
   changePlan(input: {
     subscriptionId: string;
     target: PriceRef;
-    kind: "upgrade" | "downgrade";
+    kind: ProviderChangeKind;
     prorationDate: number;
     expectedAmountDue: number | null;
+    expectedCredit?: number | null;
   }): Promise<ChangeResult>;
+  /** The customer's account credit (minor units, ≥ 0) used on future invoices. */
+  getCreditBalance(customerId: string): Promise<number>;
   cancelScheduledChange(subscriptionId: string): Promise<void>;
   cancelAtPeriodEnd(subscriptionId: string): Promise<void>;
   resume(subscriptionId: string): Promise<void>;

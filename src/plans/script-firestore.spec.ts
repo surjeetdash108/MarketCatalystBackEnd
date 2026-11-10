@@ -135,6 +135,7 @@ describe("operator scripts: --auth=gcloud Firestore REST shim", () => {
 
   it("apply-catalog works through it: one atomic commit; retire is an update that requires the doc", async () => {
     const { db, calls } = server({
+      "plans/free": { id: "free", amount: 0, active: true },
       "plans/plus": { id: "plus", amount: 2999, active: true },
       "plans/pro": { id: "pro", amount: 4999 },
     });
@@ -158,6 +159,12 @@ describe("operator scripts: --auth=gcloud Firestore REST shim", () => {
       updateMask: { fieldPaths: ["active", "retiredAt", "updatedAt"] },
       currentDocument: { exists: true },
     });
+    // Free is retired the same way (an update to active:false), never deleted.
+    const writes = (commits[0].body as { writes: Array<Record<string, unknown>> }).writes;
+    expect(writes.some((w) => "delete" in w)).toBe(false);
+    expect(
+      writes.find((w) => String((w.update as { name?: string } | undefined)?.name ?? "").endsWith("plans/free")),
+    ).toMatchObject({ updateMask: { fieldPaths: ["active", "retiredAt", "updatedAt"] } });
     expect((await db.doc("plans/pro").get()).data()?.amount).toBe(5900);
     const again = await applyCatalog(db as unknown as Firestore, {
       dryRun: false,

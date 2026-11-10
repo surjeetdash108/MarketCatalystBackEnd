@@ -80,8 +80,8 @@ describe("PATCH /api/profile", () => {
     expect(doc.riskTolerance).toBe("Moderate");
     expect(doc.uid).toBe(UID);
     expect(doc.email).toBe(AUTH_EMAIL);
-    expect(doc.tier).toBe("free");
-    expect(doc.currentPlan).toBe("free");
+    expect(doc.tier).toBe("none");
+    expect(doc.currentPlan).toBe("none");
     expect(doc.subscriptionStatus).toBe("NONE");
     expect(doc.createdAt).not.toBe(HOSTILE.createdAt);
     for (const k of [

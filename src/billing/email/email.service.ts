@@ -153,7 +153,7 @@ export class EmailService {
       to,
       "Your subscription has been cancelled",
       [
-        `Your ${planName(p.planId)} plan will not renew. You keep full access until ${longDate(p.endsAt)}, then your account moves to the Free plan.`,
+        `Your ${planName(p.planId)} plan will not renew. You keep full access until ${longDate(p.endsAt)}, then you can choose a plan any time to keep using MarketCatalyst.`,
         "No further charges will be made. You can resume any time before that date.",
       ],
     );
@@ -247,7 +247,7 @@ export class EmailService {
 
   planEnded(to: string, p: { planId: string }) {
     return this.send("plan_ended", to, "Your plan has ended", [
-      `Your ${planName(p.planId)} plan has ended and your account is now on the Free plan. Your watchlists and data are kept.`,
+      `Your ${planName(p.planId)} plan has ended. Your watchlists and data are kept — choose a plan any time to pick up where you left off.`,
     ]);
   }
 
@@ -268,7 +268,7 @@ export class EmailService {
   launchOffer(to: string, p: { code: string; trialEndsAt: string }) {
     return this.send("launch_offer", to, "[LAUNCH EMAIL SUBJECT PLACEHOLDER]", [
       "[LAUNCH EMAIL COPY PLACEHOLDER]",
-      `You have Pro free until ${longDate(p.trialEndsAt)}. After that your account moves to Free unless you choose a plan.`,
+      `You have Pro at no charge until ${longDate(p.trialEndsAt)}. After that, choose a plan to keep using MarketCatalyst.`,
       `Your one-time code for your first year: ${p.code}`,
     ]);
   }
@@ -298,7 +298,7 @@ export class EmailService {
   ) {
     return this.send("refund", to, "Your refund is on its way", [
       `We've refunded ${money(p.amount, p.currency)} for your ${planName(p.planId)} plan, as our ${p.windowDays}-day refund policy allows.`,
-      "Your subscription has ended and your account is now on the Free plan.",
+      "Your subscription has ended. Choose a plan any time to keep using MarketCatalyst.",
       "The refund usually reaches your card within 5–10 business days.",
     ]);
   }

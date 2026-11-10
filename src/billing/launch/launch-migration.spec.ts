@@ -37,7 +37,7 @@ describe("launch migration (decision i)", () => {
     expect(h.fs.ids("promo_codes")).toEqual([]);
   });
 
-  it("gives existing users 30 days of Pro then Free, a one-time first-year code and the launch email; skips payers and staff; idempotent", async () => {
+  it("gives existing users 30 days of Pro then no plan, a one-time first-year code and the launch email; skips payers and staff; idempotent", async () => {
     const { h, deps, opts, promos } = setup();
     for (const u of ["u1", "u2"]) {
       h.fs.seed("users", u, { email: `${u}@example.com` });
@@ -73,7 +73,7 @@ describe("launch migration (decision i)", () => {
     expect(h.tags().filter((t) => t === "launch_offer").length).toBe(2);
     expect((await h.subscriptions.forUser("payer")).planId).toBe("elite");
     await h.provider.advanceTo(T0 + 30 * DAY + 1);
-    expect((await h.subscriptions.forUser("u1")).planId).toBe("free");
+    expect((await h.subscriptions.forUser("u1")).planId).toBe("none");
     const again = await runLaunchMigration(deps, opts);
     expect(again).toMatchObject({ granted: 0, skippedAlreadyMigrated: 2 });
   });
@@ -111,10 +111,10 @@ describe("launch migration (decision i)", () => {
       new Date(T0 + 30 * DAY).toISOString(),
     );
     await h.provider.advanceTo(T0 + 31 * DAY);
-    expect((await h.subscriptions.forUser("u1")).planId).toBe("free");
+    expect((await h.subscriptions.forUser("u1")).planId).toBe("none");
     expect((await h.subscriptions.forUser("legacy")).planId).toBe("pro");
     await h.provider.advanceTo(T0 + 91 * DAY);
-    expect((await h.subscriptions.forUser("legacy")).planId).toBe("free");
+    expect((await h.subscriptions.forUser("legacy")).planId).toBe("none");
   });
 
   it("refuses to apply with placeholder offer values", () => {

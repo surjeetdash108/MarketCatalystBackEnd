@@ -2,9 +2,12 @@ import { StaffAccessService } from "../account/staff-access.service";
 import { maskPhone } from "./checkout/phone";
 import {
   BadRequestException,
+  Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
+import { BILLING_PROVIDER, type BillingProvider } from "./provider/billing-provider";
 import { AppClock } from "../common/app-clock";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import {
@@ -139,6 +142,7 @@ export class AdminBillingService {
     private readonly emails: EmailService,
     private readonly clock: AppClock,
     private readonly staff: StaffAccessService,
+    @Optional() @Inject(BILLING_PROVIDER) private readonly provider?: BillingProvider | null,
   ) {}
 
   private async all(
@@ -246,8 +250,14 @@ export class AdminBillingService {
       this.firebase.firestore.collection("customers").doc(uid).get(),
     ]);
     const c = customer.data() ?? {};
+    const provider = this.provider;
+    const creditBalance =
+      provider && c.customerId
+        ? await provider.getCreditBalance(String(c.customerId)).catch(() => 0)
+        : 0;
     return {
       ...row,
+      creditBalance,
       mirror: mirror.exists ? mirror.data() : null,
       // Renewal consent recorded at checkout (time, text version, plan, interval, price, IP).
       consent:

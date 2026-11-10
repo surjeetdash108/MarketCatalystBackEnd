@@ -2,7 +2,6 @@ import { BadRequestException, Controller, Get, Query, UseGuards } from "@nestjs/
 import { CurrentUser } from "../common/current-user.decorator";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 import { AiAnalysisService } from "../live/ai-analysis.service";
-import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
 
 /** Firestore ids are opaque, but keep them boring — this one is concatenated
  *  into a doc id, so refuse anything with a path separator or wildcard. */
@@ -19,7 +18,6 @@ const LIST_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
  * caller can only ever summarise their own basket.
  */
 @Controller("api/ai")
-@RequiresEntitlement("aiAssistant")
 @UseGuards(FirebaseAuthGuard)
 export class AiUserController {
   constructor(private readonly ai: AiAnalysisService) {}

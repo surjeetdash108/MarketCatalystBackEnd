@@ -155,7 +155,7 @@ describe("billing event handler: the only writer of billing state", () => {
     });
   });
 
-  it("cancel at period end: paid access to the exact end, then Free with claim and email", async () => {
+  it("cancel at period end: paid access to the exact end, then no plan with claim and email", async () => {
     const h = billingHarness();
     const { subscriptionId } = await h.buy("u1", "pro", "monthly");
     await h.provider.cancelAtPeriodEnd(subscriptionId);
@@ -169,12 +169,12 @@ describe("billing event handler: the only writer of billing state", () => {
     expect(h.fs.read("subscriptions", "u1")).toMatchObject({
       status: "CANCELLED",
     });
-    expect((await h.subscriptions.forUser("u1")).planId).toBe("free");
-    expect(h.auth.claim("u1")).toBe("free");
+    expect((await h.subscriptions.forUser("u1")).planId).toBe("none");
+    expect(h.auth.claim("u1")).toBe("none");
     expect(h.tags()).toContain("plan_ended");
   });
 
-  it("past due: 7-day grace with access and a payment-failed email, then Free", async () => {
+  it("past due: 7-day grace with access and a payment-failed email, then no plan", async () => {
     const h = billingHarness();
     await h.buy("u1", "pro", "monthly", "renewal_failure");
     const end = Date.parse(
@@ -195,11 +195,11 @@ describe("billing event handler: the only writer of billing state", () => {
       .filter((p) => p.paymentStatus === "FAILED");
     expect(failed.length).toBe(1);
     await h.provider.advanceTo(end + 7 * DAY);
-    expect((await h.subscriptions.forUser("u1")).planId).toBe("free");
-    expect(h.auth.claim("u1")).toBe("free");
+    expect((await h.subscriptions.forUser("u1")).planId).toBe("none");
+    expect(h.auth.claim("u1")).toBe("none");
   });
 
-  it("past due without a provider deletion still drops to Free after the grace period", async () => {
+  it("past due without a provider deletion still drops to no plan after the grace period", async () => {
     const h = billingHarness();
     h.fs.seed("subscriptions", "u9", {
       uid: "u9",
@@ -209,7 +209,7 @@ describe("billing event handler: the only writer of billing state", () => {
       currentPeriodEnd: new Date(T0 + 20 * DAY).toISOString(),
     });
     expect(await h.subscriptions.forUser("u9")).toMatchObject({
-      planId: "free",
+      planId: "none",
       status: "EXPIRED",
       inGrace: false,
     });
@@ -254,7 +254,7 @@ describe("billing event handler: the only writer of billing state", () => {
     expect(await none.syncSubscription("sub_x", null)).toBe("ignored");
   });
 
-  it("the launch trial grants TRIALING Pro until a date, then Free, and never replaces a paying plan", async () => {
+  it("the launch trial grants TRIALING Pro until a date, then no plan, and never replaces a paying plan", async () => {
     const h = billingHarness();
     h.auth.add("old", "old@example.com");
     const ends = new Date(T0 + 30 * DAY).toISOString();
@@ -265,7 +265,7 @@ describe("billing event handler: the only writer of billing state", () => {
     });
     expect(h.auth.claim("old")).toBe("pro");
     await h.provider.advanceTo(T0 + 30 * DAY + 1);
-    expect((await h.subscriptions.forUser("old")).planId).toBe("free");
+    expect((await h.subscriptions.forUser("old")).planId).toBe("none");
     await h.buy("payer", "elite", "monthly");
     expect(await h.events.applyLaunchTrial("payer", "pro", ends)).toBe(
       "skipped",

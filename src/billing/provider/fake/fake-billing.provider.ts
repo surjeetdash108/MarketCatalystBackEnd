@@ -1,5 +1,7 @@
 import { simulatedTax } from "./fake-tax.config";
-import type { BillingDetails, BillingRegion, CheckoutQuote } from "../types";
+import type { BillingDetails, BillingRegion, CheckoutQuote,
+  ProviderChangeKind,
+} from "../types";
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { Logger } from "@nestjs/common";
 import type { AppClock } from "../../../common/app-clock";
@@ -687,6 +689,13 @@ export class FakeBillingProvider implements BillingProvider {
     return this.all<ProviderSubscription>(C.subscriptions);
   }
 
+  /**
+   * Proration at `at`, Stripe-style: credit for the unused time on the current
+   * price, charge for the remaining time on the new one (same interval), or the
+   * full new price with a new period (interval change). An active percent
+   * discount (e.g. the retention offer) applies to both lines, so it carries
+   * over to the new price for its remaining invoices.
+   */
   private prorate(sub: ProviderSubscription, target: PriceRef, at: number) {
     const start = ms(sub.currentPeriodStart);
     const end = ms(sub.currentPeriodEnd);
@@ -694,70 +703,97 @@ export class FakeBillingProvider implements BillingProvider {
       1,
       Math.max(0, (end - at) / Math.max(1, end - start)),
     );
-    const unused = Math.round(sub.amount * remaining);
+    const pct =
+      sub.discount?.percentOff != null &&
+      (sub.discount.remainingInvoices == null || sub.discount.remainingInvoices > 0)
+        ? sub.discount.percentOff
+        : 0;
+    const factor = 1 - pct / 100;
+    const unused = Math.round(sub.amount * factor * remaining);
     const lines: InvoiceLine[] = [
       {
         description: `Unused time on ${sub.planId} (${sub.interval})`,
         amount: -unused,
         proration: true,
+        periodStart: iso(at),
+        periodEnd: iso(end),
       },
     ];
-    let amountDue: number;
+    let net: number;
     let periodStart = start;
     let periodEnd = end;
     if (target.interval === sub.interval) {
-      const charge = Math.round(target.amount * remaining);
+      const charge = Math.round(target.amount * factor * remaining);
       lines.push({
         description: `Remaining time on ${target.planId} (${target.interval})`,
         amount: charge,
         proration: true,
+        periodStart: iso(at),
+        periodEnd: iso(end),
       });
-      amountDue = charge - unused;
+      net = charge - unused;
     } else {
       // Interval change resets the billing cycle: new full period from now.
-      lines.push({
-        description: `${target.planId} (${target.interval})`,
-        amount: target.amount,
-        proration: false,
-      });
-      amountDue = target.amount - unused;
       periodStart = at;
       periodEnd = addInterval(at, target.interval);
+      const full = Math.round(target.amount * factor);
+      lines.push({
+        description: `${target.planId} (${target.interval})`,
+        amount: full,
+        proration: false,
+        periodStart: iso(periodStart),
+        periodEnd: iso(periodEnd),
+      });
+      net = full - unused;
     }
-    return { amountDue: Math.max(0, amountDue), lines, periodStart, periodEnd };
+    return {
+      net,
+      amountDue: Math.max(0, net),
+      credit: Math.max(0, -net),
+      lines,
+      periodStart,
+      periodEnd,
+    };
+  }
+
+  async getCreditBalance(customerId: string): Promise<number> {
+    return (await this.mustCustomer(customerId)).creditBalance;
   }
 
   async previewChange(input: {
     subscriptionId: string;
     target: PriceRef;
-    kind: "upgrade" | "downgrade";
+    kind: ProviderChangeKind;
   }): Promise<ChangePreview> {
     const sub = await this.mustSubscription(input.subscriptionId);
     const at = this.clock.now();
-    if (input.kind === "downgrade") {
+    const base = {
+      planId: input.target.planId,
+      interval: input.target.interval,
+      currency: input.target.currency,
+      prorationDate: at,
+      nextRenewalAmount: input.target.amount,
+      currentPeriodStart: sub.currentPeriodStart,
+      currentPeriodEnd: sub.currentPeriodEnd,
+    };
+    if (input.kind === "scheduled") {
       return {
-        kind: "downgrade",
-        planId: input.target.planId,
-        interval: input.target.interval,
-        currency: input.target.currency,
+        ...base,
+        kind: "scheduled",
         amountDueNow: 0,
-        prorationDate: at,
+        creditToBalance: 0,
         effectiveAt: sub.currentPeriodEnd,
-        nextRenewalAmount: input.target.amount,
         nextRenewalDate: sub.currentPeriodEnd,
         lines: [],
       };
     }
     const p = this.prorate(sub, input.target, at);
     return {
-      kind: "upgrade",
-      planId: input.target.planId,
-      interval: input.target.interval,
-      currency: input.target.currency,
-      amountDueNow: p.amountDue,
-      prorationDate: at,
+      ...base,
+      kind: input.kind,
+      amountDueNow: input.kind === "upgrade" ? p.amountDue : 0,
+      creditToBalance: input.kind === "downgrade" ? p.credit : 0,
       effectiveAt: iso(at),
-      nextRenewalAmount: input.target.amount,
       nextRenewalDate: iso(p.periodEnd),
       lines: p.lines,
     };
@@ -766,12 +802,13 @@ export class FakeBillingProvider implements BillingProvider {
   async changePlan(input: {
     subscriptionId: string;
     target: PriceRef;
-    kind: "upgrade" | "downgrade";
+    kind: ProviderChangeKind;
     prorationDate: number;
     expectedAmountDue: number | null;
+    expectedCredit?: number | null;
   }): Promise<ChangeResult> {
     const sub = await this.mustSubscription(input.subscriptionId);
-    if (input.kind === "downgrade") {
+    if (input.kind === "scheduled") {
       sub.scheduledChange = {
         planId: input.target.planId,
         interval: input.target.interval,
@@ -791,6 +828,18 @@ export class FakeBillingProvider implements BillingProvider {
     }
     const at = input.prorationDate ?? this.clock.now();
     const p = this.prorate(sub, input.target, at);
+    if (input.kind === "downgrade") {
+      if (input.expectedCredit != null && input.expectedCredit !== p.credit)
+        throw new PreviewStaleError(input.expectedCredit, p.credit);
+      const invoiceId = await this.applyChange(sub, input.target, at, "downgrade");
+      return {
+        status: "applied",
+        invoiceId,
+        amountCharged: 0,
+        creditToBalance: p.credit,
+        effectiveAt: iso(at),
+      };
+    }
     if (
       input.expectedAmountDue != null &&
       input.expectedAmountDue !== p.amountDue
@@ -830,10 +879,19 @@ export class FakeBillingProvider implements BillingProvider {
     };
   }
 
-  private async applyUpgrade(
+  private applyUpgrade(
     sub: ProviderSubscription,
     target: PriceRef,
     at: number,
+  ): Promise<string | null> {
+    return this.applyChange(sub, target, at, "upgrade");
+  }
+
+  private async applyChange(
+    sub: ProviderSubscription,
+    target: PriceRef,
+    at: number,
+    kind: "upgrade" | "downgrade",
   ): Promise<string | null> {
     const p = this.prorate(sub, target, at);
     sub.planId = target.planId;
@@ -845,23 +903,38 @@ export class FakeBillingProvider implements BillingProvider {
     sub.scheduledChange = null;
     delete (sub as ProviderSubscription & { scheduledTarget?: PriceRef })
       .scheduledTarget;
-    sub.cancelAtPeriodEnd = false;
+    // An upgrade resumes a cancelling plan; a downgrade keeps the cancel date.
+    if (kind === "upgrade") sub.cancelAtPeriodEnd = false;
     sub.updatedAt = this.clock.now();
     let invoiceId: string | null = null;
-    if (p.amountDue > 0) {
+    if (p.amountDue > 0 || kind === "downgrade") {
       const c = await this.mustCustomer(sub.customerId);
+      // A downgrade's proration invoice totals ≤ 0: the difference goes to the
+      // customer balance (used automatically on the next invoices, never refunded).
+      const lines =
+        kind === "downgrade" && p.credit > 0
+          ? [
+              ...p.lines,
+              {
+                description: "Credit to your account balance",
+                amount: p.credit,
+                proration: false,
+              },
+            ]
+          : p.lines;
       const inv = this.newInvoice(sub, {
         billingReason: "subscription_update",
         periodStart: at,
         periodEnd: p.periodEnd,
-        subtotal: p.amountDue,
+        subtotal: kind === "downgrade" ? 0 : p.amountDue,
         discountAmount: 0,
         creditApplied: 0,
-        lines: p.lines,
+        lines,
         discount: null,
       });
       this.markPaid(inv);
-      c.successfulCharges++;
+      if (kind === "downgrade") c.creditBalance += p.credit;
+      else c.successfulCharges++;
       await this.write(C.customers, c);
       await this.write(C.invoices, inv);
       sub.latestInvoiceId = inv.id;
@@ -874,7 +947,7 @@ export class FakeBillingProvider implements BillingProvider {
         customerId: sub.customerId,
         subscriptionId: sub.id,
         invoiceId,
-        amount: p.amountDue,
+        amount: kind === "downgrade" ? 0 : p.amountDue,
       });
     }
     await this.emit("subscription.updated", {

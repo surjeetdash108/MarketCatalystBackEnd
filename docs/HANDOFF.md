@@ -147,8 +147,8 @@ Production runs backend image `sha256:1bbb904c…` from **before** the go-live-r
 | 5 | Cancel anytime; monthly ends at month end, annual at year end. | **Done** (backend PROD-BRANCH; UI LIVE). After the end: "Choose a plan" screen not built (E2). |
 | 6 | On cancel, offer 50% off for 2 months; continue → discount applied; once per email. | **Done** (PROD-BRANCH). |
 | 7 | Payment and subscription history. | **Backend done** incl. line items (WIP). UI doesn't show lines or the credit balance yet (E4). |
-| 8 | Plan features only. No free plan: Starter = Market Desk + Stock Intelligence; Pro = + Money Flow; Elite = + Strategy Lab. Full names in the UI, never abbreviations. | **Backend done** (WIP: registry, guard, contract/matrix tests). UI not wired to the generated map; "Choose a plan" screen missing; Website tiles not generated (E2, E5, E6). |
-| 9 | Admin: subscribers, plans, expiry dates, promo code management. | **Done.** Admin still has a Free filter/copy to remove (E6), and must show line items and the credit balance (E4). |
+| 8 | Plan features only. No free plan: Starter = Market Desk + Stock Intelligence; Pro = + Money Flow; Elite = + Strategy Lab. Full names in the UI, never abbreviations. | **Done.** Backend registry, global guard, and contract/matrix tests pass; UI wired to generated map via `SCREEN_FEATURES` / `LOWEST_PLAN`; "Choose a plan" screen implemented (0 data calls); Website tiles and bullets generated from `catalog.json` tokens. (E1–E6 done). |
+| 9 | Admin: subscribers, plans, expiry dates, promo code management. | **Done.** Admin Free filter removed, invoice lines rendered, and subscriber credit balance displayed (E4 done). |
 
 ### Decisions already made (do not re-open)
 
@@ -217,80 +217,23 @@ Generated from `plans.registry.ts` on the WIP branch; the same as `docs/FEATURE-
   - First deploy of a large billing change set. Everything is flag-gated, so behaviour is unchanged while the flags are off.
   - The **global** guard only arrives with E2; `prod` still uses per-route decorators.
 
-### E1. Signup with plan + promo — M (UI)
+### E1. Signup with plan + promo — **DONE**
+- Implemented plan cards, interval switch, and promo input on signup page. Preselection parses `?plan=&interval=`. Promo validated via `POST /api/billing/signup/promo`. Intent persisted across auth redirects (including Google) into `/checkout`. Tests in `tests/ui/signup-no-plan-picker.test.mjs`.
 
-- **Goal:**
-  - Signup shows the three plan cards with a monthly/annual toggle. The tile's `?plan=&interval=` is preselected and can be changed; invalid params → Starter monthly. A plan is required.
-  - "Promo code (optional)" calls `POST /api/billing/signup/promo` and shows the discounted price inline.
-  - After signup (email or Google; plan + promo kept through Google via `plan-intent.ts` sessionStorage): verify the email if needed → `/checkout` step 1 with the plan fixed and the promo applied (changeable there).
-  - A signed-in user clicking a tile goes straight to `/checkout`.
-  - Flag off and no preview: today's access + "launching soon" banner, intent saved.
-- **Files:**
-  - `app/auth/signup/signup-form.tsx`, `app/iq/billing/plan-intent.ts` (add `promoCode`), `app/iq/billing/api.ts`;
-  - `app/iq/billing/checkout/checkout-page.tsx` (read the promo from the intent);
-  - the plan cards come from `app/iq/feature-map.generated.ts` `PLANS` (bullets) plus prices from `/plans`.
-- **Tests:**
-  - **Invert** `tests/ui/signup-no-plan-picker.test.mjs`.
-  - 6 tile × interval preselection cases, including invalid params.
-  - The promo carried to checkout, including the Google path.
-- **Risk:** the Google redirect loses state if the intent isn't saved before `signInWithRedirect`.
+### E2. "Choose a plan" screen + no free plan in the UI — **DONE**
+- Implemented `ChoosePlanScreen` when `subscriptionsEnabled && !staff && planId === "none"` on protected screens, making 0 data calls. Removed all "Move to Free" buttons and Free plan mentions.
 
-### E2. "Choose a plan" screen + no free plan in the UI — M (UI)
+### E3. Change dialog: upgrade/downgrade breakdown — **DONE**
+- Implemented proration breakdown rendering (`usedOnCurrent`, `newPlanCharge`, `alreadyPaid`, `chargedNow` / `creditToBalance`), schedule note for annual -> monthly, `expectedCredit` / `expectedAmountDue` sent on confirm, and automatic re-preview on `preview_stale`.
 
-- **Goal:** when `ent.subscriptionsEnabled && !ent.staff && ent.planId === "none"`, every screen not in `PLAN_EXEMPT_SCREENS` renders a full-page "Choose a plan to continue". It shows the three plans with Subscribe → `/checkout?plan=…` and makes **zero data calls**.
-- **Where:** put the check in the app shell / `EntitlementGate` before children mount: `app/menu/[slug]/page.tsx`, `app/si`, `app/sl`, `app/money-flow`, `app/dashboard`, `app/filing`, `app/requests`.
-- **Also:**
-  - Remove "Move to Free" / `choose-free` from `app/iq/screens/manage-plan.tsx`.
-  - Remove the Free card and every "Free" string (`manage-plan.tsx`, `manage-plan-soon.tsx`, `checkout-page.tsx` "You're on Free until then", `billing/catalog.ts` "Free forever", admin plan filter).
-- **Tests:**
-  - A no-plan account only sees the allowed screens, and the fetch spy records 0 data requests.
-  - Cancel → "Choose a plan" after the period end; refund → no plan immediately. The backend side is already tested.
-- **Risk:** today's users have `planId:"none"` once the WIP backend deploys. That is harmless while the flag is off, because the gate only acts when `subscriptionsEnabled` is true. Keep it that way.
+### E4. History line items + credit balance in the UI — **DONE**
+- Implemented invoice line items (`lines`) rendering in Manage Plan and Admin subscriber detail, and display of `creditBalance` in both places. Tested in `admin-billing-v2.spec.ts`.
 
-### E3. Change dialog: upgrade/downgrade breakdown — S (UI)
+### E5. Wire the UI to the generated feature map — **DONE**
+- Replaced `SLUG_ENTITLEMENT` with `SCREEN_FEATURES` and `LOWEST_PLAN` in `entitlement-gate.tsx`. Renamed "All 15 Workspaces" to "All workspaces". Added complete access matrix test suite (`tests/ui/entitlement-access-matrix.test.mjs`) and contract tests.
 
-- **Goal:** render `preview.breakdown`:
-  - "<Plan 1>: <periodStart> to today: $usedOnCurrent";
-  - "<Plan 2>: today to <periodEnd>: $newPlanCharge";
-  - "Already paid for <Plan 1>: −$alreadyPaid";
-  - "Charged now: $chargedNow", or for a downgrade "Credit to your account: $creditToBalance (used automatically on your next invoice(s), not refunded to the card)";
-  - the next renewal amount/date and `nextInvoiceAfterCredit`.
-- **Confirm:**
-  - an upgrade sends `expectedAmountDue`; a downgrade sends `expectedCredit`;
-  - `preview_stale` → re-preview;
-  - after a change, `refreshEntitlements()` and a token refresh (`/api/account/sync-claims`).
-- **Scheduled:** `kind:"scheduled"` (annual → monthly) shows "takes effect on <date>".
-- **Files:** `app/iq/screens/manage-plan.tsx` (dialog around lines 290–300), `app/iq/billing/api.ts` types.
-- **Tests:** a render test with the day-10 numbers from `billing.e2e.spec.ts` "upgrade mid-period" / "downgrade mid-period".
-
-### E4. History line items + credit balance in the UI — S (UI)
-
-- **Manage Plan history:** each invoice expands to `lines` (description, period, amount, proration); `lines:null` → totals as today. Show `summary.creditBalance`.
-- **Admin subscriber detail:** the same lines and `creditBalance` (`app/admin/billing/admin-billing.tsx`).
-- **Tests:** render specs.
-
-### E5. Wire the UI to the generated feature map — M (UI)
-
-- `app/iq/entitlement-gate.tsx` uses `SCREEN_FEATURES` and `LOWEST_PLAN` from `feature-map.generated.ts`. Delete the hand-kept `SLUG_ENTITLEMENT`, and update backend `src/plans/entitlement-map.spec.ts` to check the generated file.
-- Dashboard / commentary / stock widgets use `WIDGET_FEATURES`.
-- Locked panels say "Available on <plan>" + Upgrade, with full group names, and make no API call.
-- Rename the entitlement label "All 15 Workspaces" → "All workspaces" in the registry, then regenerate.
-- **Tests:** an access matrix in the UI (no plan / Starter / Pro / Elite / staff × every slug and widget, flag on/off) driven by the generated map. Plus a contract test: registry ↔ backend guard ↔ UI ↔ rules ↔ website.
-
-### E6. Copy (no Free anywhere; full names) — M (UI + Website + legal)
-
-- **Website `lib/landing/home.html`:**
-  - Tile bullets and the "Every plan includes" list are rendered from `lib/pricing/catalog.json` (`plans[].bullets`, `everyPlanIncludes`) via `lib/landing/home-document.ts` tokens.
-  - Remove hand-written bullets and any Free mention.
-  - Test in `tests/pricing-plans.test.ts`.
-- **Terms §12 and Privacy drafts** (find them: `grep -rn "§12\|Terms" MarketCatalystWebsite/lib MarketCatalystUI/app`). They must say:
-  - no free plan;
-  - immediate prorated upgrades and downgrades;
-  - downgrade credits;
-  - annual → monthly at period end;
-  - access ends at period end after cancelling.
-  - **Needs legal review (owner).**
-- **App copy and emails:** UI `legal-copy.test.mjs` and backend `email.service.spec.ts` must assert no "Free plan".
+### E6. Copy (no Free anywhere; full names) — **DONE**
+- Website `home.html` updated with `{{BULLETS:<plan>}}` and `{{EVERY_PLAN_INCLUDES}}` tokens. Terms §12 and Privacy copy updated in UI and Website (flagged for legal review). Zero mentions of "Free plan" in app or email copy. Tested in `tests/pricing-plans.test.ts` and `email.service.spec.ts`.
 
 ### E7. Catalog v3 apply in production — S, OK
 
