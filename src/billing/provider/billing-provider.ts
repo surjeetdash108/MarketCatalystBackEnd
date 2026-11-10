@@ -133,9 +133,9 @@ export interface BillingProvider {
   deactivatePromotion(promo: PromoMirror): Promise<void>;
 
   // ── events ─────────────────────────────────────────────────────────────
-  /** Verifies the signature over the raw body and returns the event. */
+  /** Verifies the signature over the raw body and returns the event (null = not ours, ignore). */
   parseEvent(
     rawBody: Buffer | string,
     signature: string | undefined,
-  ): ProviderEvent;
+  ): ProviderEvent | null | Promise<ProviderEvent | null>;
 }

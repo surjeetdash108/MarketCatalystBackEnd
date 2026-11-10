@@ -12,7 +12,8 @@ Generated from the checker's output on 2026-11-10 (updated for checkout v2); reg
 | STRIPE_WEBHOOK_SECRET | `__PLACEHOLDER__` | Signing secret of the webhook endpoint (whsec_…) | `MarketCatalystBackEnd/.env.example:20` | Secret (Secret Manager) | staging, production |
 | NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY | `__PLACEHOLDER__` | Publishable key for Stripe.js 3-D Secure (pk_…) | `MarketCatalystUI/.env.example:15` | Plain config (UI build env) | staging, production |
 | STRIPE_PORTAL_CONFIGURATION | `bpc_PLACEHOLDER` | Customer Portal configuration id printed by scripts/stripe-seed.ts | `MarketCatalystBackEnd/.env.example:21` | Plain config | staging, production |
-| STRIPE_RETENTION_COUPON_ID | `coupon_RETAIN50_2M_PLACEHOLDER` | Retention coupon id (50% off, repeating, 2 months) printed by the seed script | `MarketCatalystBackEnd/.env.example:22` | Plain config | staging, production |
+| STRIPE_RETENTION_COUPON_ID | — (optional, unset) | Not needed: the provider creates the retention coupon on demand. Set only to use your own coupon | `MarketCatalystBackEnd/.env.example` | Plain config (optional) | — |
+| STRIPE_PAYMENT_METHOD_TYPES / NEXT_PUBLIC_STRIPE_PAYMENT_METHOD_TYPES | `card,link` (default) | Same list on backend and UI; add `paypal` only if the account supports it; never crypto/UPI | `MarketCatalystBackEnd/.env.example`, `MarketCatalystUI/.env.example` | Plain config | staging, production |
 | Price lookup keys / ids | `price_starter_monthly_PLACEHOLDER` … | Real Price ids printed by the seed script; the app resolves Prices by lookup key (starter_monthly … elite_annual from plans.registry), so ids are reference only | `MarketCatalystBackEnd/.env.example:25` | Plain config (reference) | staging, production |
 | Webhook URL | — | Register `https://app.marketcatalyst.ai/api/billing/webhook` (staging: the stage host) in Stripe with the events listed in stripe-billing.provider.ts | `MarketCatalystBackEnd/.env.example:23`, `MarketCatalystBackEnd/src/billing/provider/stripe/stripe-billing.provider.ts` (STRIPE_EVENT_MAP) | Stripe dashboard setting | staging, production |
 | STRIPE_PRODUCT_TAX_CODE | `__PLACEHOLDER__` | Stripe product tax code for SaaS (to confirm with tax counsel) set on the Products by the seed script | `MarketCatalystBackEnd/.env.example`, `MarketCatalystBackEnd/scripts/stripe-seed.ts` | Plain config (seed run) | staging, production |
@@ -66,24 +67,23 @@ Generated from the checker's output on 2026-11-10 (updated for checkout v2); reg
 - `MarketCatalystBackEnd/scripts/launch-migration.ts:37` [env-default] const prefix = process.env.LAUNCH_PROMO_PREFIX ?? "LAUNCH_PLACEHOLDER";
 - `MarketCatalystBackEnd/scripts/launch-migration.ts:38` [env-default] const percentRaw = process.env.LAUNCH_PROMO_PERCENT ?? "__PLACEHOLDER__";
 - `MarketCatalystBackEnd/scripts/launch-migration.ts:58` [env-default] excludeEmails: [process.env.ADMIN_EMAIL ?? "admin@example.com"],
-- `MarketCatalystBackEnd/scripts/stripe-seed.ts:34` [env-default] const taxCode = process.env.STRIPE_PRODUCT_TAX_CODE ?? "__PLACEHOLDER__";
+- `MarketCatalystBackEnd/scripts/stripe-seed.ts:36` [env-default] const taxCode = process.env.STRIPE_PRODUCT_TAX_CODE ?? "__PLACEHOLDER__";
 - `MarketCatalystBackEnd/.env.example:3` [env-template] # never in this file or in deploy/*.yaml. Every value containing PLACEHOLDER (or an
 - `MarketCatalystBackEnd/.env.example:16` [env-template] FAKE_BILLING_WEBHOOK_SECRET=__PLACEHOLDER__
 - `MarketCatalystBackEnd/.env.example:19` [env-template] STRIPE_SECRET_KEY=__PLACEHOLDER__
 - `MarketCatalystBackEnd/.env.example:20` [env-template] STRIPE_WEBHOOK_SECRET=__PLACEHOLDER__
 - `MarketCatalystBackEnd/.env.example:21` [env-template] STRIPE_PORTAL_CONFIGURATION=bpc_PLACEHOLDER
-- `MarketCatalystBackEnd/.env.example:22` [env-template] STRIPE_RETENTION_COUPON_ID=coupon_RETAIN50_2M_PLACEHOLDER
-- `MarketCatalystBackEnd/.env.example:25` [env-template] STRIPE_PRODUCT_TAX_CODE=__PLACEHOLDER__
-- `MarketCatalystBackEnd/.env.example:28` [env-template] # scripts/stripe-seed.ts for reference: price_starter_monthly_PLACEHOLDER etc.
-- `MarketCatalystBackEnd/.env.example:32` [env-template] EMAIL_PROVIDER_API_KEY=__PLACEHOLDER__
-- `MarketCatalystBackEnd/.env.example:33` [env-template] EMAIL_FROM_NAME="MarketCatalyst [PLACEHOLDER]"
-- `MarketCatalystBackEnd/.env.example:34` [env-template] EMAIL_FROM_ADDRESS=noreply@example.com
-- `MarketCatalystBackEnd/.env.example:35` [env-template] EMAIL_REPLY_TO=support@example.com
-- `MarketCatalystBackEnd/.env.example:38` [env-template] ADMIN_EMAIL=admin@example.com
-- `MarketCatalystBackEnd/.env.example:43` [env-template] LAUNCH_PROMO_PREFIX=LAUNCH_PLACEHOLDER
-- `MarketCatalystBackEnd/.env.example:44` [env-template] LAUNCH_PROMO_PERCENT=__PLACEHOLDER__
-- `MarketCatalystBackEnd/.env.example:47` [env-template] STREAM_TICKET_SECRET=__PLACEHOLDER__
-- `MarketCatalystBackEnd/.env.example:50` [env-template] SEC_USER_AGENT="MarketCatalyst [PLACEHOLDER] contact@example.com"
+- `MarketCatalystBackEnd/.env.example:30` [env-template] STRIPE_PRODUCT_TAX_CODE=__PLACEHOLDER__
+- `MarketCatalystBackEnd/.env.example:33` [env-template] # scripts/stripe-seed.ts for reference: price_starter_monthly_PLACEHOLDER etc.
+- `MarketCatalystBackEnd/.env.example:37` [env-template] EMAIL_PROVIDER_API_KEY=__PLACEHOLDER__
+- `MarketCatalystBackEnd/.env.example:38` [env-template] EMAIL_FROM_NAME="MarketCatalyst [PLACEHOLDER]"
+- `MarketCatalystBackEnd/.env.example:39` [env-template] EMAIL_FROM_ADDRESS=noreply@example.com
+- `MarketCatalystBackEnd/.env.example:40` [env-template] EMAIL_REPLY_TO=support@example.com
+- `MarketCatalystBackEnd/.env.example:43` [env-template] ADMIN_EMAIL=admin@example.com
+- `MarketCatalystBackEnd/.env.example:48` [env-template] LAUNCH_PROMO_PREFIX=LAUNCH_PLACEHOLDER
+- `MarketCatalystBackEnd/.env.example:49` [env-template] LAUNCH_PROMO_PERCENT=__PLACEHOLDER__
+- `MarketCatalystBackEnd/.env.example:52` [env-template] STREAM_TICKET_SECRET=__PLACEHOLDER__
+- `MarketCatalystBackEnd/.env.example:55` [env-template] SEC_USER_AGENT="MarketCatalyst [PLACEHOLDER] contact@example.com"
 - `MarketCatalystUI/app/auth/legal/privacy-content.tsx:87` [code-or-copy] <strong>Payment and subscription information:</strong> your plan, billing history, and billing contact details. Payments are processed by our third-party paymen
 - `MarketCatalystUI/app/auth/legal/privacy-content.tsx:89` [code-or-copy] <strong>Transactional email:</strong> we send billing emails (receipts, renewal reminders, payment problems, plan changes and cancellation confirmations) throug
 - `MarketCatalystUI/app/auth/legal/privacy-content.tsx:93` [code-or-copy] <strong>Phone number:</strong> the mobile number you give at checkout. We use it for account and billing contact and share it with our payment processor as your

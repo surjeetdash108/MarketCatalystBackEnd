@@ -413,7 +413,11 @@ export class BillingService {
       amountDueToday: session.amountDueToday,
       tax: session.tax ?? 0,
       currency: session.currency,
-      payment: { provider: provider.name },
+      // Stripe: the browser confirms the first payment with this (Payment Element).
+      payment: {
+        provider: provider.name,
+        clientSecret: session.clientSecret ?? null,
+      },
     };
   }
 
