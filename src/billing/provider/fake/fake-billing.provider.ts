@@ -198,6 +198,12 @@ export function normaliseDiscount(
 
 export class FakeBillingProvider implements BillingProvider {
   readonly name = "fake" as const;
+  /**
+   * The fake simulates a live account by default (so admin metrics can be
+   * exercised); opts.livemode=false simulates Stripe test mode. Never runs in
+   * production either way.
+   */
+  readonly livemode: boolean;
   private readonly logger = new Logger("FakeBillingProvider");
   private sink: EventSink | null = null;
   private readonly secret: string;
@@ -205,8 +211,13 @@ export class FakeBillingProvider implements BillingProvider {
   constructor(
     private readonly firebase: FirebaseAdminService,
     private readonly clock: AppClock,
-    private readonly opts: { appUrl: string; webhookSecret?: string },
+    private readonly opts: {
+      appUrl: string;
+      webhookSecret?: string;
+      livemode?: boolean;
+    },
   ) {
+    this.livemode = opts.livemode ?? true;
     this.secret = opts.webhookSecret || randomBytes(32).toString("hex");
     this.clock.enableControl();
   }

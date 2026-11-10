@@ -1,6 +1,10 @@
 import { CONSENT_VERSION, consentText } from "./checkout/consent";
 import { normaliseE164 } from "./checkout/phone";
-import { addInterval as addIntervalMs } from "./provider/fake/fake-billing.provider";
+import {
+  addInterval as addIntervalMs,
+  discountAmountFor,
+  normaliseDiscount,
+} from "./provider/fake/fake-billing.provider";
 import { refundPolicy } from "./refund/refund-policy";
 import { EmailVerificationService } from "../account/email-verification.service";
 import {
@@ -26,12 +30,13 @@ import {
 } from "../plans/plans.registry";
 import { SubscriptionsService } from "../plans/subscriptions.service";
 import { BillingAccessService } from "./billing-access.service";
+import { inCheckoutPreview } from "./checkout-preview";
 import type { MirrorDoc } from "./billing-events.service";
 import {
   PreviewStaleError,
   type BillingProvider,
 } from "./provider/billing-provider";
-import type { PriceRef } from "./provider/types";
+import type { AppliedDiscount, PriceRef } from "./provider/types";
 import {
   describePromo,
   GENERIC_PROMO_ERROR,
@@ -141,8 +146,15 @@ export class BillingService {
     email: string | null,
     provider: BillingProvider,
   ): Promise<string> {
+    // A test-mode customer is never reused in live mode (or the reverse).
+    const sameMode = (x: Record<string, unknown>) =>
+      x.livemode === undefined || x.livemode === provider.livemode;
     const c = (await this.db.collection("customers").doc(uid).get()).data();
-    if (c?.customerId && (c.provider == null || c.provider === provider.name))
+    if (
+      c?.customerId &&
+      (c.provider == null || c.provider === provider.name) &&
+      sameMode(c)
+    )
       return String(c.customerId);
     // Reuse the customer from an earlier, unfinished checkout before creating another.
     const pending = await this.db
@@ -151,7 +163,7 @@ export class BillingService {
       .get();
     const reuse = pending.docs
       .map((d) => d.data())
-      .find((s) => s.provider === provider.name && s.customerId);
+      .find((s) => s.provider === provider.name && s.customerId && sameMode(s));
     if (reuse) return String(reuse.customerId);
     return (await provider.createCustomer({ uid, email })).customerId;
   }
@@ -178,9 +190,9 @@ export class BillingService {
       } | null;
     },
   ) {
-    const provider = await this.access.requireLive();
+    const provider = await this.access.requireQuoteProvider();
     const price = this.priceRef(input.planId, input.interval);
-    let discount = null;
+    let discount: AppliedDiscount | null = null;
     let promo: { code: string; description: string } | null = null;
     if (input.promoCode) {
       const v = await this.promos.validate({
@@ -207,7 +219,11 @@ export class BillingService {
           postalCode: input.region.postalCode ?? null,
         }
       : null;
-    const quote = await provider.previewCheckout({ price, discount, region });
+    // Staff preview with no provider connected yet: a local quote (no tax —
+    // tax only ever comes from the provider) so steps 1–2 still render.
+    const quote = provider
+      ? await provider.previewCheckout({ price, discount, region })
+      : localQuote(price, discount, this.clock.now());
     const renewsAt = new Date(
       addIntervalMs(this.clock.now(), input.interval),
     ).toISOString();
@@ -223,6 +239,7 @@ export class BillingService {
         text: consentText(price.planId, price.interval),
       },
       refundPolicy: refundPolicy(),
+      providerConnected: provider !== null,
     };
   }
 
@@ -369,6 +386,7 @@ export class BillingService {
       .set(
         {
           uid,
+          livemode: provider.livemode,
           phone,
           phoneUpdatedAt: now,
           marketingOptIn: { optedIn: input.marketingOptIn === true, at: now },
@@ -384,6 +402,7 @@ export class BillingService {
           id: session.id,
           uid,
           provider: provider.name,
+          livemode: provider.livemode,
           customerId,
           planId: price.planId,
           interval: price.interval,
@@ -657,7 +676,8 @@ export class BillingService {
     } | null;
     return {
       subscriptionsLive: live,
-      paidPlansAvailable: live,
+      paidPlansAvailable: live || inCheckoutPreview(),
+      checkoutPreview: !live && inCheckoutPreview(),
       provider: this.access.providerName,
       planId: effective.planId,
       planName: effective.planName,
@@ -765,7 +785,7 @@ export class BillingService {
     ip: string | null,
     input: { code: string; planId: string; interval: BillingInterval },
   ) {
-    await this.access.requireLive();
+    await this.access.requireQuoteProvider();
     this.priceRef(input.planId, input.interval);
     return this.promos.preview({ ...input, uid, ip });
   }
@@ -822,4 +842,23 @@ export class BillingService {
     await ref.set(patch, { merge: true });
     return this.contact(uid);
   }
+}
+
+/** Quote without a provider (staff preview before Stripe keys are set): tax pending. */
+export function localQuote(
+  price: PriceRef,
+  discount: AppliedDiscount | null,
+  now: number,
+) {
+  const d = discount ? normaliseDiscount(discount, price.interval, now) : null;
+  const off = discountAmountFor(d, price.amount);
+  return {
+    currency: price.currency,
+    subtotal: price.amount,
+    discount: off,
+    tax: 0,
+    total: price.amount - off,
+    taxLabel: null,
+    taxPending: true,
+  };
 }

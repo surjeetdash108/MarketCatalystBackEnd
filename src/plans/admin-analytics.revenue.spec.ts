@@ -30,7 +30,10 @@ function stubFirestore(collections: Record<string, Record<string, Row>>) {
   return { collection: (name: string) => query(name) };
 }
 
-function service(collections: Record<string, Record<string, Row>>, staffList: string[] = []) {
+function service(
+  collections: Record<string, Record<string, Row>>,
+  staffList: string[] = [],
+) {
   const firebase = {
     firestore: stubFirestore(collections),
   } as unknown as FirebaseAdminService;
@@ -118,6 +121,21 @@ describe("AdminAnalyticsService.revenue", () => {
     expect(r.totalMinor).toBe(5900 + 56640 + 5900);
   });
 
+  it("Stripe test-mode payments (livemode:false) never count toward revenue, MRR or subscriptions", async () => {
+    const r = await service({
+      users: { u1: { email: "a@example.com" }, u2: { email: "b@example.com" } },
+      payments: {
+        live: payment({ livemode: true }),
+        test: payment({ userId: "u2", amount: 19900, livemode: false }),
+      },
+    }).revenue();
+    expect(r.totalMinor).toBe(5900);
+    expect(r.mrrMinor).toBe(5900);
+    expect(r.activeSubscriptions).toBe(1);
+    expect(r.freeUsers).toBe(1);
+    expect(r.paymentsCounted).toBe(1);
+  });
+
   it("excludes staff from every count", async () => {
     const r = await service({
       users: {
@@ -133,8 +151,14 @@ describe("AdminAnalyticsService.revenue", () => {
   it("staff on the allowlist are excluded from subscriber counts, MRR and revenue", async () => {
     const r = await service(
       {
-        users: { u1: { email: "a@example.com" }, s1: { email: "ops-staff@example.com" } },
-        payments: { p1: payment({}), p2: payment({ userId: "s1", amount: 19900 }) },
+        users: {
+          u1: { email: "a@example.com" },
+          s1: { email: "ops-staff@example.com" },
+        },
+        payments: {
+          p1: payment({}),
+          p2: payment({ userId: "s1", amount: 19900 }),
+        },
       },
       ["ops-staff@example.com"],
     ).revenue();

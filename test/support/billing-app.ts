@@ -1,3 +1,4 @@
+import { CheckoutPreviewService } from "../../src/billing/checkout-preview";
 /**
  * A Nest app with the real billing controllers and services over
  * FakeFirestore + FakeBillingProvider + a frozen AppClock. Auth is replaced by
@@ -125,6 +126,8 @@ export interface BillingAppOptions {
   provider?: boolean;
   /** Test-only override of REFUND_WINDOW_DAYS (0 = refunds off). */
   refundWindowDays?: number;
+  /** true = the provider runs in test mode (records carry livemode:false). */
+  testMode?: boolean;
 }
 
 export async function billingApp(opts: BillingAppOptions = {}) {
@@ -142,7 +145,10 @@ export async function billingApp(opts: BillingAppOptions = {}) {
   const provider =
     opts.provider === false
       ? null
-      : new FakeBillingProvider(firebase, clock, { appUrl: "http://app.test" });
+      : new FakeBillingProvider(firebase, clock, {
+          appUrl: "http://app.test",
+          livemode: opts.testMode !== true,
+        });
   if (provider) clock.freeze(T0);
   const sender = new ConsoleEmailSender();
 
@@ -180,6 +186,7 @@ export async function billingApp(opts: BillingAppOptions = {}) {
       EmailVerificationService,
       StaffAccessService,
       RefundService,
+      CheckoutPreviewService,
       ...(opts.refundWindowDays !== undefined
         ? [{ provide: REFUND_WINDOW, useValue: opts.refundWindowDays }]
         : []),

@@ -1,3 +1,7 @@
+import {
+  CheckoutPreviewInterceptor,
+  CheckoutPreviewService,
+} from "./checkout-preview";
 import { RefundService } from "./refund/refund.service";
 import { Module } from "@nestjs/common";
 import { PlansModule } from "../plans/plans.module";
@@ -32,6 +36,8 @@ import { BillingReconcileJob } from "./reconcile.job";
     AdminBillingService,
     BillingReconcileJob,
     RefundService,
+    CheckoutPreviewService,
+    CheckoutPreviewInterceptor,
   ],
   exports: [
     BillingEventsService,

@@ -150,6 +150,13 @@ export class StripeBillingProvider implements BillingProvider {
     this.client = client ?? null;
   }
 
+  /** Live mode only with an sk_live_ key (refused at startup unless STRIPE_LIVE_APPROVED). */
+  get livemode(): boolean {
+    return String(this.config.get("STRIPE_SECRET_KEY", "") ?? "").startsWith(
+      "sk_live_",
+    );
+  }
+
   private get stripe(): Stripe {
     if (!this.client) {
       const key = String(this.config.get("STRIPE_SECRET_KEY", "") ?? "");
@@ -1031,6 +1038,8 @@ export class StripeBillingProvider implements BillingProvider {
     }
     let type = STRIPE_EVENT_MAP[e.type];
     if (!type) return null;
+    // A test-mode event never changes live state, and vice versa.
+    if (e.livemode !== this.livemode) return null;
     const obj = e.data.object as unknown as Record<string, unknown> & {
       id: string;
       object: string;

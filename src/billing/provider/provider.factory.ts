@@ -18,6 +18,15 @@ export function configuredProvider(config: ConfigService): ConfiguredProvider {
   return v === "fake" || v === "stripe" ? v : "none";
 }
 
+/** STRIPE_LIVE_APPROVED=true: live-mode Stripe keys may be used. Default off. */
+export function stripeLiveApproved(config: ConfigService): boolean {
+  return (
+    String(config.get("STRIPE_LIVE_APPROVED", "") ?? "")
+      .trim()
+      .toLowerCase() === "true"
+  );
+}
+
 /**
  * Builds the configured provider, or null when none is configured.
  *
@@ -56,6 +65,15 @@ export function createBillingProvider(
         "BILLING_PROVIDER=stripe but STRIPE_SECRET_KEY is missing or not a Stripe secret key: paid plans stay unavailable.",
       );
       return null;
+    }
+    // Live keys need an explicit, separate approval; until then only test-mode
+    // keys run (the staff checkout preview). Refusing at startup means a live
+    // key pasted into the wrong secret can never take real payments.
+    if (key.startsWith("sk_live_") && !stripeLiveApproved(config)) {
+      throw new Error(
+        "FATAL: STRIPE_SECRET_KEY is a live-mode key but STRIPE_LIVE_APPROVED is not 'true'. " +
+          "Use a test-mode key (sk_test_…) or set STRIPE_LIVE_APPROVED=true once live payments are approved.",
+      );
     }
     return new StripeBillingProvider(config);
   }
