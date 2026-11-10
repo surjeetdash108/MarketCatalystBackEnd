@@ -1,3 +1,4 @@
+import { Logger } from "@nestjs/common";
 import type { FactoryProvider } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AppClock } from "../../common/app-clock";
@@ -46,7 +47,18 @@ export function createBillingProvider(
       webhookSecret: config.get<string>("FAKE_BILLING_WEBHOOK_SECRET"),
     });
   }
-  if (name === "stripe") return new StripeBillingProvider(config);
+  if (name === "stripe") {
+    // No usable key → no provider: paid plans show "launching soon" rather than
+    // a checkout that fails. (Keys come from Secret Manager; never logged.)
+    const key = String(config.get("STRIPE_SECRET_KEY", "") ?? "");
+    if (!/^sk_(test|live)_/.test(key) || key.includes("PLACEHOLDER")) {
+      new Logger("BillingProvider").error(
+        "BILLING_PROVIDER=stripe but STRIPE_SECRET_KEY is missing or not a Stripe secret key: paid plans stay unavailable.",
+      );
+      return null;
+    }
+    return new StripeBillingProvider(config);
+  }
   return null;
 }
 

@@ -11,6 +11,7 @@
  *   - one recurring Price per plan × interval with the catalog lookup key,
  *     tax_behavior "exclusive" (Stripe Tax adds tax on top of the catalog price)
  *   - a Customer Portal configuration: payment method update + invoice history only
+ *   - the app's payment method domain (Apple Pay / Google Pay), from APP_URL
  * The retention and promo coupons are created on demand by the provider.
  * Prints STRIPE_PORTAL_CONFIGURATION and the webhook events to register.
  */
@@ -109,6 +110,20 @@ async function main() {
       metadata: { mc: "card-and-invoices" },
     }));
   out.STRIPE_PORTAL_CONFIGURATION = portal.id;
+  // Apple Pay / Google Pay in the Payment Element need the app's domain registered.
+  const domain = new URL(process.env.APP_URL ?? "https://app.marketcatalyst.ai")
+    .hostname;
+  const domains = await stripe.paymentMethodDomains.list({
+    domain_name: domain,
+    limit: 1,
+  });
+  const pmd =
+    domains.data[0] ??
+    (await stripe.paymentMethodDomains.create({
+      domain_name: domain,
+      enabled: true,
+    }));
+  out.payment_method_domain = `${pmd.domain_name} (apple_pay: ${pmd.apple_pay?.status ?? "?"}, google_pay: ${pmd.google_pay?.status ?? "?"})`;
   console.log(
     "Register the webhook endpoint https://app.marketcatalyst.ai/api/billing/webhook with these events:",
   );

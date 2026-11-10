@@ -479,10 +479,29 @@ describe("provider factory safety", () => {
       ),
     ).toBeInstanceOf(FakeBillingProvider);
   });
+  it("Stripe without a usable secret key is no provider (paid plans stay unavailable)", () => {
+    for (const key of [
+      undefined,
+      "",
+      "__PLACEHOLDER__",
+      "pk_test_wrong_kind",
+    ]) {
+      expect(
+        createBillingProvider(
+          cfg({
+            BILLING_PROVIDER: "stripe",
+            ...(key !== undefined ? { STRIPE_SECRET_KEY: key } : {}),
+          }),
+          fb,
+          new AppClock(),
+        ),
+      ).toBeNull();
+    }
+  });
   it("selects Stripe by config only, and nothing when unset", () => {
     expect(
       createBillingProvider(
-        cfg({ BILLING_PROVIDER: "stripe" }),
+        cfg({ BILLING_PROVIDER: "stripe", STRIPE_SECRET_KEY: "sk_test_x" }),
         fb,
         new AppClock(),
       ),
