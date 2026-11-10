@@ -25,7 +25,8 @@
     "sync:earnings-articles": "ts-node --transpile-only scripts/run-earnings-articles.ts",
     "sync:etf-holdings": "ts-node --transpile-only scripts/sync-etf-holdings.ts",
     "sync:etf-market": "ts-node --transpile-only scripts/sync-etf-market.ts",
-    "go-live-check": "ts-node --transpile-only scripts/go-live-check.ts"
+    "go-live-check": "ts-node --transpile-only scripts/go-live-check.ts",
+    "purge-test-billing": "ts-node --transpile-only scripts/purge-test-billing.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

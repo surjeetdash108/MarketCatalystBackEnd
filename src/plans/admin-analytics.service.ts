@@ -1,3 +1,4 @@
+import { isTestRecord } from "../billing/livemode";
 import { StaffAccessService } from "../account/staff-access.service";
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -341,6 +342,7 @@ export class AdminAnalyticsService {
     for (const doc of paySnap?.docs ?? []) {
       const p = doc.data();
       if (p.paymentStatus !== "SUCCESS") continue;
+      if (isTestRecord(p)) continue; // Stripe test mode is never revenue
       if (p.userId && staffRevenueUids.has(String(p.userId))) continue; // staff are never revenue
       // Fallback matches the USD plan catalog (plans.registry.ts), not INR — see
       // subscriptionRows above (BUG-DATA-013).
@@ -449,6 +451,7 @@ export function subscriptionCountsFromPayments(
   for (const p of payments) {
     const uid = typeof p.userId === "string" ? p.userId : null;
     if (!uid || !customers.has(uid) || p.paymentStatus !== "SUCCESS") continue;
+    if (isTestRecord(p)) continue;
     if ((p.currency ?? "USD") !== currency) continue;
     paidEver.add(uid);
     const end = periodEndMs(p.subscriptionExpiryDate);

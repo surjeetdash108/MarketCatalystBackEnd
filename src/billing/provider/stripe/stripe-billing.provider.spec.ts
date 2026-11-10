@@ -581,6 +581,7 @@ describe("StripeBillingProvider — webhooks", () => {
     object: "event",
     type,
     created: T,
+    livemode: false,
     data: { object },
   });
 
@@ -662,6 +663,23 @@ describe("StripeBillingProvider — webhooks", () => {
       type: "charge.refunded",
       data: { invoiceId: "in_1", amount: 5900 },
     });
+  });
+
+  it("ignores events from the other mode (live event on a test key, test event on a live key)", async () => {
+    const sub = () => ev("customer.subscription.updated", subObj());
+    const test = provider();
+    const liveEv = signed({ ...sub(), livemode: true });
+    expect(await test.p.parseEvent(liveEv.payload, liveEv.header)).toBeNull();
+    const testEv = signed(sub());
+    expect(
+      await test.p.parseEvent(testEv.payload, testEv.header),
+    ).not.toBeNull();
+    const live = provider({ STRIPE_SECRET_KEY: "sk_live_x" });
+    expect(live.p.livemode).toBe(true);
+    expect(await live.p.parseEvent(testEv.payload, testEv.header)).toBeNull();
+    expect(
+      await live.p.parseEvent(liveEv.payload, liveEv.header),
+    ).not.toBeNull();
   });
 
   it("events we don't use are ignored; the endpoint subscribes to exactly the mapped list", async () => {

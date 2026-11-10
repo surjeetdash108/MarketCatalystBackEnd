@@ -498,6 +498,44 @@ describe("provider factory safety", () => {
       ).toBeNull();
     }
   });
+  it.each([
+    ["production", "market-catalyst-502415"],
+    ["staging", "market-catalyst-stage"],
+  ])(
+    "refuses a live-mode Stripe key at startup unless STRIPE_LIVE_APPROVED=true (%s)",
+    (_env, project) => {
+      const live = (extra: Record<string, string> = {}) =>
+        createBillingProvider(
+          cfg({
+            BILLING_PROVIDER: "stripe",
+            STRIPE_SECRET_KEY: "sk_live_x",
+            FIREBASE_PROJECT_ID: project,
+            ...extra,
+          }),
+          fb,
+          new AppClock(),
+        );
+      expect(() => live()).toThrow(/live-mode key but STRIPE_LIVE_APPROVED/);
+      expect(() => live({ STRIPE_LIVE_APPROVED: "false" })).toThrow();
+      expect(() => live({ STRIPE_LIVE_APPROVED: "yes" })).toThrow();
+      const approved = live({ STRIPE_LIVE_APPROVED: "true" });
+      expect(approved).toBeInstanceOf(StripeBillingProvider);
+      expect(approved?.livemode).toBe(true);
+    },
+  );
+  it("test-mode Stripe keys run in production (staff checkout preview) and report livemode:false", () => {
+    const p = createBillingProvider(
+      cfg({
+        BILLING_PROVIDER: "stripe",
+        STRIPE_SECRET_KEY: "sk_test_x",
+        FIREBASE_PROJECT_ID: "market-catalyst-502415",
+      }),
+      fb,
+      new AppClock(),
+    );
+    expect(p).toBeInstanceOf(StripeBillingProvider);
+    expect(p?.livemode).toBe(false);
+  });
   it("selects Stripe by config only, and nothing when unset", () => {
     expect(
       createBillingProvider(

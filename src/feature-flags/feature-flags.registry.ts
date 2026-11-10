@@ -50,6 +50,14 @@ export const FEATURE_FLAGS: FeatureFlagDef[] = [
     defaultOn: false,
     environmentDefault: true,
   },
+  // Staff-only checkout preview: staff-allowlist accounts can buy (Stripe TEST
+  // mode) while SUBSCRIPTIONS_ENABLED stays off for everyone else.
+  {
+    key: "CHECKOUT_PREVIEW",
+    row: "BILLING",
+    label: "Checkout preview (staff only, test mode)",
+    defaultOn: false,
+  },
   // ── W1 — live ────────────────────────────────────────────────────────────
   { key: "FF_MOVERS", row: "R9", label: "Market Movers", defaultOn: true },
   { key: "FF_HEATMAP", row: "R10", label: "Market Heatmap", defaultOn: true },

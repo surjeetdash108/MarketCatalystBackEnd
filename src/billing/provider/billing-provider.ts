@@ -48,6 +48,12 @@ export class InvalidEventSignatureError extends Error {}
  */
 export interface BillingProvider {
   readonly name: ProviderName;
+  /**
+   * false for test-mode providers (the fake, Stripe sk_test_ keys). Every
+   * billing record written through this provider carries it, so test data is
+   * excluded from MRR/revenue/counts and can be purged.
+   */
+  readonly livemode: boolean;
 
   // ── customers ──────────────────────────────────────────────────────────
   createCustomer(input: {

@@ -1,5 +1,6 @@
 import { ConfigService } from "@nestjs/config";
 import { emailDeliveryReady } from "./email/email-provider";
+import { inCheckoutPreview } from "./checkout-preview";
 import {
   Inject,
   Optional,
@@ -45,16 +46,37 @@ export class BillingAccessService {
     return this.provider !== null && (await this.flagEnabled());
   }
 
-  /** 503 "Paid plans launching soon" unless subscriptions are live. */
+  /** Live for everyone, or this request is a staff checkout preview. */
+  async paymentsOpen(): Promise<boolean> {
+    return inCheckoutPreview() || (await this.subscriptionsLive());
+  }
+
+  /**
+   * 503 "Paid plans launching soon" unless subscriptions are live — or this is
+   * a staff checkout preview (then 503 "Payment provider not connected" until
+   * Stripe keys are set).
+   */
   async requireLive(): Promise<BillingProvider> {
-    if (!(await this.subscriptionsLive())) {
+    if (await this.subscriptionsLive()) return this.provider;
+    if (inCheckoutPreview()) {
+      if (this.provider) return this.provider;
       throw new ServiceUnavailableException({
         statusCode: 503,
-        code: "paid_plans_unavailable",
-        message: "Paid plans launching soon.",
+        code: "provider_not_connected",
+        message: "Payment provider not connected.",
       });
     }
-    return this.provider;
+    throw new ServiceUnavailableException({
+      statusCode: 503,
+      code: "paid_plans_unavailable",
+      message: "Paid plans launching soon.",
+    });
+  }
+
+  /** For quotes: the provider, or null in a staff preview with no provider yet. */
+  async requireQuoteProvider(): Promise<BillingProvider | null> {
+    if (inCheckoutPreview() && !this.provider) return null;
+    return this.requireLive();
   }
 
   /** The provider if one is configured (webhooks still verify when the flag is off). */
