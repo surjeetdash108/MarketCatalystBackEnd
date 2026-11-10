@@ -1,5 +1,7 @@
 {
   "projects": {
-    "default": "market-catalyst-502415"
+    "default": "market-catalyst-502415",
+    "stage": "market-catalyst-stage",
+    "prod": "market-catalyst-502415"
   }
 }

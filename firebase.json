@@ -1,6 +1,3 @@
 {
-  "firestore": {
-    "rules": "firestore.rules",
-    "indexes": "firestore.indexes.json"
-  }
+  "//": "No firestore block on purpose. This repo's firestore.rules is NOT the live ruleset — MarketCatalystUI/firestore.rules is, and it deploys to both databases. Naming the local file here meant `firebase deploy --only firestore` from this repo would overwrite the (default) ruleset with a set that drops read access to financials and market_breadth. A warning comment in the file was not enough to prevent that; removing the target is."
 }

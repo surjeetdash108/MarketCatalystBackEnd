@@ -1,0 +1,301 @@
+import { Injectable, Logger, OnModuleInit, Optional } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { setWithCreatedAt } from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { SyncRegistry } from "../common/sync-registry.service";
+import { isoDate } from "../common/date.util";
+import { splitMovers } from "../common/movers-split.util";
+import { etDate } from "../common/market-calendar.util";
+import { formatRecapIndices, nasdaqCompositeQuote, nasdaqCompositeFromEod, type IndexRow } from "../common/recap-indices.util";
+import { FmpService } from "../vendors/fmp/fmp.service";
+
+/**
+ * End-of-Day recap → `recaps/{date}` (delivery-plan R28).
+ *
+ * A recap is a frozen EOD SNAPSHOT of data that already lives in other synced
+ * collections — indices, movers, sectors and breadth. It composes them (it does
+ * not call any vendor) into one document so `recap.tsx` can render a real,
+ * date-stamped recap instead of the hardcoded "Tuesday May 21" it shipped with.
+ *
+ * Deliberately snapshot-per-day rather than a live read: the recap for a past
+ * session must not change when the underlying collections advance. It runs after
+ * the 18:00 ET EOD jobs (market-movers / sectors / market-breadth), at 18:45 ET.
+ *
+ * The NARRATIVE lead (the prose "stocks closed higher because…") is NOT produced
+ * here — that is AI copy tracked under R36 (Anthropic). This job owns the DATA.
+ */
+
+const JOB_NAME = "recaps";
+const TOP_N = 6;
+/**
+ * Fraction of the ticker universe that must have a bar for a session before its
+ * breadth is reported. Set from observed behaviour: a settled session covers
+ * ~75% of the universe, while a session still filling in sits in single digits.
+ * Anything between is provisional and moves, so it is not published.
+ */
+const BREADTH_MIN_COVERAGE = 0.5;
+
+
+const BACKFILL_JOB = "recaps-nasdaq-backfill";
+/** The QQQ proxy was labelled "Nasdaq" from this date (713b463). */
+const BACKFILL_SINCE = "2026-08-13";
+
+@Injectable()
+export class RecapsJob implements OnModuleInit {
+  private readonly logger = new Logger(RecapsJob.name);
+
+  constructor(
+    private readonly firebase: FirebaseAdminService,
+    private readonly meta: SyncMetaService,
+    private readonly registry: SyncRegistry,
+    @Optional() private readonly fmp?: FmpService,
+  ) {}
+
+  onModuleInit() {
+    this.registry.register(JOB_NAME, () => this.run(), {
+      collections: ["recaps"],
+      cronExpression: "45 18 * * 1-5",
+      timeZone: "America/New_York",
+    });
+    // One-off, manual run only (job-manifest: trigger "none").
+    this.registry.register(BACKFILL_JOB, () => this.backfillNasdaq(), {
+      collections: ["recaps"],
+      cronExpression: "0 0 30 2 *",
+      timeZone: "America/New_York",
+    });
+  }
+
+  /**
+   * ONE-OFF repair of recaps written while the QQQ proxy stood in for "Nasdaq"
+   * (from 2026-08-13, when that label shipped, until 97e31ba): relabels the QQQ
+   * row "Nasdaq-100" and inserts the Nasdaq Composite for the recap's own date
+   * from FMP's ^IXIC daily closes. Only `indices` is touched; a recap whose date
+   * has no ^IXIC row is left as is.
+   */
+  async backfillNasdaq(since = BACKFILL_SINCE): Promise<{ checked: number; patched: number; skipped: number }> {
+    try {
+      if (!this.fmp) throw new Error("FMP is not configured");
+      const db = this.firebase.firestore;
+      const snap = await db.collection("recaps").where("date", ">=", since).get();
+      const to = etDate();
+      const rows = (await this.fmp.request(
+        `historical-price-eod/full?symbol=${encodeURIComponent("^IXIC")}&from=${isoDate(new Date(Date.parse(`${since}T00:00:00Z`) - 10 * 86_400_000))}&to=${to}`,
+      )) as Array<{ date: string; close: number }>;
+      let patched = 0, skipped = 0;
+      for (const d of snap.docs) {
+        const x = d.data() as { date?: string; indices?: IndexRow[] };
+        const ixic = x.date ? nasdaqCompositeFromEod(rows, x.date) : null;
+        if (!ixic || !Array.isArray(x.indices)) { skipped++; continue; }
+        await d.ref.set({ indices: formatRecapIndices(x.indices, ixic), indicesRepairedAt: new Date().toISOString() }, { merge: true });
+        patched++;
+      }
+      this.logger.log(`recap Nasdaq backfill: ${patched} patched, ${skipped} skipped of ${snap.size}`);
+      await this.meta.record(BACKFILL_JOB, { ok: true, count: patched });
+      return { checked: snap.size, patched, skipped };
+    } catch (err) {
+      await this.meta.record(BACKFILL_JOB, { ok: false, error: (err as Error).message });
+      throw err;
+    }
+  }
+
+  async scheduled() {
+    await this.registry.get(JOB_NAME)();
+  }
+
+  private num(v: unknown): number | null {
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  }
+
+  async run() {
+    try {
+      const db = this.firebase.firestore;
+      const weekAgo = isoDate(new Date(Date.now() - 7 * 86_400_000));
+      const [
+        indicesSnap,
+        moversSnap,
+        sectorsSnap,
+        breadthSnap,
+        idxHistSnap,
+        secHistSnap,
+      ] = await Promise.all([
+        db.collection("market_indices").get(),
+        db.collection("market_movers").get(),
+        db.collection("sectors").get(),
+        db.collection("market_breadth").get(),
+        db
+          .collection("market_indices_history")
+          .where("asOfDate", ">=", weekAgo)
+          .get(),
+        db.collection("sectors_history").where("asOfDate", ">=", weekAgo).get(),
+      ]);
+
+      // Indices (SPX/NDX/DJI/RUT/VIX/US10Y/…) — label, value, % move.
+      const rawIndices = indicesSnap.docs.map((d) => {
+        const x = d.data();
+        return {
+          id: d.id,
+          label: x.label ?? d.id,
+          value: this.num(x.value),
+          pctChange: this.num(x.pctChange),
+          change: this.num(x.change),
+          isProxy: !!x.isProxy,
+          proxyTicker: x.proxyTicker ?? null,
+          unit: x.unit ?? null,
+        };
+      });
+      const indices = formatRecapIndices(rawIndices, await nasdaqCompositeQuote(this.fmp));
+
+      // Movers → top gainers / losers by % change.
+      const movers = moversSnap.docs
+        .map((d) => {
+          const x = d.data();
+          return {
+            ticker: x.ticker ?? d.id,
+            name: x.name ?? x.ticker ?? d.id,
+            price: this.num(x.price),
+            pctChange: this.num(x.pctChange),
+            sector: x.sector ?? null,
+            cap: x.cap ?? null,
+          };
+        })
+        .filter((m) => m.pctChange != null);
+      const { gainers: topGainers, losers: topLosers } = splitMovers(
+        movers,
+        (m) => m.pctChange,
+        TOP_N,
+      );
+
+      // Sectors → leaders / laggards by % change.
+      const sectors = sectorsSnap.docs
+        .map((d) => {
+          const x = d.data();
+          return { sector: x.sector ?? d.id, pctChange: this.num(x.pctChange) };
+        })
+        .filter((s) => s.pctChange != null)
+        .sort((a, b) => (b.pctChange ?? 0) - (a.pctChange ?? 0));
+      const sectorLeaders = sectors.slice(0, 3);
+      const sectorLaggards = sectors.slice(-3).reverse();
+
+      // Internals → the latest breadth day.
+      const breadth = breadthSnap.docs
+        .map((d) => ({ id: d.id, data: d.data() }))
+        .sort((a, b) => b.id.localeCompare(a.id))[0]?.data;
+      const breadthId = breadthSnap.docs
+        .map((d) => d.id)
+        .sort((a, b) => b.localeCompare(a))[0];
+      /**
+       * Breadth is only reported once enough of the universe has a bar for the
+       * session. Daily bars land late and incompletely: a session observed at
+       * 18:45 ET routinely has a handful of tickers in, and a recap built from
+       * that published "4 advancing, 14 declining — decidedly negative" for a
+       * day that finished 91 to 89. Below the threshold internals are omitted
+       * entirely, so the recap says nothing about breadth rather than saying
+       * something wrong; a later run fills it in once the data settles.
+       */
+      const covered = this.num(breadth?.covered);
+      const universe = this.num(breadth?.universe);
+      const coverage = covered != null && universe ? covered / universe : null;
+      const breadthSettled = coverage != null && coverage >= BREADTH_MIN_COVERAGE;
+      if (breadth && !breadthSettled) {
+        this.logger.warn(
+          `breadth ${breadthId} omitted — coverage ${covered ?? "unknown"}/${universe ?? "?"} ` +
+            `below ${Math.round(BREADTH_MIN_COVERAGE * 100)}%`,
+        );
+      }
+
+      const internals = breadth && breadthSettled
+        ? {
+            date: breadthId,
+            covered,
+            universe,
+            advancers: this.num(breadth.advancers),
+            decliners: this.num(breadth.decliners),
+            netAdvancers: this.num(breadth.netAdvancers),
+            breadthPct: this.num(breadth.breadthPct),
+            trin: this.num(breadth.trin),
+            mcclellan: this.num(breadth.mcclellan),
+            upVolume: this.num(breadth.upVolume),
+            downVolume: this.num(breadth.downVolume),
+          }
+        : null;
+
+      // ── Weekly aggregates (delivery-plan R28 weekly tab) ──
+      // Index weekly % = price move from the first to the last history row this
+      // week (values are already scaled to the index level). Sector weekly % =
+      // the daily sector %s compounded across the week (sectors carry no level).
+      const idxByLabel = new Map<
+        string,
+        { asOfDate: string; value: number | null }[]
+      >();
+      for (const d of idxHistSnap.docs) {
+        const x = d.data();
+        const label = (x.label as string) ?? d.id;
+        const arr = idxByLabel.get(label) ?? [];
+        arr.push({ asOfDate: x.asOfDate as string, value: this.num(x.value) });
+        idxByLabel.set(label, arr);
+      }
+      const weeklyIndices = [...idxByLabel.entries()].map(([label, rows]) => {
+        const sorted = rows
+          .filter((r) => r.value != null && r.asOfDate)
+          .sort((a, b) => a.asOfDate.localeCompare(b.asOfDate));
+        if (sorted.length < 2) return { label, pctChange: null };
+        const first = sorted[0].value;
+        const last = sorted[sorted.length - 1].value;
+        const pct = first !== 0 ? ((last - first) / first) * 100 : null;
+        return {
+          label,
+          pctChange: pct == null ? null : Math.round(pct * 100) / 100,
+        };
+      });
+
+      const secByName = new Map<string, number[]>();
+      for (const d of secHistSnap.docs) {
+        const x = d.data();
+        const name = (x.sector as string) ?? d.id;
+        const pc = this.num(x.pctChange);
+        if (pc == null) continue;
+        const arr = secByName.get(name) ?? [];
+        arr.push(pc);
+        secByName.set(name, arr);
+      }
+      const weeklySectors = [...secByName.entries()]
+        .map(([sector, pcts]) => {
+          const compound =
+            (pcts.reduce((acc, p) => acc * (1 + p / 100), 1) - 1) * 100;
+          return { sector, pctChange: Math.round(compound * 100) / 100 };
+        })
+        .sort((a, b) => b.pctChange - a.pctChange);
+      const weekly = {
+        indices: weeklyIndices,
+        sectorLeaders: weeklySectors.slice(0, 3),
+        sectorLaggards: weeklySectors.slice(-3).reverse(),
+      };
+
+      const date = breadthId ?? etDate();
+      await setWithCreatedAt(db, db.collection("recaps").doc(date), {
+        date,
+        indices,
+        topGainers,
+        topLosers,
+        sectorLeaders,
+        sectorLaggards,
+        internals,
+        weekly,
+        // Narrative is R36 (Anthropic) — this job intentionally leaves it null.
+        narrative: null,
+        source: "polygon-derived",
+        updatedAt: new Date().toISOString(),
+      });
+
+      await this.meta.record(JOB_NAME, { ok: true, count: 1 });
+      this.logger.log(
+        `recap ${date}: ${indices.length} indices, ${topGainers.length}/${topLosers.length} movers, ` +
+          `${sectorLeaders.length}/${sectorLaggards.length} sector lead/lag, internals ${internals ? "yes" : "no"}`,
+      );
+      return { date, gainers: topGainers.length, losers: topLosers.length };
+    } catch (err) {
+      await this.meta.record(JOB_NAME, { ok: false, error: err.message });
+      throw err;
+    }
+  }
+}

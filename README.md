@@ -1,19 +1,34 @@
 # Market Catalyst Backend
 
-The **data-ingestion service** for Market Catalyst. It pulls market data from
-vendor APIs on scheduled cron jobs and writes the results into **Cloud Firestore**.
-The Next.js frontend reads those Firestore collections directly via the client SDK
-— it never calls this service and never holds a vendor API key.
+The **data-ingestion service** for Market Catalyst. Market-wide data (indices,
+movers, sectors, earnings, news, etc.) is filled by ONE daily batch job
+(`premarket`, 08:00 ET weekdays); per-ticker data (company profile, bars) is
+filled **on demand** the first time any user asks for it. Either way, results
+land in **Cloud Firestore**, and the Next.js frontend reads most of it back
+directly via the client SDK. It never holds a vendor API key.
 
 ```
 Vendor APIs (Polygon, FMP, Finnhub, FRED, SEC EDGAR)
-        │   21 scheduled sync jobs (@nestjs/schedule)
+        │
+        ├─ premarket job (@nestjs/schedule, 08:00 ET weekdays)
+        │     → market-wide + per-ticker batch collections
+        │
+        └─ GET /live/bars, /live/company  (on-demand, cache-aside)
+              → per-ticker collections, populated on first request
         ▼
    Cloud Firestore   ← written server-side via the Firebase Admin SDK
-        │   onSnapshot() real-time reads (Firestore client SDK)
+        │   onSnapshot() real-time reads (Firestore client SDK) for most
+        │   screens, PLUS direct HTTP calls to /live/bars + /live/company
+        │   (see MarketCatalystUI's useOhlcvBars / useEnsureCompanies hooks)
+        │   to trigger the on-demand fetch in the first place
         ▼
    Next.js app (separate repo)  — every live screen element
 ```
+
+> Market-wide collections have no on-demand path — they only refill via the
+> `premarket` job. If Firestore was just emptied, expect those screens to stay
+> blank until the next scheduled run (or trigger it manually — see
+> `deploy/DEPLOY.md` §6, `POST /sync/premarket/run`).
 
 This is a NestJS app. Vendor calls go through an **adapter layer** (`src/adapters/`)
 with automatic fallback between two vendors for company profiles, movers, mover
@@ -32,10 +47,10 @@ by the frontend directly, never through this service.
 cp .env.example .env      # fill in real vendor API keys
 # keep a Firebase service-account.json at the repo root for local Firestore access
 npm install
-npm run start:dev         # http://localhost:4100
+npm run start:dev         # http://localhost:4400
 ```
 
-- **Ops monitor UI:** http://localhost:4100/ (job status dashboard, served by NestJS)
+- **Ops monitor UI:** http://localhost:4400/ (job status dashboard, served by NestJS)
 - **Health:** `GET /health`
 - **Ops API:** `GET /sync/jobs`, `GET /sync/status`, `POST /sync/:job/run`, `POST /sync/run-all`
 
@@ -51,11 +66,14 @@ for the full list. Essentials:
 
 | Var | Purpose |
 |---|---|
-| `FIREBASE_PROJECT_ID` | GCP/Firebase project to write to — **must match the frontend's project** |
+| `FIREBASE_PROJECT_ID` | GCP/Firebase project to serve — selects the **environment**: `market-catalyst-502415` (prod) or `market-catalyst-stage` (stage). **Must match the frontend build's `NEXT_PUBLIC_FIREBASE_PROJECT_ID`** for that environment. Nothing is hardcoded — the same image runs against either project by this one var (`.env` locally, `deploy/env.<env>.yaml` on Cloud Run). |
 | `FIREBASE_SERVICE_ACCOUNT_PATH` | Local only; on Cloud Run leave unset (uses Application Default Credentials) |
 | `POLYGON_API_KEY`, `FMP_API_KEY`, `FINNHUB_API_KEY`, `FRED_API_KEY` | Core vendor keys |
 | `SEC_EDGAR_USER_AGENT` | Required contact string for SEC EDGAR |
 | `*_SOURCE` / `*_FALLBACK_SOURCE`, `NEWS_SOURCE` | Adapter vendor routing |
+| `FINANCIALS_SOURCE` / `FINANCIALS_FALLBACK_SOURCE` | Financial statements (`financials` job, `fundamentals-growth`, `/live/financials`): `polygon` (default) / `fmp` (default). The fallback fires when Polygon throws **or returns zero periods** — foreign private issuers (20-F/6-K filers such as GAUZ) are absent from Polygon's financials. Non-USD FMP periods are dropped |
+| `LIVE_QUOTE_SOURCE` / `LIVE_QUOTE_FALLBACK_SOURCE` | Live quote cache (`/live/snapshot`, `/live/quotes`): `polygon` (default) or `fmp`; fallback fills only tickers the primary missed. Separate from `QUOTE_SOURCE` (market-indices adapter, Polygon-only) |
+| `LIVE_STREAM_SOURCE` / `LIVE_STREAM_POLL_MS` | `/live/stream` SSE: `polygon` (default, delayed WebSocket) or `fmp` (ticks from the quote cache above, no socket); poll default 5000ms |
 | `BENZINGA_API_KEY`, `TRADIER_ACCESS_TOKEN`, `UNUSUAL_WHALES_API_KEY`, `SENTRY_DSN` | Optional; jobs degrade gracefully when blank |
 
 Firestore access is server-only via the Admin SDK (`src/common/firebase-admin.provider.ts`),
@@ -66,9 +84,19 @@ it uses the runtime service account's Application Default Credentials.
 
 ## Sync jobs
 
-21 jobs, each with a fixed `@Cron(...)` schedule (America/New_York) and the Firestore
-collection(s) it writes. In production these are driven by **Cloud Scheduler** (see
-Deployment); locally the in-process `@nestjs/schedule` cron fires them.
+21 jobs, each writing the Firestore collection(s) below. They no longer self-schedule
+individually — **one** Cloud Scheduler entry (`sync-premarket`, 08:00 ET weekdays) hits
+`POST /sync/premarket/run`, which runs all of them in dependency-ordered phases (see
+`src/sync/premarket.job.ts`). The `cronExpression` shown per job is now just registry
+metadata (surfaced on `GET /sync/jobs`) describing how often that job *used to* run
+standalone — not a live trigger. Each job can still be fired individually via
+`POST /sync/:job/run` for manual backfills/debugging.
+
+Per-ticker company + bars data additionally fills **on demand**: `companies` and
+`stock_bars` are also written by `GET /live/bars` / `GET /live/company` the first
+time any user's browser requests a ticker (see `src/live/ondemand.service.ts`) —
+that path is what the frontend actually calls day to day; the batch schedule below
+is the once-a-day floor, not the only way these collections fill.
 
 | Job | Schedule (ET) | Writes collection(s) |
 |---|---|---|
@@ -101,13 +129,15 @@ tracks incremental cursors.
 
 ## Deployment (Firebase / GCP)
 
-Runs on **Cloud Run** (scale-to-zero) with **Cloud Scheduler** triggering each job
-over HTTP. Full step-by-step runbook: **[`deploy/DEPLOY.md`](deploy/DEPLOY.md)**.
+Two Cloud Run services from the same image (worker + public `live`), plus **one**
+Cloud Scheduler job (`sync-premarket`) triggering the batch orchestrator over HTTP.
+Full step-by-step runbook: **[`deploy/DEPLOY.md`](deploy/DEPLOY.md)**.
 
 Deploy artifacts in this repo:
 - [`Dockerfile`](Dockerfile) — multi-stage container (uses ADC, no baked key)
 - [`firebase.json`](firebase.json) + [`firestore.rules`](firestore.rules) + [`firestore.indexes.json`](firestore.indexes.json) — Firestore config
-- [`deploy/create-scheduler-jobs.sh`](deploy/create-scheduler-jobs.sh) — creates all 21 Cloud Scheduler jobs from the schedules above
+- [`deploy/create-scheduler-jobs.sh`](deploy/create-scheduler-jobs.sh) — creates the single `sync-premarket` job and deletes any leftover per-job schedules
+- [`deploy/empty-market-data.mjs`](deploy/empty-market-data.mjs) — resets market-data collections to the on-demand shape (never touches users/plans/settings)
 
 > Requires the Firebase project on the **Blaze** plan (Cloud Run + Scheduler +
 > backfill write-bursts). The project must be the **same** one the frontend reads from.

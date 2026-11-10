@@ -1,0 +1,270 @@
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { SyncRegistry } from "../common/sync-registry.service";
+import { etDate } from "../common/market-calendar.util";
+import { TickerAiAnalysisService } from "../live/ticker-ai-analysis.service";
+import { EARNINGS_ESTIMATES_ADAPTER } from "../adapters/types";
+import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
+import {
+  needsYearAgo,
+  pickYearAgoByReportDate,
+  type YearAgoQuarter,
+  type YearAgoRow,
+} from "./earnings-year-ago.util";
+
+const JOB_NAME = "earnings-actuals";
+
+/** The slice of a stored `earnings_events` row this job reads. */
+interface StoredRow extends YearAgoRow {
+  ticker?: string;
+  date?: string;
+}
+
+/**
+ * Fills in actuals for the tickers reporting TODAY, nothing else.
+ *
+ * WHY NOT JUST RUN THE `earnings` JOB MORE OFTEN
+ * That job rebuilds the entire forward calendar — 12,441 docs per run. Firing
+ * it every 5 minutes across the two reporting windows would be 48 runs/day and
+ * ~597,000 writes/day, roughly $32/month, in order to change the couple of
+ * dozen rows that actually report on a given day (27 today). More than the
+ * whole cost ceiling, spent rewriting rows that did not change.
+ *
+ * This job instead reads only the rows already dated today, pulls that single
+ * calendar day from the vendor (one call, covering exactly those reporters),
+ * and writes ONLY rows whose actuals have appeared or changed, or that have
+ * reported but still lack year-ago comparables (see below). A typical run is
+ * one vendor call and zero writes; the run that matters is the one right after
+ * a company reports.
+ *
+ * Year-ago EPS / revenue (the EPS % and Sales % columns) are filled here too,
+ * the moment a row has an actual. The `earnings` job only does it at 06:00 and
+ * 21:00 and skips rows with no actual, so without this a same-day reporter
+ * showed "—" in both columns until that evening.
+ *
+ * It never creates rows and never touches dates or estimates — the nightly
+ * `earnings` job remains the sole owner of calendar shape.
+ */
+@Injectable()
+export class EarningsActualsJob implements OnModuleInit {
+  private readonly logger = new Logger(EarningsActualsJob.name);
+
+  constructor(
+    @Inject(EARNINGS_ESTIMATES_ADAPTER)
+    private readonly estimates: EarningsEstimatesAdapter,
+    private readonly firebase: FirebaseAdminService,
+    private readonly meta: SyncMetaService,
+    private readonly registry: SyncRegistry,
+    private readonly tickerAi: TickerAiAnalysisService,
+  ) {}
+
+  onModuleInit() {
+    // Registered for completeness. The REAL cadence is Cloud Scheduler: the
+    // worker has no minScale and scales to zero, so the in-process cron cannot
+    // be relied on to fire.
+    this.registry.register(JOB_NAME, () => this.run(), {
+      collections: ["earnings_events"],
+      cronExpression: "*/5 6-7,16-17 * * 1-5",
+      timeZone: "America/New_York",
+    });
+  }
+
+  /**
+   * One "announcement" analysis per ticker whose result just landed.
+   *
+   * Runs only for tickers in `filled` — those whose epsActual went from null
+   * to a value on THIS run — so a company is analysed once per report, not on
+   * every 5-minute pass through the window.
+   *
+   * Never throws: a model failure must not fail an actuals run that already
+   * stored the figures correctly.
+   *
+   * `rows` must be the POST-patch values. The query snapshot predates this
+   * run's writes, so reading it here meant every announcement was built with
+   * epsActual/revenueActual null — all 100 stored reads (GS, JPM, C…) said
+   * "EPS actual —" with verdict "unknown", and the Earnings Playbook had no
+   * beat/miss to show.
+   */
+  private async announce(
+    filled: string[],
+    rows: Map<string, Record<string, unknown>>,
+    today: string,
+  ): Promise<void> {
+    const byTicker = rows;
+    for (const ticker of filled) {
+      try {
+        const e = byTicker.get(ticker) as {
+          epsActual?: number | null; epsEstimate?: number | null;
+          revenueActual?: number | null; revenueEstimate?: number | null;
+          companyName?: string | null;
+        } | undefined;
+        if (!e) continue;
+        const act = e.epsActual ?? null;
+        const est = e.epsEstimate ?? null;
+        const surprisePct =
+          act != null && est != null && est !== 0
+            ? ((act - est) / Math.abs(est)) * 100
+            : null;
+        const verdict: "beat" | "miss" | "in-line" | "unknown" =
+          surprisePct == null ? "unknown"
+          : surprisePct > 1 ? "beat"
+          : surprisePct < -1 ? "miss"
+          : "in-line";
+
+        // Recent stories give the model context for WHY, but the figures
+        // above are the subject. Filler is excluded for the usual reason.
+        const newsSnap = await this.firebase.firestore
+          .collection("news").where("ticker", "==", ticker).get();
+        const news = newsSnap.docs
+          .map((d) => ({
+            id: d.id,
+            headline: String(d.data().headline ?? ""),
+            summary: (d.data().summary as string | null) ?? null,
+            source: String(d.data().source ?? ""),
+            publishedAt: String(d.data().publishedAt ?? ""),
+            tag: (d.data().tag as string | null) ?? null,
+            filler: d.data().filler === true,
+          }))
+          .filter((n) => !n.filler && n.headline)
+          .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
+          .slice(0, 8);
+
+        const out = await this.tickerAi.recordAnnouncement(
+          ticker,
+          {
+            reportDate: today,
+            epsActual: act, epsEstimate: est,
+            surprisePct: surprisePct == null ? null : Math.round(surprisePct * 10) / 10,
+            revenueActual: e.revenueActual ?? null,
+            revenueEstimate: e.revenueEstimate ?? null,
+            verdict,
+          },
+          news,
+          e.companyName ?? null,
+        );
+        this.logger.log(
+          `announcement ${ticker}: ${verdict}` +
+            (surprisePct != null ? ` ${surprisePct.toFixed(1)}%` : "") +
+            (out ? " — analysis stored" : " — analysis unavailable"),
+        );
+      } catch (err) {
+        this.logger.warn(
+          `announcement analysis failed for ${ticker}: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+
+  async run() {
+    const today = etDate();
+    try {
+      const snap = await this.firebase.firestore
+        .collection("earnings_events")
+        .where("date", "==", today)
+        .get();
+      if (snap.empty) {
+        await this.meta.record(JOB_NAME, { ok: true, count: 0 });
+        return { date: today, reporters: 0, updated: 0, filled: [] as string[] };
+      }
+
+      const rows = await this.estimates.getUpcoming(today, today);
+      const byTicker = new Map(rows.map((r) => [r.ticker.toUpperCase(), r]));
+
+      const pending = snap.docs.map((d) => {
+        const cur = d.data() as StoredRow;
+        const t = String(cur.ticker ?? "").toUpperCase();
+        const fresh = byTicker.get(t);
+        const patch: Record<string, unknown> = {};
+        // Only ever FILL or correct. A vendor momentarily returning null for a
+        // value we already hold must never blank it back out.
+        if (fresh?.epsActual != null && fresh.epsActual !== cur.epsActual) {
+          patch.epsActual = fresh.epsActual;
+        }
+        if (
+          fresh?.revenueActual != null &&
+          fresh.revenueActual !== cur.revenueActual
+        ) {
+          patch.revenueActual = fresh.revenueActual;
+        }
+        return { d, cur, t, patch };
+      });
+
+      // Year-ago comparables for EPS % / Sales %. The `earnings` job fills them,
+      // but it only runs at 06:00 and 21:00 and skips rows that haven't reported
+      // — so a row whose actuals land HERE sat at "—" until the 21:00 run. Fill
+      // them in the same write, judged on the row as it will be stored.
+      const needYearAgo = pending.filter(
+        (p) => p.cur.ticker && needsYearAgo({ ...p.cur, ...p.patch }),
+      );
+      if (needYearAgo.length) {
+        const quarters = await this.loadQuarters([
+          ...new Set(needYearAgo.map((p) => p.cur.ticker)),
+        ]);
+        for (const p of needYearAgo) {
+          const ya = pickYearAgoByReportDate(
+            quarters.get(p.cur.ticker) ?? [],
+            p.cur.date ?? today,
+          );
+          if (!ya) continue;
+          p.patch.epsActualYearAgo = ya.eps;
+          p.patch.revenueYearAgo = ya.rev;
+        }
+      }
+
+      const batch = this.firebase.firestore.batch();
+      let updated = 0;
+      const filled: string[] = [];
+      // Each row as stored AFTER this run's patch, for the announcement read.
+      const merged = new Map<string, Record<string, unknown>>();
+      for (const { d, cur, t, patch } of pending) {
+        if (!Object.keys(patch).length) continue;
+
+        if ("epsActual" in patch || "revenueActual" in patch) {
+          patch.actualsUpdatedAt = new Date().toISOString();
+        }
+        merged.set(t, { ...d.data(), ...patch });
+        batch.set(d.ref, patch, { merge: true });
+        updated++;
+        if (cur.epsActual == null && patch.epsActual != null) filled.push(t);
+      }
+      if (updated) await batch.commit();
+
+      if (filled.length) {
+        this.logger.log(
+          `earnings-actuals ${today}: FIRST actuals in for ${filled.join(", ")}`,
+        );
+        // The result is persisted at this point (batch.commit above), so the
+        // announcement analysis is generated from data already stored — same
+        // ordering rule as the news pipeline: never analyse before the save.
+        await this.announce(filled, merged, today);
+      }
+      await this.meta.record(JOB_NAME, { ok: true, count: updated });
+      return { date: today, reporters: snap.size, updated, filled };
+    } catch (err) {
+      await this.meta.record(JOB_NAME, {
+        ok: false,
+        error: (err as Error).message,
+      });
+      throw err;
+    }
+  }
+
+  /** ticker → stored `financials/{ticker}` quarters, for the year-ago lookup. */
+  private async loadQuarters(
+    tickers: string[],
+  ): Promise<Map<string, YearAgoQuarter[]>> {
+    const out = new Map<string, YearAgoQuarter[]>();
+    for (let i = 0; i < tickers.length; i += 300) {
+      const refs = tickers
+        .slice(i, i + 300)
+        .map((t) => this.firebase.firestore.collection("financials").doc(t));
+      const snaps = await this.firebase.firestore.getAll(...refs);
+      for (const s of snaps) {
+        if (!s.exists) continue;
+        out.set(s.id, (s.data()?.quarters ?? []) as YearAgoQuarter[]);
+      }
+    }
+    return out;
+  }
+}

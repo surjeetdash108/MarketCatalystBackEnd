@@ -1,11 +1,57 @@
-import { Global, Module } from '@nestjs/common';
-import { FirebaseAdminService } from './firebase-admin.provider';
-import { SyncMetaService } from './sync-meta.service';
-import { SyncRegistry } from './sync-registry.service';
+import { Global, Module } from "@nestjs/common";
+import { APP_INTERCEPTOR } from "@nestjs/core";
+import { AdminGuard } from "./admin.guard";
+import { DelistedTickersService } from "./delisted-tickers.service";
+import { DelistedTickerGuard } from "./delisted-ticker.guard";
+import { ApiUsageInterceptor } from "./api-usage.interceptor";
+import { ApiUsageService } from "./api-usage.service";
+import { AdminAuditInterceptor } from "./admin-audit.interceptor";
+import { FirebaseAuthGuard } from "./firebase-auth.guard";
+import { FirebaseAdminService } from "./firebase-admin.provider";
+import { NotificationsService } from "./notifications.service";
+import { SyncMetaService } from "./sync-meta.service";
+import { SyncRegistry } from "./sync-registry.service";
+import { UserSessionService } from "./user-session.service";
+import { AppClock } from "./app-clock";
+import { StreamTicketService } from "./stream-ticket.service";
+import { StreamTicketGuard } from "./stream-ticket.guard";
 
 @Global()
 @Module({
-  providers: [FirebaseAdminService, SyncRegistry, SyncMetaService],
-  exports: [FirebaseAdminService, SyncRegistry, SyncMetaService],
+  providers: [
+    AdminGuard,
+    DelistedTickersService,
+    DelistedTickerGuard,
+    FirebaseAuthGuard,
+    FirebaseAdminService,
+    UserSessionService,
+    AppClock,
+    StreamTicketService,
+    StreamTicketGuard,
+    SyncRegistry,
+    SyncMetaService,
+    NotificationsService,
+    ApiUsageService,
+    // Global metering: every authenticated request bumps a per-user counter
+    // (in-memory, batched flush) that the admin console's apiCalls column reads.
+    { provide: APP_INTERCEPTOR, useClass: ApiUsageInterceptor },
+    // Every admin write is recorded in admin_audit.
+    { provide: APP_INTERCEPTOR, useClass: AdminAuditInterceptor },
+  ],
+  exports: [
+    AdminGuard,
+    DelistedTickersService,
+    DelistedTickerGuard,
+    FirebaseAuthGuard,
+    FirebaseAdminService,
+    UserSessionService,
+    AppClock,
+    StreamTicketService,
+    StreamTicketGuard,
+    SyncRegistry,
+    SyncMetaService,
+    NotificationsService,
+    ApiUsageService,
+  ],
 })
 export class CommonModule {}

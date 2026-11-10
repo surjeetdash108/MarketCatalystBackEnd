@@ -1,14 +1,32 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { TICKER_UNIVERSE } from '../common/ticker-universe';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { etDate as etDateOfInstant } from "../common/market-calendar.util";
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import {
+  batchSetWithCreatedAt,
+  type PendingWrite,
+} from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { activeUniverse } from "../common/ticker-universe";
+import { SyncRegistry } from "../common/sync-registry.service";
+import { PolygonService } from "../vendors/polygon/polygon.service";
 
-const JOB_NAME = 'technical-indicators';
-const BARS_TO_READ = 120;
+const JOB_NAME = "technical-indicators";
+// >=252 so the 52-week high/low is a real rolling year rather than "whatever
+// history happens to be loaded". 200-DMA needs 200; the binding constraint is
+// the 52-week window, so this is 252 plus a margin for holidays/halts.
+const BARS_TO_READ = 300;
+/** Per-ticker cache of the bar series this job computes from. */
+const SERIES_COLLECTION = "indicator_series";
+/** Newest bars pulled to top the cache up. One per session, so this covers a
+ *  long weekend plus margin; anything larger means a gap and a full re-read. */
+const DELTA_FETCH = 5;
 const MIN_BARS = 40;
 const RVOL_WINDOW = 20;
+const TRADING_DAYS_YEAR = 252;
+/** Periods the Stock Detail moving-average drawer renders. */
+const MA_PERIODS = [10, 20, 30, 50, 100, 200];
+/** How many trailing RSI values to persist for the sparkline pane. */
+const RSI_SERIES_LEN = 90;
 
 function ema(values: number[], period: number) {
   const k = 2 / (period + 1);
@@ -19,17 +37,14 @@ function ema(values: number[], period: number) {
   return out;
 }
 
-function rsi(closes: number[], period = 14) {
-  if (closes.length < period + 1)
-    return null;
+export function rsi(closes: number[], period = 14) {
+  if (closes.length < period + 1) return null;
   let gain = 0;
   let loss = 0;
   for (let i = 1; i <= period; i++) {
     const d = closes[i] - closes[i - 1];
-    if (d >= 0)
-      gain += d;
-    else
-      loss -= d;
+    if (d >= 0) gain += d;
+    else loss -= d;
   }
   let avgGain = gain / period;
   let avgLoss = loss / period;
@@ -38,14 +53,133 @@ function rsi(closes: number[], period = 14) {
     avgGain = (avgGain * (period - 1) + Math.max(d, 0)) / period;
     avgLoss = (avgLoss * (period - 1) + Math.max(-d, 0)) / period;
   }
-  if (avgLoss === 0)
-    return 100;
+  if (avgLoss === 0) return 100;
   return 100 - 100 / (1 + avgGain / avgLoss);
 }
 
+/**
+ * Stochastic %K (14, 3) — the `smooth`-session average of the raw %K, which is
+ * the %K Yahoo and TradingView publish for Stochastic (14, 3, 3). The raw
+ * reading alone swings far more: JPM's raw 43.8 on 19 Oct beside a published
+ * 57.9, NEE's 64.2 beside 81.6.
+ */
+function stochK(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+  period = 14,
+  smooth = 3,
+): number | null {
+  if (closes.length < period + smooth - 1) return null;
+  let sum = 0;
+  for (let i = 0; i < smooth; i++) {
+    const end = closes.length - i;
+    const hh = Math.max(...highs.slice(end - period, end));
+    const ll = Math.min(...lows.slice(end - period, end));
+    if (!Number.isFinite(hh) || !Number.isFinite(ll) || hh === ll) return null;
+    sum += ((closes[end - 1] - ll) / (hh - ll)) * 100;
+  }
+  return sum / smooth;
+}
+
+/** Wilder ADX(14) — trend strength from smoothed +DI/-DI. */
+function adx(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+  period = 14,
+): number | null {
+  const n = closes.length;
+  if (n < period * 2 + 1) return null;
+  const tr: number[] = [];
+  const plusDM: number[] = [];
+  const minusDM: number[] = [];
+  for (let i = 1; i < n; i++) {
+    const up = highs[i] - highs[i - 1];
+    const dn = lows[i - 1] - lows[i];
+    plusDM.push(up > dn && up > 0 ? up : 0);
+    minusDM.push(dn > up && dn > 0 ? dn : 0);
+    tr.push(
+      Math.max(
+        highs[i] - lows[i],
+        Math.abs(highs[i] - closes[i - 1]),
+        Math.abs(lows[i] - closes[i - 1]),
+      ),
+    );
+  }
+  // Wilder smoothing (running sum, not simple average).
+  const smooth = (arr: number[]): number[] => {
+    let s = arr.slice(0, period).reduce((a, b) => a + b, 0);
+    const out = [s];
+    for (let i = period; i < arr.length; i++) {
+      s = s - s / period + arr[i];
+      out.push(s);
+    }
+    return out;
+  };
+  const trS = smooth(tr);
+  const pS = smooth(plusDM);
+  const mS = smooth(minusDM);
+  const dx: number[] = [];
+  for (let i = 0; i < trS.length; i++) {
+    if (trS[i] === 0) {
+      dx.push(0);
+      continue;
+    }
+    const pdi = (100 * pS[i]) / trS[i];
+    const mdi = (100 * mS[i]) / trS[i];
+    const sum = pdi + mdi;
+    dx.push(sum === 0 ? 0 : (100 * Math.abs(pdi - mdi)) / sum);
+  }
+  if (dx.length < period) return null;
+  let adxVal = dx.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < dx.length; i++)
+    adxVal = (adxVal * (period - 1) + dx[i]) / period;
+  return adxVal;
+}
+
+/** Beta vs a benchmark: cov(ticker, mkt) / var(mkt) over date-aligned daily returns. */
+function betaVs(
+  bars: { barDate: string; close: number }[],
+  mktByDate: Map<string, number>,
+): number | null {
+  const rt: number[] = [];
+  const rm: number[] = [];
+  for (let i = 1; i < bars.length; i++) {
+    const s = mktByDate.get(bars[i].barDate);
+    const sPrev = mktByDate.get(bars[i - 1].barDate);
+    const c = bars[i].close;
+    const cPrev = bars[i - 1].close;
+    if (
+      s == null ||
+      sPrev == null ||
+      sPrev <= 0 ||
+      cPrev == null ||
+      cPrev <= 0 ||
+      c == null
+    )
+      continue;
+    rt.push((c - cPrev) / cPrev);
+    rm.push((s - sPrev) / sPrev);
+  }
+  const N = Math.min(rt.length, 252);
+  if (N < 60) return null;
+  const a = rt.slice(-N);
+  const b = rm.slice(-N);
+  const ma = a.reduce((x, y) => x + y, 0) / N;
+  const mb = b.reduce((x, y) => x + y, 0) / N;
+  let cov = 0;
+  let varb = 0;
+  for (let i = 0; i < N; i++) {
+    cov += (a[i] - ma) * (b[i] - mb);
+    varb += (b[i] - mb) ** 2;
+  }
+  if (varb === 0) return null;
+  return cov / varb;
+}
+
 function macd(closes: number[]) {
-  if (closes.length < 35)
-    return null;
+  if (closes.length < 35) return null;
   const ema12 = ema(closes, 12);
   const ema26 = ema(closes, 26);
   const line = closes.map((_, i) => ema12[i] - ema26[i]);
@@ -58,13 +192,630 @@ function macd(closes: number[]) {
   };
 }
 
-function rvol(volumes: number[], window = RVOL_WINDOW) {
-  if (volumes.length < window + 1)
-    return null;
+export function rvol(volumes: number[], window = RVOL_WINDOW) {
+  if (volumes.length < window + 1) return null;
   const latest = volumes[volumes.length - 1];
   const prior = volumes.slice(-window - 1, -1);
   const avg = prior.reduce((a, b) => a + b, 0) / prior.length;
   return avg > 0 ? latest / avg : null;
+}
+
+/** Simple moving average of the last `period` closes, or null if too few bars. */
+function sma(closes: number[], period: number): number | null {
+  if (closes.length < period) return null;
+  const window = closes.slice(-period);
+  return window.reduce((a, b) => a + b, 0) / period;
+}
+
+/**
+ * Rolling RSI, one value per bar once the seed window is filled (Wilder
+ * smoothing, same recurrence as rsi() above). rsi() returns only the final
+ * scalar; the RSI pane needs the whole line, which it was drawing as a seeded
+ * sine-plus-noise walk.
+ */
+export function rsiSeries(closes: number[], period = 14): number[] {
+  if (closes.length < period + 1) return [];
+  let gain = 0;
+  let loss = 0;
+  for (let i = 1; i <= period; i++) {
+    const d = closes[i] - closes[i - 1];
+    if (d >= 0) gain += d;
+    else loss -= d;
+  }
+  let avgGain = gain / period;
+  let avgLoss = loss / period;
+  const out: number[] = [
+    avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss),
+  ];
+  for (let i = period + 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    avgGain = (avgGain * (period - 1) + Math.max(d, 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(-d, 0)) / period;
+    out.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
+  }
+  return out;
+}
+
+/** Trailing average of the last `period` values, or null if too few. */
+function trailingAvg(values: number[], period: number): number | null {
+  if (values.length < period) return null;
+  return values.slice(-period).reduce((a, b) => a + b, 0) / period;
+}
+
+const round2 = (n: number | null | undefined) =>
+  n == null || !Number.isFinite(n) ? null : Math.round(n * 100) / 100;
+
+/** Percent change over the last `sessions` trading days (closes oldest→newest). */
+function changeOverSessions(closes: number[], sessions: number): number | null {
+  if (closes.length < sessions + 1) return null;
+  const latest = closes[closes.length - 1];
+  const past = closes[closes.length - 1 - sessions];
+  return past > 0 ? ((latest - past) / past) * 100 : null;
+}
+
+/**
+ * Classic (floor-trader) pivot points from a prior period's H/L/C — the support
+ * & resistance levels the "Key levels" widget/drawer render. Derived from the
+ * Polygon bars we already store (no vendor has a native S/R feed).
+ */
+export interface PivotLevels {
+  pivot: number | null;
+  r1: number | null;
+  r2: number | null;
+  r3: number | null;
+  s1: number | null;
+  s2: number | null;
+  s3: number | null;
+}
+
+export function pivotLevels(high: number, low: number, close: number): PivotLevels {
+  const p = (high + low + close) / 3;
+  const range = high - low;
+  return {
+    pivot: round2(p),
+    r1: round2(2 * p - low),
+    s1: round2(2 * p - high),
+    r2: round2(p + range),
+    s2: round2(p - range),
+    r3: round2(high + 2 * (p - low)),
+    s3: round2(low - 2 * (high - p)),
+  };
+}
+
+/** Monday (UTC) of the week containing `dateStr` (YYYY-MM-DD) — a week key. */
+function weekKey(dateStr: string): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  const back = (d.getUTCDay() + 6) % 7; // days since Monday
+  d.setUTCDate(d.getUTCDate() - back);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Aggregate H/L/C of the last COMPLETE week (excludes the current partial week). */
+function priorWeekHLC(
+  bars: Array<{ barDate?: string; high?: number; low?: number; close?: number }>,
+  now: Date,
+): { high: number; low: number; close: number } | null {
+  const weeks = new Map<
+    string,
+    { high: number; low: number; close: number; last: string }
+  >();
+  for (const b of bars) {
+    if (
+      !b.barDate ||
+      typeof b.high !== "number" ||
+      typeof b.low !== "number" ||
+      typeof b.close !== "number"
+    )
+      continue;
+    const wk = weekKey(b.barDate);
+    const cur = weeks.get(wk);
+    if (!cur) {
+      weeks.set(wk, { high: b.high, low: b.low, close: b.close, last: b.barDate });
+    } else {
+      cur.high = Math.max(cur.high, b.high);
+      cur.low = Math.min(cur.low, b.low);
+      if (b.barDate >= cur.last) {
+        cur.close = b.close;
+        cur.last = b.barDate;
+      }
+    }
+  }
+  const keys = [...weeks.keys()].sort();
+  // The newest bucket is the week still trading only while today (ET) is in
+  // it and its Friday close has not passed. Once it has finished it IS the
+  // last complete week: always skipping it put COST's pivots for the week of
+  // 19 Oct on 5–9 Oct, because its bars ended on Friday 16 Oct.
+  const { etDate, regularSessionClosed } = marketTimeEt(now);
+  const newest = keys[keys.length - 1];
+  const thisWeek = weekKey(etDate);
+  const dow = new Date(`${etDate}T00:00:00Z`).getUTCDay();
+  const weekDone =
+    dow === 6 || dow === 0 || (dow === 5 && regularSessionClosed);
+  const newestComplete =
+    newest != null && (newest < thisWeek || (newest === thisWeek && weekDone));
+  const basis = newestComplete ? newest : keys[keys.length - 2];
+  const prior = basis != null ? weeks.get(basis) : undefined;
+  return prior ? { high: prior.high, low: prior.low, close: prior.close } : null;
+}
+
+/**
+ * Current trading date and whether its regular session has closed, evaluated in
+ * US market time (America/New_York) so pivot selection can tell a still-forming
+ * current-session bar from a completed one. DST-safe via Intl.
+ *
+ * We have no market-status feed inside this pure function (it is shared by the
+ * cron and the on-demand rebuild, neither of which threads live session state
+ * in), so we use the regular-session close time as the completeness boundary:
+ *   - The regular NYSE/Nasdaq session closes at 16:00 ET. A bar dated for the
+ *     current ET calendar day is treated as complete only once 16:00 ET has
+ *     passed; before that it is a still-forming intraday aggregate and the prior
+ *     bar is the last completed session.
+ *   - This is CORRECT for the two common cases: mid-session → prior day;
+ *     after the close (still the same calendar day) → today's completed bar.
+ * Documented tradeoff: early-close half-days (13:00 ET) are conservatively
+ * treated as still-open until 16:00 ET, so between 13:00 and 16:00 on those days
+ * the basis falls back to the prior completed session rather than the (already
+ * finished) half-day — the safe direction, never a partial bar.
+ */
+function marketTimeEt(now: Date): {
+  etDate: string;
+  regularSessionClosed: boolean;
+} {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const etDate = `${get("year")}-${get("month")}-${get("day")}`;
+  let hour = Number(get("hour"));
+  if (hour === 24) hour = 0; // some engines emit "24" for midnight
+  // Regular session close is 16:00 ET.
+  const regularSessionClosed = hour >= 16;
+  return { etDate, regularSessionClosed };
+}
+
+/**
+ * The newest session the market has COMPLETED as of `now` — the session a
+ * ticker's RVOL has to describe to be worth publishing.
+ *
+ * SPY's newest stored bar is the reference: SPY trades every session and is
+ * kept current by the same sync that stores every other ticker's bars, so it
+ * knows about holidays without a calendar. A bar for today only counts once the
+ * regular session has closed (same boundary as the pivot basis above). Callers
+ * that pass no SPY closes fall back to the most recent weekday, which is wrong
+ * only on the day after a market holiday — and wrong toward null, never toward
+ * a stale ratio.
+ */
+export function lastCompletedSession(
+  mktByDate: Map<string, number>,
+  now: Date,
+): string {
+  const { etDate, regularSessionClosed } = marketTimeEt(now);
+  const isCompleted = (d: string) =>
+    d < etDate || (d === etDate && regularSessionClosed);
+  let newest = "";
+  for (const d of mktByDate.keys()) {
+    if (isCompleted(d) && d > newest) newest = d;
+  }
+  if (newest) return newest;
+  const cursor = new Date(`${etDate}T00:00:00Z`);
+  if (!regularSessionClosed) cursor.setUTCDate(cursor.getUTCDate() - 1);
+  while (cursor.getUTCDay() === 0 || cursor.getUTCDay() === 6) {
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+  }
+  return cursor.toISOString().slice(0, 10);
+}
+
+/**
+ * Annualized N-day realized (historical) volatility, as a percent. Sample
+ * standard deviation of daily log returns over the window, scaled by √252.
+ * This is what the "30d Vol" column shows — a real volatility measure computed
+ * from the bars, since no implied-volatility (options) feed is on the plan.
+ */
+function realizedVol(closes: number[], window = 30): number | null {
+  if (closes.length < window + 1) return null;
+  const slice = closes.slice(-(window + 1));
+  const rets: number[] = [];
+  for (let i = 1; i < slice.length; i++) {
+    if (slice[i - 1] > 0 && slice[i] > 0) rets.push(Math.log(slice[i] / slice[i - 1]));
+  }
+  if (rets.length < 2) return null;
+  const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+  const variance =
+    rets.reduce((a, r) => a + (r - mean) ** 2, 0) / (rets.length - 1);
+  return Math.sqrt(variance) * Math.sqrt(252) * 100;
+}
+
+/** Bar shape the indicator math consumes — ascending by date. */
+export interface IndicatorBar {
+  barDate?: string;
+  open?: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  vwap?: number | null;
+}
+
+/**
+ * Pure technical-indicator computation, shared by the nightly sweep
+ * (computeFor below) and the on-demand first-time company sync
+ * (ondemand.service.getCompany) so a ticker seen for the very first time carries
+ * the SAME technical field set the cron writes — RSI/MACD/Stoch/ADX, beta, the
+ * MA ladder, the rolling 52-week range and pivot key levels. `bars` must be
+ * ascending by date and already limited to the window to analyse; `mktByDate` is
+ * SPY closes keyed by barDate (the beta benchmark). Returns null when history is
+ * too thin, matching the cron's skip so a sparse ticker degrades identically on
+ * both paths.
+ */
+/**
+ * Drop everything up to and including the most recent EXTREME single-day price
+ * discontinuity. A spin-off or ticker reuse leaves such a gap (e.g. Western
+ * Digital ~$1,500 → SanDisk ~$45 when SNDK was carved out) that Polygon's
+ * split/dividend adjustment does NOT remove, so the prior entity's prices poison
+ * the 52-week range and pivots. A gradual crash never produces a single-day
+ * >90%-down / >900%-up move, and no genuine session does either — so this leaves
+ * every normal ticker's series byte-identical and only trims true structural
+ * breaks. Uses close-to-close ratios (already split-adjusted).
+ */
+function trimAtStructuralBreak(bars: IndicatorBar[]): IndicatorBar[] {
+  let start = 0;
+  for (let i = 1; i < bars.length; i++) {
+    const prev = bars[i - 1].close;
+    const cur = bars[i].close;
+    if (prev > 0 && cur > 0) {
+      const ratio = cur / prev;
+      if (ratio > 10 || ratio < 0.1) start = i;
+    }
+  }
+  return start > 0 ? bars.slice(start) : bars;
+}
+
+export function computeIndicators(
+  inputBars: IndicatorBar[],
+  mktByDate: Map<string, number>,
+  now: Date = new Date(),
+  // OFFICIAL 16:00 regular-session close keyed by barDate, supplied by callers to
+  // correct the keyLevels.daily pivot basis (Polygon's daily aggregate close is
+  // the extended-hours last trade). Optional and backward-compatible: when
+  // absent, every output — keyLevels.daily included — is byte-identical to before.
+  officialCloseByDate?: Map<string, number>,
+  // OFFICIAL regular-session high/low/close for TODAY's bar (keyed by date),
+  // supplied by callers after the 16:00 close. Today's stored bar is written
+  // mid-session, so after the close it is complete in time but not in content:
+  // its H/L/C are whatever had traded when it was stored. Today's bar is used as
+  // the pivot basis only with this official bar; without it the prior session
+  // stays the basis. (E2E Oct 23: 51 after-close pivots matched neither session.)
+  officialBarByDate?: Map<string, { high: number; low: number; close: number }>,
+) {
+  // Remove pre-spin-off / pre-ticker-reuse bars before any computation so the
+  // 52-week range, pivots and MAs are all built from one continuous entity.
+  const bars = trimAtStructuralBreak(inputBars);
+  if (bars.length < MIN_BARS) return null;
+  const closes = bars.map((b) => b.close);
+  const volumes = bars.map((b) => b.volume);
+  const highs = bars.map((b) => b.high);
+  const lows = bars.map((b) => b.low);
+  const rsiVal = rsi(closes);
+  const macdVal = macd(closes);
+  if (rsiVal == null || macdVal == null) return null;
+  const sma50 = sma(closes, 50);
+  const sma200 = sma(closes, 200);
+  const week5ChangePct = changeOverSessions(closes, 5);
+  const monthChangePct = changeOverSessions(closes, 21);
+  // The close the 5-day move is measured FROM, stored alongside the move itself.
+  //
+  // week5ChangePct ends at the last stored bar, which can be days old — DAIC
+  // read +1258% from a close two sessions back, beside a live price that had
+  // since fallen ~37%. Publishing the base lets the reader measure the same
+  // window to the price it is actually showing, so the figure describes the
+  // number next to it. Null whenever the move is null, so the two travel
+  // together and a caller cannot mix a fresh base with a stale move.
+  const week5BaseClose =
+    week5ChangePct == null ? null : (closes[closes.length - 1 - 5] ?? null);
+  // The last 6 closes with their session dates, oldest → newest.
+  //
+  // week5BaseClose is only the right base while the live price is from the
+  // same session as the last stored bar. Once a new session starts, the base
+  // has to move forward one session, because today counts as one of the 5.
+  // With the dates attached, the reader matches the live price's ET date
+  // against the newest entry: same day → [0], newer day → [1]. The newest
+  // entry can be a still-forming bar on the on-demand paths; only its date
+  // is used for the match, never its close as a base.
+  // Null whenever the move is null, and when any of the bars has no date,
+  // since the reader cannot choose a base without one.
+  const week5Window = bars.slice(-6);
+  const week5Closes =
+    week5ChangePct == null || !week5Window.every((b) => b.barDate)
+      ? null
+      : week5Window.map((b) => ({
+          date: b.barDate as string,
+          close: Math.round(b.close * 10000) / 10000,
+        }));
+  const latestClose = closes[closes.length - 1];
+
+  // Full MA ladder for the drawer; sma50/sma200 stay as their own fields too.
+  const smaLadder: Record<string, number | null> = {};
+  const emaLadder: Record<string, number | null> = {};
+  for (const p of MA_PERIODS) {
+    smaLadder[String(p)] = round2(sma(closes, p));
+    const e = closes.length >= p ? ema(closes, p)[closes.length - 1] : null;
+    emaLadder[String(p)] = round2(e);
+  }
+
+  const latestBar = bars[bars.length - 1];
+
+  // Pivot basis = the last FULLY-COMPLETED daily session, never a still-forming
+  // current-day bar. The last bar is only current-and-open when it is dated for
+  // today's ET session AND the 16:00 ET close has not passed; in that window the
+  // prior bar is the last completed session. After the close (or on any past
+  // calendar day), the last bar is itself a completed session. This excludes the
+  // partial current-day bar the on-demand rebuild fetches mid-session (it pulls
+  // Polygon aggs through `now`), so keyLevels never mix a live/partial close.
+  // NOTE: `latestBar` (and `latestClose` above) intentionally stay the raw last
+  // bar — VWAP and price-vs-MA reads want the current session, only the pivot
+  // BASIS must be a completed session.
+  const { etDate, regularSessionClosed } = marketTimeEt(now);
+  const lastIsToday = latestBar?.barDate === etDate;
+  const lastIsCurrentOpenSession = lastIsToday && !regularSessionClosed;
+  const todayOfficial = lastIsToday ? officialBarByDate?.get(etDate) : undefined;
+  // Today's bar counts as a completed session only once the session has closed
+  // AND its official H/L/C are in hand; it then carries those, not the stored
+  // mid-session values.
+  const completedBars = !lastIsToday
+    ? bars
+    : regularSessionClosed && todayOfficial
+      ? [...bars.slice(0, -1), { ...latestBar, ...todayOfficial }]
+      : bars.slice(0, -1);
+  // The basis session carries its OFFICIAL high/low/close when the caller has
+  // them: a stored bar can hold vendor or mid-session high/low that are not the
+  // official ones (BJRI Oct 23: stored 58.31 / 55.99 vs official 58.46 / 55.59,
+  // E2E Oct 26), and correcting only the close left the pivots off.
+  const basisRaw = completedBars[completedBars.length - 1];
+  const basisOfficial = basisRaw?.barDate ? officialBarByDate?.get(basisRaw.barDate) : undefined;
+  const pivotBasisBar = basisOfficial && basisRaw ? { ...basisRaw, ...basisOfficial } : basisRaw;
+
+  // 52-week range over the completed sessions of the last 52 weeks (see
+  // fiftyTwoWeekWindow) — never an in-progress session.
+  const yearBars = fiftyTwoWeekWindow(completedBars, now);
+  const yearHighs = yearBars.map((b) => b.high);
+  const yearLows = yearBars.map((b) => b.low);
+  const high52 = yearHighs.length > 0 ? Math.max(...yearHighs) : null;
+  const low52 = yearLows.length > 0 ? Math.min(...yearLows) : null;
+
+  const rsiHistory = rsiSeries(closes).slice(-RSI_SERIES_LEN);
+  const stochKVal = stochK(highs, lows, closes);
+  const adxVal = adx(highs, lows, closes);
+  const betaVal = betaVs(
+    bars as { barDate: string; close: number }[],
+    mktByDate,
+  );
+
+  return {
+    rsi14: Math.round(rsiVal * 100) / 100,
+    stochK: stochKVal == null ? null : Math.round(stochKVal * 100) / 100,
+    adx14: adxVal == null ? null : Math.round(adxVal * 100) / 100,
+    // 1-year DAILY beta, kept for short-horizon views. The headline `beta` is
+    // the 5-year monthly one, owned by beta.job — writing it here would
+    // overwrite that every night.
+    beta1yDaily: betaVal == null ? null : Math.round(betaVal * 1000) / 1000,
+    macd: Math.round(macdVal.macd * 10000) / 10000,
+    macdSignal: Math.round(macdVal.signal * 10000) / 10000,
+    macdHistogram: Math.round(macdVal.histogram * 10000) / 10000,
+    rvol: (() => {
+      // Only for the last completed session. The newest stored bar can be days
+      // old — BMBL's bars ended 13 Oct, so on 15 Oct it published 13 Oct's
+      // 29.12x beside a real 1.37x, and delisted names (WBA, last bar Aug 2025)
+      // kept their final ratio indefinitely. A still-forming bar for today is a
+      // partial volume and no better. null, as market-movers does, rather than
+      // an old ratio presented as today's.
+      if (
+        lastIsCurrentOpenSession ||
+        !latestBar?.barDate ||
+        latestBar.barDate < lastCompletedSession(mktByDate, now)
+      ) {
+        return null;
+      }
+      const v = rvol(volumes);
+      return v == null ? null : Math.round(v * 100) / 100;
+    })(),
+    sma50: sma50 == null ? null : Math.round(sma50 * 100) / 100,
+    sma200: sma200 == null ? null : Math.round(sma200 * 100) / 100,
+    aboveSma50: sma50 == null ? null : latestClose >= sma50,
+    aboveSma200: sma200 == null ? null : latestClose >= sma200,
+    week5ChangePct:
+      week5ChangePct == null ? null : Math.round(week5ChangePct * 100) / 100,
+    monthChangePct:
+      monthChangePct == null ? null : Math.round(monthChangePct * 100) / 100,
+    week5BaseClose:
+      week5BaseClose == null ? null : Math.round(week5BaseClose * 10000) / 10000,
+    /** Last 6 dated closes, oldest → newest (see week5Closes above). */
+    week5Closes,
+
+    /** Rolling RSI(14) line for the RSI pane. */
+    rsi14Series: rsiHistory.map((v) => Math.round(v * 10) / 10),
+    /** SMA/EMA at every period the MA drawer lists, keyed by period. */
+    smaLadder,
+    emaLadder,
+    /** Session VWAP straight from the vendor bar. */
+    vwap: round2(latestBar?.vwap),
+    /** Real rolling-52-week range and where price sits inside it. */
+    high52,
+    low52,
+    pctFromHigh52:
+      high52 && high52 > 0
+        ? round2(((latestClose - high52) / high52) * 100)
+        : null,
+    pctFromLow52:
+      low52 && low52 > 0
+        ? round2(((latestClose - low52) / low52) * 100)
+        : null,
+    /** Average daily volume. */
+    avgVolume20: round2(trailingAvg(volumes, 20)),
+    avgVolume50: round2(trailingAvg(volumes, 50)),
+    /** Bars actually used, so the UI can tell "no data" from "thin history". */
+    barsAnalyzed: closes.length,
+
+    /** Annualized 30-day realized volatility (%) — the "30d Vol" column (there
+     *  is no implied-vol/options feed on the plan). */
+    realizedVol30: (() => {
+      const v = realizedVol(closes, 30);
+      return v == null ? null : Math.round(v * 100) / 100;
+    })(),
+
+    /**
+     * Support & resistance — classic pivot points from the prior daily and
+     * prior-complete-weekly bar (Polygon has no S/R feed).
+     */
+    keyLevels: {
+      // Daily classic pivots from the last COMPLETED session (pivotBasisBar),
+      // using that bar's stored/finalized OHLC — never a partial current-day bar
+      // and never a substituted live price for the close.
+      daily: (() => {
+        if (
+          !pivotBasisBar ||
+          typeof pivotBasisBar.high !== "number" ||
+          typeof pivotBasisBar.low !== "number" ||
+          typeof pivotBasisBar.close !== "number"
+        ) {
+          return null;
+        }
+        // Prefer the OFFICIAL 16:00 regular-session close for the pivot CLOSE when
+        // the caller supplied one for this bar's date; Polygon's stored daily
+        // close is the extended-hours last trade, which skews the pivot. Falls
+        // back to the stored close when absent/null (zero-regression). Weekly
+        // pivots below could be corrected the same way later — intentionally left
+        // untouched in this zero-side-effect pass.
+        const pivotClose =
+          (pivotBasisBar.barDate != null
+            ? officialCloseByDate?.get(pivotBasisBar.barDate)
+            : undefined) ?? pivotBasisBar.close;
+        return pivotLevels(pivotBasisBar.high, pivotBasisBar.low, pivotClose);
+      })(),
+      // Weekly pivots from the last COMPLETE week. priorWeekHLC skips the
+      // newest week bucket only while that week is still trading; feeding it
+      // `completedBars` also keeps a still-forming current-day bar out of the
+      // week aggregation so its H/L/C can never leak into the basis.
+      weekly: (() => {
+        const w = priorWeekHLC(
+          completedBars as Array<{
+            barDate?: string;
+            high?: number;
+            low?: number;
+            close?: number;
+          }>,
+          now,
+        );
+        return w ? pivotLevels(w.high, w.low, w.close) : null;
+      })(),
+    },
+  };
+}
+
+/**
+ * Official high/low/close (Polygon open-close) for the sessions a pivot basis
+ * can be: the last two bars, today's only once its regular session has closed.
+ * Used for the pivot basis and, after the close, to finalise today's bar (see
+ * computeIndicators' officialBarByDate) — two calls per build, as before.
+ */
+export async function officialBarsFor(
+  polygon: { getOfficialDayBar(ticker: string, date: string): Promise<{ high: number; low: number; close: number } | null> },
+  ticker: string,
+  bars: ReadonlyArray<{ barDate?: string }>,
+  now: Date = new Date(),
+): Promise<Map<string, { high: number; low: number; close: number }>> {
+  const map = new Map<string, { high: number; low: number; close: number }>();
+  const { etDate, regularSessionClosed } = marketTimeEt(now);
+  for (const b of bars.slice(-2)) {
+    const d = b.barDate;
+    if (!d || d > etDate || (d === etDate && !regularSessionClosed)) continue;
+    const bar = await polygon.getOfficialDayBar(ticker, d).catch(() => null);
+    if (bar) map.set(d, bar);
+  }
+  return map;
+}
+
+/** 52 weeks, in days. */
+const FIFTY_TWO_WEEKS_DAYS = 364;
+
+/** Minutes past midnight in New York for an instant. */
+function etMinutes(d: Date): number {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false })
+      .formatToParts(d).map((x) => [x.type, x.value]),
+  );
+  return (Number(p.hour) % 24) * 60 + Number(p.minute);
+}
+
+/** The vendor day rolls to a new session once that day's extended hours end. */
+const ROLLOVER_MINUTES_ET = 20 * 60;
+
+/**
+ * The sessions of the 52 weeks the published range covers: every bar dated
+ * AFTER (anchor − 364 days), through the newest bar. `bars` ascending,
+ * completed sessions only.
+ *
+ * The anchor is the newest session once its day — extended hours included —
+ * is over (20:00 ET). Before that, quote pages still measure the 52 weeks from
+ * the PREVIOUS session and widen them with today's high/low. Measured on both
+ * E2E workbooks (all 52-week rows, both halves): read Oct 26 15:45–18:00 ET,
+ * ANIP 96.57 / MSEX 62.18 / ORCL 287 include Mon Oct 27 2025 (anchor Fri Oct
+ * 23); read after midnight on Oct 23, SFM 107.31 / GS 754 / CAT 521.43 start
+ * at Oct 27 2025 (anchor Oct 23). Anchoring at the newest bar as soon as it
+ * completed got the first three wrong (95.57 / 61.60 / 285.46).
+ */
+export function fiftyTwoWeekWindow<T extends { barDate?: string }>(bars: ReadonlyArray<T>, now: Date = new Date()): T[] {
+  const last = bars[bars.length - 1]?.barDate;
+  if (!last) return bars.slice(-TRADING_DAYS_YEAR);
+  const prev = bars[bars.length - 2]?.barDate;
+  const anchor = prev && last === etDateOfInstant(now) && etMinutes(now) < ROLLOVER_MINUTES_ET ? prev : last;
+  const start = new Date(`${anchor}T00:00:00Z`);
+  start.setUTCDate(start.getUTCDate() - FIFTY_TWO_WEEKS_DAYS);
+  const cut = start.toISOString().slice(0, 10);
+  return bars.filter((b) => b.barDate != null && b.barDate > cut);
+}
+
+/**
+ * Re-anchor the 52-week fields to the price the doc actually displays.
+ *
+ * computeIndicators measures pctFromHigh52/pctFromLow52 from the last STORED
+ * bar's close, but ohlcv_bars only gain a session at the next premarket run,
+ * while `price` is the snapshot — always at least one session newer. MSFT read
+ * -3.37% off its high (from the 10-09 close) beside a 10-12 price that was
+ * really -2.27% off; CIBR read -0.12% beside a price -2.60% off, because its
+ * 10-12 new high was not in the bars either. Folding `price` into the range
+ * and measuring from it makes the figures describe the number next to them.
+ * Docs without a usable price or range pass through unchanged.
+ */
+type Anchored52w = {
+  pctFromHigh52?: number | null;
+  pctFromLow52?: number | null;
+};
+
+export function anchor52wToPrice<T extends Record<string, unknown>>(
+  doc: T,
+): T & Anchored52w {
+  const price = doc.price;
+  if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) {
+    return doc;
+  }
+  const out: Record<string, unknown> = { ...doc };
+  if (typeof doc.high52 === "number" && doc.high52 > 0) {
+    const high52 = Math.max(doc.high52, price);
+    out.high52 = high52;
+    out.pctFromHigh52 = round2(((price - high52) / high52) * 100);
+  }
+  if (typeof doc.low52 === "number" && doc.low52 > 0) {
+    const low52 = Math.min(doc.low52, price);
+    out.low52 = low52;
+    out.pctFromLow52 = round2(((price - low52) / low52) * 100);
+  }
+  return out as T & Anchored52w;
 }
 
 @Injectable()
@@ -75,56 +826,154 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
+    private readonly polygon: PolygonService,
   ) {}
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['companies'],
-      cronExpression: '10 4 * * *',
-      timeZone: 'America/New_York',
+      collections: ["companies"],
+      cronExpression: "10 4 * * *",
+      timeZone: "America/New_York",
     });
   }
 
-  @Cron('10 4 * * *', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
   }
 
-  private async computeFor(ticker: string) {
+  /** SPY closes keyed by barDate — the benchmark for beta. */
+  private async loadMarketCloses(): Promise<Map<string, number>> {
     const snap = await this.firebase.firestore
-      .collection('ohlcv_bars')
-      .where('ticker', '==', ticker)
-      .orderBy('barDate', 'desc')
+      .collection("ohlcv_bars")
+      .where("ticker", "==", "SPY")
+      .orderBy("barDate", "desc")
       .limit(BARS_TO_READ)
       .get();
-    if (snap.size < MIN_BARS)
-      return null;
-    const bars = snap.docs.map((d) => d.data()).reverse();
-    const closes = bars.map((b) => b.close);
-    const volumes = bars.map((b) => b.volume);
-    const rsiVal = rsi(closes);
-    const macdVal = macd(closes);
-    if (rsiVal == null || macdVal == null)
-      return null;
-    return {
-      rsi14: Math.round(rsiVal * 100) / 100,
-      macd: Math.round(macdVal.macd * 10000) / 10000,
-      macdSignal: Math.round(macdVal.signal * 10000) / 10000,
-      macdHistogram: Math.round(macdVal.histogram * 10000) / 10000,
-      rvol: (() => {
-        const v = rvol(volumes);
-        return v == null ? null : Math.round(v * 100) / 100;
-      })(),
+    const m = new Map<string, number>();
+    for (const d of snap.docs) {
+      const x = d.data();
+      if (typeof x.close === "number") m.set(x.barDate as string, x.close);
+    }
+    return m;
+  }
+
+  /**
+   * The last BARS_TO_READ sessions for a ticker, as ONE document read.
+   *
+   * WHY THIS EXISTS
+   * This job used to query 300 bar documents per ticker, every run. Firestore
+   * bills per DOCUMENT read, so that was 923 x 300 = 276,900 reads a day — 96%
+   * of the project's entire Firestore cost, spent re-reading a series that
+   * grows by one bar a day.
+   *
+   * The series is cached on a single document and topped up with only the bars
+   * that arrived since: 1 read for the cache plus 1 for the delta, instead of
+   * 300. A 300-bar window of six numbers is ~14 KB, comfortably inside the 1 MiB
+   * document limit.
+   *
+   * The indicator MATH IS UNCHANGED — computeIndicators receives exactly the
+   * same ascending array it always did. Only the source of the array moved.
+   *
+   * SELF-HEALING: a missing, malformed or stale-beyond-repair cache falls back
+   * to the original full query and rewrites the cache, so a bad document costs
+   * one expensive run rather than wrong numbers.
+   */
+  private async loadSeries(ticker: string): Promise<IndicatorBar[]> {
+    const db = this.firebase.firestore;
+    const ref = db.collection(SERIES_COLLECTION).doc(ticker);
+    const fullRead = async (): Promise<IndicatorBar[]> => {
+      const snap = await db
+        .collection("ohlcv_bars")
+        .where("ticker", "==", ticker)
+        .orderBy("barDate", "desc")
+        .limit(BARS_TO_READ)
+        .get();
+      return snap.docs.map((d) => d.data()).reverse() as IndicatorBar[];
     };
+
+    let cached: IndicatorBar[] = [];
+    let lastDate = "";
+    try {
+      const doc = await ref.get();
+      const d = doc.data();
+      if (d && Array.isArray(d.bars)) {
+        cached = d.bars as IndicatorBar[];
+        lastDate = String(d.lastDate ?? "");
+      }
+    } catch {
+      // A cache read failure must not stop the job — fall through to the query.
+    }
+
+    let bars: IndicatorBar[];
+    if (cached.length >= MIN_BARS && lastDate) {
+      // The newest few bars, using the SAME (ticker asc, barDate desc) index the
+      // full read already uses. An inequality on barDate with an ascending sort
+      // would need a second composite index that does not exist — in production
+      // that is a FAILED_PRECONDITION on every ticker, not a slow path.
+      const recent = await db
+        .collection("ohlcv_bars")
+        .where("ticker", "==", ticker)
+        .orderBy("barDate", "desc")
+        .limit(DELTA_FETCH)
+        .get();
+      const fetched = (
+        recent.docs.map((d) => d.data()) as IndicatorBar[]
+      ).reverse();
+      const oldestFetched = fetched.length
+        ? String(fetched[0].barDate ?? "")
+        : "";
+      // The fetched slice must OVERLAP the cache, otherwise sessions between the
+      // two are missing and the indicators would read a hole as real history.
+      if (fetched.length > 0 && oldestFetched <= lastDate) {
+        const fresh = fetched.filter(
+          (b) => String(b.barDate ?? "") > lastDate,
+        );
+        bars = [...cached, ...fresh];
+      } else {
+        bars = await fullRead();
+      }
+    } else {
+      bars = await fullRead();
+    }
+
+    bars = bars.slice(-BARS_TO_READ);
+    const newest = bars.length ? String(bars[bars.length - 1].barDate ?? "") : "";
+    if (bars.length > 0 && newest !== lastDate) {
+      // Best-effort: the numbers this run returns do not depend on the write.
+      await ref
+        .set({ bars, lastDate: newest, updatedAt: new Date().toISOString() })
+        .catch(() => undefined);
+    }
+    return bars;
+  }
+
+  private async computeFor(ticker: string, mktByDate: Map<string, number>) {
+    const bars = await this.loadSeries(ticker);
+    // OFFICIAL 16:00 close for the classic-pivot basis only. The pivot basis is
+    // the last completed daily session; fetch the official close for the last 1–2
+    // bar dates (the possible basis dates) and pass only non-null results — any
+    // miss / weekend / holiday leaves the map empty and the pivot falls back to
+    // the stored bar close (no regression). Not fetched for historical bars.
+    const officialBarByDate = await officialBarsFor(this.polygon, ticker, bars);
+    const officialCloseByDate = new Map([...officialBarByDate].map(([d, b]) => [d, b.close]));
+    return computeIndicators(bars, mktByDate, undefined, officialCloseByDate, officialBarByDate);
   }
 
   async run() {
     try {
+      // Dynamic universe: exactly the tickers users have touched (on-demand
+      // growth) plus the premarket warm set — never the fixed list.
+      const universe = await activeUniverse(this.firebase.firestore);
+      if (universe.length === 0) {
+        await this.meta.record(JOB_NAME, { ok: true, count: 0 });
+        return { computed: 0, skipped: 0, note: "no active tickers yet" };
+      }
+      const mktByDate = await this.loadMarketCloses();
       const results = [];
       let skipped = 0;
-      for (const ticker of TICKER_UNIVERSE) {
+      for (const ticker of universe) {
         try {
-          const ind = await this.computeFor(ticker);
+          const ind = await this.computeFor(ticker, mktByDate);
           if (!ind) {
             skipped++;
             continue;
@@ -134,21 +983,25 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
             data: { ...ind, technicalsUpdatedAt: new Date().toISOString() },
           });
         } catch (err) {
-          this.logger.error(`Failed computing indicators for ${ticker}: ${err.message}`);
+          this.logger.error(
+            `Failed computing indicators for ${ticker}: ${err.message}`,
+          );
           skipped++;
         }
       }
       if (results.length === 0) {
-        this.logger.warn(`No tickers had enough ohlcv_bars to compute indicators (${skipped}/${TICKER_UNIVERSE.length} skipped) — has stock-history.job.ts run yet?`);
+        this.logger.warn(
+          `No tickers had enough ohlcv_bars to compute indicators (${skipped}/${universe.length} skipped) — has stock-history.job.ts run yet?`,
+        );
         await this.meta.record(JOB_NAME, { ok: true, count: 0 });
         return { computed: 0, skipped };
       }
-      const batch = this.firebase.firestore.batch();
-      const col = this.firebase.firestore.collection('companies');
+      const writes: PendingWrite[] = [];
+      const col = this.firebase.firestore.collection("companies");
       for (const r of results) {
-        batch.set(col.doc(r.ticker), r.data, { merge: true });
+        writes.push({ ref: col.doc(r.ticker), data: r.data });
       }
-      await batch.commit();
+      await batchSetWithCreatedAt(this.firebase.firestore, writes);
       await this.meta.record(JOB_NAME, { ok: true, count: results.length });
       return { computed: results.length, skipped };
     } catch (err) {

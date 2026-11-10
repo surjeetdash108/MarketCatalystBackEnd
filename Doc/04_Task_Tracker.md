@@ -1,20 +1,318 @@
 # MarketCatalyst — Task Tracker
+
+> ## ⏱ State sync — 2026-08-16 · FMP NEWS, ON-DEMAND COMPLETENESS, COVERAGE SELF-HEAL, SCALE-TO-ZERO COST (deployed to prod)
+>
+> _This block is newest and authoritative where it differs from the blocks
+> below. It records seven changes deployed to production on 2026-08-16 (worker
+> `market-catalyst-backend` rev 00101, live `market-catalyst-live` rev 00040,
+> UI hosting redeployed, new Cloud Run Job `premarket-job`)._
+>
+> **This doc, specifically:** New Done rows are captured in the dated task
+> subsection **"Cost Architecture, On-Demand Completeness & Coverage Self-Heal
+> (2026-08-16)"** below (T-149a–g). Materially, **T-148a is now largely resolved**:
+> the premarket bundle runs as a dedicated **Cloud Run Job** (`premarket-job`) fired
+> by the `run-premarket-job` scheduler (`0 8 * * 1-5` ET), and the intraday jobs run
+> every 5 min — automated refresh runs in production, with the worker intentionally
+> scale-to-zero. T-148b/c/d (browser→backend reachability, its security prereq, and
+> the Polygon key rotation) are untouched by this session.
+>
+> **A · FMP news (new).** News feed MERGES Polygon + FMP (deduped by URL, Polygon
+> wins); every article carries a `vendor` field, badged in the UI with `source` +
+> `sentiment`. Backend: `NEWS_FMP_SOURCE=fmp`, new `src/adapters/fmp-news.adapter.ts`
+> + `NEWS_FMP_ADAPTER`, a `news.job.ts` merge loop, `/live/news` stamps `vendor`; FMP
+> `getStockNews()` → `/stable/news/stock`.
+>
+> **B · Stock-detail wiring fixes.** `market-catalyst-live` (serves `/live/*` +
+> `/market-data/*`) was on a stale image → redeployed. `/live/company` now builds
+> peRatio/eps/dividendYield/dividendPerShare/peers. UI: analyst popup PT
+> median/low-high + recent grades; commentary thumbnails; IPO Shares/Deal-size
+> columns; MoverPopup null-guards RVOL/RS.
+>
+> **C · stock-history self-heal → RS/tech coverage 70 → 376/385.** A once-failed
+> ticker was wrongly marked "backfilled" and never re-attempted; `stock-history.job.ts`
+> now runs a `count()` guard that re-triggers the deep window when a "backfilled"
+> ticker has < 65 stored bars.
+>
+> **D · On-demand completeness + shared compute.** `ondemand.getCompany` first-fetch
+> returns the FULL detail-page dataset (technicals + ranked RS/tech) and persists
+> ~2yr bars so nightly crons rank the new ticker. Crons persist RAW scores
+> (`rsScore`; `techMomentum`/`techTrend`/`techRsi`); PURE compute functions shared by
+> cron + on-demand.
+>
+> **E · Earnings full-US coverage.** Forward (FMP) calendar resolves symbols against
+> the ~13,106-row Polygon US ticker reference (not the ~385 tracked companies). Aug 26
+> 2026: 4 → 38 reporters; `earnings_events` ~7.3k → ~8.8k.
+>
+> **F · Nightly sync integrity.** `companies.job.ts` no longer merge-writes
+> placeholder nulls for `beta`/`volume`/`averageVolume`/`week52Range`; field ownership
+> is single-owner across the nightly chain.
+>
+> **G · Cost architecture → scale-to-zero (~$75–90/mo → <$15/mo).** Worker
+> `market-catalyst-backend` → `--min-instances=0` + CPU throttling. Premarket bundle →
+> **Cloud Run Job** `premarket-job` (`node dist/job-entry.js` booting
+> `src/app-job.module.ts`, worker modules minus ServeStaticModule; task-timeout 3600s,
+> 2Gi/1cpu, ~18 min/weekday ≈ $0.50/mo). Scheduler `run-premarket-job`
+> (`0 8 * * 1-5` ET) fires it as `scheduler-invoker@`; old `sync-premarket` scheduler
+> DELETED. Intraday syncs 2 → 5 min. Manual: `gcloud run jobs execute premarket-job`.
+
+> ## ⏱ State sync — 2026-07-27 · TWO ENVIRONMENTS (stage + prod), env-driven config
+>
+> _This block is newest and authoritative where it differs from the blocks
+> below. It introduces a second, fully-isolated environment; nothing about the
+> per-environment runtime topology (§6, the on-demand data layer, the CDN
+> rewrite) changes — that topology now simply exists twice, once per project._
+>
+> **This doc, specifically:** Add an open task — wire stage's Firebase Hosting
+> rewrites (`/api`, `/market-data`, `/live` → the stage `market-catalyst-live`
+> service) once stage billing is linked; every other tracked task is unchanged.
+>
+> **Two isolated Firebase projects = two environments.** Production stays on
+> `market-catalyst-502415`. A new **stage** project `market-catalyst-stage`
+> (project #523639228835) was created as an independent copy: its own Firestore
+> `(default)` in **nam5 / STANDARD / NATIVE** (identical region/edition to prod),
+> the **same `firestore.rules` + `firestore.indexes.json`** deployed to it, its
+> own Auth, and its own `backend-runtime@…` service account (roles
+> `datastore.user` + `secretmanager.secretAccessor`, mirroring prod — keyless,
+> the backend authenticates via ADC). Nothing is shared between the two: a
+> destructive sync, a rules change, or a test signup on stage can never touch
+> prod data or users.
+>
+> **Branch ⇄ environment.** Both repos work on the **`stage`** branch for
+> day-to-day work; `main`/`prod` map to production. `.firebaserc` carries
+> `stage`/`prod` aliases so `firebase deploy … --project stage|prod` targets the
+> right project.
+>
+> **Firebase config is env-driven now, not hardcoded.**
+> · **Backend** reads `FIREBASE_PROJECT_ID` (previously pinned to prod). Stage
+>   `.env` and `deploy/env.stage.yaml` set it to `market-catalyst-stage`;
+>   `deploy/env.production.yaml` keeps prod. Same image, same code — only the env
+>   var differs.
+> · **UI** reads `NEXT_PUBLIC_FIREBASE_*` (`app/firebase.ts`), falling back to
+>   the prod values for zero-regression. The stage build sets them via
+>   `.env.production` to the stage web-app config, so the deployed stage site
+>   authenticates against `market-catalyst-stage`.
+>
+> **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
+> static build works in every environment without a rebuild:
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
+> · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
+>   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
+>   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,
+>   CDN-cacheable). A `localhost` value of `NEXT_PUBLIC_BACKEND_URL` is ignored
+>   once the page is served from a real host, so a dev env baked into a prod
+>   build can never misroute deployed traffic. This is the **same implementation
+>   for stage and prod** — the only per-env difference is which project's
+>   `market-catalyst-live` the rewrite resolves to.
+>
+> **Per-environment Cloud Run topology is unchanged** (see §6): one image → a
+> private `worker` (`market-catalyst-backend`, all sync/admin/plans) and a public
+> `live` (`market-catalyst-live`, serving `LiveModule` + `MarketDataModule` +
+> `UserDataModule`, i.e. `/live` + `/market-data` + `/api`). Each project gets
+> its own pair.
+>
+> **Stage data = a full copy of prod.** All 35 Firestore collections (18,748
+> top-level docs + subcollections: users' portfolios/holdings, watchlists,
+> sessions; fund_holdings' filings/positions) were copied prod → stage so stage
+> mirrors production.
+>
+> **Stage status / open items (2026-07-27).**
+> · Stage **billing is not yet linked** (free/Spark). Firebase Hosting **Cloud
+>   Run rewrites and any Cloud Run deploy require billing**, so the stage
+>   `firebase.json` currently ships the **SPA catch-all only** and the stage
+>   `live`/`worker` services are **not deployed yet**. Re-add the rewrites (see
+>   prod) once billing + the stage `market-catalyst-live` service exist.
+> · The stage **static UI is live** at `https://market-catalyst-stage.web.app`.
+> · Google sign-in on stage reaches Google but needs the stage project's **OAuth
+>   consent screen published / test-users added** to complete; Email/Password
+>   works today.
+
+
+> ## ⏱ State sync — 2026-07-26 (evening) · CDN, zero-poll, spinners, DB reset EXECUTED
+>
+> _Additive to the morning 2026-07-26 on-demand block below; nothing prior is
+> removed. Where they differ, this block is newest._
+>
+> **DB reset executed.** `deploy/empty-market-data.mjs` was RUN against
+> production: **323,575 market-data docs deleted** across 29 collections
+> (ohlcv_bars ~300k, tickers ~13k, news ~5.6k, …). Users, watchlists,
+> portfolios, sessions, settings, plans and feature flags were kept. The DB now
+> starts empty and grows strictly with usage + the premarket warm.
+>
+> **Spinners app-wide (first-fetch UX).** Every on-demand path now shows a
+> spinner while data is being fetched and an honest empty state if none exists:
+> the Dashboard's single grid spinner, the shared `DataState` loading state,
+> the chart pane (spinner while `/live/bars` is in flight — and the last
+> fabricated fallback, `genOHLC`'s seeded random-walk chart, was **removed**),
+> the stock page and stock drawer (`useCompanyState`, ~12 s bounded grace while
+> `/live/company` lands).
+>
+> **Zero vendor/client polling while the market is closed.** Client price poll:
+> one fetch to populate, then silent until 04:00 ET (local clock check, no
+> network); hidden tabs never poll and refresh instantly on return. Snapshot
+> cache: zero Polygon calls when closed (cold-start exception only). Tape:
+> skips the vendor entirely once a clean closing frame exists; a 15-min phase
+> check is the only reopen signal (market-status, 60 s TTL, ~1 light call/min
+> server-wide). WebSocket: never opens (unused path, kept for a future
+> real-time plan).
+>
+> **Firebase Hosting free CDN.** `firebase.json` rewrites `/live/**` on the
+> Hosting origin to the public `market-catalyst-live` Cloud Run service. The UI
+> (`app/iq/backend.ts`) calls same-origin on `*.web.app`/`*.firebaseapp.com`
+> (→ rides Hosting's global CDN, cached per each endpoint's Cache-Control/
+> s-maxage; no CORS) and the direct Cloud Run URL in dev. **SSE stays direct**
+> (Hosting buffers streams). `/live/whoami` is `no-store` so the CDN can never
+> cache one user's IP for another. 11 UI consumers rewired.
+>
+> **SSE decision.** The tape keeps SSE while its compute stays under
+> ~$1/month (roughly ≤300 concurrent viewers; ref-counted, 0 viewers = $0).
+> Past that, the pre-built fallback — polling the CDN-cached `GET /live/tape`
+> (s-maxage=60) — is a ~30-minute switch that collapses 10k viewers to ~1
+> origin request/minute.
+>
+> **Cost (honest, at 10k users).** Firestore **≈ $0.70/mo** — the <$1 target,
+> met. Whole GCP infra **≈ $10–25/mo** at genuinely 10k daily-active (network
+> egress + concurrent compute are bandwidth physics, not design slack); ~$2–5
+> if ~1k are active daily. The Polygon subscription (~$2,000/mo) dominates
+> everything — see `Polygon-vs-Finnhub-Vendor-Comparison.pdf`.
+
+
+> ## ⏱ State sync — 2026-07-26 (ON-DEMAND DATA LAYER redesign)
+>
+> _This block supersedes any earlier description of scheduled full-universe
+> syncing. The data layer is now on-demand._
+>
+> **Design.** The app no longer pre-syncs a fixed ticker universe. Firestore
+> starts EMPTY (market-data collections) and grows strictly with usage:
+> `GET /live/bars?ticker&tf` and `GET /live/company?ticker` check Firestore
+> (every doc carries **`createdAt`** + a per-resolution TTL) → on miss make ONE
+> coalesced Polygon call → write back → serve. Repeat users hit the shared
+> cache; browsers additionally cache via Cache-Control+ETag (304s).
+>
+> **Bars storage.** One doc per (ticker, resolution family) in `stock_bars/`:
+> `_1min` (1H) · `_5min` (1D/1W) · `_30min` (1M) · `_daily` (3M/6M/1Y/5Y,
+> **widen-in-place**: a 1Y request upgrades a 3M doc in place; narrower
+> timeframes are served as slices of the wider doc with zero vendor calls).
+> The old per-bar `ohlcv_bars` (≈300k docs) is retired as a client read path
+> (it remains only as the internal substrate the indicator jobs read).
+>
+> **Usage tracking.** Every on-demand fetch increments **`ticker_usage/{t}`**
+> (batched ≤1 write/min/ticker) — the gradually-built record of which stocks
+> are REALLY used.
+>
+> **One premarket cron.** A single Cloud Scheduler job (`sync-premarket`,
+> 08:00 ET weekdays → `/sync/premarket/run`) replaces all 22 scattered jobs
+> (deleted; in-code `@Cron` decorators removed). Phases: ① warm the
+> high-frequency set's company PROFILES only (tape universe + every user's
+> watchlist/portfolio + `ticker_usage` top-100) — bar history is strictly
+> on-demand and INCREMENTAL (only days since the last stored bar are fetched;
+> a 5-year series is never re-downloaded); ② market-wide jobs
+> (indices, sectors, movers, breadth, F&G, calendars, news, insider);
+> ③ per-ticker compute jobs over the **dynamic universe** (= `companies` ids,
+> i.e. only used tickers — the fixed 241-ticker list is retired);
+> ④ recap (freezes the prior session). Intraday freshness comes from the live
+> layer (SSE tape, /live/snapshot, on-demand TTLs), not from re-running batch
+> syncs — no other cron frequency is required.
+>
+> **Search.** `GET /live/search?q=` — in-memory index over the full ~13k
+> Polygon reference universe, per instance, refreshed daily. The `tickers`
+> collection (10k docs) is retired: search costs ZERO Firestore reads and now
+> matches substrings.
+>
+> **Presence cost fix.** Heartbeat 90s → 30 min (client-gated); ~2-4 writes
+> per active user per day. Presence read convention: online = `isOnline` and
+> `lastSeenAt` fresher than ~35 min.
+>
+> **Firebase cost @ 10k users/month (nam5 pricing, free tier ignored —
+> conservative):** shared/cached reads ≈ $0.04 · owner-scoped reads
+> (watchlist/portfolio/settings, ~10 docs/session) ≈ $0.45 · writes (presence
+> + premarket + usage) ≈ $0.20 · storage < free 1 GB ⇒ **≈ $0.70/month
+> total — under the $1 target.** Reads no longer scale with (users × docs)
+> anywhere; the dominant remaining term is owner-scoped reads, linear in
+> sessions, not in market data.
+>
+> **Reset.** `deploy/empty-market-data.mjs` empties ONLY market-data
+> collections (DRY_RUN by default; users/settings/plans/flags kept).
+
+
+
+> ## ⏱ State sync — 2026-07-24 (current deployed reality)
+>
+> _This block reflects what is actually built, deployed, and running as of
+> 2026-07-24. Where anything below predates it, this block is authoritative._
+>
+> **This doc, specifically:** For tasks: the ingestion + UI tasks are done; the open ones are the AI features (R35/R36) and Benzinga-gated estimates.
+>
+> **Infrastructure (live).** One image → **two Cloud Run services** split by
+> `APP_ROLE`: a **private `worker`** (`market-catalyst-backend` — all
+> sync/admin/plans) and a **public `live`** (`market-catalyst-live` — `LiveModule`
+> only; `/sync`·`/purge`·`/admin` 404 there). **22 Cloud Scheduler jobs are
+> ENABLED and firing** (OIDC via the `scheduler-invoker` SA). The browser reaches
+> the backend through the public `live` service (`NEXT_PUBLIC_BACKEND_URL`).
+> Vendor keys in **Secret Manager**. Firestore: **34 collections, ~322k docs**.
+>
+> **Live data paths.** SSE ticker tape (`/live/tape/stream`), cached snapshot
+> polling (`/live/snapshot`, backing a **shared live-price subscription** across
+> tape / watchlist / portfolio / search / stock), market status
+> (`/live/market-status`), and a new **`/live/collections`** endpoint that serves
+> the shared, slow-changing collections from a **5-minute server-side cache**
+> (Cache-Control + ETag/304) so per-user Firestore reads no longer scale with
+> user count.
+>
+> **Data completeness (this session).** Real **4-component Fear & Greed** + history
+> backfill (`market_sentiment_history`); **Recaps EOD job** writing `recaps/`
+> per-date docs (prose narrative stays AI, tracked under R36); **macro regime**
+> computed from VIX/breadth/yield; financials now carry **10 quarters + 8 annual
+> years** (income / balance / cash-flow) driving the **EPS & Sales** and **Income
+> statement** *Quarterly / Yearly* tabs; screener filters wired; stock detail
+> fully Polygon-real; **TradingView removed**; heatmap **sector + stock modals**
+> and the dashboard **Market Pulse** wired to real `companies` (fabricated
+> ranges / news / sector rows removed).
+>
+> **Vendor / licensing.** **Polygon/Massive is the ONLY vendor whose data reaches
+> users** (licensed for redistribution). FMP / Finnhub are **worker-only** and are
+> never served to the browser. **15 Polygon endpoints** are in use (see
+> `architecture-map.html`). The one remaining gap is EPS **estimates** (need
+> Polygon's Benzinga add-on). Alpha Vantage was evaluated (~85% data coverage but
+> a redistribution-licensing blocker); OpenRouter is a viable option for the AI
+> layer (AI output is not market-data redistribution).
+>
+> **Delivery plan.** **21 of 36 rows at 100%** (R26 Fear & Greed, R28 Recaps, R30
+> macro complete; R29 capped at 90% pending Benzinga estimates).
+>
+> **Cost.** GCP/Firebase infra ~**$3–5/month** at current usage (scale-to-zero,
+> one vendor call fanned out to all users, shared reads cached); the Polygon data
+> subscription is the dominant fixed cost.
+
 v1.5 | June 2026
 
-> **⚠ Implementation status (updated 2026-07-09, first noted 2026-07-05):**
+> **⚠ Implementation status (updated 2026-07-22; previously 2026-07-09, first noted 2026-07-05):**
 > Nearly every infra task below (AWS VPC, ECS, Redis, ClickHouse, Stripe,
 > Fastify, WebSocket gateway) describes a stack that was never built and
 > isn't planned to be — the actual backend is a single NestJS service
-> (`backend/`) using `@nestjs/schedule` cron jobs (17, one per collection)
-> writing directly to Cloud Firestore, with no AWS/ECS/Redis/ClickHouse/
-> BullMQ/Stripe/Fastify/WebSocket layer anywhere. For what's actually
-> implemented and what's genuinely still pending — including the live
-> in-session task board this file doesn't reflect — see `Doc/openapi.yaml`
-> (per-endpoint `x-status: live|planned`), `Doc/schema.sql`, and
-> `Doc/screen-data-sources.md`. This file is retained for historical
-> planning context, not as a live task board.
+> (`backend/`) using `@nestjs/schedule` cron jobs (**23 as of 2026-07-22**,
+> roughly one per collection) writing directly to Cloud Firestore, with no
+> AWS/ECS/Redis/ClickHouse/BullMQ/Stripe/Fastify/WebSocket layer anywhere.
+> For what's actually implemented and what's genuinely still pending — including
+> the live in-session task board this file doesn't reflect — see
+> `Doc/openapi.yaml` (per-endpoint `x-status: live|planned`), `Doc/schema.sql`,
+> `Doc/screen-data-sources.md`, and `Doc/DELIVERY-PLAN-STATUS.md`.
+> Sections **T-143 onward are current and authoritative**; everything before
+> them is retained for historical planning context.
+
+> **⚠ Read before trusting any "Done" below.** Two production-wide conditions
+> mean *code complete ≠ working for a user*:
+> **(1)** There are **no Cloud Scheduler jobs in any region** and Cloud Run runs
+> at `min-instances=0`, so the `@Cron` decorators never fire — **no sync job has
+> ever run automatically in production**; all data came from manual runs.
+> **(2)** The **browser cannot reach the backend** (`NEXT_PUBLIC_BACKEND_URL`
+> unset → `http://localhost:4400` baked into the production bundle, blocked as
+> mixed content). See T-148a–d.
 
 **Status:** Not Started | In Progress | In Review | Done  
+**Status semantics (tightened 2026-07-22 — applied to T-143 onward):**  
+&nbsp;&nbsp;• **Done** = LIVE. Deployed *and* exercisable by a real user in production.  
+&nbsp;&nbsp;• **In Review** = BUILT-NOT-LIVE. Code is written and deployed but production cannot execute or reach it. Notes must start with `⚠ BUILT, NOT LIVE —` and give the reason.  
+&nbsp;&nbsp;• **Not Started** = NOT BUILT. No implementation exists.  
 **Priority:** P0 = MVP blocker | P1 = high quality | P2 = nice to have  
 **Est.** = engineering days (sub-tasks are ≤ 0.5d each)  
 **ID convention:** T-NNN = original task; T-NNNa / T-NNNb = granular sub-tasks
@@ -84,6 +382,48 @@ v1.5 | June 2026
 | T-009c | Write firestore.rules: `isOwner()` helper; rules for users, settings, portfolios, watchlists, alerts, notifications, stock_comments | Backend | 0.5d | P0 | Backend | S-01 | Not Started | No public reads; all require isOwner(uid) |
 | T-009d | Define composite indexes in firestore.indexes.json: stock_comments (uid+sym+createdAt), notifications (uid+read+createdAt). Deploy `firebase deploy --only firestore:indexes` | Backend | 0.5d | P0 | Backend | S-01 | Not Started | Required for compound queries |
 
+#### Firestore Rules — Missing-Rule Bugs & Drift (2026-07-22)
+
+| ID | Task | Type | Est. | Pri | Assignee | Sprint | Status | Notes |
+|---|---|---|---|---|---|---|---|---|
+| T-145a | Add `market_sentiment` security rule (public read, server-only write); deploy ruleset | Backend | 0.25d | P0 | Backend | S-13 | **Done** | 🐛 **Bug fix, not a feature.** The collection had **no rule at all**, so default-deny silently blocked the read and the Dashboard Fear & Greed gauge fell through to a **hardcoded 62 / "Greed"** for every user. Data had been correct in Firestore since 07-21 — nobody could see it. Gauge now reads live. |
+| T-145b | Add `stock_comments` security rule (`isOwner(uid)`); deploy ruleset | Backend | 0.25d | P0 | Backend | S-13 | **Done** | 🐛 Same class of bug — no rule existed, so the chart-notes feature (T-112) was silently dead in production despite being marked Done since S-08. |
+| T-145c | Add DO-NOT-DEPLOY header to the stale backend `firestore.rules` copy | Backend | 0.25d | P0 | Backend | S-13 | **Done** | Both repos ship a `firestore.rules` and they have **drifted**. The LIVE ruleset deploys from `MarketCatalystUI/firestore.rules`. The backend copy is stale; header added so it is never deployed by mistake. |
+| T-145d | Reconcile the two `firestore.rules` copies into a single source of truth (delete or symlink the backend copy; document the deploy path in the release checklist) | Backend | 0.5d | P0 | Backend | S-13 | Not Started | T-145c is a guardrail, not a fix. Two divergent rulesets in two repos is how T-145a/T-145b happened in the first place. |
+| T-145e | Rules for the subscription/analytics collections: `plans` (admin may write **`featureFlags`+`updatedAt` ONLY**, create/delete denied), `payments`/`subscriptions` (admin reads all, user reads own), `api_usage`/`feature_adoption`/`audit_logs`/`revenue_summary`/`system_metrics` (admin read), `users` (owner OR admin read) | Backend | 0.5d | P0 | Backend | S-13 | **Done** | Price/currency/cycle are deliberately server-only — a client able to rewrite `amount` could set a plan to $0. `feature_adoption` is the **only** client-writable analytics collection (forced by the browser↔backend gap, T-148b) and is constrained: row must belong to caller, `openCount` may only INCREASE, ownership immutable, delete denied. |
+| T-145f | `isAdmin()` helper: `token.admin == true` **OR** `token.email == ADMIN_EMAIL`, deliberately **without** an `email_verified` requirement | Backend | 0.25d | P0 | Backend | S-13 | **Done** | ⚠ Intentional and load-bearing — do not "harden" this back. The admin is a password account with `emailVerified=false`; requiring verification locked the admin out of Firestore while the backend guard still admitted the same account. |
+
+#### Operations — Scheduling & Reachability (2026-07-22)
+
+> These four are the highest-value open items in this file. None needs a vendor
+> purchase or new feature code; together they are the difference between "the
+> code exists" and "the product runs".
+
+| ID | Task | Type | Est. | Pri | Assignee | Sprint | Status | Notes |
+|---|---|---|---|---|---|---|---|---|
+| T-148a | Run `create-scheduler-jobs.sh`: create Cloud Scheduler jobs for all sync jobs + create the `scheduler-invoker` service account + grant it `run.invoker` | Infra | 0.5d | P0 | Infra Eng | S-13 | **Largely resolved** | 🔴 **Nothing refreshes automatically in production.** No Cloud Scheduler jobs exist in **any** region and no `scheduler-invoker` SA exists — the script was never run. With `min-instances=0` the in-process `@Cron` decorators never fire. Every populated collection is frozen at its last **manual** run. ✅ **2026-08-16 — automated refresh now runs in prod (see the 2026-08-16 block, G):** the premarket bundle is a dedicated **Cloud Run Job** `premarket-job` fired by the `run-premarket-job` scheduler (`0 8 * * 1-5` ET) as `scheduler-invoker@` (granted `roles/run.invoker` on the job), and intraday syncs run every 5 min (`*/5 9-16 * * 1-5`: quotes/movers/breadth/indices/fear-greed). The worker is intentionally scale-to-zero, so the schedulers — not `@Cron` — drive refresh. T-148b/c/d remain open. |
+| T-148b | Firebase Hosting rewrite → Cloud Run so the browser can reach the backend; set `NEXT_PUBLIC_BACKEND_URL` and rebuild the bundle | Infra | 0.5d | P0 | Infra Eng | S-13 | Not Started | 🔴 `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4400` is baked into the production bundle and blocked as mixed content. Disables in prod: admin **Monitor** tab, extended-hours moves, market-status pill, all `/plans` + `/admin/*` endpoints, and any future Stripe checkout/webhook. **Blocked on T-148c — do not do this first.** |
+| T-148c | Set `ADMIN_GUARD_TRUST_IAM=false` **before** T-148b | Infra | 0.25d | P0 | Infra Eng | S-13 | Not Started | ⚠ **Ordering is a security requirement.** Cloud Run currently runs `--no-allow-unauthenticated`, so IAM is the guard. The moment a Hosting rewrite fronts it, `/sync/:job/run`, `/purge` and `/retention` become world-callable unless this flag is flipped first. |
+| T-148d | Rotate `POLYGON_API_KEY` (exposed in chat, never rotated) | Infra | 0.25d | P0 | Infra Eng | S-13 | Not Started | Secret Manager version 4 is enabled. `deploy/rotate-polygon-key.sh` automates everything **except** generating the replacement key at Polygon — that step is manual and must be done by the account holder. ⚠ **2026-08-03 re-verify: still Not Started** — key remains un-rotated (R49). |
+| T-148e | 🆕 **Analyst Actions → Polygon (not FMP).** Per the 2026-08-02 request, migrate `analyst-actions.job.ts` off FMP `grades-consensus` onto a real per-firm feed (Polygon Benzinga-ratings add-on wired into a new `PolygonService` method, or a funded Benzinga key), and change the stored shape from a single consensus doc (`source:'fmp_consensus_interim'`) to per-firm events (firm/action/ratingOld→New/ptOld→New/date) | Backend | 3.5d | P0 | Backend | S-13 | Not Started | ⚠ **2026-08-03:** commit `afd4429` was a to-do note only (touched `src/live/*`+`src/user-data/*`); no code migration exists. `PolygonService` currently has **no** analyst method, and `BENZINGA_API_KEY` is empty. This is why the UI shows Analyst as "active from FMP". Tracks delivery row **R41** (5%). |
+
+#### Cost Architecture, On-Demand Completeness & Coverage Self-Heal (2026-08-16, prod)
+
+> Deployed to production on 2026-08-16 (worker rev 00101, live rev 00040, UI
+> hosting redeployed, new Cloud Run Job `premarket-job`). Every row below is
+> **Done = LIVE** (deployed and exercisable in production). Source of record: the
+> 2026-08-16 State sync block at the top of this file and `DELIVERY-PLAN-STATUS.md`.
+
+| ID | Task | Type | Est. | Pri | Assignee | Sprint | Status | Notes |
+|---|---|---|---|---|---|---|---|---|
+| T-149a | FMP news integration: new `src/adapters/fmp-news.adapter.ts` + `NEWS_FMP_ADAPTER` token, `NEWS_FMP_SOURCE=fmp`; `news.job.ts` merge loop + `/live/news` on-demand path both stamp `vendor`; FMP `getStockNews()` → `/stable/news/stock`; UI vendor + sentiment pills + thumbnails | Backend + FE | 1.5d | P1 | Full Stack | S-14 | **Done** | News feed now MERGES Polygon + FMP, deduped by URL (Polygon wins). Every article carries `vendor` ("polygon"\|"fmp"). Deliberate, licensed expansion of FMP scope (was "never news"); FMP `sentiment` frequently null. See F-07. |
+| T-149b | Stock-detail wiring: redeploy `market-catalyst-live` off a stale image; `/live/company` builds peRatio/eps/dividendYield/dividendPerShare/peers; UI fixes (analyst-popup PT median/low-high + recent grades, commentary thumbnails, IPO Shares/Deal-size columns, MoverPopup null-guards RVOL/RS) | Backend + FE | 1d | P0 | Full Stack | S-14 | **Done** | Root cause: both `/live/*` and `/market-data/*` route to `market-catalyst-live`, which was serving a stale image. `/live/company` was a slim profile-only doc. See F-17. |
+| T-149c | `stock-history.job.ts`: `count()` guard re-triggers the deep window when a "backfilled" ticker still has < 65 (`MIN_HEALTHY_BARS`) stored bars | Backend | 0.5d | P0 | Backend | S-14 | **Done** | 🐛 A ticker whose deep-history fetch once failed was wrongly marked "backfilled" (`earliestSyncedFrom` set) and never re-attempted, so ~250 tickers (incl. every mega-cap) stayed below rs-rating's 65-bar minimum and unscored. Self-healing + self-limiting. **rsRating coverage 70 → 376/385.** |
+| T-149d | On-demand completeness: `ondemand.getCompany` first-fetch returns the full detail-page set (technicals + ranked RS/tech), persists ~2yr bars to `ohlcv_bars`; crons persist RAW scores (`rsScore`; `techMomentum`/`techTrend`/`techRsi`); extract shared PURE compute (`computeIndicators`, `computeRsScore`+`rsPercentile`, `computeTechComponents`+`techRatingFromComponents`) used by BOTH cron + on-demand | Backend | 2d | P0 | Backend | S-14 | **Done** | Identical field sets across cron and on-demand. Existing cron ranks stay authoritative; a single-ticker percentile is computed only when a brand-new ticker lacks one. See F-17. |
+| T-149e | `earnings.job.ts loadRefNames`: resolve forward FMP calendar symbols against the ~13,106-row Polygon US ticker reference (`tickers`), keep US CS/ADRC listings with Polygon names, drop FMP worldwide rows — stop filtering to the ~385 tracked `companies` | Backend | 1d | P1 | Backend | S-14 | **Done** | Now lists ALL US reporters (Aug 26 2026: 4 → 38); `earnings_events` ~7.3k → ~8.8k. Reported/historical rows were already full-US (Polygon). NOTE: `/market-data/earnings` still returns the whole collection — add date-windowed loading if it grows. See F-02. |
+| T-149f | `companies.job.ts`: stop merge-writing placeholder nulls `beta`/`volume`/`averageVolume`/`week52Range`; establish single field-owner across the nightly chain | Backend | 0.5d | P0 | Backend | S-14 | **Done** | 🐛 The profile write was nulling `beta`/`volume` between runs (`beta` owned by technical-indicators, `volume` by market-quotes). `averageVolume`/`week52Range` are dead (UI uses avgVolume20/50 + computes the 52-week range client-side). Ownership now single-owner: companies → technical-indicators → rs-rating → tech-rating; market-quotes owns price/pctChange/volume. |
+| T-149g | Cost architecture → scale-to-zero: worker `market-catalyst-backend` `--min-instances=0` + CPU throttling; premarket bundle → **Cloud Run Job** `premarket-job` (new `src/job-entry.ts` + `src/app-job.module.ts`, worker modules minus ServeStaticModule); scheduler `run-premarket-job` (`0 8 * * 1-5` ET) via OAuth POST as `scheduler-invoker@`; delete old `sync-premarket` scheduler; intraday syncs 2 → 5 min | Infra | 1.5d | P0 | Infra Eng | S-14 | **Done** | The always-on worker (`min-instances=1` + `--no-cpu-throttling` ≈ $65/mo) existed only to host the DETACHED premarket bundle. Job config: task-timeout 3600s, max-retries 1, 2Gi/1cpu, ~18 min/weekday ≈ $0.50/mo (validated: execution completed in 1091s, exit 0). Honest bill ~$75–90/mo → <$15/mo. Manual run: `gcloud run jobs execute premarket-job` (NOT `POST /sync/premarket/run`, killed on the scale-to-zero worker). Resolves T-148a. |
+
 #### Stripe
 
 | ID | Task | Type | Est. | Pri | Assignee | Sprint | Status | Notes |
@@ -110,6 +450,28 @@ v1.5 | June 2026
 | T-012a | Build OHLCV REST fetcher: `GET /v2/aggs/ticker/{sym}/range/1/day/{from}/{to}`; normalize to ClickHouse schema `{sym,date,o,h,l,c,v,vwap}` | Backend | 0.5d | P0 | Backend | S-02 | Not Started | Throttle: 5 req/s; use BullMQ rate-limited queue |
 | T-012b | ClickHouse bulk insert worker: batch 1000 rows per INSERT; ReplacingMergeTree handles deduplication on re-run | Backend | 0.5d | P0 | Backend | S-02 | Not Started | Use ClickHouse HTTP bulk endpoint for throughput |
 | T-012c | 2-year backfill script: for each symbol in watch universe, fetch last 500 trading days; mark sym as backfilled in Redis `backfill:{sym}`; skip if already done | Backend | 0.5d | P0 | Backend | S-02 | Not Started | One-time run on first deploy; ~2h for 500 symbols |
+
+#### Polygon.io — Deep Data Wiring (2026-07-22, rev 00031-wvc)
+
+> Supersedes the ClickHouse/Redis design in T-011/T-012 above. All of this
+> writes directly to Firestore from `@nestjs/schedule` jobs. Every job below is
+> **Done = code live on Cloud Run and data verified present in production
+> Firestore** — but see T-148a: none of them fires on a schedule yet.
+
+| ID | Task | Type | Est. | Pri | Assignee | Sprint | Status | Notes |
+|---|---|---|---|---|---|---|---|---|
+| T-143a | New `src/sync/intraday-bars.job.ts`: fetch 5-min + 30-min aggregates → `intraday_bars/{ticker}_{5min\|30min}`; cron `25 16 * * 1-5` ET | Backend | 1d | P0 | Backend | S-13 | **Done** | 474 docs in prod. **One doc per ticker/resolution holding an ARRAY of bars** — not a doc per bar (deliberate: keeps read cost at 1 doc per chart load). Unblocks the 1D/1W chart timeframes. |
+| T-143b | New `src/sync/corporate-actions.job.ts`: `dividend_history/{ticker}` + `splits/{ticker}`; cron `40 6 * * *` ET | Backend | 1d | P0 | Backend | S-13 | **Done** | 241 docs each in prod. `dividend_history` carries full payment history, annual totals, TTM total, derived yield, 5-year CAGR and increase streak — all computed at sync time so the client does no aggregation. |
+| T-143c | `stock-history.job.ts`: raise backfill 300 days → **5 years** (clamped to the plan's rolling 5-year edge); add `earliestSyncedFrom` watermark; persist `vwap` per bar | Backend | 1d | P0 | Backend | S-13 | **Done** | ⚠ **Raising the constant alone did nothing** — `lastSyncedThrough` only ever advances, so the job could never reach *older* data. The `earliestSyncedFrom` watermark makes history fill **backwards** as well as forwards. `ohlcv_bars` now holds **~299,552 docs** across the full 5-year window. Unblocks the 5Y chart timeframe. |
+| T-143d | `technical-indicators.job.ts`: add `rsi14Series` (90-point rolling), `smaLadder`/`emaLadder` (10/20/30/50/100/200), `vwap`, `high52`/`low52`, `pctFromHigh52`/`pctFromLow52`, `avgVolume20`/`avgVolume50`, `barsAnalyzed` | Backend | 1d | P0 | Backend | S-13 | **Done** | Only became computable once T-143c gave the job 5 years of bars to work from. |
+| T-143e | `financials.job.ts`: store balance sheet + cash flow + margins + current ratio | Backend | 0.5d | P0 | Backend | S-13 | **Done** | The job was already **fetching these and discarding them** — it only persisted the income-statement fields. Now stored; backs the full fundamentals panel, not just EPS history. |
+| T-143f | `options-chains.job.ts`: per-contract full OHLC, VWAP, trade count, range % | Backend | 0.5d | P1 | Backend | S-13 | **Done** | ⚠ Scope this narrowly: option **contract aggregates** are authorized on the plan, so traded price/volume history per contract is now **real**. The options **snapshot** endpoint (greeks/IV/OI/bid-ask) is still `NOT_AUTHORIZED` — see T-132a–d. |
+| T-143g | `market-indices.job.ts`: source US10Y from `/fed/v1/treasury-yields`; set `isProxy:false`, `unit:"percent"` | Backend | 0.5d | P0 | Backend | S-13 | **Done** | 🐛 **Correctness fix, not an upgrade.** US10Y was previously the **TLT ETF price**, which moves *inversely* to the yield it was labelled as — the card showed the yield falling when it was rising. Now the real Treasury yield. |
+| T-143h | `src/live/snapshot-cache.service.ts`: v2 → **v3 universal snapshot**; add `earlyTradingChangePct` / `lateTradingChangePct` / `regularTradingChangePct` / `marketStatus` | Backend | 0.5d | P0 | Backend | S-13 | **Done** | Splits a single day-change number into pre-market / regular / after-hours components. |
+| T-143i | New `src/live/market-status.service.ts` + `GET /live/market-status` | Backend | 0.5d | P1 | Backend | S-13 | **In Review** | ⚠ BUILT, NOT LIVE — endpoint is deployed on rev 00031-wvc but the browser cannot reach the backend (T-148b), so the vendor market-status pill never renders in production. |
+| T-143j | `src/vendors/polygon/polygon.service.ts`: add `getIntradayBars`, `getRelatedCompanies`, `getDividendHistory`, `getSplits`, `getMarketStatus`, `getUpcomingMarketHolidays`, `getTreasuryYields`, `getUniversalSnapshot`, `getFinancialStatements`, `planHistoryFloor()` | Backend | 1d | P0 | Backend | S-13 | **Done** | `planHistoryFloor()` centralises the measured 5-year edge so no caller requests data the plan will 403 on. |
+| T-143k | `polygon-company-profile.adapter.ts`: populate `peers` (`/v1/related-companies`), `dividendYield`, `dividendPerShare` | Backend | 0.5d | P1 | Backend | S-13 | **Done** | These three were previously declared `FIELD_NOT_SUPPORTED` — **that was wrong**; all three are authorized on the current plan. Unblocks the Stock Detail peer table (T-043a) at the data layer. |
+| T-143L | Probe and document actual Polygon plan entitlements (Stocks Starter) | Backend | 0.5d | P0 | Backend | S-13 | **Done** | ✅ Authorized: daily + intraday aggs, 5-year history, grouped daily, v2/v3 snapshots, reference tickers/dividends/splits/IPOs/news, `/v1/related-companies`, `/v1/indicators/*`, `/v1/marketstatus/*`, `/vX/reference/financials`, option **contract** aggs, `/fed/v1/*`. ❌ 403: options snapshot (greeks/IV/OI/bid-ask), index values (`I:SPX`, `I:VIX`), trades/quotes/last-trade, `/benzinga/v1/*`, `/v1/summaries`. ❌ 404: short-interest, futures. **Measured: exactly 900 s (15 min) delay, exactly 5-year rolling history.** Re-probe rather than assume — T-143k and the R24 chart gap were both caused by assumed, not measured, limits. |
 
 #### Benzinga — News
 
@@ -432,7 +794,15 @@ v1.5 | June 2026
 | T-042a | Replace seeded CandleChart with real OHLCV: `GET /api/v1/ohlcv?sym=&tf={1d|1w|1m|3m|6m|1y|3y}`; keep seeded as fallback | Frontend | 0.5d | P0 | FE Eng 1 | S-08 | Not Started | |
 | T-042b | Overlay earnings events on chart: vertical dashed line at each ER date; show surprise% tooltip on hover | Frontend | 0.5d | P0 | FE Eng 1 | S-08 | Not Started | ER dates from `GET /api/v1/earnings?sym=&limit=8` |
 | T-042c | Overlay analyst actions: tiny badge at action date; show firm + direction on hover | Frontend | 0.5d | P0 | FE Eng 1 | S-08 | Not Started | Data from Firestore `analyst_actions where sym=ticker` |
-| T-042d | 1D intraday view: use real-time tick aggregation from Redis; 1W–3Y use daily OHLCV from ClickHouse | Frontend | 0.5d | P0 | FE Eng 1 | S-08 | Not Started | |
+| T-042d | 1D intraday view: use real-time tick aggregation from Redis; 1W–3Y use daily OHLCV from ClickHouse | Frontend | 0.5d | P0 | FE Eng 1 | S-08 | Not Started | Superseded by T-144a (Firestore, not Redis/ClickHouse) |
+
+#### Live Stock — Real Chart Data (2026-07-22)
+
+| ID | Task | Type | Est. | Pri | Assignee | Sprint | Status | Notes |
+|---|---|---|---|---|---|---|---|---|
+| T-144a | `app/iq/hooks/useChartBars.ts`: serve **all 7 timeframes** (1D/1W/1M/3M/6M/1Y/5Y) from real bars — `intraday_bars` for 1D/1W, `ohlcv_bars` for 1M–5Y | Frontend | 1d | P0 | FE Eng 1 | S-13 | **Done** | ✅ **No synthetic chart timeframes remain.** The prior assessment recorded 1D/1W/5Y as blocked by the data plan — that diagnosis was **wrong**. Both intraday aggregates and 5-year history were authorized all along (T-143L); it was a **sync gap, not a plan gap**. Closed by T-143a + T-143c. |
+| T-144b | Hooks `useCompany`, `useDividendHistory`, `useSplits` | Frontend | 0.5d | P1 | FE Eng 1 | S-13 | **Done** | `app/iq/hooks/`. Back the peers list, dividend history/streak/CAGR panel and split history on Stock Detail. |
+| T-144c | Hook `useExtendedHours` (pre-market / after-hours move) | Frontend | 0.5d | P1 | FE Eng 1 | S-13 | **In Review** | ⚠ BUILT, NOT LIVE — depends on the backend snapshot endpoint (T-143h), which the browser cannot reach (T-148b). Renders nothing in production. |
 
 #### Live Stock — Peer View
 
@@ -714,9 +1084,39 @@ v1.5 | June 2026
 
 | ID | Task | Type | Est. | Pri | Assignee | Sprint | Status | Notes |
 |---|---|---|---|---|---|---|---|---|
-| T-065a | Tier comparison page: Free/Pro/Premium feature matrix, price, billing toggle (monthly/annual), "Get started" CTA per tier | Frontend | 0.5d | P0 | FE Eng 2 | S-08 | Not Started | Route: /menu/manage-plan (already scaffolded) |
-| T-065b | Stripe Checkout integration: `POST /api/v1/billing/create-checkout-session`; redirect to Stripe-hosted page; tier updated via webhook (T-010b) | Frontend | 0.5d | P0 | FE Eng 2 | S-08 | Not Started | |
-| T-065c | Feature gate component: `<TierGate minTier="pro">`; if Free user hits gated feature, show upgrade modal inline | Frontend | 0.5d | P0 | FE Eng 2 | S-08 | Not Started | Check Redux `state.profile.data.tier` |
+| T-065a | Tier comparison page: Free/Pro/Premium feature matrix, price, billing toggle (monthly/annual), "Get started" CTA per tier | Frontend | 0.5d | P0 | FE Eng 2 | S-08 | Not Started | Route: /menu/manage-plan (already scaffolded). Plan data now exists (T-146a) — this is UI only. |
+| T-065b | Stripe Checkout integration: `POST /api/v1/billing/create-checkout-session`; redirect to Stripe-hosted page; tier updated via webhook (T-010b) | Frontend | 0.5d | P0 | FE Eng 2 | S-08 | Not Started | ⛔ **NOT BUILT — no Stripe code exists in either repo.** Additionally blocked on T-148b: checkout *and* webhooks both require a browser-reachable backend. `payments` / `subscriptions` collections exist and are **empty**. |
+| T-065c | Feature gate component: `<TierGate minTier="pro">`; if Free user hits gated feature, show upgrade modal inline | Frontend | 0.5d | P0 | FE Eng 2 | S-08 | Not Started | **Superseded by T-146f/T-146g** — shipped as `EntitlementGate` / `PlanGate` keyed on named entitlements rather than an ordinal tier. Retained here for traceability; do not build. |
+
+#### Plans & Entitlements (2026-07-22) — additional scope, not in the weekly plan
+
+> ⚠ This subsection is **outside** the 36-row weekly delivery plan
+> (`MarketCatalyst.ai_weekly_deliverables_Plan.xlsx`). It is additional scope
+> and is excluded from that plan's completion percentages.
+
+| ID | Task | Type | Est. | Pri | Assignee | Sprint | Status | Notes |
+|---|---|---|---|---|---|---|---|---|
+| T-146a | `src/plans/plans.registry.ts`: 30 entitlement keys, 3 plans, `formatAmount()` | Backend | 0.5d | P0 | Backend | S-13 | **Done** | Seeded and verified in prod Firestore (`plans`, 3 docs). Free 0 / Plus 2999 / Pro 4999 — **amounts are MINOR units (cents)**, so 4999 = $49.99. Cumulative ladder: Free 8/30 (marketCatalyst, news, scanner, heatmap, macro, ipos, chartsDaily, watchlist) → Plus +12 = 20/30 (chartsIntraday, chartsHistory, chartIndicators, chartNotes, technicalRatings, dividendHistory, peers, earningsDetail, portfolio, screener, themes, alerts) → Pro +8 = 28/30 (fundamentalRatings, ownership, optionsChain, exportData, apiAccess, aiAssistant, backtesting, paperTrading). **Pro is 28/30, not 30/30:** `adminDashboard` + `userManagement` are staff-only and false on every plan — selling them would be privilege escalation. |
+| T-146b | `plans.service.ts`: seed/read `plans`, **merge-based** so operator edits survive re-seeding | Backend | 0.5d | P0 | Backend | S-13 | **Done** | A destructive seed would silently revert every per-plan feature toggle an operator made in the admin console (T-147c) on the next deploy. |
+| T-146c | `subscriptions.service.ts`: resolve effective subscription | Backend | 0.5d | P0 | Backend | S-13 | **Done** | ⚠ **Expiry is computed at read time, never trusted from the stored doc** — nothing currently rewrites a user doc when a subscription lapses, so a stored `active` flag would go stale and grant free Pro access forever. Falls back to FREE, never to no-access. |
+| T-146d | `plans.controller.ts`: `GET /plans`, `POST /plans/seed` (admin), `GET /users/:uid/entitlements` | Backend | 0.5d | P0 | Backend | S-13 | **In Review** | ⚠ BUILT, NOT LIVE — deployed on rev 00031-wvc but unreachable from the browser (T-148b). The frontend resolves entitlements directly from Firestore instead. |
+| T-146e | `admin-analytics.service.ts` + `admin-analytics.controller.ts`: `GET /admin/users`, `GET /admin/subscriptions`, `GET /admin/revenue`, all admin-guarded | Backend | 1d | P1 | Backend | S-13 | **In Review** | ⚠ BUILT, NOT LIVE — same reachability gap (T-148b). **Staff accounts are excluded from every metric** so internal usage never inflates the numbers. |
+| T-146f | `app/iq/entitlements.tsx`: `EntitlementProvider`, `useSubscription`, `useEntitlement`, `EntitlementGate`, `formatAmount` | Frontend | 1d | P0 | FE Eng 1 | S-13 | **Done** | Reads Firestore directly (see T-146d). |
+| T-146g | `app/iq/entitlement-gate.tsx`: `PlanGate` upgrade panel, `useSlugEntitled` (hides nav items), `SLUG_ENTITLEMENT` map | Frontend | 0.5d | P0 | FE Eng 1 | S-13 | **Done** | |
+| T-146h | Keep the **two gating layers separate**: `FF_*` release flags (T-006/feature-flags registry) vs plan entitlements | Architecture | 0.25d | P0 | Backend | S-13 | **Done** | ⚠ **Do not merge these.** `FF_*` answers *"is it built and shipped?"* → renders **"coming soon"**. Entitlements answer *"may this tier use it?"* → renders **"upgrade to unlock"**. A feature is usable only when BOTH are true. Merging them would make an unbuilt feature masquerade as a paywall — concretely, `backtesting` and `paperTrading` are granted on Pro but **not built**, and must show "coming soon", not an upsell. |
+
+### Admin Console & Analytics (2026-07-22) — additional scope, not in the weekly plan
+
+| ID | Task | Type | Est. | Pri | Assignee | Sprint | Status | Notes |
+|---|---|---|---|---|---|---|---|---|
+| T-147a | `app/admin/admin-data.ts`: build the console dataset from Firestore and stage it in `sessionStorage` **before** the iframe mounts | Frontend | 0.5d | P0 | FE Eng 1 | S-13 | **Done** | Ordering matters — the iframe reads `sessionStorage` synchronously on load, so staging after mount yields an empty console. |
+| T-147b | `public/admin/console.html`: render REAL data; suppress fabricated trend deltas and the fake MRR history chart whenever real data is present | Frontend | 1d | P0 | FE Eng 1 | S-13 | **Done** | The console shipped with demo scaffolding. Leaving invented deltas next to real numbers would make fiction indistinguishable from fact on an operator screen. |
+| T-147c | Per-plan feature editor in the admin console (writes `plans/{id}.featureFlags`) | Frontend | 0.5d | P1 | FE Eng 1 | S-13 | **Done** | Constrained by the rule in T-145e to `featureFlags` + `updatedAt` only; price/currency/cycle stay server-only. |
+| T-147d | **Monitor** nav item in the admin console, embedding the backend ops UI | Frontend | 0.25d | P1 | FE Eng 1 | S-13 | **In Review** | ⚠ BUILT, NOT LIVE — **dead in production.** Embeds the backend ops UI, which the browser cannot reach (T-148b). Works locally only. |
+| T-147e | `app/iq/feature-adoption.ts` + `app/iq/track-feature.tsx`: track **48 features** (all `menuItems` screens + in-app actions — 8 stock drawers, chart timeframes/indicators/expand, watchlist add/remove, search, screener, news…) | Frontend | 1d | P1 | FE Eng 1 | S-13 | **Done** | 30-second dedupe; **failures are swallowed so analytics can never break a screen**. Only ~12 seeded rows so far — the signal is thin until real traffic arrives. This is the **only** client-writable analytics collection, forced by T-148b, and its rule is correspondingly tight (T-145e). |
+| T-147f | `api_usage` recording middleware | Backend | 1d | P1 | Backend | S-14 | Not Started | ⛔ **NOT BUILT.** Collection and admin-read rule exist; nothing writes to them. The admin **"Usage & API" KPIs read 0** — they are unimplemented, not broken. Do not report them as a metric. |
+| T-147g | Per-user engagement columns in the admin console (watchlists / holdings / apiCalls / alerts) | Backend | 1d | P2 | Backend | S-14 | Not Started | ⛔ **NOT BUILT.** All four render 0 — no collection backs them. `apiCalls` additionally depends on T-147f. |
+| T-147h | Populate the remaining specified-but-empty collections: `payments`, `subscriptions`, `audit_logs`, `revenue_summary`, `system_metrics` | Backend | 2d | P1 | Backend | S-14 | Not Started | ⛔ **NOT BUILT.** Collections + rules exist; nothing writes to them. `payments`/`subscriptions` depend on Stripe (T-065b), which depends on T-148b. |
 
 ### AI Copilot (Phase 2)
 
@@ -773,34 +1173,55 @@ v1.5 | June 2026
 
 **Nav groups: Intelligence / Context / My Money**
 
-| Area | Nav Group | Done | Not Started | Total |
-|---|---|---|---|---|
-| Core Infrastructure | — | 3 | 21 | 24 |
-| Data Ingestion | — | 0 | 21 | 21 |
-| Landing Page | Pre-App | 1 | 0 | 1 |
-| Auth Pages | Pre-App | 2 | 4 | 6 |
-| Dashboard | Intelligence | 8 | 18 | 26 |
-| Earnings | Intelligence | 1 | 22 | 23 |
-| Market Movers | Intelligence | 2 | 8 | 10 |
-| Market Heatmap | Intelligence | 1 | 0 | 1 |
-| Analyst Actions | Intelligence | 4 | 5 | 9 |
-| Screener | Intelligence | 4 | 0 | 4 |
-| Themes | Intelligence | 1 | 0 | 1 |
-| IPOs | Intelligence | 1 | 0 | 1 |
-| Stock Detail | Intelligence | 5 | 10 | 15 |
-| Options Chain | Intelligence | 1 | 4 | 5 |
-| Insider & Inst. | Intelligence | 2 | 10 | 12 |
-| Commentary | Context | 6 | 0 | 6 |
-| Recaps | Context | 3 | 10 | 13 |
-| Macro & VIX | Context | 2 | 4 | 6 |
-| Portfolio Pulse | My Money | 6 | 8 | 14 |
-| Watchlist | My Money | 5 | 6 | 11 |
-| Shell & Design | Platform | 21 | 0 | 21 |
-| Subscription | Platform | 0 | 3 | 3 |
-| AI Copilot | Platform | 0 | 5 | 5 |
-| Cmd+K | Platform | 0 | 2 | 2 |
-| Story Stocks | Platform | 0 | 4 | 4 |
-| Learn 60s | Platform | 0 | 2 | 2 |
-| Industry Alerts | Platform | 0 | 2 | 2 |
-| Mobile | Platform | 0 | 4 | 4 |
-| **TOTAL** | | **80** | **173** | **253** |
+> **"In Review" column added 2026-07-22** = BUILT-NOT-LIVE: written and deployed,
+> but production cannot execute or reach it (almost all of it blocked by T-148b,
+> the browser↔backend gap). It is counted separately from **Done** on purpose —
+> folding it into Done would report five features as delivered that no user can
+> currently use.
+
+| Area | Nav Group | Done (live) | In Review (built, not live) | Not Started | Total |
+|---|---|---|---|---|---|
+| Core Infrastructure | — | 8 | 0 | 26 | 34 |
+| Data Ingestion | — | 11 | 1 | 21 | 33 |
+| Landing Page | Pre-App | 1 | 0 | 0 | 1 |
+| Auth Pages | Pre-App | 2 | 0 | 4 | 6 |
+| Dashboard | Intelligence | 8 | 0 | 18 | 26 |
+| Earnings | Intelligence | 1 | 0 | 22 | 23 |
+| Market Movers | Intelligence | 2 | 0 | 8 | 10 |
+| Market Heatmap | Intelligence | 1 | 0 | 0 | 1 |
+| Analyst Actions | Intelligence | 4 | 0 | 5 | 9 |
+| Screener | Intelligence | 4 | 0 | 0 | 4 |
+| Themes | Intelligence | 1 | 0 | 0 | 1 |
+| IPOs | Intelligence | 1 | 0 | 0 | 1 |
+| Stock Detail | Intelligence | 7 | 1 | 10 | 18 |
+| Options Chain | Intelligence | 1 | 0 | 4 | 5 |
+| Insider & Inst. | Intelligence | 2 | 0 | 10 | 12 |
+| Commentary | Context | 6 | 0 | 0 | 6 |
+| Recaps | Context | 3 | 0 | 10 | 13 |
+| Macro & VIX | Context | 2 | 0 | 4 | 6 |
+| Portfolio Pulse | My Money | 6 | 0 | 8 | 14 |
+| Watchlist | My Money | 5 | 0 | 6 | 11 |
+| Shell & Design | Platform | 21 | 0 | 0 | 21 |
+| Subscription & Plans | Platform | 6 | 2 | 3 | 11 |
+| Admin Console & Analytics | Platform | 4 | 1 | 3 | 8 |
+| AI Copilot | Platform | 0 | 0 | 5 | 5 |
+| Cmd+K | Platform | 0 | 0 | 2 | 2 |
+| Story Stocks | Platform | 0 | 0 | 4 | 4 |
+| Learn 60s | Platform | 0 | 0 | 2 | 2 |
+| Industry Alerts | Platform | 0 | 0 | 2 | 2 |
+| Mobile | Platform | 0 | 0 | 4 | 4 |
+| **TOTAL** | | **108** | **5** | **181** | **294** |
+
+**Delta since 2026-07-21:** +41 tasks tracked (253 → 294); Done 80 → 108; a new
+**In Review** bucket of 5. The 28 newly-Done tasks are concentrated in Data
+Ingestion (Polygon deep wiring, T-143a–L) and the additional
+subscriptions/entitlements/admin workstream (T-146/T-147) — the latter is
+**outside** the 36-row weekly delivery plan and is excluded from that plan's
+percentages in `Doc/DELIVERY-PLAN-STATUS.md`.
+
+**The four tasks that matter most are all Not Started:** T-148a (no Cloud
+Scheduler — nothing refreshes automatically in production), T-148b (browser
+cannot reach the backend — the cause of all 5 In Review items), T-148c (the
+security prerequisite for T-148b), T-148d (un-rotated Polygon key). None needs
+a vendor purchase; together they are the difference between "the code exists"
+and "the product runs".

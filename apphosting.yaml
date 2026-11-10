@@ -1,0 +1,219 @@
+# Firebase App Hosting config for the PROD worker backend (.firebaserc "prod"
+# and "default" both point at market-catalyst-502415). This is a SEPARATE
+# config surface from gcloud run deploy — App Hosting does not read
+# deploy/env.*.yaml, does not use the root Dockerfile, and does not honor
+# --set-secrets. Everything the app needs at runtime must be declared here.
+#
+# Stage deploys to market-catalyst-stage are on hold for now — see
+# .firebaserc's "stage" alias when that resumes.
+#
+# Secrets referenced below must already exist in Secret Manager for this
+# project and be granted to the App Hosting backend's service account:
+#   firebase apphosting:secrets:set POLYGON_API_KEY --project market-catalyst-502415
+#   firebase apphosting:secrets:grantaccess POLYGON_API_KEY --backend <BACKEND_ID> --project market-catalyst-502415
+# (repeat for FMP_API_KEY, FINNHUB_API_KEY, FRED_API_KEY)
+
+runConfig:
+  # Worker must stay warm 24/7 or the in-process @Cron scheduler (SyncModule,
+  # APP_ROLE=worker) never fires — overnight jobs then only run when a request
+  # happens to trigger ensureFresh. This is the low-traffic worker backend (the
+  # public read API is the separate `live` service), so 1 warm instance means
+  # the daily crons fire exactly once. maxInstances:1 also prevents a second
+  # instance from double-firing cursor jobs (edgar-8k / sec-form4).
+  minInstances: 1
+  maxInstances: 1
+  concurrency: 80
+  cpuMiB: 1000
+  memoryMiB: 512
+
+env:
+  # RUNTIME-only: if NODE_ENV=production leaks into the BUILD, `npm ci` prunes
+  # devDependencies and `nest build` fails with "nest: not found" (@nestjs/cli is
+  # a devDependency). Scoping to runtime lets the build install devDeps as it
+  # does locally, while the running service still gets NODE_ENV=production.
+  - variable: NODE_ENV
+    value: "production"
+    availability: ["RUNTIME"]
+
+  - variable: PORT
+    value: "8080"
+
+  # ─── Service role (src/app.module.ts) ────────────────────────────────────────
+  # This backend is the WORKER: runs the @Cron/Scheduler-triggered sync jobs and
+  # mounts the admin controllers + ops monitor at /. Do NOT set APP_ROLE=live
+  # here — see deploy/DEPLOY.md §3b for why the public "live" role must stay a
+  # separate backend/config.
+  - variable: APP_ROLE
+    value: "worker"
+
+  # Selects the Firestore project this backend reads/writes. Must match the UI's
+  # NEXT_PUBLIC_FIREBASE_PROJECT_ID for prod.
+  - variable: FIREBASE_PROJECT_ID
+    value: "market-catalyst-502415"
+
+  # ─── Polygon / Massive ────────────────────────────────────────────────────────
+  - variable: POLYGON_API_BASE_URL
+    value: "https://api.massive.com"
+  # MUST be 0 on a paid plan — see deploy/env.production.yaml for the full
+  # rationale. Non-zero makes several jobs exceed platform timeouts.
+  - variable: POLYGON_PAGE_DELAY_MS
+    value: "0"
+
+  # ─── Vendor routing (src/adapters/adapters.module.ts) ────────────────────────
+  # FMP is the primary market-data vendor and Polygon/Massive the backup (see
+  # MARKET_DATA_PRIMARY below); FALLBACK "none" keeps the other adapters
+  # registered so a vendor can be switched later without a code change.
+  # Mirrors deploy/env.production.yaml.
+  # ─── Market data: FMP primary, Polygon backup ──────────────────────────────────
+  # MARKET_DATA_PRIMARY=fmp routes every PolygonService call (bars, quotes,
+  # snapshot, profile, peers, dividends, splits, IPOs, treasury, market clock)
+  # through MarketDataService: FMP first, Polygon on an FMP error/empty answer
+  # (src/vendors/market-data/market-data.service.ts). The *_SOURCE="polygon"
+  # adapters below therefore read FMP-first underneath. Options chains, the
+  # typed ticker universe and delisting records stay Polygon (no FMP equivalent).
+  # Set to "polygon" to roll everything back to Polygon-only with no deploy of code.
+  - variable: MARKET_DATA_PRIMARY
+    value: "fmp"
+  # Live quote cache (every on-screen price) + SSE stream: FMP, Polygon fills gaps.
+  - variable: LIVE_QUOTE_SOURCE
+    value: "fmp"
+  - variable: LIVE_QUOTE_FALLBACK_SOURCE
+    value: "polygon"
+  - variable: LIVE_STREAM_SOURCE
+    value: "fmp"
+  - variable: COMPANY_PROFILE_SOURCE
+    value: "polygon"
+  - variable: COMPANY_PROFILE_FALLBACK_SOURCE
+    value: "none"
+  - variable: MOVER_ENRICHMENT_SOURCE
+    value: "polygon"
+  - variable: MOVER_ENRICHMENT_FALLBACK_SOURCE
+    value: "none"
+  - variable: MOVERS_SOURCE
+    value: "polygon"
+  - variable: MOVERS_FALLBACK_SOURCE
+    value: "none"
+  # Polygon-only, NOT "aggregate": we hold a Massive/Polygon redistribution
+  # licence but not one for Finnhub, so merging its articles would breach it.
+  - variable: NEWS_SOURCE
+    value: "polygon"
+  - variable: DIVIDENDS_SOURCE
+    value: "polygon"
+  - variable: DIVIDENDS_FALLBACK_SOURCE
+    value: "none"
+  - variable: IPOS_SOURCE
+    value: "polygon"
+  - variable: IPOS_FALLBACK_SOURCE
+    value: "none"
+  # FMP's sector labels were verified 2026-10-16 to match the ETF-proxy labels
+  # the UI keys on exactly (all 11), so FMP is primary.
+  - variable: SECTORS_SOURCE
+    value: "fmp"
+  - variable: SECTORS_FALLBACK_SOURCE
+    value: "polygon"
+
+  # ── FMP-backed gap-fillers (supplementary vendor; Doc/FMP-INTEGRATION.md) ──
+  # These fill features Polygon has no feed for, so FMP is the primary source.
+  - variable: EARNINGS_ESTIMATES_SOURCE
+    value: "fmp"
+  - variable: ANALYST_SOURCE
+    value: "fmp"
+  # FMP news is the primary feed, merged FMP-first with Polygon news.
+  - variable: NEWS_FMP_SOURCE
+    value: "fmp"
+  # Economic calendar: FMP adds the forward US release schedule + estimates FRED
+  # lacks. "none" reverts the macro-events job to FRED-only.
+  - variable: ECON_CALENDAR_SOURCE
+    value: "fmp"
+  # Per-run cursor batch for the financials job. 150 covers the ~385-ticker
+  # universe in ~3 runs and keeps nightly full-refresh to ~3 nights, while staying
+  # inside the 900s request timeout. 40 reverts. (analyst-actions is a
+  # full-universe sweep each run — no batch/cursor.)
+  - variable: FINANCIALS_BATCH_SIZE
+    value: "150"
+  # Tickers per run for institutional-ownership.job, which sweeps the whole active
+  # company universe (~1.2k), not the fixed 241 list. Steady state is one FMP call
+  # per ticker (earlier quarters are stored), so 150 covers the universe in ~8
+  # runs inside the 900s timeout; a first-seen ticker backfills 4 quarters.
+  - variable: INSTITUTIONAL_BATCH_SIZE
+    value: "150"
+  - variable: QUOTE_SOURCE
+    value: "polygon"
+  - variable: QUOTE_FALLBACK_SOURCE
+    value: "none"
+  - variable: MARKET_BARS_SOURCE
+    value: "polygon"
+  - variable: MARKET_BARS_FALLBACK_SOURCE
+    value: "none"
+  - variable: TICKER_UNIVERSE_SOURCE
+    value: "polygon"
+  - variable: TICKER_UNIVERSE_FALLBACK_SOURCE
+    value: "none"
+  - variable: FINANCIALS_SOURCE
+    value: "fmp"
+  - variable: FINANCIALS_FALLBACK_SOURCE
+    value: "polygon"
+
+  # ─── SEC EDGAR ───────────────────────────────────────────────────────────────
+  # SEC requires a descriptive User-Agent with a real contact address.
+  - variable: SEC_EDGAR_USER_AGENT
+    value: "Market Catalyst Backend hello@inc108.com"
+
+  # ─── Data lifecycle jobs ─────────────────────────────────────────────────────
+  - variable: RETENTION_DRY_RUN
+    value: "false"
+  - variable: AUTO_PURGE_DRY_RUN
+    value: "false"
+
+  # ─── Admin authorization (src/common/admin.guard.ts) ─────────────────────────
+  # The single fixed admin account for /sync, /purge, /retention, feature-flags.
+  - variable: ADMIN_EMAIL
+    value: "admin@marketcatalyst.ai"
+
+  # CRITICAL: this OVERRIDES deploy/env.production.yaml, which sets "true".
+  #
+  # "true" means "trust that Cloud Run IAM already vetted the caller" — correct
+  # ONLY for the private (--no-allow-unauthenticated) gcloud worker. Firebase App
+  # Hosting serves this backend PUBLICLY (ingress: all, no IAM in front), so with
+  # trust-IAM on, the guard would accept ANY anonymous request to /purge and
+  # /sync. Forcing "false" makes those endpoints require a verified Firebase
+  # admin ID token instead — the only thing standing between the internet and
+  # the purge/sync controllers on a public service.
+  - variable: ADMIN_GUARD_TRUST_IAM
+    value: "false"
+
+  # ─── Secrets (Google Secret Manager) ─────────────────────────────────────────
+  # CRITICAL SECURITY WARNING: Do NOT put plain-text API keys as `value: "..."` in this file!
+  # This file is checked into version control. You must use Google Secret Manager.
+  # Run these commands to set them up:
+  #   firebase apphosting:secrets:set POLYGON_API_KEY --project market-catalyst-502415
+  #   firebase apphosting:secrets:grantaccess POLYGON_API_KEY --backend <BACKEND_ID> --project market-catalyst-502415
+  - variable: POLYGON_API_KEY
+    secret: POLYGON_API_KEY
+  - variable: FMP_API_KEY
+    secret: FMP_API_KEY
+  - variable: FINNHUB_API_KEY
+    secret: FINNHUB_API_KEY
+  - variable: FRED_API_KEY
+    secret: FRED_API_KEY
+  - variable: OPENROUTER_API_KEY
+    secret: OPENROUTER_API_KEY
+  # - variable: BENZINGA_API_KEY
+  #   secret: BENZINGA_API_KEY
+
+  # Free slugs get retired without notice (deepseek-chat-v3:free began 404ing
+  # with "unavailable for free"). Pick a replacement from the entries priced at
+  # 0 in https://openrouter.ai/api/v1/models, and prefer an instruct ("-it")
+  # model over a reasoning one — reasoning models can return empty content.
+  # "openrouter/free" is an auto-router across free models, so it survives both
+  # retirements and per-model rate limits.
+  - variable: OPENROUTER_MODEL
+    value: "openrouter/free"
+  # Second-chance model, used only when the primary returns no parseable JSON
+  # (bad auto-route, upstream 429, or a 402 on the paid :online web plugin).
+  # It is always called WITHOUT web search, so a no-news ticker still gets a
+  # technicals-only read instead of a blank widget. Must be a CAPABLE instruct
+  # model: a small one returns a half-filled object.
+  - variable: OPENROUTER_FALLBACK_MODEL
+    value: "google/gemma-4-31b-it:free"
+

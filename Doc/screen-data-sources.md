@@ -1,10 +1,471 @@
 # MarketCatalyst Screen Data Sources
 
+> ## ⏱ State sync — 2026-08-21 · REST read-API (not Firestore) · shared hooks · recent UI features · sector via TradingView taxonomy
+>
+> _Newest and authoritative where it differs from the per-screen tables below.
+> Verified against a full frontend + backend re-survey._
+>
+> **Data-access model.** Screens no longer read Firestore directly. Every screen
+> goes through `app/iq/backend.ts` (`apiGet/apiPost/...`, same-origin → Firebase
+> Hosting rewrites → `market-catalyst-live`). Shared read hooks:
+> `useApiList(path)` / `useApiResource(path)` (GET a `/market-data/*` collection
+> or a `/live/*` on-demand doc); `useLiveQuotes(tickers)` — one shared 30 s
+> `/live/snapshot` union poll chunked at 250, so every surface shows identical
+> prices (`live-quotes-context.tsx`); `useLiveTick` (per-ticker `/live/stream`
+> SSE) and `useTapeStream` (`/live/tape/stream`) for pushes; `useBackendBars`
+> (`/live/bars`). The client Firebase SDK is used only for Auth/Analytics.
+>
+> **Per-screen endpoints (current).** Bulk collections via `/market-data/*`;
+> on-demand per-ticker via `/live/*`:
+> · **Dashboard** — companies, sectors, movers, earnings, earnings-announcements,
+>   analyst-actions, insider-transactions, news, recaps, market-sentiment(+history),
+>   `/live/news`, tape, live quotes.
+> · **Live Feed (commentary)** — news, companies, filings-wire, macro-regime,
+>   `/api/watchlist`, `/api/portfolio`, live quotes.
+> · **Earnings Hub** — earnings, earnings-announcements, companies, analyst-actions,
+>   `/live/earnings-transcript` (Read-aloud TTS panel).
+> · **Movers** — movers, companies, analyst-actions, news, `/live/news`, live quotes.
+> · **Heatmap** — sectors, companies, live quotes. · **Analyst Actions** —
+>   analyst-actions, companies. · **Macro & VIX** — macro-events, companies,
+>   `/live/market-status`, `/live/dividend-history`, tape.
+> · **Screener / Themes** — companies. · **IPOs** — ipos, ipo-pipeline, companies.
+> · **Ownership (insider)** — insider-transactions, institutional-ownership,
+>   fund-holdings.
+> · **Stock Detail (`/menu/stock`, nav label "Search")** — companies, sectors,
+>   earnings, analyst-actions, insider-transactions; `/live/company`,
+>   `/live/financials`, `/live/dividend-history`, `/live/splits`,
+>   `/live/ai-analysis`, `/live/news`, `/live/bars`, `/live/stream`+`/live/quotes`;
+>   `/api/stock-notes` (POST/DELETE).
+> · **Daily/Weekly Recaps** (one `recap.tsx`, `mode`) — recaps, earnings,
+>   earnings-announcements, analyst-actions, macro-events, companies, sectors, news.
+> · **Portfolio** — companies + `/api/portfolio*`, live quotes. · **Watchlist** —
+>   companies + `/api/watchlists*`, live quotes. · **Options** — companies (hidden
+>   route, not in nav; static grid). · **Settings/Manage-plan/Requests** —
+>   `/api/settings`, plan UI, `/api/feature-requests`.
+>
+> **Recent UI features.** Movers: **no pagination** (renders the full filtered
+> list; 5 tabs — Top Gainers/Losers, Unusual Volume, Weekly Gainers/Losers).
+> Earnings: Day/Week/Month + session + "At a glance" **segmented controls with a
+> brand-highlighted selected state** (`.ecal-segbtn.on`), and a transcript **"Read
+> aloud"** TTS (`app/iq/speech.ts` neural-voice picker + `earnings.tsx`; NOT in
+> `shell.tsx`). Stock-detail header: symbol/price/change on **one line** (reduced
+> fonts). Left rail **auto-collapses on `/menu/stock`** (search routes there) and
+> restores the manual preference elsewhere.
+>
+> **Sector/industry** on every screen come from the SIC → **TradingView/RBICS**
+> taxonomy (`classifyFromSic`), not from any vendor's own sector label. See
+> `Doc/02_Architecture_Document_Tracker.md` (2026-08-21 block) for the full
+> serving/cache/deploy topology.
+
+
+> ## ⏱ State sync — 2026-08-16 · FMP NEWS MERGE · STOCK-DETAIL WIRING · ON-DEMAND COMPLETENESS · FULL-US EARNINGS (deployed to prod)
+>
+> _Newest and authoritative where it differs from the blocks and per-screen
+> tables below. Scoped to per-screen / per-field data sourcing; nothing about the
+> runtime topology, on-demand layer or cost architecture is restated here._
+>
+> **News / Commentary — now a Polygon + FMP merge.** The news feed merges
+> Polygon and FMP articles, deduped by URL (Polygon wins a collision). Every
+> article now carries a `vendor` field (`"polygon"` | `"fmp"`), badged in the UI,
+> alongside the publisher `source`, a `sentiment` pill and an article-thumbnail
+> image. Backend: env `NEWS_FMP_SOURCE=fmp`, new `src/adapters/fmp-news.adapter.ts`
+> + `NEWS_FMP_ADAPTER` token, a `news.job.ts` merge loop, and the `/live/news`
+> on-demand path (`ondemand.service.ts`) also writes `vendor`; the FMP client is
+> `getStockNews()` (`/stable/news/stock`). FMP article `sentiment` is frequently
+> null. This deliberately reverses the earlier "FMP supplies NEVER … news" scope
+> note (redistribution licensing flagged and accepted). `commentary.tsx` and
+> `stock.tsx` render the vendor + sentiment pills and the thumbnails.
+>
+> **Stock Detail — the full detail-page set now lands on the FIRST on-demand
+> fetch.** `/live/company` (`ondemand.getCompany`) previously returned a slim
+> profile-only doc, so technicals and ratings were blank until the nightly crons
+> caught up. It now returns the FULL set on first fetch: `peRatio`, `eps`,
+> `dividendYield`, `dividendPerShare`, `peers`, the technicals (`rsi14`, `macd`,
+> `stochK`, `adx14`, `beta`, the SMA ladder, `high52`/`low52` from real bars,
+> `keyLevels`) AND the RS + tech rating — a brand-new ticker is ranked on-demand
+> against the cached universe's stored score distribution (existing cron ranks
+> stay authoritative). It also persists ~2yr of bars to `ohlcv_bars` so the
+> nightly RS/tech-rating crons rank the ticker too. The "blank until a cron runs"
+> caveat on the Stock Detail rows below no longer applies to a first-time fetch.
+>
+> **Dashboard popups.** The analyst popup now renders price-target
+> median/low-high + recent grades (was a stale "not built yet" note). The mover
+> popup null-guards RVOL / RS, so a ticker without those values no longer renders
+> a fabricated "0×" / "0/99".
+>
+> **IPOs — Shares + Deal size columns are now shown** (`numberOfShares` /
+> `totalSharesValue`) — the fields were already synced, just not surfaced.
+>
+> **Earnings Hub — the forward calendar now covers the full US market.** The
+> forward (FMP) earnings calendar no longer filters to the ~385 tracked
+> `companies`; it resolves every FMP calendar symbol against the ~13,106-row
+> Polygon US ticker reference (`tickers`, written by `ticker-universe.job`),
+> keeping CS/ADRC US listings with Polygon names and dropping FMP's worldwide
+> rows. Reported/historical rows were already full-US (Polygon
+> `getFinancialsByFilingDate`). One representative day (Aug 26 2026) went 4 → 38
+> reporters; `earnings_events` ~7.3k → ~8.8k.
+
+> ## ⏱ State sync — 2026-07-30 · ALL SCREENS REWIRED OFF `app/iq/data.ts` MOCKS; UI SCAFFOLD PRESERVED
+>
+> _This block is newest and authoritative where it differs from the per-screen
+> table below (last fully accurate ~2026-07-08/07-22, per the row dates cited
+> in that table). Everything the table marks 🔴 Static that names a
+> `data.ts` export, a `buildChain()`/`earnHistory()`/`earnIncome()` seeded
+> generator, `PARSED`/`CALLS_DATA`/`EARN_CAL`/`RECENT_IPOS`/`PIPELINE`/
+> `INST_DATA` as its source is now out of date — see below for what actually
+> replaced it. Nothing about the runtime topology, on-demand layer, or CDN
+> rewrite (§6 and prior blocks) changes here; this block is scoped entirely to
+> the UI's client-side data sourcing in `app/iq/screens/*.tsx`._
+>
+> **The governing rule, end to end.** Every screen now sources its primary
+> data from `useApiList` (`/market-data/*`, Firestore-backed, populated by the
+> sync jobs described in the on-demand-layer blocks below) or `useApiResource`
+> (`/live/*`, on-demand fetch-on-miss, persisted to Firestore on first fetch so
+> the next request — from any user — is served from cache rather than hitting
+> the vendor again). Where no live source exists for a field at all, the UI
+> renders the shared `NotAvailable` (inline) / `DataState` (block) primitive
+> from `app/iq/utils.tsx` instead of a fabricated number — but the surrounding
+> UI (table columns, tabs, filter chips, cards, buttons) is always kept in
+> place, never deleted, specifically so a future vendor integration only has
+> to wire data into an existing slot. `app/iq/data.ts` still exists but is now
+> only (a) type re-exports some components still import, and (b) two
+> genuinely-structural config arrays — `pulse` (which 9 indices exist,
+> consumed only via `mergePulse` in `live-market-indices.ts`, which drops any
+> index with no live match rather than showing its number) and `sectorList`
+> (which ~21 sub-sectors exist and their ticker membership — same status).
+> Every other export (`movers`, `earnings`, `analyst`, `folio`, `funds`,
+> `fundDetail`, `watch`, `stockInfo`, `screenerStocks`, `commentary`, `recap`,
+> `wmn`) has zero remaining callers in `app/iq/screens/*` or `app/iq/shell.tsx`.
+>
+> **Mid-pass correction, and why some rows below still look "static."** An
+> earlier stage of this rewrite over-corrected: removing a mock sometimes
+> deleted the UI section around it instead of leaving the scaffold and
+> swapping only the values. Caught and reverted screen-by-screen — every
+> table/tab/filter/card the product had is back, with `NotAvailable`/
+> `DataState` filling the data slots that genuinely have no live source
+> (options bid/ask/IV/OI; per-ticker 13F ownership, keyed by CUSIP not ticker
+> in `fund-holdings/positions`; earnings session/guidance/price-reaction/
+> implied-move, absent from the FMP calendar feed; classic pivot points,
+> absent a prior-day-OHLC feed).
+>
+> **Today's pass (2026-07-30) — the parts of the above that were still fake,
+> found by re-auditing rather than trusting the "done" list:**
+> · **`app/iq/utils.tsx`'s `RsiPane`** — every screen showing an "RSI (14)"
+>   chart (Stock Detail, and the shared `stock-panel.tsx` `ChartCard` used by
+>   Screener/Watchlist/Portfolio/Themes) was drawing a seeded 90-point random
+>   walk, unconditionally, regardless of the real `rsi14` value already
+>   computed by `technical-indicators.job.ts` and displayed correctly as text
+>   right next to the chart. Only one real reading exists per ticker (no
+>   historical RSI time series is stored), so the pane now plots that single
+>   real value as a marker against the classic 70/30 zones and says plainly
+>   that the historical line isn't available — real data, not a fabricated
+>   series standing in for it.
+> · **`app/iq/stock-panel.tsx`'s `ChartCard`/`ChartCardExpanded`** (the chart
+>   embedded in Screener, Watchlist, Portfolio, Themes, and Movers' sliding
+>   drawer) — despite a prior note in this doc claiming this was fixed, it was
+>   not: `CandleChart` was never actually passed `realBars`, so all four/five
+>   screens' candles were still `genOHLC()` synthetic. Also still present: an
+>   RSI badge computed as `38 + rs*0.36` off a static `screenerStocks`
+>   relative-strength fallback, and an "Earnings · EPS Surprise" mini-chart
+>   (`EarnPane`) generated by the same seeded `earnHistory()` used pre-rewrite,
+>   seeded off static `stockInfo`/`watch` tables. All three now use
+>   `useBackendBars`, `/live/company`'s real `rsi14`, and a real EPS-surprise
+>   history built from `/market-data/earnings` filtered by ticker — the exact
+>   pattern Stock Detail already used, just not propagated here.
+> · **`app/iq/screens/earnings.tsx`'s selected-company detail card** — still
+>   built on `earnings.find(...) ?? EARN_CAL.find(...)`, i.e. the old static
+>   `Earning`/`EARN_CAL` mock supplying session/guidance/price-reaction/
+>   market-cap/sector, with only `epsEstimate`/`epsActual` overlaid from the
+>   live feed when present. The 10-quarter EPS chart and "Income statement"
+>   chart/table were likewise still `earnHistory()`/`earnIncome()` — the same
+>   seeded generators, seeded off static `stockInfo` price/P·E. Rewired to
+>   build EPS history directly from `/market-data/earnings` (mirroring Stock
+>   Detail's `hist10`), pull name/sector from `/live/company`, and pull the
+>   income statement from `/live/financials` (the same real endpoint Stock
+>   Detail's Financials card uses) — session/guidance/reaction/implied-move
+>   stay `NotAvailable` (genuinely absent from every earnings-calendar vendor
+>   evaluated) instead of silently coming from the mock. **`CALLS_DATA`** — ~20
+>   fully invented earnings-call summaries and fabricated Q&A transcripts
+>   with specific fake financial figures attributed to real, named companies
+>   (NVDA, AAPL, MSFT, …) — is deleted outright; the "Earnings call" and "AI
+>   analysis" buttons stay on the card (same honest-non-functional-control
+>   pattern as the AI Copilot and audio-recap) but now say plainly that no
+>   transcript/analysis vendor is connected instead of rendering the invented
+>   content.
+> · **Sector heatmap** (`heatmap.tsx`'s Market Heatmap screen, and the
+>   Dashboard's embedded sector-heatmap widget) — `mergeSectorList`/
+>   `mergeSectorListData` fell back to the static `sectorList`'s hardcoded
+>   per-sector % change whenever `/market-data/sectors` had no matching row —
+>   which was most of the time, since that feed only has the ~11 standard GICS
+>   sectors against this UI's ~21 finer-grained sub-sector taxonomy
+>   (Semiconductors, Cloud Software, Cybersecurity, … all roll up under
+>   "Technology"/"Financials" etc. live-side). Worse, the "Improving/
+>   Deteriorating/Flat" trend label was *never* recomputed — it was always
+>   derived from the static mock's number, so a sector could show a real
+>   "+2.1%" badge next to a "Deteriorating" label left over from the old
+>   mock's "-1.3%". Fixed: sector-level `pctChange` is now the direct live
+>   match, or — when this finer taxonomy has no such match — the real average
+>   of that sector's own live per-company changes (already computed correctly
+>   for the stock tiles); `trend` is now derived from that same real number;
+>   both render `NotAvailable` only when neither real source exists. The
+>   sector *names and ticker membership* remain static structural config —
+>   same category as `mergePulse`'s index list, not fabricated market data.
+> · **`app/iq/shell.tsx`'s `FundDrawer`/`openFund`** — deleted, not restored.
+>   Unlike everything else in this pass, this control was never reachable:
+>   `openFund` had zero callers anywhere in the app, so the drawer (built
+>   entirely on static `funds`/`fundDetail`/`folio`) could never actually be
+>   opened by a user. `insider.tsx` already has its own real, live-wired fund
+>   drawer (`FundHoldingDoc` via `/market-data/fund-holdings`); the shell-level
+>   copy was dead, superseded code, not shipped UI.
+>
+> **Net effect on the table below:** treat any row citing `data.movers`,
+> `data.analyst`, `data.folio`, `data.watch`, `data.stockInfo`,
+> `data.screenerStocks`, `EARN_CAL`, `CALLS_DATA`, `RECENT_IPOS`, `PIPELINE`,
+> `buildChain()`, `PARSED`, or `genOHLC()` (outside of "was … now fixed" past
+> tense) as **stale**. A full row-by-row re-score of this table against
+> current code is still owed — flagged here rather than attempted wholesale,
+> since re-verifying all ~17 screens' exact field-level status is a
+> significant audit in its own right and this block covers only what today's
+> pass touched plus what the compacted prior-session record establishes.
+
+> ## ⏱ State sync — 2026-07-27 · TWO ENVIRONMENTS (stage + prod), env-driven config
+>
+> _This block is newest and authoritative where it differs from the blocks
+> below. It introduces a second, fully-isolated environment; nothing about the
+> per-environment runtime topology (§6, the on-demand data layer, the CDN
+> rewrite) changes — that topology now simply exists twice, once per project._
+>
+> **This doc, specifically:** The per-screen live/static breakdown is identical
+> in both environments; nothing here changes.
+>
+> **Two isolated Firebase projects = two environments.** Production stays on
+> `market-catalyst-502415`. A new **stage** project `market-catalyst-stage`
+> (project #523639228835) was created as an independent copy: its own Firestore
+> `(default)` in **nam5 / STANDARD / NATIVE** (identical region/edition to prod),
+> the **same `firestore.rules` + `firestore.indexes.json`** deployed to it, its
+> own Auth, and its own `backend-runtime@…` service account (roles
+> `datastore.user` + `secretmanager.secretAccessor`, mirroring prod — keyless,
+> the backend authenticates via ADC). Nothing is shared between the two: a
+> destructive sync, a rules change, or a test signup on stage can never touch
+> prod data or users.
+>
+> **Branch ⇄ environment.** Both repos work on the **`stage`** branch for
+> day-to-day work; `main`/`prod` map to production. `.firebaserc` carries
+> `stage`/`prod` aliases so `firebase deploy … --project stage|prod` targets the
+> right project.
+>
+> **Firebase config is env-driven now, not hardcoded.**
+> · **Backend** reads `FIREBASE_PROJECT_ID` (previously pinned to prod). Stage
+>   `.env` and `deploy/env.stage.yaml` set it to `market-catalyst-stage`;
+>   `deploy/env.production.yaml` keeps prod. Same image, same code — only the env
+>   var differs.
+> · **UI** reads `NEXT_PUBLIC_FIREBASE_*` (`app/firebase.ts`), falling back to
+>   the prod values for zero-regression. The stage build sets them via
+>   `.env.production` to the stage web-app config, so the deployed stage site
+>   authenticates against `market-catalyst-stage`.
+>
+> **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
+> static build works in every environment without a rebuild:
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
+> · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
+>   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
+>   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,
+>   CDN-cacheable). A `localhost` value of `NEXT_PUBLIC_BACKEND_URL` is ignored
+>   once the page is served from a real host, so a dev env baked into a prod
+>   build can never misroute deployed traffic. This is the **same implementation
+>   for stage and prod** — the only per-env difference is which project's
+>   `market-catalyst-live` the rewrite resolves to.
+>
+> **Per-environment Cloud Run topology is unchanged** (see §6): one image → a
+> private `worker` (`market-catalyst-backend`, all sync/admin/plans) and a public
+> `live` (`market-catalyst-live`, serving `LiveModule` + `MarketDataModule` +
+> `UserDataModule`, i.e. `/live` + `/market-data` + `/api`). Each project gets
+> its own pair.
+>
+> **Stage data = a full copy of prod.** All 35 Firestore collections (18,748
+> top-level docs + subcollections: users' portfolios/holdings, watchlists,
+> sessions; fund_holdings' filings/positions) were copied prod → stage so stage
+> mirrors production.
+>
+> **Stage status / open items (2026-07-27).**
+> · Stage **billing is not yet linked** (free/Spark). Firebase Hosting **Cloud
+>   Run rewrites and any Cloud Run deploy require billing**, so the stage
+>   `firebase.json` currently ships the **SPA catch-all only** and the stage
+>   `live`/`worker` services are **not deployed yet**. Re-add the rewrites (see
+>   prod) once billing + the stage `market-catalyst-live` service exist.
+> · The stage **static UI is live** at `https://market-catalyst-stage.web.app`.
+> · Google sign-in on stage reaches Google but needs the stage project's **OAuth
+>   consent screen published / test-users added** to complete; Email/Password
+>   works today.
+
+
+> ## ⏱ State sync — 2026-07-26 (evening) · CDN, zero-poll, spinners, DB reset EXECUTED
+>
+> _Additive to the morning 2026-07-26 on-demand block below; nothing prior is
+> removed. Where they differ, this block is newest._
+>
+> **DB reset executed.** `deploy/empty-market-data.mjs` was RUN against
+> production: **323,575 market-data docs deleted** across 29 collections
+> (ohlcv_bars ~300k, tickers ~13k, news ~5.6k, …). Users, watchlists,
+> portfolios, sessions, settings, plans and feature flags were kept. The DB now
+> starts empty and grows strictly with usage + the premarket warm.
+>
+> **Spinners app-wide (first-fetch UX).** Every on-demand path now shows a
+> spinner while data is being fetched and an honest empty state if none exists:
+> the Dashboard's single grid spinner, the shared `DataState` loading state,
+> the chart pane (spinner while `/live/bars` is in flight — and the last
+> fabricated fallback, `genOHLC`'s seeded random-walk chart, was **removed**),
+> the stock page and stock drawer (`useCompanyState`, ~12 s bounded grace while
+> `/live/company` lands).
+>
+> **Zero vendor/client polling while the market is closed.** Client price poll:
+> one fetch to populate, then silent until 04:00 ET (local clock check, no
+> network); hidden tabs never poll and refresh instantly on return. Snapshot
+> cache: zero Polygon calls when closed (cold-start exception only). Tape:
+> skips the vendor entirely once a clean closing frame exists; a 15-min phase
+> check is the only reopen signal (market-status, 60 s TTL, ~1 light call/min
+> server-wide). WebSocket: never opens (unused path, kept for a future
+> real-time plan).
+>
+> **Firebase Hosting free CDN.** `firebase.json` rewrites `/live/**` on the
+> Hosting origin to the public `market-catalyst-live` Cloud Run service. The UI
+> (`app/iq/backend.ts`) calls same-origin on `*.web.app`/`*.firebaseapp.com`
+> (→ rides Hosting's global CDN, cached per each endpoint's Cache-Control/
+> s-maxage; no CORS) and the direct Cloud Run URL in dev. **SSE stays direct**
+> (Hosting buffers streams). `/live/whoami` is `no-store` so the CDN can never
+> cache one user's IP for another. 11 UI consumers rewired.
+>
+> **SSE decision.** The tape keeps SSE while its compute stays under
+> ~$1/month (roughly ≤300 concurrent viewers; ref-counted, 0 viewers = $0).
+> Past that, the pre-built fallback — polling the CDN-cached `GET /live/tape`
+> (s-maxage=60) — is a ~30-minute switch that collapses 10k viewers to ~1
+> origin request/minute.
+>
+> **Cost (honest, at 10k users).** Firestore **≈ $0.70/mo** — the <$1 target,
+> met. Whole GCP infra **≈ $10–25/mo** at genuinely 10k daily-active (network
+> egress + concurrent compute are bandwidth physics, not design slack); ~$2–5
+> if ~1k are active daily. The Polygon subscription (~$2,000/mo) dominates
+> everything — see `Polygon-vs-Finnhub-Vendor-Comparison.pdf`.
+
+
+> ## ⏱ State sync — 2026-07-26 (ON-DEMAND DATA LAYER redesign)
+>
+> _This block supersedes any earlier description of scheduled full-universe
+> syncing. The data layer is now on-demand._
+>
+> **Design.** The app no longer pre-syncs a fixed ticker universe. Firestore
+> starts EMPTY (market-data collections) and grows strictly with usage:
+> `GET /live/bars?ticker&tf` and `GET /live/company?ticker` check Firestore
+> (every doc carries **`createdAt`** + a per-resolution TTL) → on miss make ONE
+> coalesced Polygon call → write back → serve. Repeat users hit the shared
+> cache; browsers additionally cache via Cache-Control+ETag (304s).
+>
+> **Bars storage.** One doc per (ticker, resolution family) in `stock_bars/`:
+> `_1min` (1H) · `_5min` (1D/1W) · `_30min` (1M) · `_daily` (3M/6M/1Y/5Y,
+> **widen-in-place**: a 1Y request upgrades a 3M doc in place; narrower
+> timeframes are served as slices of the wider doc with zero vendor calls).
+> The old per-bar `ohlcv_bars` (≈300k docs) is retired as a client read path
+> (it remains only as the internal substrate the indicator jobs read).
+>
+> **Usage tracking.** Every on-demand fetch increments **`ticker_usage/{t}`**
+> (batched ≤1 write/min/ticker) — the gradually-built record of which stocks
+> are REALLY used.
+>
+> **One premarket cron.** A single Cloud Scheduler job (`sync-premarket`,
+> 08:00 ET weekdays → `/sync/premarket/run`) replaces all 22 scattered jobs
+> (deleted; in-code `@Cron` decorators removed). Phases: ① warm the
+> high-frequency set's company PROFILES only (tape universe + every user's
+> watchlist/portfolio + `ticker_usage` top-100) — bar history is strictly
+> on-demand and INCREMENTAL (only days since the last stored bar are fetched;
+> a 5-year series is never re-downloaded); ② market-wide jobs
+> (indices, sectors, movers, breadth, F&G, calendars, news, insider);
+> ③ per-ticker compute jobs over the **dynamic universe** (= `companies` ids,
+> i.e. only used tickers — the fixed 241-ticker list is retired);
+> ④ recap (freezes the prior session). Intraday freshness comes from the live
+> layer (SSE tape, /live/snapshot, on-demand TTLs), not from re-running batch
+> syncs — no other cron frequency is required.
+>
+> **Search.** `GET /live/search?q=` — in-memory index over the full ~13k
+> Polygon reference universe, per instance, refreshed daily. The `tickers`
+> collection (10k docs) is retired: search costs ZERO Firestore reads and now
+> matches substrings.
+>
+> **Presence cost fix.** Heartbeat 90s → 30 min (client-gated); ~2-4 writes
+> per active user per day. Presence read convention: online = `isOnline` and
+> `lastSeenAt` fresher than ~35 min.
+>
+> **Firebase cost @ 10k users/month (nam5 pricing, free tier ignored —
+> conservative):** shared/cached reads ≈ $0.04 · owner-scoped reads
+> (watchlist/portfolio/settings, ~10 docs/session) ≈ $0.45 · writes (presence
+> + premarket + usage) ≈ $0.20 · storage < free 1 GB ⇒ **≈ $0.70/month
+> total — under the $1 target.** Reads no longer scale with (users × docs)
+> anywhere; the dominant remaining term is owner-scoped reads, linear in
+> sessions, not in market data.
+>
+> **Reset.** `deploy/empty-market-data.mjs` empties ONLY market-data
+> collections (DRY_RUN by default; users/settings/plans/flags kept).
+
+
+
+> ## ⏱ State sync — 2026-07-24 (current deployed reality)
+>
+> _This block reflects what is actually built, deployed, and running as of
+> 2026-07-24. Where anything below predates it, this block is authoritative._
+>
+> **This doc, specifically:** For screen sources: the earnings Income-statement + EPS/Sales tabs, heatmap modals, and dashboard Market Pulse are all real now.
+>
+> **Infrastructure (live).** One image → **two Cloud Run services** split by
+> `APP_ROLE`: a **private `worker`** (`market-catalyst-backend` — all
+> sync/admin/plans) and a **public `live`** (`market-catalyst-live` — `LiveModule`
+> only; `/sync`·`/purge`·`/admin` 404 there). **22 Cloud Scheduler jobs are
+> ENABLED and firing** (OIDC via the `scheduler-invoker` SA). The browser reaches
+> the backend through the public `live` service (`NEXT_PUBLIC_BACKEND_URL`).
+> Vendor keys in **Secret Manager**. Firestore: **34 collections, ~322k docs**.
+>
+> **Live data paths.** SSE ticker tape (`/live/tape/stream`), cached snapshot
+> polling (`/live/snapshot`, backing a **shared live-price subscription** across
+> tape / watchlist / portfolio / search / stock), market status
+> (`/live/market-status`), and a new **`/live/collections`** endpoint that serves
+> the shared, slow-changing collections from a **5-minute server-side cache**
+> (Cache-Control + ETag/304) so per-user Firestore reads no longer scale with
+> user count.
+>
+> **Data completeness (this session).** Real **4-component Fear & Greed** + history
+> backfill (`market_sentiment_history`); **Recaps EOD job** writing `recaps/`
+> per-date docs (prose narrative stays AI, tracked under R36); **macro regime**
+> computed from VIX/breadth/yield; financials now carry **10 quarters + 8 annual
+> years** (income / balance / cash-flow) driving the **EPS & Sales** and **Income
+> statement** *Quarterly / Yearly* tabs; screener filters wired; stock detail
+> fully Polygon-real; **TradingView removed**; heatmap **sector + stock modals**
+> and the dashboard **Market Pulse** wired to real `companies` (fabricated
+> ranges / news / sector rows removed).
+>
+> **Vendor / licensing.** **Polygon/Massive is the ONLY vendor whose data reaches
+> users** (licensed for redistribution). FMP / Finnhub are **worker-only** and are
+> never served to the browser. **15 Polygon endpoints** are in use (see
+> `architecture-map.html`). The one remaining gap is EPS **estimates** (need
+> Polygon's Benzinga add-on). Alpha Vantage was evaluated (~85% data coverage but
+> a redistribution-licensing blocker); OpenRouter is a viable option for the AI
+> layer (AI output is not market-data redistribution).
+>
+> **Delivery plan.** **21 of 36 rows at 100%** (R26 Fear & Greed, R28 Recaps, R30
+> macro complete; R29 capped at 90% pending Benzinga estimates).
+>
+> **Cost.** GCP/Firebase infra ~**$3–5/month** at current usage (scale-to-zero,
+> one vendor call fanned out to all users, shared reads cached); the Polygon data
+> subscription is the dominant fixed cost.
+
+
 _Last verified: 2026-07-09, against the actual code in `app/iq/screens/*.tsx` and `backend/src/sync/*.job.ts`. See `Doc/openapi.yaml` for the full data contract and `Doc/schema.sql` if this ever migrates off Firestore. (2026-07-09 also added backend ops tooling — sync_meta collections/cron/next-run tracking, `POST /sync/run-all`, `backendUI/index.html` dashboard polish — none of which touches a MarketCatalyst screen, so nothing below changed from this pass.)_
 
 > **Update 2026-07-12 — backend vendor migration to Polygon.** Several jobs were re-pointed to Polygon as primary (FMP/Finnhub kept as fallback), so the *source* of already-live data changed even though **what's live did not** (live/dynamic stayed ~44%, static ~56% — subsequently raised to **~48% live / ~52% static** by the computed indicator/score jobs; see the 2026-07-12 part 2 note below). Now Polygon-primary: **dividends** (`/v3/reference/dividends`), **IPOs** (`/vX/reference/ipos`), **sector performance** (SPDR sector-ETF proxies), **index quotes** (ETF-proxy daily aggs), and **company profile** — including **P/E now computed from Polygon `/vX/reference/financials` TTM EPS**. Stays non-Polygon (no product exists): **earnings calendar** + **analyst consensus** (FMP; Polygon 404s), **peers** + **dividend yield** (null on Polygon), **macro** (FRED), **SEC filings** (EDGAR). Also this session: Stock Detail candles fixed (Firestore index/query-direction bug), a live market-open/closed indicator added to the shell header, and the stale FMP pill labels corrected (Stock Detail "live quote · Polygon", Macro "Live Dividend Calendar · Polygon"; Earnings/Analyst stay FMP — those data weren't migrated)._
 >
 > **Update 2026-07-12 (part 2) — computed indicators/scores now backed by real jobs.** New no-vendor compute jobs turn several previously-🔴 "proprietary/no source" data points 🟡 (code-complete, live once the jobs run): **RSI/MACD** (Stock Detail — from real `ohlcv_bars`, replacing the seeded values; the scalar values are real, the plotted RSI-pane curve stays seeded pending a stored series), **RVOL** (Screener + Movers), **Tech Rating** + **rank within sector** (Screener + Stock Detail), **sales/EPS growth** + **gross margin** (Screener — from Polygon financials), and **Fear & Greed** (Dashboard gauge — from `market_sentiment/fear_greed`). All bounded-storage (upsert onto `companies`), no key/quota. Also: news is now multi-source **aggregated** (Polygon + Finnhub merged, not fallback), and ticker search matches **company name** (nameLower/searchTokens on `tickers`)._
+
+> **Update 2026-07-21/22 — Polygon data wiring + subscriptions/entitlements/admin analytics.** Two bodies of work landed. **(A)** Eighteen previously-generated surfaces became live, all served by the *existing* Polygon Stocks Starter plan — nothing was purchased. Five new Firestore collections are now read by screens: **`intraday_bars`** (one doc per `{ticker}_{5min|30min}` holding an array of bars — powers 1D/1W/1M charts), **`dividend_history`** (full payment history + annual totals + TTM + derived yield + 5y CAGR + increase streak), **`splits`**, **`plans`**, and **`feature_adoption`**. `ohlcv_bars` backfilled 300 days → **5 years** (299,552 docs), so the 5Y chart is real too. `technical-indicators.job.ts` now stores an RSI series, MA/EMA ladders, VWAP, 52-week high/low and average volumes. The **US10Y tile is now the real Treasury yield** (`/fed/v1/treasury-yields`, `isProxy:false`) — it was previously the **TLT ETF, which moves inversely to the yield it was labelled as**. See [POLYGON-FEATURE-CROSSCHECK.md](./POLYGON-FEATURE-CROSSCHECK.md) for the per-endpoint entitlement probes; that file is authoritative on what the plan does and does not serve.
+> **(B)** A `plans`/entitlements layer (3 plans, 30 entitlement keys) now gates nav items and screens, client feature usage is recorded to `feature_adoption`, and the **admin console renders real Firestore data** — see the new Admin Console section below.
+>
+> Two caveats that apply throughout: **the browser cannot reach the backend in production** (`NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4400` is baked into the static bundle and blocked as mixed content), which disables the market-status pill, extended-hours moves and the Monitor tab in production only. And **no Cloud Scheduler jobs exist**, so with `min-instances=0` the in-process `@Cron` decorators never fire — every row marked ✅ below was populated by a manual job run, and stays fresh only if jobs are run manually.
 
 > **Legend**
 > - ✅ **Live** — data comes from a real Firestore collection written by a backend sync job (or Firebase Auth/user-owned Firestore data)
@@ -38,6 +499,12 @@ Still missing at this full-market scale: fundamentals (P/E, sector, dividend yie
 | **Ticker strip prices** (top of every screen) | `app/iq/shell.tsx` now uses the same `mergePulse()` helper (extracted to `app/iq/live-market-indices.ts`) as Dashboard's own Market Pulse widget — both read `market_indices` and stay in sync; the index drawer it opens now receives the same merged array as a prop instead of re-reading the stale static one | 🟡 Hybrid |
 | **Cmd+K / top search bar** (new) | Real ticker-prefix search over the full `tickers` collection (~10,000+ tickers, real price/%change), via `app/iq/hooks/useTickerSearch.ts` — a scoped on-demand Firestore query, not a full-collection subscription (see that file's docblock for why). The original curated 15-name `SEARCHABLE_STOCKS` list stays as the "quick access" suggestions shown before typing anything, and fills in any gaps if a typed prefix matches a curated name not yet returned by the live query | 🟡 Hybrid |
 | Cmd+K starred stocks | `IQShell` useState `starred: Set<string>` — in-memory per session | 🔴 Static (session-only) |
+| **US10Y tile** in the ticker strip | `market_indices/US10Y` — now the **real Treasury 10-year yield** from Polygon `/fed/v1/treasury-yields` (`isProxy:false`, `unit:"percent"`). Previously this tile carried **TLT**, a bond ETF that moves *inversely* to the yield it was labelled as, so the sign was wrong as well as the magnitude. SPX/NDX/DJI/RUT/VIX/WTI/GOLD/DXY remain ETF proxies (`isProxy:true`) — index and futures values are 403/404 on this plan | ✅ Live |
+| **Market open/closed pill** | `GET /live/market-status` (backend `market-status.service.ts` → Polygon `/v1/marketstatus/{now,upcoming}`), replacing a local clock plus a hand-maintained holiday list | ⚠️ Live locally, **falls back to the local-clock computation in production** — the browser can't reach the backend (see the note at the top) |
+| **Nav item visibility** | `plans/{id}.featureFlags` → `useSlugEntitled()` / `SLUG_ENTITLEMENT` in `app/iq/entitlement-gate.tsx`. A screen the user's tier doesn't include is hidden from nav and shows a `PlanGate` upgrade panel if reached directly | ✅ Live |
+| **Feature usage tracking** | `app/iq/track-feature.tsx` writes `feature_adoption/{uid}_{feature}` (48 tracked features — every screen in `menuItems` plus in-app actions: the 8 stock drawers, chart timeframe/indicator/expand, watchlist add/remove, search, screener, news). 30-second dedupe; `openCount` may only increase; failures are swallowed so analytics can never break a screen. **The only client-writable analytics collection** — the browser has no backend route to write through | ✅ Live |
+
+**Two independent gates, deliberately not merged.** `FF_*` release flags (`feature-flags.registry.ts`) answer *"is it built and shipped?"*; plan entitlements (`plans.registry.ts`) answer *"may this tier use it?"*. A feature is usable only when both are true, and they render differently — "coming soon" vs "upgrade to unlock". `backtesting` and `paperTrading` are granted on Pro but **not built**, so they correctly show "coming soon" rather than a paywall.
 
 ---
 
@@ -47,16 +514,16 @@ All 14 original widgets are intact; live data is merged in via `useCollection()`
 
 | Widget | Data | Status |
 |---|---|---|
-| Market Pulse strip (6 of 9 indices shown) | `market_indices` merged onto `data.pulse` by label→symbol map (SPX/NDX/DJI/RUT/VIX/US10Y/WTI/GOLD/DXY, ETF-proxied — see `x-primary-source` on `/market-indices` in the OpenAPI spec) | 🟡 Hybrid |
+| Market Pulse strip (6 of 9 indices shown) | `market_indices` merged onto `data.pulse` by label→symbol map (SPX/NDX/DJI/RUT/VIX/US10Y/WTI/GOLD/DXY — see `x-primary-source` on `/market-indices` in the OpenAPI spec). **US10Y is no longer a proxy**: it is the real Treasury yield from `/fed/v1/treasury-yields` (`isProxy:false`); the other eight stay ETF-proxied because index spot (`I:SPX`, `I:VIX`) is 403 and futures 404 on this plan | 🟡 Hybrid |
 | VIX card | Same `market_indices` merge (VIX proxy = VIXY) | 🟡 Hybrid |
-| Market Movers widget (Gainers/Losers/Most Active tabs) | `market_movers` merged onto `data.movers` (price/%/name/sector/cap real; RVOL/catalyst/weekly-% still mock) | 🟡 Hybrid |
+| Market Movers widget (Gainers/Losers/Most Active tabs) | `market_movers` merged onto `data.movers` (price/%/name/sector/cap real; RVOL/catalyst/weekly-% still mock). **As of 2026-08-16 the mover popup null-guards RVOL/RS** — a ticker without those values renders `NotAvailable` instead of a fabricated "0×"/"0/99" | 🟡 Hybrid |
 | Market Heatmap mini | `sectors` + `companies` merged onto `data.sectorList` (sector %, per-stock market cap/%change real) | 🟡 Hybrid |
 | Earnings Today widget | `earnings_events` merged onto `data.earnings` by ticker (EPS estimate/actual real; session/guidance/reaction still mock) | 🟡 Hybrid |
 | Insider & Institutional mini | `insider_transactions` (latest 5 real Form 4 filings) prepended to the mock insider mini-list | 🟡 Hybrid |
-| Live Market Feed | Real `news` docs shown when any exist for the tracked universe; falls back to the original mock feed items when none have synced yet. Polygon-primary as of 2026-07-08 — docs now carry `sentiment`/`sentimentReasoning`/`keywords` when served from Polygon (null/empty on Finnhub fallback) | 🟡 Hybrid |
+| Live Market Feed | Real `news` docs shown when any exist for the tracked universe; falls back to the original mock feed items when none have synced yet. Polygon-primary as of 2026-07-08 — docs now carry `sentiment`/`sentimentReasoning`/`keywords` when served from Polygon. **As of 2026-08-16 news is a Polygon + FMP merge** (deduped by URL, Polygon wins): every doc carries a `vendor` field (`polygon`\|`fmp`), publisher `source`, `sentiment` and a thumbnail image (FMP `sentiment` often null) | 🟡 Hybrid |
 | What Matters Now (AI card) | `data.wmn` — hardcoded (needs Claude; see Recaps note below) | 🔴 Static |
-| Fear & Greed gauge | Hardcoded `62` | 🔴 Static |
-| Analyst Actions mini-list | `analyst_actions` consensus pill shown next to matching tickers; per-firm action rows stay `data.analyst` (no live per-firm event feed exists) | 🟡 Hybrid |
+| Fear & Greed gauge | `market_sentiment/fear_greed`, computed in-house from Polygon `/v2/aggs/grouped/…`. The job had been writing this all along — the collection had **no Firestore rule at all**, so default-deny silently blocked every client read and the gauge fell back to its hardcoded `62`/"Greed" with no visible error. Rule added 2026-07-22 | ✅ Live |
+| Analyst Actions mini-list | `analyst_actions` consensus pill shown next to matching tickers; per-firm action rows stay `data.analyst` (no live per-firm event feed exists). **As of 2026-08-16 the analyst popup renders price-target median/low-high + recent grades** (was a stale "not built yet" note) | 🟡 Hybrid |
 | Screener Leaders & Laggards mini | `data.screenerStocks` — hardcoded | 🔴 Static |
 | Portfolio Pulse mini | Signed-in user's real `users/{uid}/portfolios/default/holdings` merged with `companies` for live price/%; falls back to `data.folio` if the user has no saved holdings | 🟡 Hybrid |
 | Watchlist mini | Signed-in user's real `users/{uid}/watchlists/default` merged with `companies` for live price/%; falls back to `data.watch` if the user has no saved watchlist | 🟡 Hybrid |
@@ -64,14 +531,18 @@ All 14 original widgets are intact; live data is merged in via `useCollection()`
 
 ---
 
-## Earnings Hub (`/menu/earnings`) — `screens/earnings.tsx`
+## Earnings Hub (`/menu/earnings`) — `screens/earnings.tsx` — **updated 2026-07-30**
 
 | Element | Data | Status |
 |---|---|---|
-| EPS estimate / actual | `earnings_events` overlaid onto the matching `EARN_CAL` row by ticker, tagged with a "live EPS · FMP" pill when live | 🟡 Hybrid |
-| Calendar structure (Today/Week/Month tabs, session BMO/AMC, date grid) | `EARN_CAL` — hardcoded; the calendar is built around a fixed illustrative "today", not a live date range | 🔴 Static |
-| Guidance status, price reaction, implied move | Hardcoded — no live source has these fields (FMP's calendar has no guidance/reaction; needs Benzinga) | 🔴 Static |
-| Earnings call summaries / transcripts | `CALLS_DATA` — hardcoded AI-style summaries | 🔴 Static |
+| Calendar (Day/Week toggle, date navigator + mini-calendar, Before Open/After Close/Both, live rows) | `earnings_events` only — a row exists iff a real doc matches the date; no mock rows blended in. **As of 2026-08-16 the forward calendar covers the full US market**: every FMP calendar symbol is resolved against the ~13,106-row Polygon `tickers` reference (keeping US CS/ADRC listings with Polygon names, dropping FMP's worldwide rows) rather than filtering to the ~385 tracked `companies`; reported rows were already full-US via Polygon `getFinancialsByFilingDate` | ✅ Live |
+| Toolbar: Sort (Symbol/Surprise), View (EPS/Sales) | Real, functional. Cap filter, Min-move filter, Has-news toggle are visible but disabled — no live source for market cap-per-row, implied move, or news-correlation yet | 🟡 Hybrid |
+| Selected-company detail card: EPS estimate/actual | `earnings_events` for the selected ticker | ✅ Live |
+| Selected-company detail card: name/sector, Guidance, Reaction, session (BMO/AMC) | Name/sector from `/live/company`; Guidance/Reaction/session render `NotAvailable` — no vendor evaluated has these fields | 🟡 Hybrid |
+| 10-quarter EPS history chart | Built directly from `earnings_events` filtered by ticker (same pattern as Stock Detail's `hist10`) — was `earnHistory()`, a seeded generator | ✅ Live |
+| Income statement chart/table | `/live/financials` (same endpoint Stock Detail's Financials card uses) — was `earnIncome()`, seeded off static `stockInfo` price/P·E | ✅ Live |
+| "Earnings call" / "AI analysis" buttons | Controls stay on the card; both now state plainly that no transcript/analysis vendor is connected — was `CALLS_DATA`, ~20 fabricated call summaries/transcripts with invented figures for real companies | 🔴 Static feature, honestly labeled (not faked) |
+| Upcoming IPOs panel (in toolbar) | `ipos` (Finnhub), live-only | ✅ Live |
 
 ---
 
@@ -85,13 +556,14 @@ All 14 original widgets are intact; live data is merged in via `useCollection()`
 
 ---
 
-## Market Heatmap (`/menu/heatmap`) — `screens/heatmap.tsx`
+## Market Heatmap (`/menu/heatmap`) — `screens/heatmap.tsx` — **updated 2026-07-30**
 
 | Element | Data | Status |
 |---|---|---|
-| Sector cells (% change) | `sectors` merged onto `data.sectorList` by sector name | 🟡 Hybrid |
-| Stock cells (market cap, % change) | `companies` merged onto each sector's `items[]` by ticker (marketCap converted from raw USD to $B) | 🟡 Hybrid |
-| Hover tooltip (RVOL, RS, MA posture) | Still sourced from mock `movers`/`screenerStocks` — no live technical-analysis source exists | 🔴 Static |
+| Sector cells (% change) | `sectors` direct match by name, else the real average of that sector's own live per-company changes; `NotAvailable` only if neither exists — was silently falling back to `sectorList`'s hardcoded number until 2026-07-30 | ✅ Live |
+| Stock cells (market cap, % change) | `companies` merged onto each sector's `items[]` by ticker (marketCap converted from raw USD to $B); tickers with no live match are dropped, not shown with a stale number | ✅ Live |
+| Hover tooltip (Mkt Cap, Price, RVOL, RS Rating, same-sector peer list) | `companies` (`c.rvol`, `c.rsRating`) — `NotAvailable` per field when null | ✅ Live |
+| Sector name / ticker membership (which ~21 sub-sectors exist, which tickers belong to each) | `data.sectorList` — fixed structural taxonomy, same category as `mergePulse`'s index list, not market data | Static config (by design) |
 
 ---
 
@@ -111,6 +583,7 @@ All 14 original widgets are intact; live data is merged in via `useCollection()`
 |---|---|---|
 | Market cap, P/E, Relative Strength | `companies` merged onto `data.screenerStocks` by ticker — `rsRating` (from the new `rs-rating.job.ts`) overrides `relativeStrength` when available, feeding the existing RS 90+/70-90/<40 filter buttons and the "RS {n}" sparkline label unchanged | 🟡 Hybrid |
 | Sales/EPS growth %, gross margin, RVOL, Tech Rating | `data.screenerStocks` — hardcoded. Still proprietary computed scores no vendor sells directly and no computation exists for yet | 🔴 Static |
+| Per-row sparkline / chart (`stock-panel.tsx`) | Real bars via `useBackendBars` (`GET /live/bars`) — `ChartCard` now actually passes `realBars` through as of 2026-07-30; a prior note here claiming this was already fixed was wrong, it was still `genOHLC()` synthetic until then | ✅ Live |
 | Filter/preset logic | Unchanged, operates on the merged list above | ✅ Live inputs, static logic |
 
 `rs-rating.job.ts` is an independent, from-scratch approximation of an IBD-style relative-strength score (most-recent-quarter-weighted trailing returns from real `ohlcv_bars`, ranked 1-99 within `TICKER_UNIVERSE`) — not the literal proprietary IBD formula, and it writes nothing meaningful until `stock-history.job.ts` has accumulated enough real bar history first.
@@ -121,7 +594,7 @@ All 14 original widgets are intact; live data is merged in via `useCollection()`
 
 | Element | Data | Status |
 |---|---|---|
-| "Live IPO Calendar" card (new) | New, additive `ipos` (Finnhub) card — real recent/upcoming IPOs (date, name, symbol, exchange, price, status), shown once the collection has synced data | 🟡 Hybrid |
+| "Live IPO Calendar" card (new) | New, additive `ipos` (Finnhub) card — real recent/upcoming IPOs (date, name, symbol, exchange, price, status), shown once the collection has synced data. **As of 2026-08-16 the Shares and Deal size columns are shown** (`numberOfShares`/`totalSharesValue`) — the fields were already synced, just not surfaced | 🟡 Hybrid |
 | Stats strip, Recent IPO Performance table, Upcoming Pipeline table | Hardcoded (`RECENT_IPOS`, `PIPELINE`) — untouched. Finnhub's calendar has no current trading price or day-1 return, so it can't be merged into these return-calculation rows; a brand-new IPO ticker also generally isn't in `companies` yet either | 🔴 Static |
 
 FMP's `ipos-calendar` is still confirmed restricted on the current plan, but Finnhub's IPO calendar turned out to be a genuinely separate endpoint from its blocked economic calendar (verified 2026-07-07 with a real call) — so this screen is no longer vendor-blocked at all.
@@ -134,6 +607,7 @@ FMP's `ipos-calendar` is still confirmed restricted on the current plan, but Fin
 |---|---|---|
 | Theme membership (which 7-8 tickers per theme) | `THEMES` — hardcoded; this is curated editorial grouping, the same category as Screener's named presets, not vendor data | 🔴 Static |
 | Per-stock price / % change | `companies` merged onto each theme's stock list by ticker, with a "live" count shown per theme | 🟡 Hybrid |
+| Per-stock chart (`stock-panel.tsx`) | Real bars via `useBackendBars` — fixed 2026-07-30, see Screener row above | ✅ Live |
 
 ---
 
@@ -144,7 +618,8 @@ FMP's `ipos-calendar` is still confirmed restricted on the current plan, but Fin
 | Demo holdings + shares (when signed out, or before any real holdings exist) | `data.folio` + `DEFAULT_SHARES` — hardcoded, exactly as originally designed | 🔴 Static |
 | Real holdings (once a signed-in user adds any) | Firestore `users/{uid}/portfolios/default/holdings/{ticker}` — takes over from the demo data automatically | ✅ Live |
 | Price / % change on any holding, demo or real | `companies` merged in by ticker | 🟡 Hybrid |
-| "Import from photo" | Simulated OCR flow (`PARSED` fixed fake result) — restored as originally designed, not a real image-recognition integration | 🔴 Static |
+| Per-holding chart (`stock-panel.tsx`) | Real bars via `useBackendBars` — fixed 2026-07-30, see Screener row above | ✅ Live |
+| "Import from photo" | Button and modal stay; the fake `PARSED`-result OCR simulation is gone — the modal now says plainly that no OCR vendor is connected yet | 🔴 Static feature, honestly labeled (not faked) |
 | AI portfolio summary (drivers/leaders/laggards) | Computed client-side from the merged holdings above — real once the underlying prices are real | 🟡 Hybrid |
 | Materialized portfolio summary (new, 2026-07-08) | `totalValue`/`dayPL`/`dayPLPct`/`holdingsCount` written (debounced ~3s) onto the `users/{uid}/portfolios/default` doc whenever holdings or live prices change meaningfully. Not read back by any screen — the UI stays purely live-computed for zero latency; this is a cache for future consumers outside the browser (notifications, a backend job, historical tracking) | ✅ Live |
 
@@ -157,6 +632,7 @@ FMP's `ipos-calendar` is still confirmed restricted on the current plan, but Fin
 | Demo watchlist (when signed out, or before a real list exists) | `data.watch` — hardcoded, exactly as originally designed | 🔴 Static |
 | Real watchlist (once a signed-in user saves one) | Firestore `users/{uid}/watchlists/default` — takes over from the demo list automatically | ✅ Live |
 | Price / % change on any watched ticker, demo or real | `companies` merged in by ticker | 🟡 Hybrid |
+| Per-ticker chart (`stock-panel.tsx`) | Real bars via `useBackendBars` — fixed 2026-07-30, see Screener row above | ✅ Live |
 | AI watchlist summary | Computed client-side from the merged list above | 🟡 Hybrid |
 
 ---
@@ -165,21 +641,32 @@ FMP's `ipos-calendar` is still confirmed restricted on the current plan, but Fin
 
 | Element | Data | Status |
 |---|---|---|
-| Price, % change, market cap, P/E, dividend yield, beta, sector | `companies` merged in at a single point (`data` object), flowing through the whole page — tagged with a "live quote · FMP" pill when live | 🟡 Hybrid |
-| Candle chart (3M/6M/1Y) | Real `ohlcv_bars` (Polygon), tagged "live · Polygon" pill when in use | 🟡 Hybrid |
-| Candle chart (1D/1W/5Y), RSI/MACD/technical indicators | Deterministic seeded generator — 1D/1W need intraday granularity (only daily bars are stored), 5Y needs more history than the ~300-day backfill covers; RSI/MACD aren't computed from the real bars yet either | 🔴 Static |
+| Price, % change, market cap, P/E, dividend yield, beta, sector | `companies` merged in at a single point (`data` object), flowing through the whole page — tagged with a "live quote · Polygon" pill when live. **`peers` and `dividendYield` are now populated** by `polygon-company-profile.adapter.ts`; both were previously declared FIELD_NOT_SUPPORTED, which was wrong on both counts (see the two rows below) | 🟡 Hybrid |
+| Candle chart — **all 7 timeframes** (1D/1W/1M/3M/6M/1Y/5Y) | `app/iq/hooks/useChartBars.ts`. Intraday (1D/1W/1M) reads `intraday_bars/{ticker}_{5min\|30min}` — **one doc per ticker/resolution holding an array of bars**, not a doc per bar — written by `intraday-bars.job.ts`. 3M/6M/1Y/5Y read `ohlcv_bars`, now backfilled to a full **5 years** (299,552 docs) rather than ~300 days. Tagged "live · Polygon" | ✅ Live *(474 intraday docs, ~395k bars)* |
+| RSI pane series, MA/EMA ladder (10/20/30/50/100/200), VWAP, 52-week high/low, average volume (20/50) | `technical-indicators.job.ts` → `companies`. Previously all fabricated: the RSI pane was a seeded sine walk, the MA ladder was price multiples, VWAP was `p * 0.994`, the 52-week range was `p * 0.58 … p * 1.02`, and average volume was market cap ÷ price × a constant. VWAP is now the vendor's own `vw` persisted per bar | ✅ Live *(241/241)* |
+| Peers list | Polygon `/v1/related-companies/{sym}` via `companies.peers` — real peers, not the old sector-filtered mock. **225/241 covered**; the 16 blanks are foreign issuers and ADRs for which the endpoint genuinely returns nothing, and those fall back to the sector-filtered list | 🟡 Hybrid |
+| Dividend history card + drawer, dividend yield | `dividend_history/{ticker}` via `app/iq/hooks/useDividendHistory.ts` — full payment history, annual totals, TTM total, derived yield, 5-year CAGR, increase streak. Replaces a 10-year extrapolation from a single payment. **Yield is 176/241**, and the 65 nulls are correct, not missing: 57 are genuine non-payers and 8 are lapsed payers with real but stale history (ADBE, ADSK, INTC, MELI, PARA, PDD, S, STLA), which now render "Dividend suspended" with the last payment date instead of borrowing the mock's number | ✅ Live *(241/241 history)* |
+| Split history | `splits/{ticker}` via `app/iq/hooks/useSplits.ts` (`splitRatio`, `splitsSince`) — written by `corporate-actions.job.ts`. Never synced before this pass | ✅ Live *(241/241)* |
+| Balance sheet + cash flow, margins, current ratio | `financials.job.ts` → `companies`. Same `/vX/reference/financials` call the income statement already used — these fields were being fetched and then discarded, so the UI fabricated them | ✅ Live *(226 tickers)* |
 | AI thesis, AI risk, confidence score | `data.stockInfo` — hardcoded (needs Claude) | 🔴 Static |
 | Recent news / insider activity (in the AI panel) | `data.stockInfo[sym].news` / `.ins` — hardcoded (separate from the real `insider_transactions` feed used on the Insider screen) | 🔴 Static |
-| Chart notes (save / load / delete) | Firestore `stock_comments` — written/read directly via the client SDK | ✅ Live (unchanged — this was already live before any of this session's work) |
+| Chart notes (save / load / delete) | Firestore `stock_comments` — written/read directly via the client SDK | ✅ Live *(the feature was built, but `stock_comments` had **no Firestore rule**, so default-deny blocked it silently until the 2026-07-22 rules fix)* |
+
+`app/iq/stock-panel.tsx`'s `ChartCard`/`ChartCardExpanded` is the chart embedded in **Screener, Watchlist, Portfolio and Themes** and in Movers' sliding drawer (via `useBackendBars`, `GET /live/bars` — a different, newer on-demand hook than Stock Detail's own chart path above, not `useChartBars`). As of 2026-07-30 those four/five screens' candles, RSI badge, and "Earnings · EPS Surprise" mini-chart are all real — not because new sync work was needed, but because `ChartCard` was never actually passing `realBars`/`rsi14`/real earnings history through despite the bars, RSI, and earnings docs already existing.
+
+One trap worth recording: **raising the backfill depth constant did nothing on its own.** `sync_watermarks.lastSyncedThrough` only ever advances forward, so an already-synced ticker asks for `watermark + 1 day` and never reaches newly-available *older* history — the 5Y chart would have stayed synthetic while the build, the types and the tests all passed. `stock-history.job.ts` now also tracks `earliestSyncedFrom` and fills backwards to the plan's rolling 5-year edge. Any future depth increase must do the same.
+
+**2026-08-16 — the rows above no longer wait on a cron for a first-time ticker.** `/live/company` (`ondemand.getCompany`) used to return a slim profile-only doc, so the P/E, dividend yield, `peers`, the indicator rows (`rsi14`/`macd`/`stochK`/`adx14`/`beta`, the SMA ladder, `high52`/`low52`, `keyLevels`) and the Technical/RS Rating were all blank until the nightly crons caught up. The first on-demand fetch now returns the FULL detail-page set — the technicals computed inline and the RS + tech rating ranked on-demand against the cached universe's stored score distribution (`rsScore`/`techMomentum`/`techTrend`/`techRsi`, which the crons now persist as raw scores). Existing cron ranks stay authoritative; the on-demand rank is used only for a brand-new ticker that no cron has scored yet. It also persists ~2yr of bars to `ohlcv_bars` so the nightly RS/tech-rating crons rank the ticker on their next pass.
 
 ---
 
-## Options Chain (`/menu/options`) — `screens/options.tsx`
+## Options Chain (`/menu/options`) — `screens/options.tsx` — **updated 2026-07-30**
 
 | Element | Data | Status |
 |---|---|---|
-| "Live Options Reference" card (new) | New, additive `options_chains` (Polygon) card — real strikes/expirations + delayed last close/volume for the currently-selected ticker, shown only when it's in the curated `OPTIONS_UNIVERSE` (8 tickers: AAPL, MSFT, NVDA, TSLA, AMZN, META, SPY, QQQ) and has synced data | 🟡 Hybrid |
-| Full chain (strike, bid/ask, last, IV, volume, OI, ITM flag) | `buildChain()` — deterministic seeded pseudo-random generator, untouched | 🔴 Static — **not just unwired**: Polygon's options snapshot and NBBO quotes are confirmed 403 NOT_AUTHORIZED on the current plan (verified 2026-07-07), so real bid/ask/IV/OI genuinely aren't available without a plan upgrade or a Tradier key |
+| Chain layout (calls \| strike \| puts, expiry-date tabs) | Real: `options_chains` (Polygon) contracts grouped by strike/expiry via `buildChainRows()` — the old `buildChain()` deterministic pseudo-random generator is gone. Shown only for the curated `OPTIONS_UNIVERSE` (8 tickers: AAPL, MSFT, NVDA, TSLA, AMZN, META, SPY, QQQ); a `DataState` row spans the table for other tickers or empty data instead of hiding the table | ✅ Live |
+| Last, Volume (per contract) | Real, from the per-contract OHLC aggregates (`/v2/aggs/ticker/O:{contract}/range/1/day/…`, authorized on this plan) | ✅ Live |
+| Bid/Ask, IV, OI | `NotAvailable` per cell — Polygon's options snapshot and NBBO quotes are confirmed 403 NOT_AUTHORIZED on the current plan (re-verified 2026-07-21); genuinely unavailable without a plan upgrade or a Tradier key | 🔴 Static (no vendor) |
 | Greeks (delta/gamma/theta/vega) | Not computed or displayed at all currently | 🔴 Static (not built) |
 
 Two further vendor paths are still scaffolded but inert if real bid/ask/greeks are wanted later: `backend/src/vendors/tradier/tradier.service.ts` (needs `TRADIER_ACCESS_TOKEN`, currently empty) and `backend/src/vendors/unusual-whales/unusual-whales.service.ts` (needs `UNUSUAL_WHALES_API_KEY`, currently empty, covers `options_flow`/`block_trades` instead).
@@ -200,8 +687,9 @@ Two further vendor paths are still scaffolded but inert if real bid/ask/greeks a
 
 | Element | Data | Status |
 |---|---|---|
-| Live tab | Real `news` docs merged in ahead of the original mock `commentary` items. Polygon-primary as of 2026-07-08 — carries per-ticker `sentiment`/`sentimentReasoning`/`keywords` (null/empty on Finnhub fallback) | 🟡 Hybrid |
+| Live tab | Real `news` docs merged in ahead of the original mock `commentary` items. Polygon-primary as of 2026-07-08 — carries per-ticker `sentiment`/`sentimentReasoning`/`keywords`. **As of 2026-08-16 a Polygon + FMP merge** (deduped by URL, Polygon wins): each article carries a `vendor` badge (`polygon`\|`fmp`), the publisher `source`, a `sentiment` pill and a thumbnail image (FMP `sentiment` often null) — rendered by `commentary.tsx` | 🟡 Hybrid |
 | Premarket / After Hours / My names / Macro tabs | Real `news` filtered by ET hour or ticker, appended to the corresponding original mock arrays (`PREMARKET`, `AFTERHOURS`, etc.) | 🟡 Hybrid |
+| Premarket / after-hours **price moves** (previously hardcoded lines) | `app/iq/hooks/useExtendedHours.ts` → `GET /live/snapshot`, backed by Polygon **`/v3/snapshot`** (the cache moved v2 → v3), which carries `early_trading_change_percent` / `late_trading_change_percent` / `regular_trading_change_percent` / `market_status` | ⚠️ Live locally, **renders nothing in production** — this is one of the two HTTP-served surfaces the browser can't reach (see the note at the top); it fails silently by design |
 | NewsDrawer (per-ticker history) | Live `news` section shown above the original mock `buildNewsHistory()` narrative section — both present | 🟡 Hybrid |
 | "Before the Bell" / "General perspective" sidebar cards | Hardcoded | 🔴 Static |
 
@@ -220,19 +708,57 @@ Two further vendor paths are still scaffolded but inert if real bid/ask/greeks a
 | Element | Data | Status |
 |---|---|---|
 | "Live Economic Indicators" card (CPI, unemployment, payrolls, Fed funds, 10Y yield, etc.) | New, additive `macro_events` (FRED) card — shows only once the collection has synced data; doesn't touch the calendar below | 🟡 Hybrid |
-| "Live Dividend Calendar" card (new) | New, additive `dividends` card (Polygon-primary as of 2026-07-12, FMP fallback) — real upcoming ex-dividend dates, pay dates, amount, frequency across the whole market. NOTE: yield is null on Polygon-served docs (Polygon has no dividend-yield field; present only when the FMP fallback runs) | 🟡 Hybrid |
+| "Live Dividend Calendar" card | Additive `dividends` card (Polygon-primary as of 2026-07-12, FMP fallback) — real upcoming ex-dividend dates, pay dates, amount, frequency across the whole market. **Correction to the 2026-07-12 note above: yield is no longer null on Polygon-served rows.** Polygon has no dividend-*yield* field, but the yield is *derivable* — `dividend_history/{ticker}` (via `useDividendHistory`) supplies a TTM-sum ÷ price yield, annualized per calendar row, with no FMP fallback needed | 🟡 Hybrid |
+| Dividend history / 10-year payment record on the per-stock view | `dividend_history/{ticker}` — real payment rows, annual totals, 5-year CAGR and increase streak, replacing a 10-year extrapolation | ✅ Live *(241/241)* |
 | Market regime card, VIX card, Last/This/Next Week economic calendars, Dividend calendar (chip grid/month view), VIX Sensitive Stocks table | Hardcoded | 🔴 Static — the economic calendar tabs are a fixed illustrative "today" (fictional dates), not a real date range, so live FRED readings aren't force-fit into them; see the note above `MacroEventsJob` for why |
 
 ---
 
-## Summary (accurate as of 2026-07-08)
+## Admin Console (`/admin`) — `app/admin/page.tsx` + `public/admin/console.html`
+
+New as of 2026-07-22. The console is a standalone static page rendered inside an iframe; `app/admin/admin-data.ts` reads Firestore in the React parent and stages the dataset in `sessionStorage` **before** the iframe mounts, so the console's existing ~600 lines of rendering code paint real numbers without being rewritten. Writes go the other way, over `postMessage` — the iframe has no Firebase SDK, so the parent (which holds the admin session) performs them.
+
+Access is `isAdmin()` = `token.admin == true` **OR** `token.email == ADMIN_EMAIL`. It deliberately does **not** require `email_verified`: the admin is a password account with `emailVerified=false`, and requiring it locked the admin out of Firestore while the backend guard still admitted the same account.
+
+**Staff accounts are excluded from every metric.** The admin is not a customer — counting it adds a phantom user, shifts the plan mix, drags ARPU down and changes the churn denominator. At this user count one staff row moves headline numbers by 20%+, so this is correctness, not cosmetics.
+
+| View | Data | Status |
+|---|---|---|
+| Overview KPIs | `users` + `plans` + `payments`, computed in `admin-data.ts` | 🟡 Hybrid — user/plan figures real; revenue tiles read 0 because `payments` is empty |
+| Users | Real `users` docs joined to their effective plan | 🟡 Hybrid — identity/plan/status real; the engagement columns (watchlists, holdings, API calls, alerts) are **0, not estimated** — no collection backs them yet |
+| Subscriptions | `subscriptions` (backend `subscriptions.service.ts` computes the *effective* subscription — **expiry is computed, never trusted**, since nothing rewrites a user doc when a subscription lapses; falls back to FREE, never to no-access) | 🔴 Empty — the collection has no documents, because nothing writes subscriptions yet (see Stripe below) |
+| Per-plan entitlement editor | `plans/{id}.featureFlags`, toggled optimistically and reverted if the parent reports failure. Firestore rules allow admin to update **`featureFlags` + `updatedAt` only** — price, currency and cycle stay server-only, because a client that could rewrite `amount` could set a plan to $0. Create/delete denied. `adminDashboard` and `userManagement` are shown but **locked**: selling them would be privilege escalation | ✅ Live *(3 plans)* |
+| Revenue | `revenue_summary` / `payments` | 🔴 Empty — **the fabricated trend deltas and the fake MRR history chart are now suppressed when running on real data**, rather than being carried forward as if authoritative |
+| Usage & API | `api_usage` | 🔴 Empty — the collection is specified but **not implemented**; no middleware records API calls, so every KPI here reads 0 |
+| Feature adoption | `feature_adoption` — real per-user, per-feature open counts written by the client (48 tracked features) | 🟡 Hybrid — ~12 rows seeded so far |
+| Monitor | Embeds the backend ops UI over HTTP | ⚠️ **Non-functional in production** — same backend-unreachable problem as the market-status pill |
+| Social Studio | Static | 🔴 Static |
+
+**Plans, as seeded in Firestore** (`plans.registry.ts` → `plans.service.ts`, merge-based so operator edits to `featureFlags` survive a re-seed). Amounts are **minor units — 4999 = $49.99**:
+
+| id | name | amount | cycle | entitlements |
+|---|---|---|---|---|
+| `free` | Free | 0 | none | 8/30 — marketCatalyst, news, scanner, heatmap, macro, ipos, chartsDaily, watchlist |
+| `plus` | Plus | 2999 | monthly | 20/30 — adds chartsIntraday, chartsHistory, chartIndicators, chartNotes, technicalRatings, dividendHistory, peers, earningsDetail, portfolio, screener, themes, alerts |
+| `pro` | Pro | 4999 | monthly | 28/30 — adds fundamentalRatings, ownership, optionsChain, exportData, apiAccess, aiAssistant, backtesting, paperTrading |
+
+Pro is 28/30 rather than 16/16 because `adminDashboard` and `userManagement` are staff-only and false on every plan.
+
+Backend surface: `GET /plans`, `POST /plans/seed` (admin), `GET /users/:uid/entitlements`, and the admin-guarded `GET /admin/users`, `GET /admin/subscriptions`, `GET /admin/revenue`.
+
+> **Firestore rules note.** Both repos ship a `firestore.rules`, and they have **drifted**. The live ruleset is deployed from **MarketCatalystUI/firestore.rules**; the backend copy is stale and now carries a DO-NOT-DEPLOY header. `feature_adoption` is the only client-writable analytics collection, and is constrained accordingly — the row must belong to the caller, `openCount` may only increase, ownership cannot change, delete denied.
+
+---
+
+## Summary (updated 2026-07-22)
 
 | Category | Screens |
 |---|---|
-| ✅ Fully live (no mock fallback in normal operation) | Stock notes (`stock_comments`); real user watchlist/portfolio once saved |
-| 🟡 Hybrid (live data merged onto intact original mock UI) | Dashboard (all 3 mini-widgets now included), Earnings Hub, Market Movers, Market Heatmap, Analyst Actions (partially), Screener (market cap/P-E/RS now all live), Themes, Portfolio Pulse, Watchlist, Stock Detail (price/fundamentals + 3M/6M/1Y chart), Insider & Institutional, Commentary, Macro & VIX (Live Economic Indicators + Live Dividend Calendar cards), IPOs (Live IPO Calendar card), Options Chain (Live Options Reference card, curated 8-ticker universe only), shell ticker strip, shell Cmd+K search (full-market ticker search) |
-| 🔴 Fully static, blocked on vendor plan/key | Recaps (needs Claude + a new job); Options Chain's main bid/ask/IV/greeks/OI table (needs a Polygon plan upgrade or a Tradier key); Analyst Actions event table/Earnings guidance-reaction/richer News (need Benzinga) |
-| 🔴 Fully static, pending job run/restart | Macro & VIX's, IPOs', Options Chain's, and Dividends' live cards, plus Stock Detail's real chart and Screener's RS Rating — all six jobs are code-complete, keys are set (RS Rating needs none), just need the backend restarted and each job run once — RS Rating specifically also needs `stock-history` to have accumulated real history first |
+| ✅ Fully live (no mock fallback in normal operation) | Stock notes (`stock_comments`); real user watchlist/portfolio once saved; **Stock Detail's charts across all 7 timeframes, RSI series, MA/EMA ladder, VWAP, 52-week range, dividend + split history**; **Dashboard Fear & Greed**; **US10Y**; **the admin console's plans/entitlement editor and feature-adoption view** |
+| 🟡 Hybrid (live data merged onto intact original mock UI) | Dashboard (all 3 mini-widgets now included), Earnings Hub, Market Movers, Market Heatmap, Analyst Actions (partially), Screener (market cap/P-E/RS live, charts now real), Themes, Portfolio Pulse, Watchlist, Stock Detail (price/fundamentals, peers 225/241, dividend yield 176/241), Insider & Institutional, Commentary, Macro & VIX (Live Economic Indicators + Live Dividend Calendar cards, yield now derived), IPOs (Live IPO Calendar card), Options Chain (Live Options Reference card + per-contract OHLCV, curated 8-ticker universe only), shell ticker strip, shell Cmd+K search (full-market ticker search), Admin Console |
+| 🔴 Fully static, blocked on vendor plan/key | Recaps (needs Claude + a new job); Options Chain's main bid/ask/IV/greeks/OI table (needs a Polygon plan upgrade or a Tradier key); Analyst Actions event table/Earnings guidance-reaction/richer News (need Benzinga); SPX/NDX/DJI/RUT/VIX spot values (Polygon Indices add-on — the tiles stay ETF proxies and are labelled as such) |
+| ⚠️ Built and correct, but dead in production | Market-status pill, extended-hours moves, admin **Monitor** tab — all three call the backend over HTTP and the browser can't reach it (`NEXT_PUBLIC_BACKEND_URL` unset). Each degrades silently by design, so nothing looks broken; that is precisely why this needed checking rather than assuming |
+| 🔴 Specified but not implemented | `api_usage` (no middleware records API calls, so the admin Usage & API KPIs read 0); per-user engagement columns in the admin console; Stripe checkout/webhooks — **no Stripe code exists in either repo**, so `payments` and `subscriptions` are empty |
 
 ---
 
@@ -240,12 +766,17 @@ Two further vendor paths are still scaffolded but inert if real bid/ask/greeks a
 
 | Gap | What's needed |
 |---|---|
+| **Every ✅ row above going stale** | **No Cloud Scheduler jobs exist in any region**, and there is no `scheduler-invoker` service account — `create-scheduler-jobs.sh` was never run. With `min-instances=0` the in-process `@Cron` decorators never fire, so **no sync job has ever run automatically in production**; all current data came from manual runs. This is the single highest-priority operational gap |
+| Market-status pill, extended-hours moves, admin Monitor tab | Set `NEXT_PUBLIC_BACKEND_URL` and add a Firebase Hosting rewrite → Cloud Run. **This is a security decision, not a config tweak**: Cloud Run runs `--no-allow-unauthenticated` and `AdminGuard` relies on that, so making the service reachable **must** be paired with `ADMIN_GUARD_TRUST_IAM=false` or `/sync/:job/run`, `/purge` and `/retention` become world-callable |
+| Payments / subscriptions / revenue in the admin console | **Stripe is not integrated — no Stripe code exists in either repo.** Checkout and webhooks are additionally blocked on the backend-unreachable gap above |
+| Admin "Usage & API" KPIs | `api_usage` is specified but unimplemented — needs middleware that records API calls |
+| `POLYGON_API_KEY` rotation | Still un-rotated (it was exposed in chat). Secret Manager version 4 is enabled. `deploy/rotate-polygon-key.sh` automates everything except generating the replacement key in the vendor dashboard |
 | Macro & VIX's live card | `FRED_API_KEY` is already set — just restart the backend (`npm run start:dev`) and `POST /sync/macro-events/run` once |
 | IPOs' live card | Code is done (no key needed, Finnhub's already active) — just restart the backend and `POST /sync/ipos/run` once |
 | Options Chain's live card | Code is done (no key needed, Polygon's already active) — just restart the backend and `POST /sync/options-chains/run` once |
 | Macro & VIX's dividend card | Code is done (no key needed; Polygon-primary as of 2026-07-12, FMP fallback) — just restart the backend and `POST /sync/dividends/run` once |
-| Stock Detail's real chart (3M/6M/1Y) | Code is done (no key needed, Polygon's already active) — just restart the backend and `POST /sync/stock-history/run` a few times (rotating batch, ~4 runs to cover all of TICKER_UNIVERSE once) |
-| Screener's real RS Rating | Code is done, no key needed — restart the backend, run `stock-history` a few times first (to accumulate real bars), then `POST /sync/rs-rating/run` |
+| ~~Stock Detail's real chart~~ | **Closed 2026-07-22** — all 7 timeframes now real. Jobs are cursor-batched (40–60 of 241 tickers per run), so full coverage took 4–7 runs each; the whole sequence ran in dependency order (bars → intraday → companies → corporate-actions → indicators → statements) in ~2h20m |
+| ~~Screener's real RS Rating~~ | **Closed** — 241/241, 0 skipped |
 | **Options Chain's real bid/ask/IV/greeks/OI — highest-value remaining gap** | Either upgrade the Polygon plan, or get a free `TRADIER_ACCESS_TOKEN` and finish the existing `tradier.service.ts` stub |
 | Recaps | Build a Polygon-EOD-recap job + obtain `ANTHROPIC_API_KEY` |
 | Analyst Actions event table, Earnings session/guidance/reaction | Need a Benzinga key (`BENZINGA_API_KEY`, currently empty) |

@@ -1,0 +1,3428 @@
+import { Inject, Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
+import { FieldValue } from "firebase-admin/firestore";
+import {
+  NEWS_ADAPTER,
+  NEWS_FMP_ADAPTER,
+  type NewsAdapter,
+  type CanonicalNewsArticle,
+  EARNINGS_ESTIMATES_ADAPTER,
+  FINANCIALS_ADAPTER,
+  type FinancialsAdapter,
+  type AdapterResult,
+  type CanonicalFinancialStatement,
+} from "../adapters/types";
+import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { DelistedTickersService } from "../common/delisted-tickers.service";
+import { quoteRow, type QuoteRow } from "./official-quote.util";
+import type { SnapshotQuote } from "./snapshot-cache.service";
+import { classifyFromSic, keepStoredClassification, resolveSicCode, withVendorIndustryFallback } from "../common/sic-tv.util";
+import { SnapshotCacheService } from "./snapshot-cache.service";
+import { MonthlyBetaService } from "./monthly-beta.service";
+import { BETA_METHOD } from "../common/monthly-beta.util";
+import {
+  forwardAnnualDividend,
+  resolveDividendYields,
+  isRegularDividend,
+  type DivHistItem,
+} from "../common/dividend-annualization.util";
+import { reconcileMarketCap } from "../common/validate.util";
+import {
+  annualTotals,
+  dividendCagr,
+  raiseStreak,
+} from "../sync/corporate-actions.job";
+import {
+  mapAnnualRow,
+  mapQuarterRow,
+  alignReportedEstimate,
+  buildEpsHistory,
+  applyCalendarEstimates,
+  type CalendarEstimate,
+  ttmReportedEpsFromRows,
+  type SplitEvent,
+  type EpsHistoryRow,
+  type QuarterFinancials,
+  type PolygonFinancialRow,
+  latestAnnualEpsGrowth,
+} from "../sync/financials.job";
+import { toFmpSymbol } from "../vendors/market-data/fmp-mapping.util";
+import {
+  anchor52wToPrice,
+  computeIndicators,
+  lastCompletedSession,
+  officialBarsFor,
+  type IndicatorBar,
+} from "../sync/technical-indicators.job";
+import { computeRsScore, rsPercentile } from "../sync/rs-rating.job";
+import {
+  computeTechComponents,
+  techRatingFromComponents,
+  type TechComponents,
+} from "../sync/tech-rating.job";
+import {
+  PolygonService,
+  PolygonAggBar,
+} from "../vendors/polygon/polygon.service";
+import { FmpService, filedThirteenFQuarters } from "../vendors/fmp/fmp.service";
+import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
+import { isoDate } from "../common/date.util";
+import { etDate, isSessionEnded } from "../common/market-calendar.util";
+import { fetchOlderDaily, prependOlder, type DailyBar } from "./long-history";
+import { invisibleOnWhite } from "./logo-visibility";
+import {
+  groupCandles,
+  sliceRange,
+  type CandleGrouping,
+  type RangeSpan,
+} from "./bars-aggregate.util";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * ON-DEMAND DATA LAYER (cache-aside).
+ *
+ * The app no longer pre-syncs a fixed ticker universe. Data is fetched the
+ * first time ANY user asks for it, written to Firestore with `createdAt`, and
+ * served from that shared cache to every subsequent user until it goes stale:
+ *
+ *   browser → GET /live/bars|/live/company
+ *          → in-memory cache (per instance)
+ *          → Firestore doc (createdAt + per-resolution TTL)
+ *          → ONE Polygon call (coalesced across concurrent requesters)
+ *          → written back with createdAt → served
+ *
+ * Cost properties:
+ *   - Firestore reads scale with (instances × misses), not (users × docs).
+ *   - Vendor calls scale with (distinct tickers actually used × TTL windows),
+ *     not with the 10k-ticker universe.
+ *   - Every fetch increments `ticker_usage/{ticker}` (batched, 1 write/min/
+ *     ticker max) — the gradually-built record of which stocks are REALLY used,
+ *     which the premarket job reads to pre-warm the hot set.
+ *
+ * BAR STORAGE — one doc per (ticker, resolution family), NOT one doc per bar
+ * (the old ohlcv_bars stored ~300k single-bar docs):
+ *
+ *                              tf (range)            interval (candle size)
+ *   stock_bars/{TICKER}_1min   ← 1H                  1m
+ *   stock_bars/{TICKER}_5min   ← 1D · 1W             5m
+ *   stock_bars/{TICKER}_15min  ←                     15m
+ *   stock_bars/{TICKER}_30min  ← 1M                  30m · 1H · 2H · 4H
+ *   stock_bars/{TICKER}_daily  ← 3M · 6M · 1Y · 5Y   1D · 1W · 1M
+ *
+ * Every doc carries `rangeDays`: if a user asked for 3M and a later user
+ * asks for 1Y, the doc is re-fetched at the wider range and REPLACED (never
+ * duplicated); a narrower request is served as a slice of the wider doc with
+ * zero vendor calls. That is the subset optimization: 5Y ⊃ 1Y ⊃ 6M ⊃ 3M.
+ *
+ * `interval` candles other than the stored sizes (1H/2H/4H, weekly, monthly)
+ * are built from these docs by bars-aggregate.util.ts — no extra vendor call.
+ */
+
+export type BarsTf = "1H" | "1D" | "5D" | "1W" | "1M" | "3M" | "6M" | "1Y" | "5Y";
+type Resolution = "1min" | "5min" | "15min" | "30min" | "daily";
+
+export const BARS_TFS: BarsTf[] = [
+  "1H",
+  "1D",
+  "5D",
+  "1W",
+  "1M",
+  "3M",
+  "6M",
+  "1Y",
+  "5Y",
+];
+
+interface TfSpec {
+  resolution: Resolution;
+  /** Calendar days to request from the vendor for this resolution family. */
+  fetchDays: number;
+  /** History returned to the client, by TIME — never a bar count: intraday
+   *  docs carry extended hours, so counts sized for the regular session
+   *  under-covered (5D showed ~2 sessions, 1M ~9). See sliceRange. */
+  span: RangeSpan;
+}
+
+/** fetchDays covers weekends/holidays so the span always fills. */
+const TF: Record<BarsTf, TfSpec> = {
+  "1H": { resolution: "1min", fetchDays: 5, span: { kind: "minutes", minutes: 60 } },
+  "1D": { resolution: "5min", fetchDays: 9, span: { kind: "sessions", sessions: 1 } },
+  "5D": { resolution: "5min", fetchDays: 9, span: { kind: "sessions", sessions: 5 } }, // alias for 1W
+  "1W": { resolution: "5min", fetchDays: 9, span: { kind: "sessions", sessions: 5 } },
+  "1M": { resolution: "30min", fetchDays: 40, span: { kind: "months", months: 1 } },
+  "3M": { resolution: "daily", fetchDays: 95, span: { kind: "months", months: 3 } },
+  "6M": { resolution: "daily", fetchDays: 190, span: { kind: "months", months: 6 } },
+  "1Y": { resolution: "daily", fetchDays: 380, span: { kind: "sessions", sessions: 252 } },
+  "5Y": { resolution: "daily", fetchDays: 1830, span: { kind: "months", months: 60 } },
+};
+
+const RES_PARAMS: Record<
+  Resolution,
+  { multiplier: number; timespan: "minute" | "hour" | "day" }
+> = {
+  "1min": { multiplier: 1, timespan: "minute" },
+  "5min": { multiplier: 5, timespan: "minute" },
+  "15min": { multiplier: 15, timespan: "minute" },
+  "30min": { multiplier: 30, timespan: "minute" },
+  daily: { multiplier: 1, timespan: "day" },
+};
+
+/**
+ * Candle size for GET /live/bars?interval=… — the chart's candle picker and the
+ * technical-rating card both read these. Case-sensitive: `1m` is one minute,
+ * `1M` is one month.
+ */
+export type BarsInterval =
+  "1m" | "5m" | "15m" | "30m" | "1H" | "2H" | "4H" | "1D" | "1W" | "1M";
+
+export const BARS_INTERVALS: BarsInterval[] = [
+  "1m",
+  "5m",
+  "15m",
+  "30m",
+  "1H",
+  "2H",
+  "4H",
+  "1D",
+  "1W",
+  "1M",
+];
+
+interface IntervalSpec {
+  resolution: Resolution;
+  /** Calendar days of `resolution` bars the doc must hold. */
+  fetchDays: number;
+  grouping: CandleGrouping;
+  /** Newest N candles returned, after grouping. */
+  maxBars: number;
+}
+
+/**
+ * fetchDays is sized so every interval yields ≥ ~300 regular-session candles —
+ * enough warm-up for a 200-period moving average — after weekends/holidays:
+ *   15m: ~20 sessions × 26   ≈ 520     1H: ~50 sessions × 7 ≈ 350
+ *   30m: ~27 sessions × 13   ≈ 350     2H: ~88 sessions × 4 ≈ 350
+ *                                      4H: ~170 sessions × 2 ≈ 340
+ * The widest (4H, 250 days) puts ~5.5k extended-hours 30-minute bars in one
+ * doc, ~400 KB — well inside Firestore's 1 MiB doc limit.
+ *
+ * Weekly/monthly are bounded by the plan's 5-year history (~260 / ~60
+ * candles), so a 1M SMA 200 is simply not computable; the client shows it as
+ * unavailable rather than this endpoint padding the series.
+ */
+const INTERVAL: Record<BarsInterval, IntervalSpec> = {
+  "1m": {
+    resolution: "1min",
+    fetchDays: 5,
+    grouping: { kind: "session", minutes: 1 },
+    maxBars: 1500,
+  },
+  "5m": {
+    resolution: "5min",
+    fetchDays: 9,
+    grouping: { kind: "session", minutes: 5 },
+    maxBars: 1000,
+  },
+  "15m": {
+    resolution: "15min",
+    fetchDays: 30,
+    grouping: { kind: "session", minutes: 15 },
+    maxBars: 1000,
+  },
+  "30m": {
+    resolution: "30min",
+    fetchDays: 40,
+    grouping: { kind: "session", minutes: 30 },
+    maxBars: 1000,
+  },
+  "1H": {
+    resolution: "30min",
+    fetchDays: 75,
+    grouping: { kind: "session", minutes: 60 },
+    maxBars: 1000,
+  },
+  "2H": {
+    resolution: "30min",
+    fetchDays: 130,
+    grouping: { kind: "session", minutes: 120 },
+    maxBars: 600,
+  },
+  "4H": {
+    resolution: "30min",
+    fetchDays: 250,
+    grouping: { kind: "session", minutes: 240 },
+    maxBars: 400,
+  },
+  "1D": {
+    resolution: "daily",
+    fetchDays: 1830,
+    grouping: { kind: "none" },
+    maxBars: 1300,
+  },
+  "1W": {
+    resolution: "daily",
+    fetchDays: 1830,
+    grouping: { kind: "week" },
+    maxBars: 300,
+  },
+  "1M": {
+    resolution: "daily",
+    fetchDays: 1830,
+    grouping: { kind: "month" },
+    maxBars: 80,
+  },
+};
+
+type BarsSource = "memory" | "firestore" | "vendor";
+
+/**
+ * Daily / weekly / monthly candles reach back to the stock's listing date: the
+ * stored 5-year (Polygon) doc is extended with FMP's older daily history
+ * (long-history.ts). The cap is far above any listed stock's history.
+ */
+export const FULL_HISTORY_MAX_BARS: Partial<Record<BarsInterval, number>> = { "1D": 30_000, "1W": 6_000, "1M": 1_500 };
+/** Older history is cached per ticker this long (it only changes on a split). */
+const OLDER_DAILY_TTL_MS = 24 * 60 * 60_000;
+const OLDER_DAILY_MAX_TICKERS = 150;
+/** A first (uncached) FMP fetch slower than this serves the 5 years now; the history lands in the cache for the next view. */
+const OLDER_DAILY_WAIT_MS = 6_000;
+
+export interface StoredBar {
+  t: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+  vw: number | null;
+}
+
+interface BarsDoc {
+  ticker: string;
+  resolution: Resolution;
+  bars: StoredBar[];
+  rangeDays: number;
+  barCount: number;
+  createdAt: string; // ISO — when this data was inserted (the cache clock)
+  updatedAt: string;
+  source: string;
+}
+
+/** Company profile TTL — matches the vendor's own 15-minute delay. */
+const COMPANY_TTL_MS = 15 * 60_000;
+/** Key-stats summary memo — bridges the gap until the full company doc lands. */
+const COMPANY_SUMMARY_TTL_MS = 5 * 60_000;
+/** Per-source budget for the summary fan-out; a slower source → its tiles null. */
+const SUMMARY_CALL_BUDGET_MS = 3_000;
+/** Earnings transcripts change once a quarter — re-check at most daily. */
+const TRANSCRIPT_TTL_MS = 24 * 3600_000;
+/** Daily bars: at most one vendor refresh per ticker per day. */
+const DAILY_TTL_MS = 20 * 3600_000;
+/** Intraday bars during the extended session (04:00–20:00 ET weekdays). */
+const INTRADAY_SESSION_TTL_MS = 15 * 60_000;
+/** Usage counters are flushed to Firestore at most this often. */
+const USAGE_FLUSH_MS = 60_000;
+
+// Dividend history / splits / financials change rarely (at most once a
+// quarter) — reuse the same daily-cadence TTL as company profiles/bars.
+const DIV_HISTORY_LIMIT = 200;
+const DIV_ANNUAL_YEARS = 10;
+const DIV_CAGR_YEARS = 5;
+const FIN_QUARTERS = 10;
+const FIN_ANNUAL_YEARS = 8;
+/**
+ * A financials doc with no quarters is re-checked hourly instead of daily: an
+ * empty answer is usually transient (a vendor brownout, or the fallback vendor
+ * not yet configured), and caching it for a day blanked the Sales chart.
+ * Still long enough that a ticker no vendor covers (ETFs, funds) does not
+ * cost a vendor round-trip on every view.
+ */
+const EMPTY_FINANCIALS_TTL_MS = 3600_000;
+/** A recent report the stored doc hasn't caught up with (see
+ * pendingReportRetryMs) — refresh, but no more often than the retry gap. */
+const FIN_PENDING_REPORT_DAYS = 7;
+const FIN_PENDING_RETRY_MS = 30 * 60_000;
+/** Past the first week a missing statement is the vendor's slow path (the
+ * 10-Q itself, up to ~40 days out); keep checking, just less often. */
+const FIN_STATEMENT_LAG_DAYS = 45;
+const FIN_STATEMENT_RETRY_MS = 6 * 3600_000;
+
+// news.job.ts's own cron runs every 30 min; this on-demand path only fills the
+// gap for a ticker the bulk sweep hasn't reached recently, so a shorter TTL is
+// fine — articles that age out just mean the next request re-checks the vendor.
+const NEWS_TTL_MS = 15 * 60_000;
+/** 13F tab holder list: FMP pages of 100, largest holders first (~10 calls). */
+const MAX_13F_HOLDERS = 1_000;
+/**
+ * Stamped on every `filings_13f` doc; a doc without the current value is
+ * rebuilt rather than served. Docs written before the holder cap and the FMP
+ * rollup carry FMP's 10-row default page as their whole holder list and
+ * `totalHolders`, and a filed quarter's doc never expires — so MSFT went on
+ * reading "10" 13F holders against ~6,600 filers.
+ */
+const FILINGS_13F_CACHE_VERSION = 2;
+const NEWS_LOOKBACK_DAYS = 7;
+const NEWS_ARTICLE_CAP = 5;
+
+const OPTIONS_CONTRACTS_LIMIT = 20;
+const OPTIONS_AGG_LOOKBACK_DAYS = 10;
+
+
+function byPublishedAtDesc(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+): number {
+  return String(b.publishedAt).localeCompare(String(a.publishedAt));
+}
+
+/** ET clock parts without a tz library. */
+function etParts(now = new Date()): { weekday: number; hour: number } {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour12: false,
+    weekday: "short",
+    hour: "numeric",
+  });
+  const parts = fmt.formatToParts(now);
+  const wd = parts.find((p) => p.type === "weekday")?.value ?? "Mon";
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "12") % 24;
+  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(wd);
+  return { weekday, hour };
+}
+
+/** True while US extended trading (pre + regular + after) could move intraday bars. */
+function inExtendedSession(): boolean {
+  const { weekday, hour } = etParts();
+  return weekday >= 1 && weekday <= 5 && hour >= 4 && hour < 20;
+}
+
+function isFresh(
+  createdAtIso: string | undefined,
+  resolution: Resolution,
+): boolean {
+  if (!createdAtIso) return false;
+  const age = Date.now() - Date.parse(createdAtIso);
+  if (!Number.isFinite(age) || age < 0) return false;
+  if (resolution === "daily") return age < DAILY_TTL_MS;
+  // Intraday: refetch every 15 min while a session is running; once the session
+  // is over, anything fetched after it ended stays fresh until the next one.
+  if (inExtendedSession()) return age < INTRADAY_SESSION_TTL_MS;
+  return age < 12 * 3600_000;
+}
+
+// Forward-annualized dividend helpers (SPECIAL_DIVIDEND_TYPES, DivHistItem,
+// forwardAnnualDividend, …) moved to common/dividend-annualization.util.ts so
+// this on-view path and the nightly profile-adapter sweep share ONE definition
+// and can never drift the derived yield apart.
+
+export interface QuarterlyEstimate {
+  /** Fiscal quarter end (FMP's date). */
+  date: string;
+  epsAvg: number | null;
+  revenueAvg: number | null;
+  numAnalystsEps: number | null;
+  numAnalystsRevenue: number | null;
+}
+
+/** The consensus for the NEXT scheduled report (FMP `/earnings` calendar row). */
+export interface NextReportEstimate {
+  /** Report date (YYYY-MM-DD). */
+  date: string;
+  epsEstimate: number | null;
+  revenueEstimate: number | null;
+}
+
+/** A listing date that is a real date — not a vendor placeholder like 1900-01-01. */
+export function realListingDate(v: string | null | undefined): string | null {
+  const d = String(v ?? "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(d) && d > "1900-12-31" ? d : null;
+}
+
+@Injectable()
+export class OnDemandService implements OnModuleDestroy {
+  private readonly logger = new Logger(OnDemandService.name);
+
+  /** In-memory hot cache: parsed Firestore docs, keyed {TICKER}_{res}. */
+  private readonly memBars = new Map<string, BarsDoc>();
+  private readonly memCompany = new Map<
+    string,
+    { data: Record<string, unknown>; at: number }
+  >();
+  /** FMP quarterly analyst estimates per ticker; 12h. */
+  private readonly memQuarterlyEstimates = new Map<string, { data: QuarterlyEstimate[]; at: number }>();
+  /** Universe raw RS scores (nightly job) for ranking peers on demand; 1h. */
+  private rsDistribution: { scores: Map<string, number>; at: number } | null = null;
+  /** On-demand RS rating per `ticker|last completed ET session`. */
+  private readonly memRsRating = new Map<string, { rating: number | null; at: number }>();
+  /** Close 30 calendar days back per `ticker|ET date` (peers' monthly change). */
+  private readonly memMonthBase = new Map<string, { close: number | null; at: number }>();
+  /** Last close of the PRIOR calendar year per `ticker|ET date` (peers' YTD base). */
+  private readonly memYtdBase = new Map<string, { close: number | null; at: number }>();
+  private readonly memCompanySummary = new Map<
+    string,
+    { data: Record<string, unknown>; at: number }
+  >();
+  private readonly memDividendHistory = new Map<
+    string,
+    { data: Record<string, unknown>; at: number }
+  >();
+  private readonly memSplits = new Map<
+    string,
+    { data: Record<string, unknown>; at: number }
+  >();
+  private readonly memFinancials = new Map<
+    string,
+    { data: Record<string, unknown>; at: number }
+  >();
+  private readonly memNews = new Map<
+    string,
+    { data: Record<string, unknown>[]; at: number }
+  >();
+  private readonly memOptions = new Map<
+    string,
+    { data: Record<string, unknown>; at: number }
+  >();
+  private readonly memLogo = new Map<
+    string,
+    { data: { data: Buffer; contentType: string } | null; at: number }
+  >();
+  private readonly memTranscript = new Map<
+    string,
+    { data: Record<string, unknown> | null; at: number }
+  >();
+  private readonly memOwnership13DG = new Map<
+    string,
+    { data: Record<string, unknown> | null; at: number }
+  >();
+  /**
+   * Coalescing: concurrent misses for the same key share one vendor promise.
+   *
+   * SCOPE — this is per-PROCESS only. Two different Cloud Run instances that
+   * miss the same ticker at the same moment each run their own fetch: a small,
+   * NON-duplicating vendor "mini-storm" (both write the same cache doc; no data
+   * is corrupted, just a few redundant calls) that P2-8 asked us to assess.
+   *
+   * DECISION (P2-8): keep the in-process map; do NOT add a Firestore-lease-based
+   * cross-instance coalesce here. Reasoning:
+   *   - This is the USER-FACING hot path. A lease means every cache MISS pays a
+   *     Firestore transaction round-trip BEFORE fetching, and the LOSER of the
+   *     lease then POLLS the cache doc for a result.
+   *   - The company build behind a miss is heavy and highly VARIABLE in duration
+   *     (getTickerDetails + snapshot + TTM EPS + peers + 13F + a first-sync
+   *     technicals pass that pulls ~2y of bars, writes hundreds of ohlcv_bars
+   *     docs and ranks against the whole universe — often multiple seconds).
+   *     A bounded poll-wait tuned for that is a lose-lose: too short and the
+   *     loser fetches anyway (zero benefit), too long and every concurrent
+   *     viewer waits seconds on another instance that might still crash mid-run.
+   *   - Severity is low (wasteful, not incorrect) and the worker is min-
+   *     instances=0 / TTL-spread, so simultaneous cross-instance misses for the
+   *     SAME ticker are already rare.
+   * The added latency, new failure modes (stale-lease waits) and fail-open
+   * plumbing are disproportionate to a low-severity, self-healing inefficiency.
+   * If this ever becomes material, revisit with the job-lock.util.ts lease
+   * pattern (short TTL, fail-OPEN to a direct fetch, bounded poll of the cache
+   * doc) — but only guarding the CHEAP-to-recompute keys, not the heavy company
+   * build, and measure the hot-path p95 first.
+   */
+  private readonly inflight = new Map<string, Promise<unknown>>();
+
+  /** Usage accumulator — flushed as ONE batched write per interval. */
+  private pendingUsage = new Map<string, number>();
+  private usageTimer: NodeJS.Timeout | null = null;
+  private knownUsageTickers: Set<string> | null = null;
+
+  readonly stats = {
+    barsRequests: 0,
+    barsVendorCalls: 0,
+    barsFirestoreHits: 0,
+    barsMemHits: 0,
+    companyRequests: 0,
+    companyVendorCalls: 0,
+    usageFlushes: 0,
+    lastError: "",
+  };
+
+  constructor(
+    private readonly firebase: FirebaseAdminService,
+    private readonly polygon: PolygonService,
+    // Shared price cache — /live/quotes serves from the SAME entries as
+    // /live/snapshot so every surface shows one number.
+    private readonly snapshots: SnapshotCacheService,
+    @Inject(NEWS_ADAPTER) private readonly news: NewsAdapter,
+    // Optional FMP news — merged into on-demand /live/news alongside Polygon so a
+    // ticker Polygon has no articles for (micro-cap movers) still gets coverage.
+    // null when NEWS_FMP_SOURCE=none. Mirrors what news.job does for the bulk sweep.
+    @Inject(NEWS_FMP_ADAPTER) private readonly newsFmp: NewsAdapter | null,
+    // Optional FMP estimates (same adapter the sync job uses). null when
+    // EARNINGS_ESTIMATES_SOURCE=none — on-demand then behaves Polygon-only.
+    @Inject(EARNINGS_ESTIMATES_ADAPTER)
+    private readonly estimatesAdapter: EarningsEstimatesAdapter | null,
+    // Statements source: Polygon, falling back to FMP when Polygon fails or
+    // has no periods for the ticker (foreign private issuers).
+    @Inject(FINANCIALS_ADAPTER) private readonly financials: FinancialsAdapter,
+    // FMP is the only vendor providing earnings-call transcripts; behaves as a
+    // no-op (returns null) when FMP_API_KEY is unset, same as the other FMP paths.
+    private readonly fmp: FmpService,
+    // Authoritative free SIC lookup, used ONLY as a fallback when Polygon omits
+    // sic_code (foreign private issuers / ADRs) so sector/industry still resolve.
+    private readonly secEdgar: SecEdgarService,
+    private readonly delisted: DelistedTickersService,
+    private readonly monthlyBeta: MonthlyBetaService,
+  ) {}
+
+  onModuleDestroy() {
+    if (this.usageTimer) clearInterval(this.usageTimer);
+    void this.flushUsage();
+  }
+
+  // ── Bars ────────────────────────────────────────────────────────────────
+
+  isValidTf(tf: string): tf is BarsTf {
+    return (BARS_TFS as string[]).includes(tf);
+  }
+
+  /**
+   * Bars for one ticker+timeframe, cache-aside. Returns the newest N bars for
+   * the timeframe (oldest-first) plus cache metadata for the response headers.
+   */
+  async getBars(
+    ticker: string,
+    tf: BarsTf,
+  ): Promise<{
+    ticker: string;
+    tf: BarsTf;
+    bars: StoredBar[];
+    source: BarsSource;
+    asOf: string;
+  }> {
+    this.stats.barsRequests++;
+    this.recordUsage(ticker);
+    const spec = TF[tf];
+    const { doc, source } = await this.loadBarsDoc(
+      ticker,
+      spec.resolution,
+      spec.fetchDays,
+    );
+    return {
+      ticker,
+      tf,
+      bars: this.slice(doc, spec),
+      source,
+      asOf: doc.createdAt,
+    };
+  }
+
+  isValidInterval(interval: string): interval is BarsInterval {
+    return (BARS_INTERVALS as string[]).includes(interval);
+  }
+
+  /**
+   * Candles of one SIZE (vs getBars' one date RANGE): the newest maxBars
+   * candles, oldest-first, regular session only for intraday sizes. Shares the
+   * stock_bars docs with getBars — 1H/2H/4H/1W/1M are re-grouped from a stored
+   * resolution, never fetched separately.
+   */
+  async getBarsByInterval(
+    ticker: string,
+    interval: BarsInterval,
+  ): Promise<{
+    ticker: string;
+    interval: BarsInterval;
+    bars: StoredBar[];
+    source: BarsSource;
+    asOf: string;
+  }> {
+    this.stats.barsRequests++;
+    this.recordUsage(ticker);
+    const spec = INTERVAL[interval];
+    const { doc, source } = await this.loadBarsDoc(
+      ticker,
+      spec.resolution,
+      spec.fetchDays,
+    );
+    const fullMax = FULL_HISTORY_MAX_BARS[interval];
+    const older = fullMax && doc.bars.length ? await this.olderDaily(ticker, doc.bars[0].t) : [];
+    return {
+      ticker,
+      interval,
+      bars: this.groupedBars(doc, interval, older.length ? { ...spec, maxBars: fullMax! } : spec, older),
+      source,
+      asOf: doc.createdAt,
+    };
+  }
+
+  private readonly memOlderDaily = new Map<string, { bars: DailyBar[]; before: number; at: number }>();
+  private readonly olderDailyInflight = new Map<string, Promise<DailyBar[]>>();
+
+  /**
+   * The ticker's daily bars before `firstT` (the stored doc's first bar), from
+   * its listing date: memory cache → one coalesced FMP fetch. An uncached fetch
+   * that takes longer than OLDER_DAILY_WAIT_MS returns [] for this request (the
+   * 5-year window serves) and fills the cache when it finishes.
+   */
+  private async olderDaily(ticker: string, firstT: number): Promise<DailyBar[]> {
+    const hit = this.memOlderDaily.get(ticker);
+    if (hit && Date.now() - hit.at < OLDER_DAILY_TTL_MS && hit.before >= firstT) return hit.bars;
+    let p = this.olderDailyInflight.get(ticker);
+    if (!p) {
+      const beforeDay = etDate(new Date(firstT));
+      p = fetchOlderDaily((path) => this.fmp.request(path, { retries: 1 }), ticker, beforeDay)
+        .then((bars) => {
+          this.memOlderDaily.delete(ticker);
+          this.memOlderDaily.set(ticker, { bars, before: firstT, at: Date.now() });
+          while (this.memOlderDaily.size > OLDER_DAILY_MAX_TICKERS) {
+            const oldest = this.memOlderDaily.keys().next().value;
+            if (oldest === undefined) break;
+            this.memOlderDaily.delete(oldest);
+          }
+          return bars;
+        })
+        .finally(() => this.olderDailyInflight.delete(ticker));
+      this.olderDailyInflight.set(ticker, p);
+    }
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<DailyBar[]>((resolve) => { timer = setTimeout(() => resolve([]), OLDER_DAILY_WAIT_MS); });
+    try {
+      return await Promise.race([p, late]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Re-grouping is memoised per doc OBJECT: every refresh path (Firestore
+   * read, incremental append, full fetch) produces a new doc object, so a
+   * stale grouping can never be served and entries vanish with their doc.
+   * Memory-cache hits — the common case — then cost no re-grouping at all.
+   */
+  private readonly grouped = new WeakMap<
+    BarsDoc,
+    Map<string, StoredBar[]>
+  >();
+
+  private groupedBars(
+    doc: BarsDoc,
+    interval: BarsInterval,
+    spec: IntervalSpec,
+    older: readonly DailyBar[] = [],
+  ): StoredBar[] {
+    let perDoc = this.grouped.get(doc);
+    if (!perDoc) {
+      perDoc = new Map();
+      this.grouped.set(doc, perDoc);
+    }
+    // Keyed by the older history too: the cache fills after the first answer.
+    const key = `${interval}|${older.length}`;
+    let bars = perDoc.get(key);
+    if (!bars) {
+      const all = older.length ? prependOlder(older as StoredBar[], doc.bars) : doc.bars;
+      bars = groupCandles(all, spec.grouping).slice(-spec.maxBars) as StoredBar[];
+      perDoc.set(key, bars);
+    }
+    return bars;
+  }
+
+  /**
+   * Cache-aside load of one (ticker, resolution) doc holding at least
+   * `fetchDays` of history: memory → Firestore → incremental append or
+   * widening fetch → first-ever vendor fetch. Shared by getBars and
+   * getBarsByInterval so both read and write the same stock_bars docs.
+   */
+  private async loadBarsDoc(
+    ticker: string,
+    resolution: Resolution,
+    fetchDays: number,
+  ): Promise<{ doc: BarsDoc; source: BarsSource }> {
+    const key = `${ticker}_${resolution}`;
+
+    // 1. Per-instance memory (already-parsed doc).
+    const mem = this.memBars.get(key);
+    if (
+      mem &&
+      isFresh(mem.createdAt, resolution) &&
+      mem.rangeDays >= fetchDays
+    ) {
+      this.stats.barsMemHits++;
+      return { doc: mem, source: "memory" };
+    }
+
+    // 2. Firestore shared cache.
+    const ref = this.firebase.firestore.collection("stock_bars").doc(key);
+    const snap = await ref.get();
+    if (snap.exists) {
+      const doc = snap.data() as BarsDoc;
+      if (
+        isFresh(doc.createdAt, resolution) &&
+        (doc.rangeDays ?? 0) >= fetchDays
+      ) {
+        this.memBars.set(key, doc);
+        this.stats.barsFirestoreHits++;
+        return { doc, source: "firestore" };
+      }
+      // Wide enough but STALE → INCREMENTAL refresh: history never changes, so
+      // fetch only the days since the last stored bar and append. A 5-year doc
+      // costs a ~2-day fetch per day of staleness — old data is never re-pulled.
+      if ((doc.rangeDays ?? 0) >= fetchDays && doc.bars.length > 0) {
+        const fresh = await this.refreshIncremental(
+          ticker,
+          resolution,
+          doc,
+          ref,
+        );
+        return { doc: fresh, source: "vendor" };
+      }
+      // Too narrow — a wider window was requested than ever stored. This is the
+      // one genuine full fetch (backfill), still a single vendor call.
+      const widest = Math.max(fetchDays, doc.rangeDays ?? 0);
+      const fresh = await this.fetchAndStore(ticker, resolution, widest, ref);
+      return { doc: fresh, source: "vendor" };
+    }
+
+    // 3. Vendor (coalesced) — first-ever request for this ticker+resolution.
+    const fresh = await this.fetchAndStore(ticker, resolution, fetchDays, ref);
+    return { doc: fresh, source: "vendor" };
+  }
+
+  /**
+   * Append-only refresh of an existing doc: fetch from the last stored bar's
+   * date (inclusive — the tail bar may have been partial when captured) to
+   * today, replace that tail bar and append the rest. rangeDays is preserved,
+   * so a 5Y-widened doc stays 5Y without ever re-downloading 5 years.
+   */
+  private async refreshIncremental(
+    ticker: string,
+    resolution: Resolution,
+    doc: BarsDoc,
+    ref: FirebaseFirestore.DocumentReference,
+  ): Promise<BarsDoc> {
+    const key = `${ticker}_${resolution}_incr`;
+    const existing = this.inflight.get(key) as Promise<BarsDoc> | undefined;
+    if (existing) return existing;
+
+    const p = (async (): Promise<BarsDoc> => {
+      const { multiplier, timespan } = RES_PARAMS[resolution];
+      const lastT = doc.bars[doc.bars.length - 1].t;
+      const from = isoDate(new Date(lastT));
+      const to = etDate();
+      this.stats.barsVendorCalls++;
+      const raw: PolygonAggBar[] = await this.polygon.getAggsRange(
+        ticker,
+        from,
+        to,
+        timespan,
+        multiplier,
+        50_000,
+      );
+      const now = new Date().toISOString();
+      const kept = doc.bars.filter((b) => b.t < lastT); // drop the possibly-partial tail
+      const appended = raw
+        .filter((b) => b.t >= lastT)
+        .map((b) => ({
+          t: b.t,
+          o: b.o,
+          h: b.h,
+          l: b.l,
+          c: b.c,
+          v: b.v,
+          vw: b.vw ?? null,
+        }));
+      const next: BarsDoc = {
+        ...doc,
+        bars: [...kept, ...appended],
+        barCount: kept.length + appended.length,
+        createdAt: now, // the cache clock — this doc is fresh as of now
+        updatedAt: now,
+      };
+      await ref.set(next);
+      this.memBars.set(`${ticker}_${resolution}`, next);
+      return next;
+    })().finally(() => this.inflight.delete(key));
+
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  private slice(doc: BarsDoc, spec: TfSpec): StoredBar[] {
+    return sliceRange(doc.bars, spec.span);
+  }
+
+  private async fetchAndStore(
+    ticker: string,
+    resolution: Resolution,
+    rangeDays: number,
+    ref: FirebaseFirestore.DocumentReference,
+  ): Promise<BarsDoc> {
+    const key = `${ticker}_${resolution}_${rangeDays}`;
+    const existing = this.inflight.get(key) as Promise<BarsDoc> | undefined;
+    if (existing) return existing;
+
+    const p = (async (): Promise<BarsDoc> => {
+      const { multiplier, timespan } = RES_PARAMS[resolution];
+      const to = new Date();
+      const from = new Date(to.getTime() - rangeDays * 86_400_000);
+      this.stats.barsVendorCalls++;
+      const raw: PolygonAggBar[] = await this.polygon.getAggsRange(
+        ticker,
+        isoDate(from),
+        isoDate(to),
+        timespan,
+        multiplier,
+        50_000,
+      );
+      const now = new Date().toISOString();
+      const doc: BarsDoc = {
+        ticker,
+        resolution,
+        bars: raw.map((b) => ({
+          t: b.t,
+          o: b.o,
+          h: b.h,
+          l: b.l,
+          c: b.c,
+          v: b.v,
+          vw: b.vw ?? null,
+        })),
+        rangeDays,
+        barCount: raw.length,
+        createdAt: now,
+        updatedAt: now,
+        source: "polygon-ondemand",
+      };
+      // Replace (not merge): the doc IS the series; merging would append noise.
+      await ref.set(doc);
+      this.memBars.set(`${ticker}_${resolution}`, doc);
+      return doc;
+    })().finally(() => this.inflight.delete(key));
+
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  // ── Company profile ─────────────────────────────────────────────────────
+
+  /**
+   * Company profile + latest price, cache-aside on `companies/{ticker}`.
+   * Written with merge:true so the richer fields the premarket technicals job
+   * adds for hot tickers are never clobbered by an on-demand refresh.
+   *
+   * Populates the SAME fundamental fields the daily `companies` sync job's
+   * profile adapter writes — peRatio, eps, dividendYield, dividendPerShare,
+   * peers, industry, and the SIC-derived sector — so a ticker first seen here
+   * (the stock screen reads P/E, yield, peers etc. off this doc) shows them
+   * immediately instead of a NotAvailable gap until the sync cursor arrives.
+   * peRatio/yield are computed against the FRESH snapshot price, not stale bars.
+   */
+  /**
+   * Compute the technical field set the stock detail page reads (RSI/MACD/
+   * Stoch/ADX, beta, MA ladder, rolling 52-week range, pivot key levels) for a
+   * ticker being synced for the FIRST time, using the SAME computeIndicators()
+   * the nightly technical-indicators cron uses — so the field set is identical
+   * on both paths.
+   *
+   * It also persists the fetched daily bars into ohlcv_bars, which is the
+   * substrate the rs-rating and tech-rating crons read. Writing it here means
+   * the ticker earns its (universe-relative) RS / tech-rating percentile on the
+   * very next cron run. Those two ratings are the one thing this path cannot
+   * fill inline: a percentile is defined against the whole universe, not one
+   * ticker.
+   *
+   * Best-effort: any failure returns {} so the caller's company doc still saves
+   * with its profile + price rather than being lost to a bar hiccup.
+   */
+  private async computeFirstSyncTechnicals(
+    ticker: string,
+    rank: boolean,
+  ): Promise<Record<string, unknown>> {
+    // Below this many stored raw scores the universe distribution is too thin to
+    // rank against (the brief window right after deploy, before any sweep has
+    // stored raw scores). Fall back to leaving RS/tech null for the cron then.
+    const MIN_RANK_DISTRIBUTION = 20;
+    try {
+      // ~2 trading years so sma200 and the rolling 52-week window are well
+      // covered (the cron analyses the most-recent 300 bars; match that depth).
+      const to = new Date();
+      const from = new Date();
+      from.setUTCFullYear(from.getUTCFullYear() - 2);
+      const iso = (d: Date) => d.toISOString().slice(0, 10);
+      const col = this.firebase.firestore.collection("ohlcv_bars");
+
+      // USE WHAT IS ALREADY STORED. history-backfill wrote daily bars for the
+      // whole listed market by session, so for most tickers the ~2 years this
+      // used to fetch are already on disk. Re-fetching them is the single
+      // heaviest part of an on-demand miss — hundreds of vendor rows and
+      // hundreds of writes — spent to reproduce data we have.
+      //
+      // Only current, deep-enough history qualifies: too few bars and the long
+      // windows (sma200, the rolling 52-week range) would be computed over a
+      // short series, and a stale edge would rank the ticker on old prices.
+      // Either way it falls through to the vendor, so this can only make the
+      // path cheaper, never wrong.
+      //
+      // Current means the store reaches the last session the market has
+      // COMPLETED. The old allowance of "newest bar at most 6 days old"
+      // accepted a store missing sessions: COST's ended Fri 16 Oct, so on Tue
+      // 20 Oct its MACD, ADX, Stoch and pivots were all built a session
+      // behind. The calendar here is weekdays only, so the day after a market
+      // holiday goes to the vendor — costlier, never stale.
+      const STORED_MIN_BARS = 200;
+      let bars: IndicatorBar[] = [];
+      try {
+        const storedSnap = await col
+          .where("ticker", "==", ticker)
+          .orderBy("barDate", "desc")
+          .limit(500)
+          .get();
+        const stored = storedSnap.docs
+          .map((d) => d.data() as IndicatorBar)
+          .reverse();
+        const newest = stored.length
+          ? String(stored[stored.length - 1].barDate ?? "")
+          : "";
+        const lastSession = lastCompletedSession(new Map(), new Date());
+        if (stored.length >= STORED_MIN_BARS && newest >= lastSession) {
+          bars = stored;
+        }
+      } catch {
+        // A read failure just means we fetch, as before.
+      }
+
+      if (bars.length === 0) {
+        const raw = await this.polygon.getAggsRange(ticker, iso(from), iso(to));
+        if (raw.length === 0) return {};
+
+        bars = raw.map((b) => ({
+          barDate: new Date(b.t).toISOString().slice(0, 10),
+          open: b.o,
+          high: b.h,
+          low: b.l,
+          close: b.c,
+          volume: b.v,
+          vwap: b.vw ?? null,
+        }));
+
+      // Persist to ohlcv_bars (same doc shape stock-history.job writes) so the
+      // RS / tech-rating crons can rank this ticker next run. Chunked to stay
+      // under Firestore's 500-write batch ceiling. Only for bars we FETCHED —
+      // rewriting what we just read back would be pure cost.
+      // NEVER save a bar for a session that hasn't ended.
+      const endedBars = bars.filter((b) => isSessionEnded(b.barDate));
+      for (let i = 0; i < endedBars.length; i += 450) {
+        const batch = this.firebase.firestore.batch();
+        for (const b of endedBars.slice(i, i + 450)) {
+          batch.set(
+            col.doc(`${ticker}_${b.barDate}`),
+            {
+              ticker,
+              barDate: b.barDate,
+              timespan: "day",
+              open: b.open,
+              high: b.high,
+              low: b.low,
+              close: b.close,
+              volume: b.volume,
+              vwap: b.vwap,
+              source: "polygon-ondemand",
+            },
+            { merge: false },
+          );
+        }
+        await batch.commit();
+      }
+      }
+
+      // SPY closes for beta — the benchmark the cron uses, always synced.
+      const spySnap = await col
+        .where("ticker", "==", "SPY")
+        .orderBy("barDate", "desc")
+        .limit(300)
+        .get();
+      const spyMap = new Map<string, number>();
+      for (const d of spySnap.docs) {
+        const x = d.data();
+        if (typeof x.close === "number")
+          spyMap.set(x.barDate as string, x.close);
+      }
+
+      const analysisBars = bars.slice(-300);
+      // OFFICIAL 16:00 close for the classic-pivot basis only, keeping keyLevels
+      // consistent with the cron path. The pivot basis is the last completed
+      // daily session; fetch the official close for the last 1–2 bar dates (the
+      // possible basis dates) and pass only non-null results — any miss (incl. a
+      // partial current-day bar, weekend, holiday) falls back to the stored bar
+      // close (no regression). Not fetched for historical bars.
+      const officialCloseByDate = new Map<string, number>();
+      // Official H/L/C of the possible pivot-basis sessions (see officialBarsFor).
+      const officialBars = await officialBarsFor(this.polygon, ticker, analysisBars);
+      for (const [d, b] of officialBars) officialCloseByDate.set(d, b.close);
+      const ind = computeIndicators(
+        analysisBars,
+        spyMap,
+        undefined,
+        officialCloseByDate,
+        officialBars,
+      );
+      if (!ind) return {};
+
+      const closes = bars.map((b) => b.close);
+      const result: Record<string, unknown> = {
+        ...ind,
+        technicalsUpdatedAt: new Date().toISOString(),
+      };
+
+      // Raw RS score + tech components (same windows the sweeps read), stored on
+      // the doc so future rankings can place other tickers against this one too.
+      const rsScore = computeRsScore(closes.slice(-260));
+      const techComp = computeTechComponents(closes.slice(-130));
+      if (rsScore != null) result.rsScore = rsScore;
+      if (techComp) {
+        result.techMomentum = techComp.momentum;
+        result.techTrend = techComp.trend;
+        result.techRsi = techComp.rsi;
+      }
+
+      // For a brand-new ticker (no cron rating yet) rank it against the stored
+      // universe distribution so RS / tech rating show on the FIRST view. Skipped
+      // for tickers that already carry a cron rating — the sweep's universe-wide
+      // rank is authoritative — and while the distribution is too thin to trust.
+      if (rank && (rsScore != null || techComp)) {
+        try {
+          const dist = await this.firebase.firestore
+            .collection("companies")
+            .select("rsScore", "techMomentum", "techTrend", "techRsi", "delisted")
+            .get();
+          const rsScores: number[] = [];
+          const techComps: TechComponents[] = [];
+          for (const d of dist.docs) {
+            if (d.id === ticker) continue;
+            const x = d.data();
+            // A soft-deleted doc's scores are frozen at its last trading day.
+            if (x.delisted === true) continue;
+            if (typeof x.rsScore === "number") rsScores.push(x.rsScore);
+            if (
+              typeof x.techMomentum === "number" &&
+              typeof x.techTrend === "number" &&
+              typeof x.techRsi === "number"
+            ) {
+              techComps.push({
+                momentum: x.techMomentum,
+                trend: x.techTrend,
+                rsi: x.techRsi,
+              });
+            }
+          }
+          if (rsScore != null && rsScores.length >= MIN_RANK_DISTRIBUTION) {
+            result.rsRating = rsPercentile(rsScore, rsScores);
+            result.rsRatingUpdatedAt = new Date().toISOString();
+          }
+          if (techComp && techComps.length >= MIN_RANK_DISTRIBUTION) {
+            result.techRating = techRatingFromComponents(techComp, techComps);
+            result.techRatingUpdatedAt = new Date().toISOString();
+          }
+        } catch (e) {
+          this.logger.warn(
+            `on-demand rank failed for ${ticker}: ${(e as Error).message}`,
+          );
+        }
+      }
+
+      // computeIndicators only yields the 1-year daily beta (`beta1yDaily`).
+      // The headline `beta` is the 5-year monthly one beta.job owns; fill it
+      // here too, or a ticker first seen on-demand shows N/A until the next
+      // premarket run. Best-effort, like the ranking above.
+      try {
+        const market = await this.monthlyBeta.loadMarket();
+        const mb = await this.monthlyBeta.computeFor(ticker, market);
+        Object.assign(result, {
+          beta: mb.beta?.beta ?? null,
+          betaMonths: mb.beta?.months ?? 0,
+          betaR2: mb.beta?.r2 ?? null,
+          betaAsOf: mb.asOf,
+          betaMethod: BETA_METHOD,
+          betaSource: mb.source,
+          betaUpdatedAt: new Date().toISOString(),
+        });
+      } catch (e) {
+        this.logger.warn(
+          `on-demand monthly beta failed for ${ticker}: ${(e as Error).message}`,
+        );
+      }
+
+      return result;
+    } catch (e) {
+      this.logger.warn(
+        `first-sync technicals failed for ${ticker}: ${(e as Error).message}`,
+      );
+      return {};
+    }
+  }
+
+  /**
+   * The company doc with a CURRENT next-earnings date. A stored
+   * `nextEarningsDate` can be a report that already happened (MSFT carried
+   * Jul 29 after reporting), so a missing or past one is replaced by the next
+   * scheduled report in FMP's EPS history (rows with no actual yet).
+   */
+  async getCompany(ticker: string): Promise<Record<string, unknown> | null> {
+    const doc = await this.getCompanyDoc(ticker);
+    if (!doc) return doc;
+    const today = etDate();
+    const stored = typeof doc.nextEarningsDate === "string" ? doc.nextEarningsDate : null;
+    const next = await this.nextReportDate(ticker).catch(() => null);
+    const candidateDates = [stored, next].filter(
+      (d): d is string => typeof d === "string" && d >= today,
+    ).sort();
+    const resolvedDate = candidateDates[0] ?? null;
+    return { ...doc, nextEarningsDate: resolvedDate };
+  }
+
+  private readonly nextReportCache = new Map<string, { at: number; date: string | null }>();
+
+  /** Next scheduled report (YYYY-MM-DD, ET today or later) from FMP's EPS history; cached 6h. */
+  private async nextReportDate(ticker: string): Promise<string | null> {
+    const hit = this.nextReportCache.get(ticker);
+    if (hit && Date.now() - hit.at < 6 * 3600_000) return hit.date;
+    if (!this.estimatesAdapter) return null;
+    const today = etDate();
+    const rows = await this.estimatesAdapter.getEpsHistory(ticker);
+    const date = rows
+      .filter((r) => r.epsActual == null && r.date >= today)
+      .map((r) => r.date)
+      .sort()[0] ?? null;
+    this.nextReportCache.set(ticker, { at: Date.now(), date });
+    return date;
+  }
+
+  private async getCompanyDoc(ticker: string): Promise<Record<string, unknown> | null> {
+    // Checked HERE, not only at the endpoint: the premarket warm calls this for
+    // every watchlist/portfolio ticker, and would otherwise rebuild a delisted
+    // symbol's company doc — and so its place in every list — each morning.
+    if (await this.delisted.isDelisted(ticker)) return null;
+    this.stats.companyRequests++;
+    this.recordUsage(ticker);
+
+    const mem = this.memCompany.get(ticker);
+    if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
+
+    const ref = this.firebase.firestore.collection("companies").doc(ticker);
+    const snap = await ref.get();
+    if (snap.exists) {
+      const data = snap.data() as Record<string, unknown>;
+      const created =
+        typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
+      // 'description'/'instOwnershipPct' in data → the doc was written by a build
+      // that includes the profile blurb and the 13F institutional rollup; older
+      // docs lack these keys, so fall through to a refetch to backfill them
+      // rather than serving a stale doc missing those fields.
+      if (
+        Number.isFinite(created) &&
+        Date.now() - created < COMPANY_TTL_MS &&
+        data.price != null
+      ) {
+        // The nightly cron writes the 52w % from the last bar close; re-measure
+        // it from the price this doc carries (see anchor52wToPrice).
+        const anchored = anchor52wToPrice(data);
+        this.memCompany.set(ticker, { data: anchored, at: Date.now() });
+        return anchored;
+      }
+    }
+
+    const key = `company_${ticker}`;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown> | null> | undefined;
+    if (existing) return existing;
+
+    // Rank RS / tech on-demand only for a ticker that has no cron rating yet.
+    // For one the sweep already ranked, its universe-wide percentile is
+    // authoritative — merge:true preserves it rather than overwriting with an
+    // on-demand approximation.
+    const hadRating =
+      snap.exists && (snap.data() as Record<string, unknown>).rsRating != null;
+
+    const p = (async () => {
+      this.stats.companyVendorCalls++;
+      let details: Record<string, unknown> | null = null;
+      try {
+        details = await this.polygon.getTickerDetails(ticker);
+      } catch {
+        details = null; // unknown ticker — still try the snapshot
+      }
+      let price: number | null = null;
+      let pctChange: number | null = null;
+      let prevClose: number | null = null;
+      let volume: number | null = null;
+      let q: Record<string, unknown> | undefined;
+
+      // Which vendor served the price — the stock page labels the quote with it.
+      let priceSource: "fmp" | "polygon" = "polygon";
+      // FMP real-time quote preferred (seconds fresh); Polygon universal snapshot as backup
+      if (this.fmp.enabled) {
+        try {
+          const fmpQ = await this.fmp.getQuote(ticker);
+          if (fmpQ?.price != null) {
+            priceSource = "fmp";
+            price = fmpQ.price;
+            pctChange = fmpQ.changePercentage ?? null;
+            prevClose = fmpQ.previousClose ?? null;
+            volume = fmpQ.volume ?? null;
+          }
+        } catch {
+          // Fall back to Polygon universal snapshot below
+        }
+      }
+
+      if (price == null) {
+        const quotes = await this.polygon
+          .getUniversalSnapshot([ticker])
+          .catch(() => []);
+        q = quotes[0] as Record<string, unknown> | undefined;
+        if (!details && !q) return null;
+        price = (q?.price as number | undefined) ?? null;
+        if (q?.source === "fmp") priceSource = "fmp";
+        pctChange = (q?.changePercent as number | undefined) ?? null;
+        prevClose = (q?.previousClose as number | undefined) ?? null;
+        volume = (q?.volume as number | undefined) ?? null;
+      }
+
+      // Fundamentals the daily sync job's profile adapter also computes, fetched
+      // here so this doc is not missing peRatio/eps/yield/peers until the cron
+      // cursor reaches the ticker. Each is independent and best-effort: a failed
+      // or empty one degrades to null (same as the adapter's per-field try/catch)
+      // rather than dropping the whole company doc. Parallel to keep latency low.
+      const [
+        epsRes,
+        peersRes,
+        divRes,
+        techRes,
+        instRes,
+        epsHistRes,
+        fmpProfileRes,
+      ] = await Promise.allSettled([
+          this.polygon.getTtmEps(ticker),
+          this.polygon.getRelatedCompanies(ticker),
+          this.polygon.getDividendHistory(ticker, 40),
+          // First-time technicals (RSI/MACD/Stoch/ADX, beta, MA ladder, 52-week
+          // range, key levels) so the detail page isn't a wall of N/A until the
+          // nightly cron reaches this ticker. Runs alongside the other fetches so
+          // it adds max(), not sum(), to latency. Best-effort — returns {} on any
+          // failure so the company doc still saves with profile + price.
+          this.computeFirstSyncTechnicals(ticker, !hadRating),
+          // FMP 13F institutional-ownership rollup (Inst. ownership % + holder
+          // count for the detail page's Institutional card). Best-effort — null
+          // for names FMP has no 13F rollup for. Short interest stays absent:
+          // Polygon 404s on it and FMP's stable API has no product.
+          this.fmp.getLatestInstitutionalOwnership(ticker),
+          // FMP reported EPS history → non-GAAP TTM EPS for a NASDAQ/IBD-basis
+          // P/E, instead of Polygon's GAAP TTM. Best-effort, [] when FMP is off.
+          this.estimatesAdapter
+            ? this.estimatesAdapter.getEpsHistory(ticker).catch(
+                () =>
+                  [] as Array<{
+                    date: string;
+                    epsActual: number | null;
+                    epsEstimate: number | null;
+                  }>,
+              )
+            : Promise.resolve(
+                [] as Array<{
+                  date: string;
+                  epsActual: number | null;
+                  epsEstimate: number | null;
+                }>,
+              ),
+          // FMP company profile → GICS `sector` used to refine the SIC-derived
+          // sector (e.g. IREN: SIC "Finance Services" → FMP "Technology"). Best-
+          // effort; null when FMP is off or has no row → SIC fallback.
+          this.fmp.getCompanyProfile(ticker),
+        ]);
+
+      const gaapTtm = epsRes.status === "fulfilled" ? epsRes.value : null;
+      const epsTtmReported = ttmReportedEpsFromRows(
+        epsHistRes.status === "fulfilled" ? epsHistRes.value : [],
+      );
+      // GAAP diluted TTM first — the basis Yahoo, TradingView and most quote
+      // pages use for EPS (TTM) and P/E; the adjusted TTM only fills a gap.
+      // (Adjusted read ETN 12.36 / ISRG 11.13 vs the public 9.83 / 8.27.)
+      const eps = gaapTtm ?? epsTtmReported;
+      const peRatio =
+        eps != null && eps > 0 && price != null
+          ? Math.round((price / eps) * 100) / 100
+          : null;
+
+      const peers =
+        peersRes.status === "fulfilled"
+          ? peersRes.value.filter((p) => p !== ticker)
+          : [];
+
+      const technicals =
+        techRes.status === "fulfilled" ? techRes.value : {};
+
+      const inst =
+        instRes.status === "fulfilled" ? instRes.value : null;
+
+      const fmpProfile =
+        fmpProfileRes.status === "fulfilled" ? fmpProfileRes.value : null;
+      const descriptionSource = fmpProfile?.description
+        ? "fmp"
+        : details?.description
+          ? "polygon"
+          : null;
+      if (details) {
+        this.logger.debug(
+          `company ${ticker}: description from ${descriptionSource ?? "none"}`,
+        );
+      }
+
+      // FORWARD-ANNUALIZED dividend per share and yield (Polygon sells no yield
+      // product). Methodology: (most-recent REGULAR per-payment amount) ×
+      // (payments-per-year for the payer's cadence) ÷ price. This is the forward
+      // run-rate a vendor quotes; unlike a trailing-12-month SUM it does NOT
+      // overstate the yield when a rolling 365-day window happens to contain a
+      // 5th quarterly ex-date (PEP: ~5.25% TTM vs the true ~4.27% forward).
+      // Specials/one-time distributions are excluded; cadence that can't be
+      // determined → null (NOT a TTM fallback). cashAmount read is null-safe.
+      let dividendPerShare: number | null = null;
+      let dividendYield: number | null = null;
+      if (divRes.status === "fulfilled") {
+        const fwd = forwardAnnualDividend(divRes.value);
+        if (fwd) {
+          // dividendPerShare stays the forward ANNUAL figure (consistent basis).
+          dividendPerShare = Math.round(fwd.perShare * 10000) / 10000;
+          if (price != null && price > 0) {
+            dividendYield = Math.round((fwd.perShare / price) * 10000) / 100;
+          }
+        }
+      }
+
+      const now = new Date().toISOString();
+      // One SIC classification reused for sector AND industry below, so the two
+      // can never disagree. Safe when details is null — classifyFromSic returns
+      // nulls, and the whole profile block is omitted in that case anyway.
+      //
+      // Polygon omits sic_code for many foreign private issuers / ADRs (e.g.
+      // GAUZ, a 20-F filer), which left sector/industry blank on the detail page.
+      // When it's missing, fall back to the SEC's authoritative SIC — free, and
+      // the SAME standard classifyFromSic consumes — so the classification still
+      // Canonical classification: SEC EDGAR regulatory filing SIC primary, Polygon fallback.
+      const secSic = details ? await this.secEdgar.getSicByTicker(ticker) : null;
+      const resolvedSic = resolveSicCode(secSic, details?.sic_code as string | number | undefined);
+      // No SIC anywhere (FDIC-filing banks like PFBC): FMP's profile industry.
+      const sicClass = withVendorIndustryFallback(classifyFromSic(resolvedSic, ticker), fmpProfile?.industry);
+      // Nightly fundamentals-growth writes epsGrowthYoY / revenueGrowthYoY /
+      // grossMargin to the company doc; this on-demand rebuild doesn't recompute
+      // them, so carry them forward (else the returned doc — the stock-detail's
+      // source — would drop them even though Firestore keeps them via merge).
+      const prevCo = snap.exists
+        ? (snap.data() as Record<string, unknown>)
+        : {};
+
+      // FMP primary on every rebuild, on the SAME basis as the nightly
+      // fundamentals-growth job (latest complete fiscal year), so the two
+      // writers agree and the value is current rather than whatever the job
+      // last reached: gross margin and revenue growth from FMP's annual
+      // ratios / income-statement growth. EPS growth keeps the job's non-GAAP
+      // basis (FMP reported EPS, summed per fiscal year) and, like the job,
+      // falls back to GAAP diluted EPS growth only without that history.
+      let grossMargin = (prevCo.grossMargin as number | null | undefined) ?? null;
+      let revenueGrowthYoY = (prevCo.revenueGrowthYoY as number | null | undefined) ?? null;
+      let epsGrowthYoY = (prevCo.epsGrowthYoY as number | null | undefined) ?? null;
+      if (this.fmp.enabled) {
+        const fmpSym = toFmpSymbol(ticker);
+        const [ratios, growth, finSnap] = await Promise.all([
+          this.fmp.getCompanyRatios(fmpSym).catch(() => null),
+          this.fmp.getIncomeStatementGrowth(fmpSym, 1).catch(() => null),
+          this.firebase.firestore.collection("financials").doc(ticker).get().catch(() => null),
+        ]);
+        const round4 = (v: number) => Math.round(v * 10000) / 10000;
+        const gm = Number(ratios?.grossProfitMargin);
+        if (Number.isFinite(gm) && gm > 0) grossMargin = round4(gm);
+        const g = growth?.[0];
+        const rg = Number(g?.growthRevenue);
+        if (Number.isFinite(rg)) revenueGrowthYoY = round4(rg);
+        const hist = (finSnap?.data()?.epsHistory ?? []) as EpsHistoryRow[];
+        const nonGaap = latestAnnualEpsGrowth(hist);
+        if (nonGaap != null) {
+          epsGrowthYoY = nonGaap;
+        } else if (epsGrowthYoY == null) {
+          const eg = Number(g?.growthEPSDiluted ?? g?.growthEPS);
+          // Same magnitude cap as the job: a near-zero base is not a growth rate.
+          if (Number.isFinite(eg) && Math.abs(eg) <= 10) epsGrowthYoY = round4(eg);
+        }
+      }
+
+      const doc: Record<string, unknown> = {
+        ticker,
+        // getTickerDetails failed (null) but the snapshot succeeded → keep the
+        // prior good name rather than overwriting it with the bare ticker.
+        name: details?.name ?? (prevCo.name as string | undefined) ?? ticker,
+        // Profile fields come ONLY from getTickerDetails. When that call failed
+        // (details === null) these are OMITTED so the merge:true write preserves
+        // the prior good values, instead of nulling description/homepageUrl/
+        // sector/industry/marketCap/exchange on a transient details outage.
+        ...(details
+          ? {
+              // FMP's fuller writeup first, Polygon's as fallback — same order
+              // as the companies sync (polygon-company-profile.adapter.ts), so
+              // the two writers no longer flip the text back and forth.
+              // A source with no value for a field (Polygon has no description or
+              // market cap for ETFs) keeps the stored one instead of nulling it.
+              description:
+                fmpProfile?.description ?? details.description ?? (prevCo.description as string | undefined) ?? null,
+              descriptionSource,
+              betaVendor: fmpProfile?.beta ?? (prevCo.betaVendor as number | undefined) ?? null,
+              homepageUrl: details.homepage_url ?? (prevCo.homepageUrl as string | undefined) ?? null,
+              ...keepStoredClassification(sicClass, prevCo),
+              sicCode: resolvedSic == null ? null : String(resolvedSic),
+              sicDescription: details.sic_description ?? null,
+              // Correct a grossly-stale Polygon market_cap with price × shares
+              // (see reconcileMarketCap); consistent values are left untouched.
+              marketCap:
+                reconcileMarketCap(
+                  details.market_cap,
+                  price,
+                  details.weighted_shares_outstanding,
+                ) ?? (prevCo.marketCap as number | undefined) ?? null,
+              exchange: details.primary_exchange ?? (prevCo.exchange as string | undefined) ?? null,
+              employees: (details as any).total_employees ?? fmpProfile?.fullTimeEmployees ?? (prevCo.employees as number | undefined) ?? null,
+              // Vendors fill an unknown listing date with a placeholder (GE:
+              // Polygon "1900-01-01"); such a date falls through to the next source.
+              listingDate:
+                realListingDate((details as any).list_date) ??
+                realListingDate(fmpProfile?.ipoDate) ??
+                realListingDate(prevCo.listingDate as string | undefined) ??
+                null,
+              ceo: (details as any).ceo ?? fmpProfile?.ceo ?? (prevCo.ceo as string | undefined) ?? null,
+            }
+          : {}),
+        price,
+        pctChange: pctChange ?? (q?.changePercent as number | undefined) ?? null,
+        prevClose: prevClose ?? (q?.previousClose as number | undefined) ?? null,
+        volume: volume ?? (q?.volume as number | undefined) ?? null,
+        peRatio,
+        eps,
+        epsTtm: eps,
+        epsGrowthYoY,
+        revenueGrowthYoY,
+        grossMargin,
+        dividendYield,
+        dividendPerShare,
+        peers,
+        // FMP 13F institutional-ownership rollup (Institutional card). Null for
+        // names with no 13F filers (small / recently-listed / non-US).
+        instOwnershipPct: inst?.ownershipPercent ?? null,
+        inst13FHolders: inst?.investorsHolding ?? null,
+        inst13FHoldersChange: inst?.investorsHoldingChange ?? null,
+        inst13FShares: inst?.numberOf13Fshares ?? null,
+        inst13FSharesChange: inst?.numberOf13FsharesChange ?? null,
+        instTotalInvested: inst?.totalInvested ?? null,
+        instPutCallRatio: inst?.putCallRatio ?? null,
+        instAsOf:
+          inst && inst.year != null && inst.quarter != null
+            ? `Q${inst.quarter} ${inst.year}`
+            : null,
+        // Carry the cron's universe-wide RS / tech RANK forward when this rebuild
+        // didn't recompute it (hadRating → computeFirstSyncTechnicals skipped the
+        // expensive scan, so it returned no rsRating/sectorRank/techRank).
+        // Preserves the nightly job's ranks on on-demand refreshes.
+        // Tickers never swept keep null (honestly unranked).
+        rsRating: (prevCo.rsRating as number | null | undefined) ?? null,
+        rsRatingUpdatedAt:
+          (prevCo.rsRatingUpdatedAt as string | null | undefined) ?? null,
+        techRating: (prevCo.techRating as number | null | undefined) ?? null,
+        techRatingUpdatedAt:
+          (prevCo.techRatingUpdatedAt as string | null | undefined) ?? null,
+        // Technical field set computed above (empty object when history is thin
+        // or the fetch failed). Spread last so a real technicals result fills
+        // rsi14/macd/beta/high52/keyLevels/... the same way the cron would.
+        ...technicals,
+        createdAt: now,
+        updatedAt: now,
+        source: `${priceSource}-ondemand`,
+      };
+      // Stored bars stop at the last premarket run; `price` is the snapshot,
+      // a session or more newer. Measure the 52w figures from `price`.
+      const anchored = anchor52wToPrice(doc);
+      await ref.set(anchored, { merge: true });
+      this.memCompany.set(ticker, { data: anchored, at: Date.now() });
+      return anchored;
+    })().finally(() => this.inflight.delete(key));
+
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  /**
+   * Fast key-stats summary for the stock-detail header, served while
+   * /live/company builds the full doc for a ticker not yet in Firestore. The
+   * frontend fires both; this answers in ~1s, the full doc replaces it later.
+   *
+   * Only the calls those tiles need, all in parallel, each bounded by
+   * SUMMARY_CALL_BUDGET_MS — a slow/failed source nulls just its own tiles.
+   * Values come from the same helpers the full rebuild uses so tiles don't jump
+   * when the doc lands. Nothing is written to Firestore: the full doc stays the
+   * single source of truth. The FMP earnings fetch is memoized in FmpService
+   * for 60s, so the concurrent full rebuild reuses it rather than refetching.
+   */
+  async getCompanySummary(
+    ticker: string,
+  ): Promise<Record<string, unknown> | null> {
+    if (await this.delisted.isDelisted(ticker)) return null;
+    // Full doc already built (this instance) → it's a superset; serve it.
+    const full = this.memCompany.get(ticker);
+    if (full && Date.now() - full.at < 5 * 60_000) return full.data;
+
+    const memo = this.memCompanySummary.get(ticker);
+    if (memo && Date.now() - memo.at < COMPANY_SUMMARY_TTL_MS) return memo.data;
+
+    const key = `company_summary_${ticker}`;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown> | null> | undefined;
+    if (existing) return existing;
+
+    const p = this.buildCompanySummary(ticker).finally(() =>
+      this.inflight.delete(key),
+    );
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  private async buildCompanySummary(
+    ticker: string,
+  ): Promise<Record<string, unknown> | null> {
+    // Resolves null on timeout. The underlying call keeps running (fetchJson
+    // bounds it), which is harmless and lets memoized sources warm their cache.
+    const within = <T>(work: Promise<T>): Promise<T | null> =>
+      Promise.race([
+        work.catch(() => null),
+        sleep(SUMMARY_CALL_BUDGET_MS).then(() => null),
+      ]);
+
+    const to = new Date();
+    const from = new Date();
+    // Same window as computeFirstSyncTechnicals so the 52w / avg-vol figures
+    // are computed over the identical series the full doc will use.
+    from.setUTCFullYear(from.getUTCFullYear() - 2);
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+    const [details, fmpQuote, quotes, aggs, epsHist, gaapTtm, divs] = await Promise.all([
+      within(
+        this.polygon.getTickerDetails(ticker) as Promise<Record<
+          string,
+          unknown
+        > | null>,
+      ),
+      within(this.fmp.getQuote(ticker)),
+      within(this.polygon.getUniversalSnapshot([ticker])),
+      within(this.polygon.getAggsRange(ticker, iso(from), iso(to))),
+      within(
+        this.estimatesAdapter
+          ? this.estimatesAdapter.getEpsHistory(ticker)
+          : Promise.resolve([]),
+      ),
+      within(this.polygon.getTtmEps(ticker)),
+      within(this.polygon.getDividendHistory(ticker, 40)),
+    ]);
+
+    const q = quotes?.[0] as Record<string, unknown> | undefined;
+    if (!details && !q && !fmpQuote) return null;
+    const price = fmpQuote?.price ?? (q?.price as number | undefined) ?? null;
+
+    // EPS / P/E — GAAP diluted TTM preferred, adjusted fallback (same as full doc).
+    const epsRows = epsHist ?? [];
+    const epsTtmReported = ttmReportedEpsFromRows(epsRows);
+    const eps = gaapTtm ?? epsTtmReported ?? null;
+    const peRatio =
+      eps != null && eps > 0 && price != null
+        ? Math.round((price / eps) * 100) / 100
+        : (fmpQuote?.pe ?? null);
+
+    // Next ER — FMP lists scheduled quarters with no actual yet.
+    const today = etDate();
+    const nextEarningsDate =
+      epsRows
+        .filter((r) => r.epsActual == null && r.date >= today)
+        .map((r) => r.date)
+        .sort()[0] ?? null;
+
+    // Forward-annualized dividend (same methodology as the full doc).
+    let dividendPerShare: number | null = null;
+    let dividendYield: number | null = null;
+    const fwd = divs ? forwardAnnualDividend(divs) : null;
+    if (fwd) {
+      dividendPerShare = Math.round(fwd.perShare * 10000) / 10000;
+      if (price != null && price > 0) {
+        dividendYield = Math.round((fwd.perShare / price) * 10000) / 100;
+      }
+    }
+
+    // 52w range / distance from extremes / avg volume via the cron's own
+    // indicator function (no SPY map → beta stays null; not shown here).
+    let ind: ReturnType<typeof computeIndicators> = null;
+    if (aggs && aggs.length > 0) {
+      const bars: IndicatorBar[] = aggs.map((b) => ({
+        barDate: new Date(b.t).toISOString().slice(0, 10),
+        open: b.o,
+        high: b.h,
+        low: b.l,
+        close: b.c,
+        volume: b.v,
+        vwap: b.vw ?? null,
+      }));
+      ind = computeIndicators(bars.slice(-300), new Map());
+    }
+
+    // Sector / industry from Polygon's SIC only. The full doc's SEC fallback
+    // (for issuers Polygon lacks a SIC for) is too slow for this path → null.
+    const sic = details?.sic_code as string | number | null | undefined;
+    const hasSic =
+      sic != null && String(sic).trim() !== "" && String(sic).trim() !== "0";
+    const sicClass = classifyFromSic(hasSic ? sic : null, ticker);
+
+    const summary: Record<string, unknown> = {
+      ticker,
+      name: details?.name ?? fmpQuote?.name ?? q?.name ?? ticker,
+      price,
+      pctChange: fmpQuote?.changePercentage ?? q?.changePercent ?? null,
+      prevClose: fmpQuote?.previousClose ?? q?.previousClose ?? null,
+      volume: fmpQuote?.volume ?? q?.volume ?? null,
+      marketCap: details
+        ? reconcileMarketCap(
+            details.market_cap,
+            price,
+            details.weighted_shares_outstanding,
+          )
+        : (fmpQuote?.marketCap ?? null),
+      exchange: details?.primary_exchange ?? null,
+      sector: sicClass?.sector ?? null,
+      industry: sicClass?.industry ?? null,
+      peRatio,
+      eps,
+      epsTtm: eps,
+      nextEarningsDate,
+      dividendYield,
+      dividendPerShare,
+      high52: ind?.high52 ?? null,
+      low52: ind?.low52 ?? null,
+      pctFromHigh52: ind?.pctFromHigh52 ?? null,
+      pctFromLow52: ind?.pctFromLow52 ?? null,
+      avgVolume20: ind?.avgVolume20 ?? null,
+      week5ChangePct: ind?.week5ChangePct ?? null,
+      monthChangePct: ind?.monthChangePct ?? null,
+      weeklyChange: ind?.week5ChangePct ?? null,
+      monthlyChange: ind?.monthChangePct ?? null,
+      week5BaseClose: ind?.week5BaseClose ?? null,
+      week5Closes: ind?.week5Closes ?? null,
+      // Lets the frontend tell this apart from the full company doc.
+      partial: true,
+      source: "polygon-summary",
+    };
+    const anchored = anchor52wToPrice(summary);
+    this.memCompanySummary.set(ticker, { data: anchored, at: Date.now() });
+    return anchored;
+  }
+
+  /**
+   * Lightweight multi-ticker quotes (price + %change) in ONE Polygon
+   * universal-snapshot call. Used to price peer tickers that aren't in the
+   * synced companies universe, so the peers list can show every ticker Polygon
+   * returned, on demand — no per-ticker company fetch needed.
+   */
+  async getQuotes(tickers: string[]): Promise<QuoteRow[]> {
+    const syms = [
+      ...new Set(tickers.map((t) => t.toUpperCase().trim()).filter(Boolean)),
+    ].slice(0, 250);
+    if (syms.length === 0) return [];
+    syms.forEach((t) => this.recordUsage(t));
+    // Served from the SHARED snapshot cache — the same entries /live/snapshot
+    // hands the heatmap — rather than its own direct vendor call. Previously the
+    // two paths hit the vendor on independent clocks, so the same ticker could
+    // read 215.26 on a heatmap tile and 215.31 in the drawer at the same moment.
+    // One cache = one number everywhere, and it also drops upstream load (the
+    // cache refreshes a demanded ticker once per interval no matter how many
+    // surfaces ask for it).
+    //
+    // `name` is kept in the response shape for compatibility but is always null:
+    // the snapshot cache doesn't carry it and no caller reads it (every screen
+    // takes the display name from its own companies doc).
+    const { quotes } = await this.snapshots
+      .get(syms)
+      .catch(() => ({ quotes: [] as SnapshotQuote[] }));
+    // Official close outside regular hours; the extended trade rides separately.
+    return quotes.map(quoteRow);
+  }
+
+  /**
+   * Enriched peer summaries (name, price, pctChange, marketCap, peRatio, rsRating, weeklyChange, monthlyChange).
+   * Fast resolution path: checks memory caches (memCompany, memCompanySummary), Firestore companies collection,
+   * and on-demand summaries / FMP quotes for any missing peer tickers.
+   */
+  async getPeersSummary(tickers: string[]): Promise<
+    Array<{
+      ticker: string;
+      name: string | null;
+      price: number | null;
+      pctChange: number | null;
+      marketCap: number | null;
+      peRatio: number | null;
+      rsRating: number | null;
+      weeklyChange: number | null;
+      monthlyChange: number | null;
+      /** Last close of the prior calendar year — YTD = price / this − 1, measured by the reader against the price it shows. */
+      ytdBaseClose?: number | null;
+    }>
+  > {
+    const syms = [
+      ...new Set(tickers.map((t) => t.toUpperCase().trim()).filter(Boolean)),
+    ].slice(0, 50);
+    if (syms.length === 0) return [];
+
+    const results = new Map<string, {
+      ticker: string;
+      name: string | null;
+      price: number | null;
+      pctChange: number | null;
+      marketCap: number | null;
+      peRatio: number | null;
+      rsRating: number | null;
+      weeklyChange: number | null;
+      monthlyChange: number | null;
+      ytdBaseClose?: number | null;
+    }>();
+
+    const missing: string[] = [];
+    for (const sym of syms) {
+      const full = this.memCompany.get(sym);
+      if (full && Date.now() - full.at < 5 * 60_000) {
+        const d = full.data;
+        results.set(sym, {
+          ticker: sym,
+          name: (d.name as string) ?? sym,
+          price: (d.price as number) ?? null,
+          pctChange: (d.pctChange as number) ?? null,
+          marketCap: (d.marketCap as number) ?? null,
+          peRatio: (d.peRatio as number) ?? null,
+          rsRating: (d.rsRating as number) ?? null,
+          weeklyChange: (d.week5ChangePct as number) ?? null,
+          monthlyChange: (d.monthChangePct as number) ?? null,
+        });
+        continue;
+      }
+      const sum = this.memCompanySummary.get(sym);
+      if (sum && Date.now() - sum.at < COMPANY_SUMMARY_TTL_MS) {
+        const d = sum.data;
+        results.set(sym, {
+          ticker: sym,
+          name: (d.name as string) ?? sym,
+          price: (d.price as number) ?? null,
+          pctChange: (d.pctChange as number) ?? null,
+          marketCap: (d.marketCap as number) ?? null,
+          peRatio: (d.peRatio as number) ?? null,
+          rsRating: (d.rsRating as number) ?? null,
+          weeklyChange: (d.week5ChangePct as number) ?? (d.weeklyChange as number) ?? null,
+          monthlyChange: (d.monthChangePct as number) ?? (d.monthlyChange as number) ?? null,
+        });
+        continue;
+      }
+      missing.push(sym);
+    }
+
+    if (missing.length === 0) {
+      return this.withYtdBase(await this.withRsRating(await this.withLiveMonthChange(syms.map((s) => results.get(s)!).filter(Boolean))));
+    }
+
+    try {
+      const snaps = await Promise.all(
+        missing.map((s) =>
+          this.firebase.firestore.collection("companies").doc(s).get().catch(() => null),
+        ),
+      );
+      const stillMissing: string[] = [];
+      snaps.forEach((snap, idx) => {
+        const s = missing[idx];
+        if (snap && snap.exists) {
+          const d = snap.data() || {};
+          results.set(s, {
+            ticker: s,
+            name: (d.name as string) ?? s,
+            price: (d.price as number) ?? null,
+            pctChange: (d.pctChange as number) ?? null,
+            marketCap: (d.marketCap as number) ?? null,
+            peRatio: (d.peRatio as number) ?? null,
+            rsRating: (d.rsRating as number) ?? null,
+            weeklyChange: (d.week5ChangePct as number) ?? null,
+            monthlyChange: (d.monthChangePct as number) ?? null,
+          });
+        } else {
+          stillMissing.push(s);
+        }
+      });
+
+      if (stillMissing.length > 0) {
+        const [fmpQuotes, snapshotMap] = await Promise.all([
+          this.fmp.getQuotes(stillMissing).catch(() => []),
+          this.snapshots.get(stillMissing).catch(() => ({ quotes: [] })),
+        ]);
+
+        const fmpMap = new Map((fmpQuotes || []).map((q) => [q.symbol, q]));
+        const snapQuotesMap = new Map<string, { name?: string | null; price?: number | null; changePct?: number | null }>(((snapshotMap as any)?.quotes || []).map((q: any) => [q.ticker, q]));
+
+        await Promise.all(
+          stillMissing.map(async (s) => {
+            const sumDoc = await this.getCompanySummary(s).catch(() => null);
+            const fmpQ = fmpMap.get(s);
+            const snapQ = snapQuotesMap.get(s);
+
+            const name = (sumDoc?.name as string) ?? fmpQ?.name ?? snapQ?.name ?? s;
+            const price = (sumDoc?.price as number) ?? fmpQ?.price ?? snapQ?.price ?? null;
+            const pctChange = (sumDoc?.pctChange as number) ?? fmpQ?.changePercentage ?? snapQ?.changePct ?? null;
+            const marketCap = (sumDoc?.marketCap as number) ?? fmpQ?.marketCap ?? null;
+            const peRatio = (sumDoc?.peRatio as number) ?? fmpQ?.pe ?? null;
+            const rsRating = (sumDoc?.rsRating as number) ?? null;
+            const weeklyChange = (sumDoc?.week5ChangePct as number) ?? (sumDoc?.weeklyChange as number) ?? null;
+            const monthlyChange = (sumDoc?.monthChangePct as number) ?? (sumDoc?.monthlyChange as number) ?? null;
+
+            results.set(s, {
+              ticker: s,
+              name,
+              price,
+              pctChange,
+              marketCap,
+              peRatio,
+              rsRating,
+              weeklyChange,
+              monthlyChange,
+            });
+          }),
+        );
+      }
+    } catch (err) {
+      this.logger.warn(`getPeersSummary error: ${(err as Error)?.message ?? err}`);
+    }
+
+    return this.withYtdBase(await this.withRsRating(await this.withLiveMonthChange(syms.map((s) => results.get(s)!).filter(Boolean))));
+  }
+
+  /**
+   * Attach each row's YTD base: the last close on/before 31 Dec of the prior ET
+   * year. Returned as a price rather than a percentage so the reader can measure
+   * YTD to the SAME live price it displays (the stored % would end at whichever
+   * bar was last written). The base is fixed for the whole year, so it is cached
+   * for hours. A ticker with no bar in the window (listed this year, no data)
+   * gets null — the UI shows a dash rather than a made-up figure.
+   */
+  private async withYtdBase<T extends { ticker: string; ytdBaseClose?: number | null }>(rows: T[]): Promise<T[]> {
+    if (rows.length === 0) return rows;
+    const etIso = (ms: number) =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ms));
+    const now = Date.now();
+    const year = Number(etIso(now).slice(0, 4));
+    const target = `${year - 1}-12-31`;
+    const from = `${year - 1}-12-15`;
+
+    const baseClose = async (sym: string): Promise<number | null> => {
+      const key = `${sym}|${target}`;
+      const hit = this.memYtdBase.get(key);
+      if (hit && now - hit.at < 6 * 3_600_000) return hit.close;
+      const bars = await this.polygon.getAggsRange(sym, from, target).catch(() => [] as PolygonAggBar[]);
+      const base = bars
+        .filter((b) => b.c != null && b.c > 0 && etIso(b.t) <= target)
+        .sort((a, b) => a.t - b.t)
+        .at(-1);
+      const close = base?.c ?? null;
+      this.memYtdBase.set(key, { close, at: now });
+      return close;
+    };
+
+    for (let i = 0; i < rows.length; i += 5) {
+      await Promise.all(
+        rows.slice(i, i + 5).map(async (r) => {
+          r.ytdBaseClose = await baseClose(r.ticker);
+        }),
+      );
+    }
+    return rows;
+  }
+
+  /**
+   * RS rating for peers that have none stored (outside the tracked universe),
+   * computed EXACTLY like the nightly rs-rating job: computeRsScore over the
+   * last 260 completed daily closes (weighted trailing quarterly returns,
+   * 40/20/20/20; needs 65+ sessions), then rsPercentile against the universe's
+   * stored raw scores. Too little history (a recent IPO) stays null.
+   */
+  private async withRsRating<T extends { ticker: string; rsRating: number | null }>(rows: T[]): Promise<T[]> {
+    const need = rows.filter((r) => r.rsRating == null);
+    if (need.length === 0) return rows;
+    const etIso = (ms: number) =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ms));
+    const now = Date.now();
+    // Completed sessions only, like the nightly sweep's stored bars.
+    const to = etIso(now - 86_400_000);
+    const from = etIso(now - 400 * 86_400_000);
+
+    if (!this.rsDistribution || now - this.rsDistribution.at > 3_600_000) {
+      const dist = await this.firebase.firestore
+        .collection("companies")
+        .select("rsScore", "delisted")
+        .get()
+        .catch(() => null);
+      if (dist) {
+        const scores = new Map<string, number>();
+        for (const d of dist.docs) {
+          const x = d.data();
+          if (x.delisted !== true && typeof x.rsScore === "number") scores.set(d.id, x.rsScore);
+        }
+        this.rsDistribution = { scores, at: now };
+      }
+    }
+    const dist = this.rsDistribution?.scores;
+    if (!dist || dist.size < 20) return rows; // too thin to rank (same floor as the first-view path)
+
+    for (let i = 0; i < need.length; i += 5) {
+      await Promise.all(
+        need.slice(i, i + 5).map(async (r) => {
+          const key = `${r.ticker}|${to}`;
+          let hit = this.memRsRating.get(key);
+          if (!hit) {
+            const bars = await this.polygon.getAggsRange(r.ticker, from, to).catch(() => [] as PolygonAggBar[]);
+            const closes = bars
+              .filter((b) => b.c != null && b.c > 0)
+              .sort((a, b) => a.t - b.t)
+              .map((b) => b.c as number)
+              .slice(-260);
+            const score = computeRsScore(closes);
+            const others = [...dist].filter(([t]) => t !== r.ticker).map(([, v]) => v);
+            hit = { rating: score == null ? null : rsPercentile(score, others), at: now };
+            this.memRsRating.set(key, hit);
+          }
+          r.rsRating = hit.rating;
+        }),
+      );
+    }
+    return rows;
+  }
+
+  /**
+   * Quarterly analyst consensus (FMP `analyst-estimates`, period=quarter):
+   * EPS and revenue averages per fiscal quarter end, oldest first. Drives the
+   * Earnings tab's forward (estimate) quarters. Cached 12h; [] when FMP has none.
+   */
+  async getQuarterlyEstimates(ticker: string): Promise<QuarterlyEstimate[]> {
+    const sym = ticker.toUpperCase().trim();
+    const hit = this.memQuarterlyEstimates.get(sym);
+    if (hit && Date.now() - hit.at < 12 * 3_600_000) return hit.data;
+    const rows = (await this.fmp
+      .request(`analyst-estimates?symbol=${encodeURIComponent(toFmpSymbol(sym))}&period=quarter&page=0&limit=60`)
+      .catch(() => null)) as Array<Record<string, unknown>> | null;
+    if (rows == null) return hit?.data ?? [];
+    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    const data = rows
+      .map((r) => ({
+        date: String(r.date ?? "").slice(0, 10),
+        epsAvg: num(r.epsAvg),
+        revenueAvg: num(r.revenueAvg),
+        numAnalystsEps: num(r.numAnalystsEps),
+        numAnalystsRevenue: num(r.numAnalystsRevenue),
+      }))
+      .filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.date) && (r.epsAvg != null || r.revenueAvg != null))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    this.memQuarterlyEstimates.set(sym, { data, at: Date.now() });
+    return data;
+  }
+
+  /**
+   * The consensus for the next report on the calendar: the earliest FMP
+   * `/earnings` row dated today or later with no actual yet. This is the ONE
+   * "next quarter" estimate every screen shows. FMP's quarterly
+   * `analyst-estimates` can file it under the wrong quarter-end on irregular
+   * fiscal calendars (KR: the Dec-3 report's 1.16 / $34.57B sits under
+   * "2026-05-23", and "2026-11-15" carries the 16-week quarter's 1.69 /
+   * $46.6B), so the calendar row is what matches the report. Null when none.
+   */
+  async getNextReportEstimate(ticker: string): Promise<NextReportEstimate | null> {
+    const today = etDate();
+    const rows = await this.fmp.getEarningsSurprises(toFmpSymbol(ticker.toUpperCase().trim())).catch(() => []);
+    const next = rows
+      .filter((r) => r.date >= today && r.actualEarningResult == null && (r.estimatedEarning != null || r.revenueEstimated != null))
+      .sort((a, b) => a.date.localeCompare(b.date))[0];
+    return next
+      ? { date: next.date.slice(0, 10), epsEstimate: next.estimatedEarning, revenueEstimate: next.revenueEstimated ?? null }
+      : null;
+  }
+
+  /**
+   * Monthly change = live price now vs the close 30 calendar days ago (the last
+   * session on or before that ET date, for weekends/holidays), computed from
+   * daily bars for every peer. Replaces the stored 21-session figure, which ends
+   * at the last stored bar; keeps it only when the bars cannot be had.
+   */
+  private async withLiveMonthChange<T extends { ticker: string; price: number | null; monthlyChange: number | null }>(
+    rows: T[],
+  ): Promise<T[]> {
+    if (rows.length === 0) return rows;
+    const etIso = (ms: number) =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ms));
+    const now = Date.now();
+    const target = etIso(now - 30 * 86_400_000);
+    const from = etIso(now - 40 * 86_400_000);
+    const { quotes } = await this.snapshots
+      .get(rows.map((r) => r.ticker))
+      .catch(() => ({ quotes: [] as Array<{ ticker: string; price: number | null }> }));
+    const live = new Map<string, number | null>(
+      quotes.map((q: { ticker: string; price: number | null }) => [q.ticker, q.price ?? null] as [string, number | null]),
+    );
+
+    const baseClose = async (sym: string): Promise<number | null> => {
+      const key = `${sym}|${target}`;
+      const hit = this.memMonthBase.get(key);
+      if (hit && now - hit.at < 6 * 3_600_000) return hit.close;
+      const bars = await this.polygon.getAggsRange(sym, from, target).catch(() => [] as PolygonAggBar[]);
+      // Bars are stamped at ET midnight; the last one dated on/before `target`.
+      const base = bars
+        .filter((b) => b.c != null && b.c > 0 && etIso(b.t) <= target)
+        .sort((a, b) => a.t - b.t)
+        .at(-1);
+      const close = base?.c ?? null;
+      this.memMonthBase.set(key, { close, at: now });
+      return close;
+    };
+
+    for (let i = 0; i < rows.length; i += 5) {
+      await Promise.all(
+        rows.slice(i, i + 5).map(async (r) => {
+          const price = live.get(r.ticker) ?? r.price;
+          const base = await baseClose(r.ticker);
+          if (price != null && price > 0 && base != null) {
+            r.monthlyChange = Math.round(((price - base) / base) * 10_000) / 100;
+          }
+        }),
+      );
+    }
+    return rows;
+  }
+
+  // ── Company logo (Polygon branding, proxied) ────────────────────────────
+
+  /**
+   * Company logo bytes from Polygon's ticker `branding`, proxied server-side so
+   * the API key never reaches the browser. In-memory cached (including "no
+   * logo" as a null result) for a day so a logo-heavy grid doesn't re-hit
+   * Polygon; the endpoint also sets a long edge/browser Cache-Control. Returns
+   * null when Polygon has no branding for the ticker (caller → letter tile).
+   */
+  async getLogo(
+    ticker: string,
+  ): Promise<{ data: Buffer; contentType: string } | null> {
+    const mem = this.memLogo.get(ticker);
+    // Positive cache: 1 day (a vendor that adds a logo shows within a day). Negative cache (missing logo): 1 hour.
+    if (mem && Date.now() - mem.at < (mem.data ? 24 * 60 * 60_000 : 60 * 60_000)) {
+      return mem.data;
+    }
+    this.recordUsage(ticker);
+
+    // A white mark on a transparent background (made for dark pages) is an empty
+    // square on the app's white logo tile: skip it and try the next source.
+    const usable = (c: { data: Buffer; contentType: string } | null) => (c && !invisibleOnWhite(c.data) ? c : null);
+
+    // 1. Polygon branding
+    let img = usable(await this.polygon.getBrandingImage(ticker).catch(() => null));
+
+    // 2. FMP image CDN (fast public CDN, high coverage including ETFs)
+    if (!img) {
+      try {
+        const fmpResp = await fetch(
+          `https://images.financialmodelingprep.com/symbol/${encodeURIComponent(ticker)}.png`,
+          { headers: { "User-Agent": "MarketCatalyst/1.0" }, signal: AbortSignal.timeout(2000) },
+        );
+        if (fmpResp.ok && fmpResp.headers.get("content-type")?.startsWith("image/")) {
+          const contentType =
+            fmpResp.headers.get("content-type") ?? "image/png";
+          const data = Buffer.from(await fmpResp.arrayBuffer());
+          img = usable({ data, contentType });
+        }
+      } catch {
+        // Fall back to Parqet
+      }
+    }
+
+    // 3. Parqet fallback (ETFs / secondary symbols)
+    if (!img) {
+      try {
+        const parqetResp = await fetch(
+          `https://assets.parqet.com/logos/symbol/${encodeURIComponent(ticker)}?format=png`,
+          { headers: { "User-Agent": "MarketCatalyst/1.0" }, signal: AbortSignal.timeout(2000) },
+        );
+        if (parqetResp.ok && parqetResp.headers.get("content-type")?.startsWith("image/")) {
+          const contentType =
+            parqetResp.headers.get("content-type") ?? "image/png";
+          const data = Buffer.from(await parqetResp.arrayBuffer());
+          img = usable({ data, contentType });
+        }
+      } catch {
+        // Fall back to null
+      }
+    }
+
+    // Cache both positive and negative results so missing logos never re-hit vendors repeatedly
+    this.memLogo.set(ticker, { data: img, at: Date.now() });
+    return img;
+  }
+
+  // ── Dividend history ────────────────────────────────────────────────────
+
+  /**
+   * Per-ticker dividend history, cache-aside on `dividend_history/{ticker}` —
+   * the same collection/doc shape `corporate-actions.job.ts`'s bulk cursor
+   * sweep writes, so a ticker the sweep hasn't reached yet gets its doc
+   * created here on first request instead of waiting for the cron to arrive.
+   */
+  async getDividendHistory(
+    ticker: string,
+  ): Promise<Record<string, unknown> | null> {
+    const mem = this.memDividendHistory.get(ticker);
+    if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
+
+    const ref = this.firebase.firestore
+      .collection("dividend_history")
+      .doc(ticker);
+    const snap = await ref.get();
+    if (snap.exists) {
+      const data = snap.data() as Record<string, unknown>;
+      const created =
+        typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
+      if (Number.isFinite(created) && Date.now() - created < DAILY_TTL_MS) {
+        this.memDividendHistory.set(ticker, { data, at: Date.now() });
+        return data;
+      }
+    }
+
+    const key = `dividend_history_${ticker}`;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown> | null> | undefined;
+    // A usable stored doc is served at once while it is rebuilt (stale-while-
+    // revalidate): waiting on a full vendor rebuild outran the UI's 20 s timeout
+    // and rendered stored data as missing (E2E Oct 26: LCUT ex-dividend "N/A",
+    // KR statements). The rebuild writes the doc for the next request.
+    const staleDoc = snap.exists ? (snap.data() as Record<string, unknown>) : null;
+    const serveStale = staleDoc != null && (Array.isArray(staleDoc.history) && (staleDoc.history as unknown[]).length > 0);
+    if (existing) return serveStale ? staleDoc : existing;
+
+    const p = (async () => {
+      const [rawHistory, splits] = await Promise.all([
+        this.polygon.getDividendHistory(ticker, DIV_HISTORY_LIMIT),
+        this.fmp.getSplits(toFmpSymbol(ticker)).catch(() => []),
+      ]);
+      // Per-share amounts on TODAY's share basis: NVDA's pre-split payments
+      // (0.04 before its 4:1 and 10:1 splits) read as a -42.6%/yr dividend.
+      const history = splitAdjustDividends(rawHistory, splits);
+      const totals = annualTotals(history);
+      // Growth and the raise streak describe the RECURRING dividend. A special
+      // lifts its own year and makes the next look like a cut: COST's $10
+      // (2020) and $15 (Dec 2023) read as -16.9%/yr and a 1-year streak.
+      const regularTotals = annualTotals(history.filter(isRegularDividend));
+      const cutoff = new Date();
+      cutoff.setUTCFullYear(cutoff.getUTCFullYear() - 1);
+      const cutoffIso = cutoff.toISOString().slice(0, 10);
+      // Trailing = already gone ex. A declared, still-future ex-date counted as
+      // a fifth payment (MSFT 0.87% against a trailing 0.68%).
+      const todayIso = etDate();
+      const ttm = history.filter(
+        (d) =>
+          d.exDividendDate != null &&
+          d.exDividendDate >= cutoffIso &&
+          d.exDividendDate <= todayIso,
+      );
+      const ttmTotal = ttm.reduce((s, d) => s + (d.cashAmount ?? 0), 0);
+      const company: Record<string, unknown> | null = await this.getCompany(
+        ticker,
+      ).catch(() => null);
+      const price: number | null =
+        (company?.price as number | undefined) ?? null;
+
+      const now = new Date().toISOString();
+      const yields = resolveDividendYields({ history, price });
+      const fwd = yields.forward;
+      const trailing = yields.trailing;
+      const doc: Record<string, unknown> = {
+        ticker,
+        history: history.map((d) => ({
+          exDividendDate: d.exDividendDate,
+          paymentDate: d.paymentDate,
+          declarationDate: d.declarationDate,
+          recordDate: d.recordDate,
+          amount: d.cashAmount,
+          dividendType: d.dividendType,
+          frequency: d.frequency,
+        })),
+        annualTotals: totals.slice(0, DIV_ANNUAL_YEARS),
+        ttmTotal:
+          trailing?.perShare ??
+          (ttm.length > 0 ? Math.round(ttmTotal * 10000) / 10000 : null),
+        ttmPayments: ttm.length,
+        yieldPct: fwd?.yieldPct ?? trailing?.yieldPct ?? null,
+        forwardYieldPct: fwd?.yieldPct ?? null,
+        forwardPerShare: fwd?.perShare ?? null,
+        trailingYieldPct: trailing?.yieldPct ?? null,
+        trailingPerShare: trailing?.perShare ?? null,
+        yieldBasisPrice: price,
+        cagr5yPct: dividendCagr(regularTotals, DIV_CAGR_YEARS),
+        increaseStreakYears: raiseStreak(history.filter(isRegularDividend)),
+        frequency: history[0]?.frequency ?? null,
+        isPayer: yields.isPayer,
+        source: "polygon-ondemand",
+        createdAt: now,
+        updatedAt: now,
+      };
+      await ref.set(doc);
+      this.memDividendHistory.set(ticker, { data: doc, at: Date.now() });
+      return doc;
+    })().finally(() => this.inflight.delete(key));
+
+    this.inflight.set(key, p);
+    if (serveStale) {
+      p.catch((err) => this.logger.warn(`background rebuild failed for ${ticker}: ${(err as Error)?.message ?? err}`));
+      return staleDoc;
+    }
+    return p;
+  }
+
+  // ── Splits ──────────────────────────────────────────────────────────────
+
+  /** Per-ticker split history, cache-aside on `splits/{ticker}` (same shape corporate-actions.job.ts writes). */
+  async getSplits(ticker: string): Promise<Record<string, unknown> | null> {
+    const mem = this.memSplits.get(ticker);
+    if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
+
+    const ref = this.firebase.firestore.collection("splits").doc(ticker);
+    const snap = await ref.get();
+    if (snap.exists) {
+      const data = snap.data() as Record<string, unknown>;
+      const created =
+        typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
+      if (Number.isFinite(created) && Date.now() - created < DAILY_TTL_MS) {
+        this.memSplits.set(ticker, { data, at: Date.now() });
+        return data;
+      }
+    }
+
+    const key = `splits_${ticker}`;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown> | null> | undefined;
+    if (existing) return existing;
+
+    const p = (async () => {
+      const splits = await this.polygon.getSplits(ticker);
+      const now = new Date().toISOString();
+      const doc: Record<string, unknown> = {
+        ticker,
+        splits,
+        latestSplit: splits[0] ?? null,
+        source: "polygon-ondemand",
+        createdAt: now,
+        updatedAt: now,
+      };
+      await ref.set(doc);
+      this.memSplits.set(ticker, { data: doc, at: Date.now() });
+      return doc;
+    })().finally(() => this.inflight.delete(key));
+
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  // ── Financials ──────────────────────────────────────────────────────────
+
+  /**
+   * Per-ticker quarterly+annual financials, cache-aside on `financials/{ticker}`
+   * (same shape financials.job.ts's bulk cursor sweep writes). Statements come
+   * from FINANCIALS_ADAPTER (FMP primary, Polygon fallback); EPS estimates from the
+   * FMP estimates adapter, with synced `earnings_events` as the fallback.
+   */
+  async getFinancials(ticker: string): Promise<Record<string, unknown> | null> {
+    const mem = this.memFinancials.get(ticker);
+    if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
+
+    const ref = this.firebase.firestore.collection("financials").doc(ticker);
+    const snap = await ref.get();
+    if (snap.exists) {
+      const data = snap.data() as Record<string, unknown>;
+      const created =
+        typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
+      const ttl =
+        Array.isArray(data.quarters) && data.quarters.length > 0
+          ? DAILY_TTL_MS
+          : EMPTY_FINANCIALS_TTL_MS;
+      const age = Date.now() - created;
+      if (
+        Number.isFinite(created) &&
+        age < ttl &&
+        !(age > this.pendingReportRetryMs(data))
+      ) {
+        this.memFinancials.set(ticker, { data, at: Date.now() });
+        return data;
+      }
+    }
+
+    const key = `financials_${ticker}`;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown> | null> | undefined;
+    // A usable stored doc is served at once while it is rebuilt (stale-while-
+    // revalidate): waiting on a full vendor rebuild outran the UI's 20 s timeout
+    // and rendered stored data as missing (E2E Oct 26: LCUT ex-dividend "N/A",
+    // KR statements). The rebuild writes the doc for the next request.
+    const staleDoc = snap.exists ? (snap.data() as Record<string, unknown>) : null;
+    const serveStale = staleDoc != null && (Array.isArray(staleDoc.quarters) && (staleDoc.quarters as unknown[]).length > 0);
+    if (existing) return serveStale ? staleDoc : existing;
+
+    const p = (async () => {
+      // The bulk sync job (financials.job.ts) is the ONLY writer that fetches the
+      // FMP forward `annualEstimates` and full-history quarterly epsEstimate. This
+      // on-demand refresh overwrites the whole doc, so it must carry those forward
+      // or every ticker view would wipe them (Polygon has no forward estimates).
+      const prev = snap.exists
+        ? (snap.data() as {
+            annualEstimates?: unknown[];
+            statementsSource?: string | null;
+            quarters?: Array<{
+              endDate?: string;
+              epsEstimate?: number | null;
+              epsActualReported?: number | null;
+              epsEstimateReported?: number | null;
+            }>;
+          })
+        : undefined;
+      const prevEpsByEnd = new Map(
+        (prev?.quarters ?? []).map((q) => [q.endDate, q.epsEstimate]),
+      );
+      const prevActualByEnd = new Map(
+        (prev?.quarters ?? []).map((q) => [q.endDate, q.epsActualReported ?? null]),
+      );
+      const prevEstReportedByEnd = new Map(
+        (prev?.quarters ?? []).map((q) => [q.endDate, q.epsEstimateReported ?? null]),
+      );
+
+      // Fetch quarterly financial statements (FMP primary, automatic Polygon fallback).
+      let rows: PolygonFinancialRow[] = [];
+      try {
+        rows = await this.polygon.getFinancialStatements(
+          ticker,
+          "quarterly",
+          FIN_QUARTERS,
+        );
+      } catch (err: any) {
+        this.logger.warn(
+          `Quarterly financials fetch failed for ${ticker}: ${err.message}`,
+        );
+      }
+
+      // If fresh provider data cannot be obtained, preserve previously stored
+      // Firestore records rather than throwing HTTP 500.
+      if (rows.length === 0) {
+        if (snap.exists) {
+          const stored = snap.data() as Record<string, unknown>;
+          this.logger.warn(
+            `Returning previously stored Firestore financials for ${ticker} after provider empty/failure`,
+          );
+          this.memFinancials.set(ticker, { data: stored, at: Date.now() });
+          return stored;
+        }
+        return null;
+      }
+
+      // FMP estimates fetched HERE (not only in the sync job) so any ticker a
+      // user opens gets forward `annualEstimates` + full-history quarterly
+      // epsEstimate immediately — coverage no longer depends on the sync cursor
+      // having already reached this ticker. earnings_events + the prior doc are
+      // fallbacks so a transient FMP miss never downgrades what we already had.
+      let statementsError: Error | null = null;
+      const [statements, estimates, fmpAnnual, fmpQ, splits, rawEpsHist] =
+        await Promise.all([
+          this.financials
+            .fetchFinancialStatements(ticker, "quarterly", FIN_QUARTERS)
+            .catch(
+              (err: Error): AdapterResult<CanonicalFinancialStatement[]> => {
+                statementsError = err;
+                return null;
+              },
+            ),
+          this.earningsEstimatesFor(ticker),
+          this.estimatesAdapter
+            ? this.estimatesAdapter
+                .getForwardAnnual(ticker)
+                .catch(() => [] as unknown[])
+            : Promise.resolve([] as unknown[]),
+          this.estimatesAdapter
+            ? this.estimatesAdapter
+                .getQuarterlyEstimates(ticker)
+                .catch(() => null)
+            : Promise.resolve(null),
+          this.polygon.getSplits(ticker).catch(() => [] as SplitEvent[]),
+          this.estimatesAdapter
+            ? this.estimatesAdapter
+                .getEpsHistory(ticker)
+                .catch(
+                  () =>
+                    [] as Array<{
+                      date: string;
+                      epsActual: number | null;
+                      epsEstimate: number | null;
+                    }>,
+                )
+            : Promise.resolve(
+                [] as Array<{
+                  date: string;
+                  epsActual: number | null;
+                  epsEstimate: number | null;
+                }>,
+              ),
+        ]);
+      if (!statements) {
+        // Every statements source threw (e.g. Polygon 410 brownout + FMP
+        // down). A stale doc beats an error page; the 5-min memo bounds how
+        // soon this instance retries the vendors.
+        if (snap.exists) {
+          this.logger.warn(
+            `financials ${ticker}: all sources failed (${statementsError?.message}) — serving stored doc`,
+          );
+          const stale = snap.data() as Record<string, unknown>;
+          this.memFinancials.set(ticker, { data: stale, at: Date.now() });
+          return stale;
+        }
+        throw statementsError;
+      }
+      const freshQuarters = statements.data.map((r) => {
+        const fmpActual = fmpQ?.epsActualFor(r.endDate) ?? null;
+        const fmpEstimate = alignReportedEstimate(
+          r.filingDate ?? r.endDate,
+          splits,
+          fmpActual,
+          fmpQ?.epsEstimateFor(r.endDate) ?? null,
+        );
+        return mapQuarterRow(
+          r,
+          fmpEstimate ??
+            this.matchEpsEstimate(estimates, r.endDate) ??
+            prevEpsByEnd.get(r.endDate) ??
+            null,
+          fmpActual ?? prevActualByEnd.get(r.endDate) ?? null,
+          fmpEstimate ??
+            (fmpActual == null
+              ? (prevEstReportedByEnd.get(r.endDate) ?? null)
+              : null),
+          fmpQ?.revenueEstimateFor(r.endDate) ?? null,
+        );
+      });
+      // Keep the stored quarters when every source came back empty this time,
+      // like annual/epsHistory/annualEstimates below. The doc is written with
+      // a full ref.set(), so [] here would wipe good data.
+      const keepPrevQuarters =
+        freshQuarters.length === 0 && (prev?.quarters?.length ?? 0) > 0;
+      const quarters = keepPrevQuarters
+        ? (prev.quarters as QuarterFinancials[])
+        : freshQuarters;
+
+      let annual: ReturnType<typeof mapAnnualRow>[] = [];
+      try {
+        const { data: yr } = await this.financials.fetchFinancialStatements(
+          ticker,
+          "annual",
+          FIN_ANNUAL_YEARS,
+          { incomeOnly: true },
+        );
+        annual = yr.map(mapAnnualRow);
+      } catch {
+        // Annual is a secondary tab — a failure there shouldn't block quarterly data.
+      }
+      // Preserve the prior annual series when the fresh fetch is empty (failure
+      // above or a non-throwing empty response). This doc is written with a full
+      // ref.set() (no merge), so an empty [] would drop a good stored annual —
+      // reuse prev like annualEstimates/epsHistory do.
+      const prevAnnual = (prev as { annual?: ReturnType<typeof mapAnnualRow>[] })
+        ?.annual;
+      if (annual.length === 0 && Array.isArray(prevAnnual)) {
+        annual = prevAnnual;
+      }
+
+      // Deep FMP quarterly EPS history → annual EPS (sum by fiscal year). Keep
+      // the prior one if FMP returned empty so a transient miss never wipes it.
+      let epsHistory: EpsHistoryRow[] = buildEpsHistory(rawEpsHist, quarters, splits);
+      const prevEpsHistory = (prev as { epsHistory?: EpsHistoryRow[] })?.epsHistory;
+      if (epsHistory.length === 0 && Array.isArray(prevEpsHistory)) {
+        epsHistory = prevEpsHistory;
+      }
+      applyCalendarEstimates(quarters, epsHistory, estimates, splits);
+
+      const now = new Date().toISOString();
+      const doc: Record<string, unknown> = {
+        ticker,
+        quarters,
+        annual,
+        epsHistory,
+        // Freshly-fetched FMP forward estimates; fall back to the prior doc's
+        // when FMP returns nothing this refresh so a transient miss never wipes.
+        annualEstimates:
+          fmpAnnual.length > 0
+            ? fmpAnnual
+            : Array.isArray(prev?.annualEstimates)
+              ? prev.annualEstimates
+              : [],
+        source: "polygon-ondemand",
+        // Which vendor actually served the statements ("polygon" | "fmp"), so a
+        // fallback-served ticker is visible in Firestore without reading logs.
+        statementsSource: keepPrevQuarters
+          ? (prev?.statementsSource ?? null)
+          : statements.source,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await ref.set(doc);
+      this.memFinancials.set(ticker, { data: doc, at: Date.now() });
+      return doc;
+    })().finally(() => this.inflight.delete(key));
+
+    this.inflight.set(key, p);
+    if (serveStale) {
+      p.catch((err) => this.logger.warn(`background rebuild failed for ${ticker}: ${(err as Error)?.message ?? err}`));
+      return staleDoc;
+    }
+    return p;
+  }
+
+  /**
+   * How old the stored doc may get before a refresh, when a recent report has
+   * not fully landed in it; Infinity when nothing is outstanding (the normal
+   * daily TTL then applies). Two ways a doc lags a report:
+   *
+   *  - the report's EPS actual is still null — the doc was built before the
+   *    print (GS on 13 Oct: chart and Playbook showed Q3 pending all morning);
+   *  - the EPS actual is in, but `quarters` has no row for that fiscal quarter.
+   *    The announcement (FMP surprises) and the full statements are separate
+   *    vendor feeds, and FMP publishes the statement hours to weeks after the
+   *    print: JNJ and C were rebuilt on 13 Oct before their Q3 statement
+   *    existed, so the EPS/Sales graphs and quarter tables stopped at Q2.
+   *
+   * Without this the 20h TTL kept either state for most of a day.
+   */
+  private pendingReportRetryMs(data: Record<string, unknown>): number {
+    const hist = data.epsHistory as EpsHistoryRow[] | undefined;
+    if (!Array.isArray(hist)) return Infinity;
+    const today = etDate();
+    const daysAgo = (n: number) => etDate(new Date(Date.now() - n * 86_400_000));
+    const quarters = (data.quarters ?? []) as Array<{
+      fiscalYear?: string | number | null;
+      fiscalPeriod?: string | null;
+    }>;
+    const haveQuarter = new Set(
+      quarters.map((q) => `${Number(q.fiscalYear)}_${q.fiscalPeriod}`),
+    );
+    let retry = Infinity;
+    for (const h of hist) {
+      if (h.date > today || h.date < daysAgo(FIN_STATEMENT_LAG_DAYS)) continue;
+      const fresh = h.date >= daysAgo(FIN_PENDING_REPORT_DAYS);
+      if (h.epsActual == null) {
+        if (fresh) retry = Math.min(retry, FIN_PENDING_RETRY_MS);
+      } else if (!haveQuarter.has(`${h.fiscalYear}_${h.fiscalPeriod}`)) {
+        retry = Math.min(retry, fresh ? FIN_PENDING_RETRY_MS : FIN_STATEMENT_RETRY_MS);
+      }
+    }
+    return retry;
+  }
+
+  /** Raw {reportDate, epsEstimate} pairs for one ticker's synced earnings_events. */
+  private async earningsEstimatesFor(
+    ticker: string,
+  ): Promise<CalendarEstimate[]> {
+    const snap = await this.firebase.firestore
+      .collection("earnings_events")
+      .where("ticker", "==", ticker)
+      .get();
+    const out: CalendarEstimate[] = [];
+    for (const d of snap.docs) {
+      const data = d.data();
+      if (data.epsEstimate != null && data.date)
+        out.push({
+          date: data.date,
+          epsEstimate: data.epsEstimate,
+          periodEnd: data.periodEnd ?? null,
+        });
+    }
+    return out;
+  }
+
+  /**
+   * Nearest estimate to a quarter's period-end date, within a ~90-day window
+   * (report date follows fiscal period end by weeks) — mirrors
+   * FinancialsJob.matchEstimate(), scoped to one ticker's estimates already.
+   */
+  private matchEpsEstimate(
+    estimates: Array<{ date: string; epsEstimate: number }>,
+    endDate: string | null,
+  ): number | null {
+    if (!endDate) return null;
+    const target = new Date(`${endDate}T00:00:00Z`).getTime();
+    let best: { v: number; gap: number } | null = null;
+    for (const e of estimates) {
+      const gap =
+        Math.abs(new Date(`${e.date}T00:00:00Z`).getTime() - target) /
+        86_400_000;
+      if (gap <= 90 && (!best || gap < best.gap))
+        best = { v: e.epsEstimate, gap };
+    }
+    return best?.v ?? null;
+  }
+
+  // ── Per-ticker news ─────────────────────────────────────────────────────
+
+  /**
+   * Per-ticker news, cache-aside on the SAME `news` collection news.job.ts's
+   * bulk sweep already writes to (doc id `${ticker}_${articleId}`) — this only
+   * fills the gap for a ticker the sweep hasn't reached recently. No `where`
+   * + `orderBy` combination is used (no composite index is deployed for
+   * `news`): freshness is judged from each doc's own `updatedAt`, and results
+   * are sorted by `publishedAt` in memory rather than in the query.
+   */
+  async getNews(ticker: string): Promise<Record<string, unknown>[]> {
+    const mem = this.memNews.get(ticker);
+    if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
+
+    const snap = await this.firebase.firestore
+      .collection("news")
+      .where("ticker", "==", ticker)
+      .get();
+    const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Array<Record<string, unknown>>;
+    const freshestUpdate = docs.reduce((max, d) => {
+      const t = typeof d.updatedAt === "string" ? Date.parse(d.updatedAt) : NaN;
+      return Number.isFinite(t) ? Math.max(max, t) : max;
+    }, 0);
+
+    if (docs.length > 0 && Date.now() - freshestUpdate < NEWS_TTL_MS) {
+      const sorted = [...docs].sort(byPublishedAtDesc);
+      this.memNews.set(ticker, { data: sorted, at: Date.now() });
+      return sorted;
+    }
+
+    const key = `news_${ticker}`;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown>[]> | undefined;
+    if (existing) return existing;
+
+    const p = (async () => {
+      const to = new Date();
+      const from = new Date(to.getTime() - NEWS_LOOKBACK_DAYS * 86_400_000);
+      const isoDate = (d: Date) => d.toISOString().slice(0, 10);
+      // Pull FMP (primary) AND Polygon (backup) in parallel and merge — FMP
+      // usually has the "why it moved" headline for micro-caps, Polygon fills
+      // gaps on large caps. Each is best-effort: a failure degrades to [].
+      const [polyData, fmpData] = await Promise.all([
+        this.news
+          .fetchNews(ticker, isoDate(from), isoDate(to))
+          .then((r) => r.data)
+          .catch(() => [] as CanonicalNewsArticle[]),
+        this.newsFmp
+          ? this.newsFmp
+              .fetchNews(ticker, isoDate(from), isoDate(to))
+              .then((r) => r.data)
+              .catch(() => [] as CanonicalNewsArticle[])
+          : Promise.resolve([] as CanonicalNewsArticle[]),
+      ]);
+      // Dedupe across vendors by url (fall back to id), newest first. FMP is
+      // listed first so its copy of a shared article wins.
+      const seenNews = new Set<string>();
+      const merged: CanonicalNewsArticle[] = [];
+      for (const a of [...fmpData, ...polyData]) {
+        const k = (a.url || a.id || "").toLowerCase();
+        if (k && seenNews.has(k)) continue;
+        if (k) seenNews.add(k);
+        merged.push(a);
+      }
+      merged.sort((x, y) =>
+        String(y.publishedAt).localeCompare(String(x.publishedAt)),
+      );
+      const now = new Date().toISOString();
+      const articles = merged.slice(0, NEWS_ARTICLE_CAP).map((a) => {
+        const docId = `${ticker}_${a.id}`;
+        return {
+          docId,
+          // Same field set news.job.ts's bulk sweep writes — no `id` field,
+          // since the doc id itself carries it (added back on read below).
+          data: {
+            ticker: a.ticker,
+            headline: a.headline,
+            summary: a.summary,
+            source: a.source,
+            // Vendor badge parity with news.job.ts's bulk sweep — the stock
+            // screen renders a Polygon/FMP pill off this field, so the
+            // on-demand cache-fill must carry it too or the pill never shows.
+            vendor: a.vendor,
+            url: a.url,
+            category: a.category,
+            sentiment: a.sentiment,
+            sentimentReasoning: a.sentimentReasoning,
+            keywords: a.keywords,
+            imageUrl: a.imageUrl,
+            publishedAt: a.publishedAt,
+            updatedAt: now,
+          },
+        };
+      });
+      if (articles.length > 0) {
+        const batch = this.firebase.firestore.batch();
+        for (const a of articles) {
+          batch.set(
+            this.firebase.firestore.collection("news").doc(a.docId),
+            a.data,
+            { merge: true },
+          );
+        }
+        await batch.commit();
+      }
+      const sorted = articles
+        .map((a) => ({ id: a.docId, ...a.data }))
+        .sort((a, b) =>
+          String(b.publishedAt).localeCompare(String(a.publishedAt)),
+        );
+      this.memNews.set(ticker, { data: sorted, at: Date.now() });
+      return sorted;
+    })().finally(() => this.inflight.delete(key));
+
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  // ── Options chain (curated 8-ticker universe) ──────────────────────────
+
+  /**
+   * Per-ticker options chain, cache-aside on `options_chains/{ticker}` — the
+   * same collection/doc shape `options-chains.job.ts`'s bulk sweep already
+   * writes (strikes/expirations/OHLCV are real via Polygon; bid/ask, IV,
+   * greeks and open interest are NOT_AUTHORIZED on the current Polygon plan
+   * regardless of path — see that job's `note` field). Callers (the
+   * controller) are expected to reject tickers outside `OPTIONS_UNIVERSE`
+   * before calling this — it's a curated set, not an open one like bars/
+   * company/dividends.
+   */
+  async getOptionsChain(
+    ticker: string,
+  ): Promise<Record<string, unknown> | null> {
+    const mem = this.memOptions.get(ticker);
+    if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
+
+    const ref = this.firebase.firestore
+      .collection("options_chains")
+      .doc(ticker);
+    const snap = await ref.get();
+    if (snap.exists) {
+      const data = snap.data() as Record<string, unknown>;
+      const created =
+        typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
+      if (Number.isFinite(created) && Date.now() - created < DAILY_TTL_MS) {
+        this.memOptions.set(ticker, { data, at: Date.now() });
+        return data;
+      }
+    }
+
+    const key = `options_${ticker}`;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown> | null> | undefined;
+    if (existing) return existing;
+
+    const p = (async () => {
+      const today = etDate();
+      const lookback = new Date();
+      lookback.setUTCDate(lookback.getUTCDate() - OPTIONS_AGG_LOOKBACK_DAYS);
+      const from = isoDate(lookback);
+
+      const contracts = await this.polygon.getOptionContracts(
+        ticker,
+        today,
+        OPTIONS_CONTRACTS_LIMIT,
+      );
+      const enriched: Record<string, unknown>[] = [];
+      for (const c of contracts) {
+        try {
+          const bar = await this.polygon.getOptionLatestBar(
+            c.ticker,
+            from,
+            today,
+          );
+          enriched.push({
+            contractTicker: c.ticker,
+            contractType: c.contract_type,
+            strike: c.strike_price,
+            expirationDate: c.expiration_date,
+            exerciseStyle: c.exercise_style ?? null,
+            sharesPerContract: c.shares_per_contract ?? null,
+            lastOpen: bar?.o ?? null,
+            lastHigh: bar?.h ?? null,
+            lastLow: bar?.l ?? null,
+            lastClose: bar?.c ?? null,
+            lastVwap: bar?.vw ?? null,
+            lastVolume: bar?.v ?? null,
+            lastTradeCount: bar?.n ?? null,
+            lastBarDate: bar ? isoDate(new Date(bar.t)) : null,
+            lastRangePct:
+              bar && bar.o > 0
+                ? Math.round(((bar.h - bar.l) / bar.o) * 10000) / 100
+                : null,
+          });
+        } catch (err) {
+          this.logger.warn(
+            `options on-demand: bar fetch failed for ${c.ticker}: ${(err as Error).message}`,
+          );
+        }
+        await sleep(this.polygon.requestDelayMs);
+      }
+
+      const now = new Date().toISOString();
+      const doc = {
+        underlyingTicker: ticker,
+        contracts: enriched,
+        source: "polygon-ondemand",
+        note: "Strikes, expirations and per-contract OHLCV/VWAP/volume are real (delayed). Bid/ask, IV, greeks and open interest return NOT_AUTHORIZED on the current Polygon plan — they need the Options add-on.",
+        createdAt: now,
+        updatedAt: now,
+      };
+      await ref.set(doc);
+      this.memOptions.set(ticker, { data: doc, at: Date.now() });
+      return doc;
+    })().finally(() => this.inflight.delete(key));
+
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  // ── Earnings-call transcript (FMP) ──────────────────────────────────────
+
+  /**
+   * Latest earnings-call transcript for one ticker, cache-aside on
+   * `earnings_transcripts/{ticker}`. FMP is the only vendor that carries
+   * transcripts (Polygon has none), so this degrades to null when FMP is off.
+   * The `null` result is cached too, so a ticker with no transcript doesn't
+   * re-hit FMP on every drawer open until the TTL lapses.
+   */
+  async getTranscript(ticker: string): Promise<Record<string, unknown> | null> {
+    this.recordUsage(ticker);
+
+    const mem = this.memTranscript.get(ticker);
+    if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
+
+    const ref = this.firebase.firestore
+      .collection("earnings_transcripts")
+      .doc(ticker);
+    const snap = await ref.get();
+    if (snap.exists) {
+      const data = snap.data() as Record<string, unknown>;
+      const created =
+        typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
+      if (Number.isFinite(created) && Date.now() - created < TRANSCRIPT_TTL_MS) {
+        this.memTranscript.set(ticker, { data, at: Date.now() });
+        return data;
+      }
+    }
+
+    const key = `transcript_${ticker}`;
+    const existing = this.inflight.get(key) as
+      Promise<Record<string, unknown> | null> | undefined;
+    if (existing) return existing;
+
+    const p = (async () => {
+      const tx = await this.fmp.getLatestEarningsTranscript(ticker).catch(() => null);
+      const now = new Date().toISOString();
+      // Cache the "no transcript" answer as a lightweight doc so repeat opens
+      // don't re-run the FMP probe until the TTL lapses.
+      const doc: Record<string, unknown> = tx
+        ? {
+            ticker,
+            quarter: tx.quarter,
+            year: tx.year,
+            date: tx.date,
+            content: tx.content,
+            hasTranscript: true,
+            source: "fmp-ondemand",
+            createdAt: now,
+            updatedAt: now,
+          }
+        : {
+            ticker,
+            hasTranscript: false,
+            content: null,
+            source: "fmp-ondemand",
+            createdAt: now,
+            updatedAt: now,
+          };
+      await ref.set(doc);
+      this.memTranscript.set(ticker, { data: doc, at: Date.now() });
+      return doc;
+    })().finally(() => this.inflight.delete(key));
+
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  // ── Usage tracking (the "which stocks are really used" collection) ──────
+
+  /** Batched: N hits inside a flush window become ONE increment write. */
+  recordUsage(ticker: string): void {
+    this.pendingUsage.set(ticker, (this.pendingUsage.get(ticker) ?? 0) + 1);
+    if (!this.usageTimer) {
+      this.usageTimer = setInterval(
+        () => void this.flushUsage(),
+        USAGE_FLUSH_MS,
+      );
+      this.usageTimer.unref?.();
+    }
+  }
+
+  private async flushUsage(): Promise<void> {
+    if (this.pendingUsage.size === 0) return;
+    const toFlush = this.pendingUsage;
+    this.pendingUsage = new Map();
+    try {
+      const db = this.firebase.firestore;
+      if (!this.knownUsageTickers) {
+        const ids = await db.collection("ticker_usage").select().get();
+        this.knownUsageTickers = new Set(ids.docs.map((d) => d.id));
+      }
+      const batch = db.batch();
+      const now = new Date().toISOString();
+      for (const [ticker, n] of toFlush) {
+        const ref = db.collection("ticker_usage").doc(ticker);
+        const payload: Record<string, unknown> = {
+          ticker,
+          count: FieldValue.increment(n),
+          lastUsedAt: now,
+          updatedAt: now,
+        };
+        if (!this.knownUsageTickers.has(ticker)) {
+          payload.createdAt = now;
+          this.knownUsageTickers.add(ticker);
+        }
+        batch.set(ref, payload, { merge: true });
+      }
+      await batch.commit();
+      this.stats.usageFlushes++;
+    } catch (err) {
+      this.stats.lastError = `usage flush: ${(err as Error).message}`;
+      this.logger.warn(this.stats.lastError);
+      // Usage tracking must never break data serving — counts are best-effort.
+    }
+  }
+
+  /** Hot list for the premarket warm: most-used tickers, most recent first. */
+  async hotTickers(limit = 100): Promise<string[]> {
+    try {
+      const snap = await this.firebase.firestore
+        .collection("ticker_usage")
+        .orderBy("count", "desc")
+        .limit(limit)
+        .get();
+      return snap.docs.map((d) => d.id);
+    } catch (err) {
+      this.logger.warn(`hotTickers query failed: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
+  // ── Beneficial ownership (SEC EDGAR Schedules 13D/G) ──────────────────────
+
+  /**
+   * Per-ticker beneficial ownership straight from SEC EDGAR, cache-aside on
+   * `ownership_13dg/{ticker}`.
+   *
+   * This answers a DIFFERENT question from the FMP institutional-ownership
+   * rollup the 13F table is built on. That one is aggregate and anonymous —
+   * "1,847 filers hold 62% of the shares". This one is per-institution and
+   * exact: WHO owns more than 5%, how many shares, what percent of the class,
+   * and how much of that they can vote versus merely dispose of. Named holders
+   * with their own stake sizes is the thing the aggregate cannot tell you.
+   *
+   * Also returns the issuer's CUSIP, read off the same cover pages. That is
+   * what makes the tracked-fund section below exact: 13F positions are filed
+   * under CUSIP, never under a ticker, so matching them on issuer NAME (the
+   * only option without a CUSIP) both misses funds and produces false hits —
+   * "GOLD" matching both Gold Fields and Goldman Sachs.
+   *
+   * A 13D/G cover-page fetch is one HTTP call per filing against a rate-limited
+   * SEC endpoint, so the result is cached for a day. These are event-driven
+   * filings; a new one lands when a stake crosses a threshold, not on a clock.
+   */
+  async getOwnership13DG(
+    ticker: string,
+  ): Promise<Record<string, unknown> | null> {
+    const mem = this.memOwnership13DG.get(ticker);
+    if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
+
+    const ref = this.firebase.firestore
+      .collection("ownership_13dg")
+      .doc(ticker);
+    const snap = await ref.get();
+    if (snap.exists) {
+      const data = snap.data() as Record<string, unknown>;
+      const created =
+        typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
+      if (Number.isFinite(created) && Date.now() - created < DAILY_TTL_MS) {
+        this.memOwnership13DG.set(ticker, { data, at: Date.now() });
+        return data;
+      }
+    }
+
+    const key = `ownership13dg_${ticker}`;
+    const existing = this.inflight.get(key) as
+      | Promise<Record<string, unknown> | null>
+      | undefined;
+    if (existing) return existing;
+
+    const p = (async () => {
+      const cik = await this.secEdgar.getCikByTicker(ticker);
+      if (!cik) {
+        // SEC does not list the symbol (ETF, foreign issuer with no US
+        // registration). Cache the negative so every drawer open does not
+        // re-download the 800KB ticker map path.
+        const now = new Date().toISOString();
+        const doc = {
+          ticker,
+          cik: null,
+          cusip: null,
+          securitiesClass: null,
+          holders: [],
+          trackedFunds: [],
+          legacyFilings: [],
+          totalFilings: 0,
+          source: "sec-edgar-ondemand",
+          createdAt: now,
+          updatedAt: now,
+        };
+        await ref.set(doc);
+        this.memOwnership13DG.set(ticker, { data: doc, at: Date.now() });
+        return doc;
+      }
+
+      const own = await this.secEdgar.getSchedule13Ownership(cik);
+      const trackedFunds = own.cusip
+        ? await this.trackedFundsHolding(own.cusip)
+        : [];
+
+      const now = new Date().toISOString();
+      const doc: Record<string, unknown> = {
+        ticker,
+        cik,
+        cusip: own.cusip,
+        securitiesClass: own.securitiesClass,
+        holders: own.holders,
+        trackedFunds,
+        legacyFilings: own.legacyFilings.slice(0, 12),
+        totalFilings: own.totalFilings,
+        source: "sec-edgar-ondemand",
+        createdAt: now,
+        updatedAt: now,
+      };
+      await ref.set(doc);
+      this.memOwnership13DG.set(ticker, { data: doc, at: Date.now() });
+      return doc;
+    })().finally(() => this.inflight.delete(key));
+
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  /**
+   * Which of the 13F funds we track hold this CUSIP, with the position as
+   * filed. Sec13FJob keys each position doc BY CUSIP under the fund's latest
+   * filing, so this is one direct document read per tracked fund — no query, no
+   * collection-group index, and no name matching.
+   */
+  private async trackedFundsHolding(cusip: string): Promise<
+    Array<{
+      fundName: string;
+      filingDate: string | null;
+      shares: number | null;
+      value: number | null;
+      pctOfPortfolio: number | null;
+    }>
+  > {
+    try {
+      const funds = await this.firebase.firestore
+        .collection("fund_holdings")
+        .get();
+      const rows = await Promise.all(
+        funds.docs.map(async (f) => {
+          const fund = f.data() as Record<string, unknown>;
+          const accession = fund.latestAccessionNumber;
+          if (typeof accession !== "string" || !accession) return null;
+          const pos = await f.ref
+            .collection("filings")
+            .doc(accession)
+            .collection("positions")
+            .doc(cusip)
+            .get();
+          if (!pos.exists) return null;
+          const d = pos.data() as Record<string, unknown>;
+          return {
+            fundName: String(fund.fundName ?? f.id),
+            filingDate:
+              typeof fund.latestFilingDate === "string"
+                ? fund.latestFilingDate
+                : null,
+            shares: typeof d.shares === "number" ? d.shares : null,
+            value: typeof d.value === "number" ? d.value : null,
+            pctOfPortfolio:
+              typeof d.pctOfPortfolio === "number" ? d.pctOfPortfolio : null,
+          };
+        }),
+      );
+      return rows
+        .filter((r): r is NonNullable<typeof r> => r !== null)
+        .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+    } catch (err) {
+      // The 13D/G holders are the point of the drawer; a Firestore hiccup on
+      // the supplementary fund list must not fail the whole response.
+      this.logger.warn(
+        `trackedFundsHolding(${cusip}) failed: ${(err as Error).message}`,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Quarterly SEC 13F institutional ownership changes for a given stock ticker.
+   */
+  async get13FFilings(ticker: string, reqYear?: number, reqQuarter?: number) {
+    const quartersToProbe: Array<{ year: number; quarter: number; label: string }> = [];
+    const now = new Date();
+    let y = now.getUTCFullYear();
+    let q = Math.floor(now.getUTCMonth() / 3) + 1;
+    for (let i = 0; i < 8; i++) {
+      quartersToProbe.push({ year: y, quarter: q, label: `Q${q} ${y}` });
+      q -= 1;
+      if (q < 1) { q = 4; y -= 1; }
+    }
+    // A quarter still inside its 13F filing window (45 days after quarter end)
+    // has only the early filers — STRL Q3 2026 on Oct 19: 87 of ~913. It stays
+    // selectable, but is never the default and its cache is only trusted for a
+    // day, so a partial snapshot cannot be served as final.
+    const filed = new Set(filedThirteenFQuarters(8).map((f) => `${f.year}_${f.quarter}`));
+    const isFiled = (year: number, quarter: number) => filed.has(`${year}_${quarter}`);
+    const usableCache = (data: Record<string, any> | undefined, year: number, quarter: number) =>
+      !!data &&
+      data.cacheVersion === FILINGS_13F_CACHE_VERSION &&
+      Array.isArray(data.holders) &&
+      data.holders.length > 0 &&
+      (isFiled(year, quarter) ||
+        Date.now() - Date.parse(String(data.updatedAt ?? "")) < 86_400_000);
+
+    let resolvedYear = reqYear;
+    let resolvedQuarter = reqQuarter;
+    let rawRows: any[] = [];
+
+    if (resolvedYear && resolvedQuarter) {
+      const cacheDocId = `${ticker}_${resolvedYear}_Q${resolvedQuarter}`;
+      const cached = await this.firebase.firestore
+        .collection("filings_13f")
+        .doc(cacheDocId)
+        .get()
+        .catch(() => null);
+
+      if (cached && cached.exists) {
+        const data = cached.data();
+        if (usableCache(data, resolvedYear, resolvedQuarter)) {
+          return {
+            symbol: ticker,
+            selectedQuarter: `Q${resolvedQuarter} ${resolvedYear}`,
+            year: resolvedYear,
+            quarter: resolvedQuarter,
+            availableQuarters: quartersToProbe,
+            holders: data.holders,
+            summary: data.summary,
+          };
+        }
+      }
+
+      rawRows = await this.fmp.get13FExtractAnalytics(ticker, resolvedYear, resolvedQuarter, MAX_13F_HOLDERS);
+    } else {
+      for (const candidate of quartersToProbe.filter((c) => isFiled(c.year, c.quarter))) {
+        const cacheDocId = `${ticker}_${candidate.year}_Q${candidate.quarter}`;
+        const cached = await this.firebase.firestore
+          .collection("filings_13f")
+          .doc(cacheDocId)
+          .get()
+          .catch(() => null);
+
+        if (cached && cached.exists) {
+          const data = cached.data();
+          if (usableCache(data, candidate.year, candidate.quarter)) {
+            return {
+              symbol: ticker,
+              selectedQuarter: candidate.label,
+              year: candidate.year,
+              quarter: candidate.quarter,
+              availableQuarters: quartersToProbe,
+              holders: data.holders,
+              summary: data.summary,
+            };
+          }
+        }
+
+        const rows = await this.fmp.get13FExtractAnalytics(ticker, candidate.year, candidate.quarter, MAX_13F_HOLDERS);
+        if (rows && rows.length > 0) {
+          resolvedYear = candidate.year;
+          resolvedQuarter = candidate.quarter;
+          rawRows = rows;
+          break;
+        }
+      }
+    }
+
+    if (!resolvedYear || !resolvedQuarter) {
+      resolvedYear = quartersToProbe[1]?.year ?? 2024;
+      resolvedQuarter = quartersToProbe[1]?.quarter ?? 4;
+    }
+
+    const quarterLabel = `Q${resolvedQuarter} ${resolvedYear}`;
+
+    let totalShares = 0;
+    let totalMktVal = 0;
+    let newCount = 0;
+    let incCount = 0;
+    let redCount = 0;
+    let closedCount = 0;
+
+    const holders = rawRows.map((row) => {
+      const cik = String(row.cik ?? "").trim();
+      const investorName = String(row.investorName ?? "Unknown Institution").trim();
+      const sharesNumber = Number(row.sharesNumber) || 0;
+      const lastSharesNumber = Number(row.lastSharesNumber) || 0;
+      const changeInShares = Number(row.changeInSharesNumber) || (sharesNumber - lastSharesNumber);
+      const changeInSharesPct = row.changeInSharesNumberPercentage != null
+        ? Number(row.changeInSharesNumberPercentage)
+        : lastSharesNumber > 0 ? ((changeInShares / lastSharesNumber) * 100) : null;
+      const marketValue = Number(row.marketValue) || null;
+      const ownershipPct = Number(row.ownership) || null;
+      const reportDate = String(row.date ?? "");
+      const filingDate = String(row.filingDate ?? "");
+
+      let activityStatus: "New" | "Increased" | "Reduced" | "Closed Position" | "Maintained" = "Maintained";
+      const isNew = row.isNew === true || (lastSharesNumber === 0 && sharesNumber > 0);
+      const isSoldOut = row.isSoldOut === true || (sharesNumber === 0 && lastSharesNumber > 0);
+
+      if (isNew) {
+        activityStatus = "New";
+        newCount++;
+      } else if (isSoldOut) {
+        activityStatus = "Closed Position";
+        closedCount++;
+      } else if (changeInShares > 0) {
+        activityStatus = "Increased";
+        incCount++;
+      } else if (changeInShares < 0) {
+        activityStatus = "Reduced";
+        redCount++;
+      }
+
+      totalShares += sharesNumber;
+      if (marketValue) totalMktVal += marketValue;
+
+      const secFilingUrl = cik
+        ? `https://www.sec.gov/edgar/browse/?CIK=${encodeURIComponent(cik)}`
+        : `https://www.sec.gov/edgar/searchedgar/companysearch?company=${encodeURIComponent(investorName)}`;
+
+      return {
+        cik,
+        investorName,
+        symbol: ticker,
+        reportingQuarter: quarterLabel,
+        reportDate,
+        filingDate,
+        sharesNumber,
+        lastSharesNumber,
+        changeInShares,
+        changeInSharesPct: changeInSharesPct != null && Number.isFinite(changeInSharesPct) ? changeInSharesPct : null,
+        marketValue,
+        ownershipPct,
+        activityStatus,
+        secFilingUrl,
+      };
+    });
+
+    // Counts over EVERY filer come from FMP's quarter rollup; the holder list
+    // above is capped (MAX_13F_HOLDERS), so tallying it undercounts — STRL
+    // showed 10 holders (FMP's default page) against 913 actual. The row
+    // tallies stay as the fallback when the rollup is unavailable.
+    const rollup = holders.length
+      ? ((await this.fmp
+          .request(
+            `institutional-ownership/symbol-positions-summary?symbol=${encodeURIComponent(ticker)}&year=${resolvedYear}&quarter=${resolvedQuarter}`,
+          )
+          .catch(() => [])) as Array<Record<string, unknown>>)[0]
+      : undefined;
+    const fromRollup = (k: string, fallback: number) => {
+      const v = Number(rollup?.[k]);
+      return Number.isFinite(v) && v >= 0 ? v : fallback;
+    };
+    const summary = {
+      totalHolders: fromRollup("investorsHolding", holders.length),
+      newPositions: fromRollup("newPositions", newCount),
+      increasedPositions: fromRollup("increasedPositions", incCount),
+      reducedPositions: fromRollup("reducedPositions", redCount),
+      closedPositions: fromRollup("closedPositions", closedCount),
+      totalSharesHeld: fromRollup("numberOf13Fshares", totalShares),
+      totalMarketValue: fromRollup("totalInvested", totalMktVal),
+    };
+
+    if (holders.length > 0) {
+      const cacheDocId = `${ticker}_${resolvedYear}_Q${resolvedQuarter}`;
+      this.firebase.firestore
+        .collection("filings_13f")
+        .doc(cacheDocId)
+        .set({
+          symbol: ticker,
+          year: resolvedYear,
+          quarter: resolvedQuarter,
+          quarterLabel,
+          holders,
+          summary,
+          cacheVersion: FILINGS_13F_CACHE_VERSION,
+          updatedAt: new Date().toISOString(),
+        })
+        .catch((err) => {
+          this.logger.warn(`Failed to cache 13F filings for ${cacheDocId}: ${(err as Error).message}`);
+        });
+    }
+
+    return {
+      symbol: ticker,
+      selectedQuarter: quarterLabel,
+      year: resolvedYear,
+      quarter: resolvedQuarter,
+      availableQuarters: quartersToProbe,
+      holders,
+      summary,
+    };
+  }
+}
+
+/**
+ * Restates dividends paid before a split on the current share basis, but only
+ * where the feed has not already done so: a split is applied when the payment
+ * just before it is at least √ratio times the one after (an adjusted series
+ * shows no drop; √ratio leaves room for a raise announced with the split —
+ * NVDA went 0.04 → 0.01 across its 10:1).
+ */
+export function splitAdjustDividends<T extends { exDividendDate: string | null; cashAmount: number | null }>(
+  history: T[],
+  splits: ReadonlyArray<{ date: string; ratio: number }>,
+): T[] {
+  const dated = history.filter((d) => d.exDividendDate && d.cashAmount != null && d.cashAmount > 0);
+  const factors = splits
+    .filter((sp) => sp.ratio > 1)
+    .filter((sp) => {
+      const before = dated.filter((d) => d.exDividendDate! < sp.date).sort((a, b) => b.exDividendDate!.localeCompare(a.exDividendDate!))[0];
+      const after = dated.filter((d) => d.exDividendDate! >= sp.date).sort((a, b) => a.exDividendDate!.localeCompare(b.exDividendDate!))[0];
+      return !!before && !!after && before.cashAmount! / after.cashAmount! >= Math.sqrt(sp.ratio);
+    });
+  if (factors.length === 0) return history;
+  return history.map((d) => {
+    if (!d.exDividendDate || d.cashAmount == null) return d;
+    const f = factors.filter((sp) => d.exDividendDate! < sp.date).reduce((a, sp) => a * sp.ratio, 1);
+    return f === 1 ? d : { ...d, cashAmount: Math.round((d.cashAmount / f) * 1e6) / 1e6 };
+  });
+}

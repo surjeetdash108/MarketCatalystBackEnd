@@ -1,11 +1,15 @@
-import { Logger } from '@nestjs/common';
-import { AllSourcesFailedError, isRetryableVendorError, SourceAttempt } from './adapter-error';
+import { Logger } from "@nestjs/common";
+import {
+  AllSourcesFailedError,
+  isRetryableVendorError,
+  SourceAttempt,
+} from "./adapter-error";
 import {
   AdapterResult,
   AdapterWarning,
   MoverEnrichment,
   MoverEnrichmentAdapter,
-} from './types';
+} from "./types";
 
 export class CompositeMoverEnrichmentAdapter implements MoverEnrichmentAdapter {
   private readonly logger = new Logger(CompositeMoverEnrichmentAdapter.name);
@@ -29,7 +33,7 @@ export class CompositeMoverEnrichmentAdapter implements MoverEnrichmentAdapter {
       if (result) return result;
       attempts.push({
         source: this.primary.sourceName,
-        error: 'no data returned (ticker not found on this source)',
+        error: "no data returned (ticker not found on this source)",
         retryable: false,
       });
     } catch (err) {
@@ -41,10 +45,10 @@ export class CompositeMoverEnrichmentAdapter implements MoverEnrichmentAdapter {
         retryable,
       });
       this.logger.warn(
-        `${this.primary.sourceName} enrichment failed for ${ticker} (${retryable ? 'retryable' : 'not retryable'}): ${message}` +
+        `${this.primary.sourceName} enrichment failed for ${ticker} (${retryable ? "retryable" : "not retryable"}): ${message}` +
           (this.secondary
             ? ` — falling back to ${this.secondary.sourceName}`
-            : ' — no fallback configured'),
+            : " — no fallback configured"),
       );
     }
     if (!this.secondary) {
@@ -56,7 +60,7 @@ export class CompositeMoverEnrichmentAdapter implements MoverEnrichmentAdapter {
       if (!fallbackResult) {
         attempts.push({
           source: this.secondary.sourceName,
-          error: 'no data returned (ticker not found on this source)',
+          error: "no data returned (ticker not found on this source)",
           retryable: false,
         });
       }
@@ -71,7 +75,7 @@ export class CompositeMoverEnrichmentAdapter implements MoverEnrichmentAdapter {
       throw new AllSourcesFailedError(`mover enrichment ${ticker}`, attempts);
     }
     const fallbackWarning: AdapterWarning = {
-      code: 'FALLBACK_USED',
+      code: "FALLBACK_USED",
       message: `Primary enrichment source ${this.primary.sourceName} failed (${attempts[0].error}) — served by fallback ${this.secondary.sourceName} instead.`,
     };
     return {

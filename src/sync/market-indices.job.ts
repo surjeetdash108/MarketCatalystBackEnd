@@ -1,80 +1,98 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { FinnhubService } from '../vendors/finnhub/finnhub.service';
-import { PolygonService } from '../vendors/polygon/polygon.service';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import {
+  batchSetWithCreatedAt,
+  type PendingWrite,
+} from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { QUOTE_ADAPTER, type QuoteAdapter } from "../adapters/types";
+import { SyncRegistry } from "../common/sync-registry.service";
+import { PolygonService } from "../vendors/polygon/polygon.service";
+import { etDate } from "../common/market-calendar.util";
 
-const JOB_NAME = 'market-indices';
+const JOB_NAME = "market-indices";
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
+// Same multiplier convention as TAPE_INDICES in tape-universe.ts — kept in
+// sync deliberately (see that file's docblock: this job and the tape render
+// the same instruments from two independent code paths; any divergence in
+// value shows up as two tiles disagreeing about "S&P 500" on the same screen).
 const INDEX_PROXIES = [
   {
-    symbol: 'SPX',
-    label: 'S&P 500',
-    proxyTicker: 'SPY',
+    symbol: "SPX",
+    label: "S&P 500",
+    proxyTicker: "SPY",
     isProxy: true,
-    note: 'ETF proxy for the S&P 500 index',
+    note: "ETF proxy for the S&P 500 index",
+    multiplier: 10,
   },
   {
-    symbol: 'NDX',
-    label: 'Nasdaq',
-    proxyTicker: 'QQQ',
+    symbol: "NDX",
+    label: "Nasdaq-100",
+    proxyTicker: "QQQ",
     isProxy: true,
-    note: 'ETF proxy for the Nasdaq-100 index',
+    note: "ETF proxy for the Nasdaq-100 index",
+    multiplier: 36.3,
   },
   {
-    symbol: 'DJI',
-    label: 'Dow',
-    proxyTicker: 'DIA',
+    symbol: "DJI",
+    label: "Dow",
+    proxyTicker: "DIA",
     isProxy: true,
-    note: 'ETF proxy for the Dow Jones index',
+    note: "ETF proxy for the Dow Jones index",
+    multiplier: 100,
   },
   {
-    symbol: 'RUT',
-    label: 'Russell 2K',
-    proxyTicker: 'IWM',
+    symbol: "RUT",
+    label: "Russell 2000",
+    proxyTicker: "IWM",
     isProxy: true,
-    note: 'ETF proxy for the Russell 2000 index',
+    note: "ETF proxy for the Russell 2000 index",
+    multiplier: 10,
   },
   {
-    symbol: 'GOLD',
-    label: 'Gold',
-    proxyTicker: 'GLD',
+    symbol: "GOLD",
+    label: "Gold",
+    proxyTicker: "GLD",
     isProxy: true,
-    note: 'ETF proxy for spot gold',
+    note: "ETF proxy for spot gold",
   },
   {
-    symbol: 'WTI',
-    label: 'WTI Crude',
-    proxyTicker: 'USO',
+    symbol: "WTI",
+    label: "WTI Crude",
+    proxyTicker: "USO",
     isProxy: true,
-    note: 'ETF proxy for WTI crude oil',
+    note: "ETF proxy for WTI crude oil",
   },
   {
-    symbol: 'DXY',
-    label: 'Dollar (DXY)',
-    proxyTicker: 'UUP',
+    symbol: "DXY",
+    label: "Dollar (DXY)",
+    proxyTicker: "UUP",
     isProxy: true,
-    note: 'ETF proxy for the US Dollar Index',
+    note: "ETF proxy for the US Dollar Index",
   },
   {
-    symbol: 'US10Y',
-    label: '10Y Yield',
-    proxyTicker: 'TLT',
+    symbol: "VIX",
+    label: "VIX",
+    proxyTicker: "VIXY",
     isProxy: true,
-    note: 'Long-treasury ETF, inverse-correlated with the 10Y yield — NOT the yield itself',
+    note: "Decaying VIX futures ETN — directional proxy only, not the spot VIX level",
   },
   {
-    symbol: 'VIX',
-    label: 'VIX',
-    proxyTicker: 'VIXY',
+    symbol: "BTC",
+    label: "Bitcoin",
+    // No direct BTC/USD on Polygon/Massive here — proxy via the iShares spot-
+    // bitcoin ETF (IBIT). % move tracks spot BTC; tile shows the ETF price.
+    proxyTicker: "IBIT",
     isProxy: true,
-    note: 'Decaying VIX futures ETN — directional proxy only, not the spot VIX level',
+    note: "ETF proxy for spot Bitcoin (iShares Bitcoin Trust)",
+  },
+  {
+    symbol: "ETH",
+    label: "Ethereum",
+    proxyTicker: "ETHA",
+    isProxy: true,
+    note: "ETF proxy for spot Ethereum (iShares Ethereum Trust)",
   },
 ];
 
@@ -83,8 +101,8 @@ export class MarketIndicesJob implements OnModuleInit {
   private readonly logger = new Logger(MarketIndicesJob.name);
 
   constructor(
+    @Inject(QUOTE_ADAPTER) private readonly quotes: QuoteAdapter,
     private readonly polygon: PolygonService,
-    private readonly finnhub: FinnhubService,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
@@ -92,56 +110,126 @@ export class MarketIndicesJob implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['market_indices', 'market_indices_history'],
-      cronExpression: '5 18 * * 1-5',
-      timeZone: 'America/New_York',
+      collections: ["market_indices", "market_indices_history"],
+      cronExpression: "5 18 * * 1-5",
+      timeZone: "America/New_York",
     });
   }
 
-  @Cron('5 18 * * 1-5', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
   }
 
   async run() {
     try {
-      const batch = this.firebase.firestore.batch();
-      const col = this.firebase.firestore.collection('market_indices');
-      const historyCol = this.firebase.firestore.collection('market_indices_history');
-      const today = isoDate(new Date());
+      const writes: PendingWrite[] = [];
+      const col = this.firebase.firestore.collection("market_indices");
+      const historyCol = this.firebase.firestore.collection(
+        "market_indices_history",
+      );
+      const today = etDate();
       let written = 0;
       for (const idx of INDEX_PROXIES) {
         try {
-          let source = 'polygon';
-          let quote = await this.polygon.getDailyQuote(idx.proxyTicker);
-          if (!quote) {
-            quote = await this.finnhub.getQuote(idx.proxyTicker);
-            source = 'finnhub';
+          const quoteResult = await this.quotes.fetchQuote(idx.proxyTicker);
+          if (!quoteResult) {
+            this.logger.warn(
+              `No quote for ${idx.symbol} (${idx.proxyTicker}) from any source — skipping`,
+            );
+            continue;
           }
+          const quote = quoteResult.data;
+          const source = quoteResult.source;
+          // value/change/open/prevClose/dayHigh/dayLow are price-level fields
+          // and scale with the index; pctChange is scale-invariant.
+          const mult = idx.multiplier ?? 1;
           const doc = {
             label: idx.label,
             proxyTicker: idx.proxyTicker,
             isProxy: idx.isProxy,
             note: idx.note ?? null,
-            value: quote.c,
-            change: quote.d,
+            value: quote.c * mult,
+            change: quote.d * mult,
             pctChange: quote.dp,
-            open: quote.o,
-            prevClose: quote.pc,
+            open: quote.o * mult,
+            dayHigh: quote.h * mult,
+            dayLow: quote.l * mult,
+            prevClose: quote.pc * mult,
             source,
             updatedAt: new Date().toISOString(),
           };
-          batch.set(col.doc(idx.symbol), doc, { merge: true });
-          batch.set(historyCol.doc(`${today}_${idx.symbol}`), {
-            ...doc,
-            asOfDate: today,
+          writes.push({ ref: col.doc(idx.symbol), data: doc });
+          // merge:false preserves this call site's original plain set() — history
+          // rows are a full snapshot, not an accumulation of partial updates.
+          writes.push({
+            ref: historyCol.doc(`${today}_${idx.symbol}`),
+            data: {
+              ...doc,
+              asOfDate: today,
+            },
+            merge: false,
           });
           written++;
         } catch (err) {
-          this.logger.error(`Failed fetching proxy quote for ${idx.symbol} (${idx.proxyTicker}): ${err.message}`);
+          this.logger.error(
+            `Failed fetching proxy quote for ${idx.symbol} (${idx.proxyTicker}): ${err.message}`,
+          );
         }
       }
-      await batch.commit();
+      // US10Y is NOT an ETF proxy any more. It used to be TLT — a long-treasury
+      // fund that moves INVERSELY to the yield it was labelled as, so a falling
+      // 10Y rendered as a falling "10Y Yield" tile when the yield was rising.
+      // Polygon's /fed/v1/treasury-yields is authorized on this plan and gives
+      // the actual constant-maturity yield, plus the rest of the curve for the
+      // Macro screen.
+      try {
+        const curve = await this.polygon.getTreasuryYields(2);
+        const latest = curve[0];
+        const prior = curve[1];
+        if (latest?.yield10Year != null) {
+          const value = latest.yield10Year;
+          const pc = prior?.yield10Year ?? null;
+          // Yields are quoted in percentage POINTS, so `change` is a basis-point
+          // move and `pctChange` is its relative size — not the same number.
+          const change =
+            pc == null ? null : Math.round((value - pc) * 1000) / 1000;
+          const doc = {
+            label: "10Y Yield",
+            proxyTicker: null,
+            isProxy: false,
+            note: "US Treasury 10-year constant-maturity yield, in percent",
+            unit: "percent",
+            value,
+            change,
+            pctChange:
+              pc && pc !== 0 && change != null
+                ? Math.round(((value - pc) / pc) * 10000) / 100
+                : null,
+            open: null,
+            prevClose: pc,
+            asOfDate: latest.date,
+            curve: latest,
+            source: "polygon-fed",
+            updatedAt: new Date().toISOString(),
+          };
+          const curveWrites: PendingWrite[] = [
+            { ref: col.doc("US10Y"), data: doc },
+            {
+              ref: historyCol.doc(`${today}_US10Y`),
+              data: { ...doc, asOfDate: today },
+              merge: false,
+            },
+          ];
+          await batchSetWithCreatedAt(this.firebase.firestore, curveWrites);
+          written++;
+        }
+      } catch (err) {
+        this.logger.error(
+          `Failed fetching treasury yields for US10Y: ${err.message}`,
+        );
+      }
+
+      await batchSetWithCreatedAt(this.firebase.firestore, writes);
       await this.meta.record(JOB_NAME, { ok: true, count: written });
       return { written };
     } catch (err) {

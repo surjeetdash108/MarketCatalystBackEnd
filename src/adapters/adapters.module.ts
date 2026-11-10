@@ -1,190 +1,363 @@
-import { Module } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { FinnhubModule } from '../vendors/finnhub/finnhub.module';
-import { FinnhubService } from '../vendors/finnhub/finnhub.service';
-import { FmpModule } from '../vendors/fmp/fmp.module';
-import { FmpService } from '../vendors/fmp/fmp.service';
-import { PolygonModule } from '../vendors/polygon/polygon.module';
-import { PolygonService } from '../vendors/polygon/polygon.service';
-import { AggregatingNewsAdapter } from './aggregating-news.adapter';
-import { CompositeCompanyProfileAdapter } from './composite-company-profile.adapter';
-import { CompositeMoverEnrichmentAdapter } from './composite-mover-enrichment.adapter';
-import { CompositeMoversAdapter } from './composite-movers.adapter';
-import { CompositeNewsAdapter } from './composite-news.adapter';
-import { FinnhubNewsAdapter } from './finnhub-news.adapter';
-import { FmpCompanyProfileAdapter } from './fmp-company-profile.adapter';
-import { FmpMoverEnrichmentAdapter } from './fmp-mover-enrichment.adapter';
-import { FmpMoversAdapter } from './fmp-movers.adapter';
-import { PolygonCompanyProfileAdapter } from './polygon-company-profile.adapter';
-import { PolygonMoverEnrichmentAdapter } from './polygon-mover-enrichment.adapter';
-import { PolygonMoversAdapter } from './polygon-movers.adapter';
-import { PolygonNewsAdapter } from './polygon-news.adapter';
+import { Module } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { PolygonModule } from "../vendors/polygon/polygon.module";
+import { PolygonService } from "../vendors/polygon/polygon.service";
+import { FmpModule } from "../vendors/fmp/fmp.module";
+import { FmpService } from "../vendors/fmp/fmp.service";
+import { SecEdgarModule } from "../vendors/sec-edgar/sec-edgar.module";
+import { SecEdgarService } from "../vendors/sec-edgar/sec-edgar.service";
+import { BenzingaModule } from "../vendors/benzinga/benzinga.module";
+import { BenzingaService } from "../vendors/benzinga/benzinga.service";
+import { BenzingaNewsAdapter } from "./benzinga-news.adapter";
+import { FmpEarningsEstimatesAdapter } from "./earnings-estimates.adapter";
+import { FmpAnalystRatingsAdapter } from "./analyst-ratings.adapter";
+import { CompositeCompanyProfileAdapter } from "./composite-company-profile.adapter";
+import { CompositeMoverEnrichmentAdapter } from "./composite-mover-enrichment.adapter";
+import { CompositeMoversAdapter } from "./composite-movers.adapter";
+import { CompositeNewsAdapter } from "./composite-news.adapter";
+import { PolygonCompanyProfileAdapter } from "./polygon-company-profile.adapter";
+import { PolygonMoverEnrichmentAdapter } from "./polygon-mover-enrichment.adapter";
+import { PolygonMoversAdapter } from "./polygon-movers.adapter";
+import { PolygonNewsAdapter } from "./polygon-news.adapter";
+import { TradingViewNewsAdapter } from "./tradingview-news.adapter";
+import { FmpNewsAdapter } from "./fmp-news.adapter";
+import { FmpFinancialsAdapter } from "./fmp-financials.adapter";
+import {
+  CompositeDividendsAdapter,
+  PolygonDividendsAdapter,
+} from "./dividends.adapters";
+import { CompositeIposAdapter, PolygonIposAdapter } from "./ipos.adapters";
+import {
+  CompositeSectorsAdapter,
+  PolygonSectorsAdapter,
+  FmpSectorsAdapter,
+} from "./sectors.adapters";
+import {
+  CompositeFinancialsAdapter,
+  CompositeMarketBarsAdapter,
+  CompositeTickerUniverseAdapter,
+  PolygonFinancialsAdapter,
+  PolygonMarketBarsAdapter,
+  PolygonTickerUniverseAdapter,
+} from "./market-data.adapters";
+import { CompositeQuoteAdapter, PolygonQuoteAdapter } from "./quote.adapters";
 import {
   COMPANY_PROFILE_ADAPTER,
+  DIVIDENDS_ADAPTER,
+  FINANCIALS_ADAPTER,
+  MARKET_BARS_ADAPTER,
+  TICKER_UNIVERSE_ADAPTER,
+  IPOS_ADAPTER,
   MOVERS_ADAPTER,
   MOVER_ENRICHMENT_ADAPTER,
   NEWS_ADAPTER,
-} from './types';
+  NEWS_FMP_ADAPTER,
+  NEWS_BENZINGA_ADAPTER,
+  NEWS_TRADINGVIEW_ADAPTER,
+  QUOTE_ADAPTER,
+  SECTORS_ADAPTER,
+  EARNINGS_ESTIMATES_ADAPTER,
+  ANALYST_RATINGS_ADAPTER,
+} from "./types";
 
-const FMP_POLYGON_SOURCES = ['fmp', 'polygon', 'none'];
-const NEWS_SOURCES = ['polygon', 'finnhub', 'aggregate', 'none'];
-const NEWS_SINGLE_SOURCES = ['polygon', 'finnhub', 'none'];
+// These composites name only "polygon", but under MARKET_DATA_PRIMARY=fmp (the
+// default) every PolygonService call they make is answered FMP-first, Polygon
+// as backup (vendors/market-data/market-data.service.ts). The list is where a
+// second vendor becomes selectable — add its name here and to the bySource map.
+const POLYGON_ONLY_SOURCES = ["polygon", "none"];
+/** Domains where FMP is a selectable primary/fallback (has an adapter here). */
+const POLYGON_OR_FMP_SOURCES = ["polygon", "fmp", "none"];
 
 function parseSource(config, key, validSources, fallbackDefault) {
   const raw = config.get(key, fallbackDefault);
   if (!validSources.includes(raw)) {
     throw new Error(
-      `Unknown ${key}="${raw}" — expected one of: ${validSources.join(', ')}`,
+      `Unknown ${key}="${raw}" — expected one of: ${validSources.join(", ")}`,
     );
   }
   return raw;
 }
 
+/**
+ * Resolves a `<NAME>_SOURCE` / `<NAME>_FALLBACK_SOURCE` pair into a composite.
+ *
+ * Setting the fallback to "none" (or to the same vendor as the primary) yields a
+ * single-source composite — which is how you run one vendor exclusively WITHOUT
+ * losing the ability to switch vendors later, since every implementation stays
+ * registered and selectable by env var.
+ */
+function buildComposite(
+  config,
+  name: string,
+  validSources: string[],
+  defaults: { primary: string; fallback: string },
+  bySource: Record<string, () => unknown>,
+  Composite: new (primary: any, secondary: any) => unknown,
+) {
+  const primarySource = parseSource(
+    config,
+    `${name}_SOURCE`,
+    validSources,
+    defaults.primary,
+  );
+  if (primarySource === "none") {
+    throw new Error(
+      `${name}_SOURCE cannot be "none" — a primary source is required`,
+    );
+  }
+  const fallbackSource = parseSource(
+    config,
+    `${name}_FALLBACK_SOURCE`,
+    validSources,
+    defaults.fallback,
+  );
+  const fallback =
+    fallbackSource === "none" || fallbackSource === primarySource
+      ? null
+      : bySource[fallbackSource]();
+  return new Composite(bySource[primarySource](), fallback);
+}
+
 @Module({
-  imports: [FmpModule, PolygonModule, FinnhubModule],
+  imports: [PolygonModule, FmpModule, SecEdgarModule, BenzingaModule],
   providers: [
-    FmpCompanyProfileAdapter,
     PolygonCompanyProfileAdapter,
-    FmpMoversAdapter,
     PolygonMoversAdapter,
-    FmpMoverEnrichmentAdapter,
     PolygonMoverEnrichmentAdapter,
     PolygonNewsAdapter,
-    FinnhubNewsAdapter,
+    BenzingaNewsAdapter,
     {
       provide: COMPANY_PROFILE_ADAPTER,
-      inject: [ConfigService, FmpService, PolygonService],
-      useFactory: (config, fmp, polygon) => {
-        const primarySource = parseSource(
+      inject: [ConfigService, PolygonService, FmpService, SecEdgarService],
+      useFactory: (config, polygon, fmp: FmpService, secEdgar: SecEdgarService) =>
+        buildComposite(
           config,
-          'COMPANY_PROFILE_SOURCE',
-          FMP_POLYGON_SOURCES,
-          'fmp',
-        );
-        const fallbackSource = parseSource(
-          config,
-          'COMPANY_PROFILE_FALLBACK_SOURCE',
-          FMP_POLYGON_SOURCES,
-          'polygon',
-        );
-        const bySource = {
-          fmp: () => new FmpCompanyProfileAdapter(fmp),
-          polygon: () => new PolygonCompanyProfileAdapter(polygon),
-          none: () => null,
-        };
-        if (primarySource === 'none') {
-          throw new Error(
-            'COMPANY_PROFILE_SOURCE cannot be "none" — a primary source is required',
-          );
-        }
-        const primary = bySource[primarySource]();
-        const fallback =
-          fallbackSource === 'none' || fallbackSource === primarySource
-            ? null
-            : bySource[fallbackSource]();
-        return new CompositeCompanyProfileAdapter(primary, fallback);
-      },
+          "COMPANY_PROFILE",
+          POLYGON_ONLY_SOURCES,
+          { primary: "polygon", fallback: "none" },
+          {
+            polygon: () =>
+              new PolygonCompanyProfileAdapter(polygon, fmp, secEdgar),
+            none: () => null,
+          },
+          CompositeCompanyProfileAdapter,
+        ),
     },
     {
       provide: MOVERS_ADAPTER,
-      inject: [ConfigService, FmpService, PolygonService],
-      useFactory: (config, fmp, polygon) => {
-        const primarySource = parseSource(
+      inject: [ConfigService, PolygonService],
+      useFactory: (config, polygon) =>
+        buildComposite(
           config,
-          'MOVERS_SOURCE',
-          FMP_POLYGON_SOURCES,
-          'polygon',
-        );
-        const fallbackSource = parseSource(
-          config,
-          'MOVERS_FALLBACK_SOURCE',
-          FMP_POLYGON_SOURCES,
-          'fmp',
-        );
-        const bySource = {
-          fmp: () => new FmpMoversAdapter(fmp),
-          polygon: () => new PolygonMoversAdapter(polygon),
-          none: () => null,
-        };
-        if (primarySource === 'none') {
-          throw new Error(
-            'MOVERS_SOURCE cannot be "none" — a primary source is required',
-          );
-        }
-        const primary = bySource[primarySource]();
-        const fallback =
-          fallbackSource === 'none' || fallbackSource === primarySource
-            ? null
-            : bySource[fallbackSource]();
-        return new CompositeMoversAdapter(primary, fallback);
-      },
+          "MOVERS",
+          POLYGON_ONLY_SOURCES,
+          { primary: "polygon", fallback: "none" },
+          {
+            polygon: () => new PolygonMoversAdapter(polygon),
+            none: () => null,
+          },
+          CompositeMoversAdapter,
+        ),
     },
     {
       provide: MOVER_ENRICHMENT_ADAPTER,
-      inject: [ConfigService, FmpService, PolygonService],
-      useFactory: (config, fmp, polygon) => {
-        const primarySource = parseSource(
+      inject: [ConfigService, PolygonService, FmpService, SecEdgarService],
+      useFactory: (
+        config,
+        polygon,
+        fmp: FmpService,
+        secEdgar: SecEdgarService,
+      ) =>
+        buildComposite(
           config,
-          'MOVER_ENRICHMENT_SOURCE',
-          FMP_POLYGON_SOURCES,
-          'fmp',
-        );
-        const fallbackSource = parseSource(
-          config,
-          'MOVER_ENRICHMENT_FALLBACK_SOURCE',
-          FMP_POLYGON_SOURCES,
-          'polygon',
-        );
-        const bySource = {
-          fmp: () => new FmpMoverEnrichmentAdapter(fmp),
-          polygon: () => new PolygonMoverEnrichmentAdapter(polygon),
-          none: () => null,
-        };
-        if (primarySource === 'none') {
-          throw new Error(
-            'MOVER_ENRICHMENT_SOURCE cannot be "none" — a primary source is required',
-          );
-        }
-        const primary = bySource[primarySource]();
-        const fallback =
-          fallbackSource === 'none' || fallbackSource === primarySource
-            ? null
-            : bySource[fallbackSource]();
-        return new CompositeMoverEnrichmentAdapter(primary, fallback);
-      },
+          "MOVER_ENRICHMENT",
+          POLYGON_ONLY_SOURCES,
+          { primary: "polygon", fallback: "none" },
+          {
+            polygon: () =>
+              new PolygonMoverEnrichmentAdapter(polygon, fmp, secEdgar),
+            none: () => null,
+          },
+          CompositeMoverEnrichmentAdapter,
+        ),
+    },
+    {
+      // Third news provider (§1). Constructed always so the pipeline shape is
+      // fixed, but INERT until TRADINGVIEW_NEWS_URL is set — see the adapter
+      // for why it reads a licensed feed rather than scraping the site.
+      provide: NEWS_TRADINGVIEW_ADAPTER,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) =>
+        new TradingViewNewsAdapter(
+          String(config.get("TRADINGVIEW_NEWS_URL", "")).trim() || null,
+          String(config.get("TRADINGVIEW_NEWS_KEY", "")).trim() || null,
+        ),
     },
     {
       provide: NEWS_ADAPTER,
-      inject: [ConfigService, PolygonService, FinnhubService],
-      useFactory: (config, polygon, finnhub) => {
-        const mode = parseSource(config, 'NEWS_SOURCE', NEWS_SOURCES, 'aggregate');
-        const makePolygon = () => new PolygonNewsAdapter(polygon);
-        const makeFinnhub = () => new FinnhubNewsAdapter(finnhub);
-        if (mode === 'aggregate') {
-          return new AggregatingNewsAdapter([makePolygon(), makeFinnhub()]);
-        }
-        if (mode === 'none') {
-          throw new Error(
-            'NEWS_SOURCE cannot be "none" — a primary source is required',
-          );
-        }
-        const bySource = {
-          polygon: makePolygon,
-          finnhub: makeFinnhub,
-          none: () => null,
-        };
-        const fallbackSource = parseSource(
+      inject: [PolygonService],
+      useFactory: (polygon) =>
+        new CompositeNewsAdapter(new PolygonNewsAdapter(polygon), null),
+    },
+    {
+      // FMP news — the primary feed, merged FMP-first with Polygon by news.job and
+      // on-demand news. Defaults to "fmp"; NEWS_FMP_SOURCE=none turns it off.
+      provide: NEWS_FMP_ADAPTER,
+      inject: [ConfigService, FmpService],
+      useFactory: (config: ConfigService, fmp: FmpService) => {
+        const source = parseSource(config, "NEWS_FMP_SOURCE", ["fmp", "none"], "fmp");
+        return source === "fmp" ? new FmpNewsAdapter(fmp) : null;
+      },
+    },
+    {
+      provide: NEWS_BENZINGA_ADAPTER,
+      inject: [BenzingaService],
+      useFactory: (benzinga: BenzingaService) => new BenzingaNewsAdapter(benzinga),
+    },
+    {
+      provide: DIVIDENDS_ADAPTER,
+      inject: [ConfigService, PolygonService],
+      useFactory: (config, polygon) =>
+        buildComposite(
           config,
-          'NEWS_FALLBACK_SOURCE',
-          NEWS_SINGLE_SOURCES,
-          'finnhub',
+          "DIVIDENDS",
+          POLYGON_ONLY_SOURCES,
+          { primary: "polygon", fallback: "none" },
+          {
+            polygon: () => new PolygonDividendsAdapter(polygon),
+            none: () => null,
+          },
+          CompositeDividendsAdapter,
+        ),
+    },
+    {
+      provide: IPOS_ADAPTER,
+      inject: [ConfigService, PolygonService],
+      useFactory: (config, polygon) =>
+        buildComposite(
+          config,
+          "IPOS",
+          POLYGON_ONLY_SOURCES,
+          { primary: "polygon", fallback: "none" },
+          {
+            polygon: () => new PolygonIposAdapter(polygon),
+            none: () => null,
+          },
+          CompositeIposAdapter,
+        ),
+    },
+    {
+      provide: SECTORS_ADAPTER,
+      inject: [ConfigService, PolygonService, FmpService],
+      useFactory: (config, polygon, fmp: FmpService) =>
+        buildComposite(
+          config,
+          "SECTORS",
+          // FMP is primary (real aggregates) with Polygon as fallback
+          POLYGON_OR_FMP_SOURCES,
+          { primary: "fmp", fallback: "polygon" },
+          {
+            polygon: () => new PolygonSectorsAdapter(polygon),
+            fmp: () => new FmpSectorsAdapter(fmp),
+            none: () => null,
+          },
+          CompositeSectorsAdapter,
+        ),
+    },
+    {
+      provide: QUOTE_ADAPTER,
+      inject: [ConfigService, PolygonService],
+      useFactory: (config, polygon) =>
+        buildComposite(
+          config,
+          "QUOTE",
+          POLYGON_ONLY_SOURCES,
+          { primary: "polygon", fallback: "none" },
+          {
+            polygon: () => new PolygonQuoteAdapter(polygon),
+            none: () => null,
+          },
+          CompositeQuoteAdapter,
+        ),
+    },
+    {
+      provide: MARKET_BARS_ADAPTER,
+      inject: [ConfigService, PolygonService],
+      useFactory: (config, polygon) =>
+        buildComposite(
+          config,
+          "MARKET_BARS",
+          POLYGON_ONLY_SOURCES,
+          { primary: "polygon", fallback: "none" },
+          {
+            polygon: () => new PolygonMarketBarsAdapter(polygon),
+            none: () => null,
+          },
+          CompositeMarketBarsAdapter,
+        ),
+    },
+    {
+      provide: TICKER_UNIVERSE_ADAPTER,
+      inject: [ConfigService, PolygonService],
+      useFactory: (config, polygon) =>
+        buildComposite(
+          config,
+          "TICKER_UNIVERSE",
+          POLYGON_ONLY_SOURCES,
+          { primary: "polygon", fallback: "none" },
+          {
+            polygon: () => new PolygonTickerUniverseAdapter(polygon),
+            none: () => null,
+          },
+          CompositeTickerUniverseAdapter,
+        ),
+    },
+    {
+      provide: FINANCIALS_ADAPTER,
+      inject: [ConfigService, PolygonService, FmpService],
+      useFactory: (config, polygon, fmp: FmpService) =>
+        buildComposite(
+          config,
+          "FINANCIALS",
+          // FMP is the primary statements source, with Polygon as fallback
+          POLYGON_OR_FMP_SOURCES,
+          { primary: "fmp", fallback: "polygon" },
+          {
+            polygon: () => new PolygonFinancialsAdapter(polygon),
+            fmp: () => new FmpFinancialsAdapter(fmp),
+            none: () => null,
+          },
+          CompositeFinancialsAdapter,
+        ),
+    },
+    {
+      // Earnings estimates (FMP — Polygon has no estimates feed). Defaults to
+      // "fmp"; EARNINGS_ESTIMATES_SOURCE=none drops the seam to null.
+      provide: EARNINGS_ESTIMATES_ADAPTER,
+      inject: [ConfigService, FmpService],
+      useFactory: (config: ConfigService, fmp: FmpService) => {
+        const source = parseSource(
+          config,
+          "EARNINGS_ESTIMATES_SOURCE",
+          ["fmp", "none"],
+          "fmp",
         );
-        const primary = bySource[mode]();
-        const fallback =
-          fallbackSource === 'none' || fallbackSource === mode
-            ? null
-            : bySource[fallbackSource]();
-        return new CompositeNewsAdapter(primary, fallback);
+        return source === "fmp" ? new FmpEarningsEstimatesAdapter(fmp) : null;
+      },
+    },
+    {
+      // Analyst ratings (FMP — Polygon has no ratings feed). Defaults to "fmp";
+      // ANALYST_SOURCE=none makes the analyst-actions job a no-op.
+      provide: ANALYST_RATINGS_ADAPTER,
+      inject: [ConfigService, FmpService],
+      useFactory: (config: ConfigService, fmp: FmpService) => {
+        const source = parseSource(
+          config,
+          "ANALYST_SOURCE",
+          ["fmp", "none"],
+          "fmp",
+        );
+        return source === "fmp" ? new FmpAnalystRatingsAdapter(fmp) : null;
       },
     },
   ],
@@ -193,6 +366,17 @@ function parseSource(config, key, validSources, fallbackDefault) {
     MOVERS_ADAPTER,
     MOVER_ENRICHMENT_ADAPTER,
     NEWS_ADAPTER,
+    NEWS_FMP_ADAPTER,
+    NEWS_BENZINGA_ADAPTER,
+    DIVIDENDS_ADAPTER,
+    IPOS_ADAPTER,
+    SECTORS_ADAPTER,
+    QUOTE_ADAPTER,
+    MARKET_BARS_ADAPTER,
+    TICKER_UNIVERSE_ADAPTER,
+    FINANCIALS_ADAPTER,
+    EARNINGS_ESTIMATES_ADAPTER,
+    ANALYST_RATINGS_ADAPTER,
   ],
 })
 export class AdaptersModule {}

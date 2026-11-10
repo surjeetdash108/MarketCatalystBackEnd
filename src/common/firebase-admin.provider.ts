@@ -1,5 +1,10 @@
-import { Injectable, Logger, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  ServiceUnavailableException,
+} from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import {
   applicationDefault,
   cert,
@@ -7,46 +12,101 @@ import {
   getApps,
   initializeApp,
   App,
-} from 'firebase-admin/app';
-import { Firestore, getFirestore } from 'firebase-admin/firestore';
-import { existsSync, readFileSync } from 'fs';
-import { resolve } from 'path';
+} from "firebase-admin/app";
+import { Firestore, getFirestore } from "firebase-admin/firestore";
+import { Auth, getAuth } from "firebase-admin/auth";
+import { getStorage } from "firebase-admin/storage";
 
 @Injectable()
 export class FirebaseAdminService implements OnModuleInit {
   private readonly logger = new Logger(FirebaseAdminService.name);
   private app?: App;
+  private loggedDb = false;
 
   constructor(private readonly config: ConfigService) {}
 
+  /**
+   * Composes a service-account credential from individual FIREBASE_* env
+   * vars (the downloaded key JSON's fields, one env var per field — see
+   * .env.example) rather than a key file. Only the three fields
+   * firebase-admin's `cert()` actually needs are required; a missing
+   * `FIREBASE_CLIENT_EMAIL` or `FIREBASE_PRIVATE_KEY` means "not configured",
+   * not an error — ADC is a legitimate alternative.
+   */
+  private readServiceAccountFromEnv(): Record<string, string> | null {
+    const projectId = this.config.get<string>("FIREBASE_PROJECT_ID", "").trim();
+    const clientEmail = this.config
+      .get<string>("FIREBASE_CLIENT_EMAIL", "")
+      .trim();
+    // dotenv expands \n inside a double-quoted value to a real newline already;
+    // this replace is a no-op in that case and a fix-up if it didn't.
+    const privateKey = this.config
+      .get<string>("FIREBASE_PRIVATE_KEY", "")
+      .trim()
+      .replace(/\\n/g, "\n");
+    if (!projectId || !clientEmail || !privateKey) return null;
+
+    return {
+      type: this.config.get<string>("FIREBASE_TYPE", "service_account"),
+      project_id: projectId,
+      private_key_id: this.config.get<string>("FIREBASE_PRIVATE_KEY_ID", ""),
+      private_key: privateKey,
+      client_email: clientEmail,
+      client_id: this.config.get<string>("FIREBASE_CLIENT_ID", ""),
+      auth_uri: this.config.get<string>(
+        "FIREBASE_AUTH_URI",
+        "https://accounts.google.com/o/oauth2/auth",
+      ),
+      token_uri: this.config.get<string>(
+        "FIREBASE_TOKEN_URI",
+        "https://oauth2.googleapis.com/token",
+      ),
+      auth_provider_x509_cert_url: this.config.get<string>(
+        "FIREBASE_AUTH_PROVIDER_X509_CERT_URL",
+        "https://www.googleapis.com/oauth2/v1/certs",
+      ),
+      client_x509_cert_url: this.config.get<string>(
+        "FIREBASE_CLIENT_X509_CERT_URL",
+        "",
+      ),
+      universe_domain: this.config.get<string>(
+        "FIREBASE_UNIVERSE_DOMAIN",
+        "googleapis.com",
+      ),
+    };
+  }
+
   onModuleInit(): void {
-    const projectId = this.config.get<string>('FIREBASE_PROJECT_ID');
-    const serviceAccountPath = resolve(
-      this.config.get<string>('FIREBASE_SERVICE_ACCOUNT_PATH', './service-account.json'),
-    );
+    const projectId = this.config.get<string>("FIREBASE_PROJECT_ID");
 
     if (getApps().length) {
       this.app = getApp();
-      this.logger.log('Firebase Admin already initialized');
+      this.logger.log("Firebase Admin already initialized");
       return;
     }
 
-    if (existsSync(serviceAccountPath)) {
-      const serviceAccount = JSON.parse(readFileSync(serviceAccountPath, 'utf8'));
-      this.app = initializeApp({ credential: cert(serviceAccount), projectId });
-      this.logger.log('Firebase Admin initialized with service-account.json');
+    // Preferred: credentials assembled from individual FIREBASE_* env vars
+    // (Secret Manager-backed in any deployed environment, .env locally) —
+    // never a key file, checked in or otherwise.
+    const envServiceAccount = this.readServiceAccountFromEnv();
+    if (envServiceAccount) {
+      this.app = initializeApp({
+        credential: cert(envServiceAccount),
+        projectId,
+      });
+      this.logger.log("Firebase Admin initialized from FIREBASE_* env vars");
       return;
     }
 
     try {
       this.app = initializeApp({ credential: applicationDefault(), projectId });
       this.logger.log(
-        'Firebase Admin initialized with Application Default Credentials (no service-account.json found)',
+        "Firebase Admin initialized with Application Default Credentials (FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY not set)",
       );
     } catch (err) {
       this.logger.error(
-        `Firebase Admin has no credentials available. Either save a key at ${serviceAccountPath}, ` +
-          `or run "gcloud auth application-default login" to use ADC instead. ` +
+        `Firebase Admin has no credentials available. Set FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY ` +
+          `(+ FIREBASE_PROJECT_ID), or run "gcloud auth application-default login" to use ADC instead. ` +
           `Underlying error: ${(err as Error).message}`,
       );
     }
@@ -55,10 +115,73 @@ export class FirebaseAdminService implements OnModuleInit {
   get firestore(): Firestore {
     if (!this.app) {
       throw new ServiceUnavailableException(
-        'Firebase Admin is not initialized — no service-account.json and no Application Default ' +
-          'Credentials found. See backend/.env.example.',
+        "Firebase Admin is not initialized — no FIREBASE_* credential env vars and no Application " +
+          "Default Credentials found. See backend/.env.example.",
       );
     }
-    return getFirestore(this.app);
+    // Optional named Firestore database (regional-migration plumbing). Unset or
+    // "(default)" ⇒ the project's default database, i.e. no change. At cutover we
+    // set FIRESTORE_DATABASE_ID=mc-regional and redeploy. getFirestore caches per
+    // (app, databaseId), so calling this getter repeatedly is cheap.
+    const dbId = (this.config.get<string>("FIRESTORE_DATABASE_ID", "") ?? "").trim();
+    const useNamed = dbId !== "" && dbId !== "(default)";
+    if (!this.loggedDb) {
+      this.logger.log(`Firestore database: ${useNamed ? dbId : "(default)"}`);
+      this.loggedDb = true;
+    }
+    return useNamed ? getFirestore(this.app, dbId) : getFirestore(this.app);
+  }
+  /**
+   * OAuth2 access token for the identity this backend already authenticates as
+   * (Application Default Credentials on Cloud Run, or the FIREBASE_* service
+   * account when those env vars are set). Used to call Google APIs other than
+   * Firebase — today, the Cloud Run Admin API that starts a job execution for
+   * the admin Jobs tab. The credential's scopes include cloud-platform.
+   */
+  async getAccessToken(): Promise<string> {
+    const credential = this.app?.options.credential;
+    if (!credential) {
+      throw new ServiceUnavailableException(
+        "Firebase Admin has no credential to mint an access token from.",
+      );
+    }
+    const { access_token } = await credential.getAccessToken();
+    return access_token;
+  }
+
+  /**
+   * Who a Google API will see this backend as, for error messages that tell an
+   * operator which account needs a permission. Only known when the identity
+   * comes from FIREBASE_CLIENT_EMAIL; under ADC the account is whatever the
+   * Cloud Run service runs as, which the process cannot name without a
+   * metadata-server round trip.
+   */
+  describeIdentity(): string {
+    const email = this.config.get<string>("FIREBASE_CLIENT_EMAIL", "").trim();
+    return email || "the Cloud Run runtime service account of this service";
+  }
+
+  /** Admin SDK Auth — used by AdminGuard to verify caller ID tokens. */
+  get auth(): Auth {
+    if (!this.app) {
+      throw new Error("FirebaseAdminService used before initialisation");
+    }
+    return getAuth(this.app);
+  }
+
+  /**
+   * Default Storage bucket — used to externalize blog images so image-heavy
+   * `content` doesn't blow past Firestore's 1 MB/document limit.
+   */
+  get bucket() {
+    if (!this.app) {
+      throw new ServiceUnavailableException(
+        "Firebase Admin is not initialized — no FIREBASE_* credential env vars and no Application " +
+          "Default Credentials found. See backend/.env.example.",
+      );
+    }
+    return getStorage(this.app).bucket(
+      "market-catalyst-502415.firebasestorage.app",
+    );
   }
 }

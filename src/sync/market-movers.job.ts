@@ -1,13 +1,21 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
-import { AllSourcesFailedError } from '../adapters/adapter-error';
-import { MOVERS_ADAPTER, MOVER_ENRICHMENT_ADAPTER, type MoverEnrichmentAdapter, type MoversAdapter } from '../adapters/types';
-import { FirebaseAdminService } from '../common/firebase-admin.provider';
-import { SyncMetaService } from '../common/sync-meta.service';
-import { SyncRegistry } from '../common/sync-registry.service';
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { AllSourcesFailedError } from "../adapters/adapter-error";
+import {
+  MOVERS_ADAPTER,
+  MOVER_ENRICHMENT_ADAPTER,
+  type MoverEnrichmentAdapter,
+  type MoversAdapter,
+} from "../adapters/types";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import {
+  batchSetWithCreatedAt,
+  type PendingWrite,
+} from "../common/firestore-batch.util";
+import { SyncMetaService } from "../common/sync-meta.service";
+import { SyncRegistry } from "../common/sync-registry.service";
 
-const JOB_NAME = 'market-movers';
-const TOP_N = 20;
+const JOB_NAME = "market-movers";
+const TOP_N = 100;
 const DELAY_MS = 150;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -17,23 +25,58 @@ export class MarketMoversJob implements OnModuleInit {
 
   constructor(
     @Inject(MOVERS_ADAPTER) private readonly movers: MoversAdapter,
-    @Inject(MOVER_ENRICHMENT_ADAPTER) private readonly enrichment: MoverEnrichmentAdapter,
+    @Inject(MOVER_ENRICHMENT_ADAPTER)
+    private readonly enrichment: MoverEnrichmentAdapter,
     private readonly firebase: FirebaseAdminService,
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
-  ) {}
+  ) { }
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ['market_movers', 'market_movers_history'],
-      cronExpression: '0 18 * * 1-5',
-      timeZone: 'America/New_York',
+      collections: ["market_movers", "market_movers_history"],
+      cronExpression: "0 18 * * 1-5",
+      timeZone: "America/New_York",
     });
   }
 
-  @Cron('0 18 * * 1-5', { timeZone: 'America/New_York' })
   async scheduled() {
     await this.registry.get(JOB_NAME)();
+  }
+  /**
+   * RVOL for each mover, read from volume-leaders' per-ticker state: the same
+   * figure the Unusual Volume board ranks on, for the whole US market.
+   *
+   * It used to be recomputed here from the last 21 `ohlcv_bars`. Most movers
+   * sit outside the tracked universe, whose bars nothing keeps current: 137 of
+   * the 200 on 14 Oct ended at 1 Sep (CRDU's "4.09x" was 1 Sep's RVOL).
+   * Others carried partial-day bars that sank the average (UNH 3.33x for a
+   * real 1.41x).
+   *
+   * Only a state stamped with the latest session volume-leaders processed is
+   * used; a ticker that did not trade that session, or has too short a
+   * window, gets null rather than an old ratio.
+   */
+  private async loadRvols(tickers: string[]): Promise<Map<string, number | null>> {
+    const out = new Map<string, number | null>(tickers.map((t) => [t, null]));
+    if (tickers.length === 0) return out;
+    const db = this.firebase.firestore;
+    const latest = (await db.collection("volume_leaders").doc("current").get())
+      .data()?.date as string | undefined;
+    if (!latest) return out;
+    const unique = [...new Set(tickers)];
+    for (let i = 0; i < unique.length; i += 300) {
+      const snaps = await db.getAll(
+        ...unique.slice(i, i + 300).map((t) => db.collection("volume_state").doc(t)),
+      );
+      for (const snap of snaps) {
+        const d = snap.data();
+        if (d?.lastDate === latest && typeof d.rvol === "number" && Number.isFinite(d.rvol)) {
+          out.set(snap.id, d.rvol);
+        }
+      }
+    }
+    return out;
   }
 
   async run() {
@@ -42,9 +85,12 @@ export class MarketMoversJob implements OnModuleInit {
       const { date, gainers, losers } = moversResult.data;
       const topMovers = [...gainers, ...losers];
       if (moversResult.warnings.length > 0) {
-        this.logger.warn(`market-movers: ${moversResult.warnings.map((w) => w.message).join(' | ')}`);
+        this.logger.warn(
+          `market-movers: ${moversResult.warnings.map((w) => w.message).join(" | ")}`,
+        );
       }
       const enrichmentByTicker = new Map();
+      const rvolByTicker = new Map<string, number | null>();
       for (const m of topMovers) {
         try {
           const enriched = await this.enrichment.enrichTicker(m.ticker);
@@ -58,8 +104,8 @@ export class MarketMoversJob implements OnModuleInit {
               value: null,
               warnings: [
                 {
-                  code: 'SUB_REQUEST_FAILED',
-                  field: 'name,sector,cap',
+                  code: "SUB_REQUEST_FAILED",
+                  field: "name,sector,cap",
                   message: `${this.enrichment.sourceName} found no profile for ${m.ticker}.`,
                 },
               ],
@@ -67,13 +113,15 @@ export class MarketMoversJob implements OnModuleInit {
           }
         } catch (err) {
           if (err instanceof AllSourcesFailedError) {
-            this.logger.warn(`Enrichment failed for mover ${m.ticker}: every source failed — ${err.attempts.map((a) => `${a.source}: ${a.error}`).join(' | ')}`);
+            this.logger.warn(
+              `Enrichment failed for mover ${m.ticker}: every source failed — ${err.attempts.map((a) => `${a.source}: ${a.error}`).join(" | ")}`,
+            );
             enrichmentByTicker.set(m.ticker, {
               value: null,
               warnings: [
                 {
-                  code: 'SUB_REQUEST_FAILED',
-                  field: 'name,sector,cap',
+                  code: "SUB_REQUEST_FAILED",
+                  field: "name,sector,cap",
                   message: err.message,
                 },
               ],
@@ -84,9 +132,19 @@ export class MarketMoversJob implements OnModuleInit {
         }
         await sleep(DELAY_MS);
       }
-      const batch = this.firebase.firestore.batch();
-      const col = this.firebase.firestore.collection('market_movers');
-      const historyCol = this.firebase.firestore.collection('market_movers_history');
+      try {
+        for (const [t, v] of await this.loadRvols(topMovers.map((m) => m.ticker))) {
+          rvolByTicker.set(t, v);
+        }
+      } catch (err) {
+        // RVOL is an enrichment: a failed read leaves it null, never the run.
+        this.logger.warn(`RVOL read failed: ${(err as Error).message}`);
+      }
+      const writes: PendingWrite[] = [];
+      const col = this.firebase.firestore.collection("market_movers");
+      const historyCol = this.firebase.firestore.collection(
+        "market_movers_history",
+      );
       let enrichmentFailures = 0;
       const writeMover = (m, direction) => {
         const enriched = enrichmentByTicker.get(m.ticker);
@@ -94,22 +152,55 @@ export class MarketMoversJob implements OnModuleInit {
           ...moversResult.warnings,
           ...(enriched?.warnings ?? []),
         ];
-        if (enriched?.value == null)
-          enrichmentFailures++;
-        const doc = {
+        if (enriched?.value == null) enrichmentFailures++;
+          const doc = {
           ...m,
           ...enriched?.value,
+          rvol: rvolByTicker.get(m.ticker) ?? null,
           direction,
           source: this.movers.sourceName,
           warnings,
           updatedAt: new Date().toISOString(),
         };
-        batch.set(col.doc(`${direction}_${m.ticker}`), doc);
-        batch.set(historyCol.doc(`${date}_${direction}_${m.ticker}`), doc);
+        writes.push({ ref: col.doc(`${direction}_${m.ticker}`), data: doc });
+        writes.push({
+          ref: historyCol.doc(`${date}_${direction}_${m.ticker}`),
+          data: doc,
+        });
       };
-      gainers.forEach((g) => writeMover(g, 'gainer'));
-      losers.forEach((l) => writeMover(l, 'loser'));
-      await batch.commit();
+      gainers.forEach((g) => writeMover(g, "gainer"));
+      losers.forEach((l) => writeMover(l, "loser"));
+      await batchSetWithCreatedAt(this.firebase.firestore, writes);
+
+      // Full refresh of the CURRENT board: `market_movers` is keyed by
+      // `${direction}_${ticker}`, and the top tickers change every run, so
+      // without this the collection accumulates every past run's movers — old
+      // pre-quarantine extremes (e.g. a stale +600%) then headline the board.
+      // Only this run's ~40 rows survive. (market_movers_history is meant to
+      // accumulate, so it is deliberately left alone.)
+      const keepIds = new Set([
+        ...gainers.map((g) => `gainer_${g.ticker}`),
+        ...losers.map((l) => `loser_${l.ticker}`),
+      ]);
+      // Data-loss guard: if the movers fetch returned no gainers AND no losers,
+      // the keep-set is empty and the delete-pass below would wipe the entire
+      // board — the wrong response to a non-throwing empty vendor response (a
+      // Polygon soft error). Skip the delete and warn; a genuinely-empty run is
+      // a no-op, never a wipe.
+      if (keepIds.size === 0) {
+        this.logger.warn(
+          "market-movers: refresh returned 0 rows — skipping delete-pass to avoid wiping collection market_movers",
+        );
+      } else {
+        const stale = (await col.listDocuments()).filter(
+          (ref) => !keepIds.has(ref.id),
+        );
+        for (let i = 0; i < stale.length; i += 400) {
+          const batch = this.firebase.firestore.batch();
+          for (const ref of stale.slice(i, i + 400)) batch.delete(ref);
+          await batch.commit();
+        }
+      }
       await this.meta.record(JOB_NAME, {
         ok: true,
         count: gainers.length + losers.length,

@@ -1,12 +1,42 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { fetchJson } from '../../common/http.util';
+import { Injectable, Logger, Optional } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { fetchJson } from "../../common/http.util";
+import { finiteOrNull, nonNegIntOrNull } from "../../common/validate.util";
+import { FmpService } from "../fmp/fmp.service";
 
-const BASE_URL = 'https://api.polygon.io';
+// Polygon rebranded to Massive (Oct 2025); api.polygon.io still resolves but is
+// being phased out in favour of api.massive.com. Kept configurable so the host
+// can be cut over via env once a key is confirmed working on the new one,
+// without a redeploy of changed code.
+const DEFAULT_BASE_URL = "https://api.polygon.io";
+
+// Delay between pages of a paginated endpoint. 12.5s is the free Basic tier's
+// 5-calls-per-minute budget; EVERY paid tier is unlimited, so on a paid key
+// this should be 0 — it otherwise adds minutes per run to getAllTickers,
+// getDividendsCalendar and getIpoCalendar for no reason.
+const DEFAULT_PAGE_DELAY_MS = 12_500;
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const PAGE_DELAY_MS = 12_500;
 
-interface PolygonAggBar {
+/**
+ * Financial-statement unit assertion. Polygon tags each statement node with a
+ * `unit`: monetary nodes carry an ISO-4217 currency code ("USD", or "USD /
+ * shares" for per-share figures), while non-monetary nodes use lowercase tokens
+ * ("shares", "pure"). Every consumer here assumes raw USD dollars, so a node
+ * whose LEADING unit token is a three-letter code OTHER than USD is a genuine
+ * currency mismatch — return that code so the caller can warn and null the value
+ * rather than silently storing a foreign-denominated number as if it were USD.
+ * Everything else (absent/non-string unit, USD-based, "shares", "pure", ratios)
+ * is accepted unchanged, so the normal USD path is untouched. Deliberately
+ * conservative: only an explicit non-USD currency code trips it.
+ */
+function nonUsdCurrencyUnit(unit: unknown): string | null {
+  if (typeof unit !== "string") return null;
+  const lead = unit.trim().split(/[\s/]/)[0];
+  return /^[A-Z]{3}$/.test(lead) && lead !== "USD" ? lead : null;
+}
+
+export interface PolygonAggBar {
   T: string;
   v: number;
   o: number;
@@ -15,6 +45,28 @@ interface PolygonAggBar {
   l: number;
   t: number;
   n?: number;
+  /** Volume-weighted average price for the bar. Always present on aggs; used as
+   *  the session VWAP source instead of the fabricated value the UI showed. */
+  vw?: number;
+}
+
+/**
+ * Oldest date the plan will serve. Probed 2026-07-21: a daily-aggs request
+ * starting 2021-07-22 returned 200 while 2021-07-01 returned
+ * `NOT_AUTHORIZED / "Your plan doesn't include this data timeframe"` — i.e. a
+ * five-year rolling window. Requests that cross the edge fail as a whole rather
+ * than being truncated, so callers must clamp `from` instead of asking for more
+ * and taking what arrives.
+ */
+export const PLAN_HISTORY_YEARS = 5;
+
+/** The earliest `from` date the plan accepts today, with a few days of slack so
+ *  a job scheduled near midnight cannot drift over the edge mid-run. */
+export function planHistoryFloor(now: Date = new Date()): string {
+  const floor = new Date(now);
+  floor.setUTCFullYear(floor.getUTCFullYear() - PLAN_HISTORY_YEARS);
+  floor.setUTCDate(floor.getUTCDate() + 3);
+  return floor.toISOString().slice(0, 10);
 }
 
 export interface PolygonTickerRef {
@@ -35,7 +87,7 @@ export interface PolygonTickerRef {
 export interface PolygonOptionContract {
   ticker: string;
   underlying_ticker: string;
-  contract_type: 'call' | 'put';
+  contract_type: "call" | "put";
   strike_price: number;
   expiration_date: string;
   exercise_style?: string;
@@ -44,12 +96,13 @@ export interface PolygonOptionContract {
 
 export interface PolygonNewsInsight {
   ticker: string;
-  sentiment: 'positive' | 'negative' | 'neutral';
+  sentiment: "positive" | "negative" | "neutral";
   sentiment_reasoning: string;
 }
 
 export interface PolygonNewsArticle {
   id: string;
+  image_url?: string;
   publisher: {
     name: string;
   };
@@ -67,30 +120,83 @@ export interface PolygonNewsArticle {
 export class PolygonService {
   private readonly logger = new Logger(PolygonService.name);
   private readonly apiKey: string;
+  private readonly baseUrl: string;
+  private readonly pageDelayMs: number;
+  // Polygon's legacy /vX/reference/financials is retired (410 Gone) and replacement
+  // (/stocks/financials/v1/*) is not entitled on the $79 Starter plan (403).
+  // Latch true to avoid repeating failing requests and slowing requests down.
+  private massiveFinancialsUnavailable = true;
 
-  constructor(private readonly config: ConfigService) {
-    this.apiKey = this.config.get('POLYGON_API_KEY', '');
+  constructor(
+    private readonly config: ConfigService,
+    @Optional() private readonly fmp?: FmpService,
+  ) {
+    this.apiKey = this.config.get("POLYGON_API_KEY", "");
     if (!this.apiKey) {
-      this.logger.warn('POLYGON_API_KEY not set — Polygon-backed jobs will fail.');
+      this.logger.warn(
+        "POLYGON_API_KEY not set — Polygon-backed jobs will fail.",
+      );
     }
+
+    this.baseUrl = this.config
+      .get("POLYGON_API_BASE_URL", DEFAULT_BASE_URL)
+      .replace(/\/$/, "");
+
+    // Parsed defensively: a typo or a negative value must fall back to the safe
+    // free-tier delay rather than silently hammering the API. Blank is treated
+    // as unset too — `POLYGON_PAGE_DELAY_MS=` is a natural way to leave the var
+    // empty, and Number('') is 0, which would disable the throttle entirely.
+    const rawDelay = String(
+      this.config.get("POLYGON_PAGE_DELAY_MS", ""),
+    ).trim();
+    const parsedDelay = rawDelay === "" ? NaN : Number(rawDelay);
+    this.pageDelayMs =
+      Number.isFinite(parsedDelay) && parsedDelay >= 0
+        ? parsedDelay
+        : DEFAULT_PAGE_DELAY_MS;
+
+    this.logger.log(
+      `Polygon client: ${this.baseUrl}, page delay ${this.pageDelayMs}ms`,
+    );
+  }
+
+  /**
+   * The configured inter-request delay, exposed so per-ticker loops in the sync
+   * jobs throttle on the same knob as this service's own pagination. Previously
+   * three jobs hardcoded 12_500 independently, so setting POLYGON_PAGE_DELAY_MS=0
+   * on a paid plan left them sleeping ~12.5 minutes per run regardless.
+   */
+  get requestDelayMs(): number {
+    return this.pageDelayMs;
   }
 
   async getGroupedDaily(date: string): Promise<PolygonAggBar[]> {
     const res = await fetchJson<{ results?: PolygonAggBar[] }>(
-      `${BASE_URL}/v2/aggs/grouped/locale/us/market/stocks/${date}?apiKey=${this.apiKey}`,
+      `${this.baseUrl}/v2/aggs/grouped/locale/us/market/stocks/${date}?apiKey=${this.apiKey}`,
     );
     return res.results ?? [];
   }
 
   async getLatestGroupedDaily(
     candidateDates: Iterable<string>,
+    minBars = 1,
   ): Promise<{ date: string; bars: PolygonAggBar[] } | null> {
     for (const date of candidateDates) {
-      const bars = await this.getGroupedDaily(date);
-      if (bars.length > 0) {
+      let bars: PolygonAggBar[] = [];
+      try {
+        bars = await this.getGroupedDaily(date);
+      } catch (err: any) {
+        this.logger.log(
+          `Failed to fetch grouped-daily for ${date} (${err?.message ?? err}) — trying prior day`,
+        );
+        continue;
+      }
+      if (bars.length >= minBars) {
         return { date, bars };
       }
-      this.logger.log(`No grouped-daily data for ${date} (holiday/weekend) — trying prior day`);
+      this.logger.log(
+        `No grouped-daily session for ${date} (${bars.length} rows, need ${minBars}; holiday, weekend or not yet traded) — trying prior day`,
+      );
     }
     return null;
   }
@@ -99,61 +205,729 @@ export class PolygonService {
     ticker: string,
     from: string,
     to: string,
-    timespan = 'day',
+    timespan = "day",
     multiplier = 1,
+    limit = 5000,
   ): Promise<PolygonAggBar[]> {
     const res = await fetchJson<{ results?: PolygonAggBar[] }>(
-      `${BASE_URL}/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${from}/${to}?adjusted=true&sort=asc&apiKey=${this.apiKey}`,
+      `${this.baseUrl}/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${from}/${to}` +
+        `?adjusted=true&sort=asc&limit=${limit}&apiKey=${this.apiKey}`,
     );
-    return res.results ?? [];
+    const results = res.results ?? [];
+    // BUG-DATA-011 root cause + fix. `adjusted=true` makes Polygon return
+    // SPLIT-ADJUSTED volume, which it emits as a FLOAT: the raw session volume
+    // multiplied by the cumulative split factor (e.g. 18_569_371.05639 for a
+    // non-integer ratio such as 3:2). Real session volume is a whole number of
+    // shares, but every stored/served bar path reads `v`/`b.v` verbatim
+    // (ohlcv_bars via the bars adapter, on-demand stock_bars via
+    // fetchAndStore/refreshIncremental, intraday_bars via getIntradayBars), so
+    // the fraction propagates into 52w / SMA / EMA / RVOL / avgVolume. Normalise
+    // to whole shares HERE — the single vendor boundary all bar fetches flow
+    // through. Prices stay split-adjusted; only volume is rounded. Callers that
+    // read only OHLC (getDailyQuote, ipos/fear-greed/company-profile) are
+    // unaffected because they never read `v`.
+    for (const b of results) {
+      // Volume: split-adjusted floats arrive here (BUG-DATA-011). `Math.round`
+      // alone let `NaN` (Math.round(NaN)===NaN) and negatives pass straight
+      // through into 52w/SMA/EMA/RVOL/avgVolume. `nonNegIntOrNull` rounds a
+      // valid volume to whole shares and rejects NaN/negative. `PolygonAggBar.v`
+      // is a non-null `number` that every downstream consumer reads
+      // arithmetically, so an invalid value coerces to 0 rather than null — a
+      // null would break sorts/Math.min on the bar arrays. (Follow-up: widen the
+      // interface to `number | null` so "unknown volume" is distinguishable from
+      // a true 0.)
+      b.v = nonNegIntOrNull(b.v) ?? 0;
+      // OHLC: strip non-finite values (NaN/±Infinity) so a corrupt bar cannot
+      // poison downstream sums/EMAs (NaN propagates through every subsequent
+      // calc). finiteOrNull keeps legitimate 0/negatives; strictNullChecks is
+      // off so assigning null to these number fields is type-safe here.
+      b.o = finiteOrNull(b.o);
+      b.h = finiteOrNull(b.h);
+      b.l = finiteOrNull(b.l);
+      b.c = finiteOrNull(b.c);
+    }
+    return results;
+  }
+
+  /**
+   * One session's 1-minute bars from each feed this client reaches, for callers
+   * that reconcile the feeds themselves (money-flow.calc reconcileMinuteBars).
+   * Plain Polygon has only its own; MarketDataService adds FMP's.
+   */
+  async getMinuteBarsByFeed(
+    ticker: string,
+    from: string,
+    to: string,
+  ): Promise<{ polygon: PolygonAggBar[]; fmp: PolygonAggBar[] }> {
+    return { polygon: await this.getAggsRange(ticker, from, to, "minute", 1, 50_000), fmp: [] };
+  }
+
+  /**
+   * Intraday aggregate bars. Verified authorized on this plan (2026-07-21):
+   * `/range/1/minute` returned 1553 bars and still resolves a year back — the
+   * intraday timeframes were never plan-blocked, only unsynced.
+   *
+   * `limit` is raised well above the 5000 default because a multi-day 1-minute
+   * pull exceeds it silently, and a truncated series plots as a chart that just
+   * stops mid-window.
+   */
+  async getIntradayBars(
+    ticker: string,
+    multiplier: number,
+    timespan: "minute" | "hour",
+    from: string,
+    to: string,
+  ): Promise<PolygonAggBar[]> {
+    return this.getAggsRange(ticker, from, to, timespan, multiplier, 50_000);
+  }
+
+  /**
+   * The OFFICIAL 16:00 ET regular-session close for one ticker on one date, via
+   * the daily open-close endpoint. `/v2/aggs` daily `c` is the last trade over
+   * the FULL extended session (incl. after-hours), which skews classic pivots;
+   * this endpoint's `close` is the official regular-session close. Only used to
+   * correct the keyLevels.daily pivot basis — `afterHours`/`preMarket` are
+   * deliberately ignored.
+   *
+   * Fail-safe by design: any error / 404 / missing field returns null so callers
+   * fall back to the stored daily close (no new failure mode). Never throws.
+   * `date` is YYYY-MM-DD.
+   */
+  async getOfficialClose(ticker: string, date: string): Promise<number | null> {
+    try {
+      const res = await fetchJson<{ close?: unknown }>(
+        `${this.baseUrl}/v1/open-close/${ticker}/${date}` +
+          `?adjusted=true&apiKey=${this.apiKey}`,
+      );
+      return finiteOrNull(res.close);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The official regular-session high / low / close for one date (same
+   * open-close endpoint), or null. Used to finalise TODAY's stored bar after
+   * the 16:00 close: that bar was written mid-session, so its high/low/close
+   * are partial even once the session has ended.
+   */
+  async getOfficialDayBar(
+    ticker: string,
+    date: string,
+  ): Promise<{ high: number; low: number; close: number } | null> {
+    try {
+      const res = await fetchJson<{ high?: unknown; low?: unknown; close?: unknown }>(
+        `${this.baseUrl}/v1/open-close/${ticker}/${date}` +
+          `?adjusted=true&apiKey=${this.apiKey}`,
+      );
+      const high = finiteOrNull(res.high);
+      const low = finiteOrNull(res.low);
+      const close = finiteOrNull(res.close);
+      return high != null && low != null && close != null ? { high, low, close } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Peer tickers. Polygon DOES have a peers product — earlier notes in this repo
+   * recorded `peers` as "structurally null on this source", which was wrong: the
+   * companies job simply never called this endpoint. Verified on the paid plan,
+   * AAPL returns MSFT, AMZN, GOOGL, GOOG, NVDA.
+   */
+  async getRelatedCompanies(ticker: string): Promise<string[]> {
+    const res = await fetchJson<{ results?: Array<{ ticker: string }> }>(
+      `${this.baseUrl}/v1/related-companies/${ticker}?apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []).map((r) => r.ticker).filter(Boolean);
+  }
+
+  /**
+   * Full dividend history for one ticker, newest first. Distinct from
+   * getDividendsCalendar, which sweeps every ticker over a forward ex-date
+   * window; this walks one ticker backwards to build the history chart and the
+   * trailing-twelve-month figure the yield is derived from.
+   */
+  async getDividendHistory(
+    ticker: string,
+    limit = 200,
+  ): Promise<
+    Array<{
+      exDividendDate: string | null;
+      paymentDate: string | null;
+      declarationDate: string | null;
+      recordDate: string | null;
+      // Nullable: Polygon can omit cash_amount on a row (e.g. a stock-only
+      // distribution). Read null-safe below; consumers must `?? 0` in sums and
+      // never store a fabricated 0 as the amount.
+      cashAmount: number | null;
+      dividendType: string | null;
+      frequency: number | null;
+    }>
+  > {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v3/reference/dividends?ticker=${ticker}` +
+        `&order=desc&sort=ex_dividend_date&limit=${limit}&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []).map((d: any) => ({
+      exDividendDate: d.ex_dividend_date ?? null,
+      paymentDate: d.pay_date ?? null,
+      declarationDate: d.declaration_date ?? null,
+      recordDate: d.record_date ?? null,
+      cashAmount: d.cash_amount ?? null,
+      dividendType: d.dividend_type ?? null,
+      frequency: d.frequency ?? null,
+    }));
+  }
+
+  /** Split history for one ticker, newest first. */
+  async getSplits(
+    ticker: string,
+    limit = 50,
+  ): Promise<
+    Array<{ executionDate: string; splitFrom: number; splitTo: number }>
+  > {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v3/reference/splits?ticker=${ticker}` +
+        `&order=desc&sort=execution_date&limit=${limit}&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []).map((s: any) => ({
+      executionDate: s.execution_date,
+      splitFrom: s.split_from,
+      splitTo: s.split_to,
+    }));
+  }
+
+  /**
+   * Every split executing in a date window, across all tickers, in one call.
+   * Used to detect the reverse-split artifact in close-to-close %change: when a
+   * split takes effect between the two comparison days, the prior close is
+   * pre-split and today's is post-split, so the ratio explodes into a fake
+   * hundreds-of-percent "move".
+   *
+   * `afterDate` is exclusive and `throughDate` inclusive — pass the prior
+   * trading day and today, so a split dated on the prior day (already reflected
+   * in that day's close) is not counted. A single page with a high limit is
+   * enough: even a busy day has only a handful of market-wide splits, far below
+   * the 1000 cap, so pagination is intentionally not followed here.
+   */
+  async getSplitsInRange(
+    afterDate: string,
+    throughDate: string,
+  ): Promise<
+    Array<{
+      ticker: string;
+      executionDate: string;
+      splitFrom: number;
+      splitTo: number;
+    }>
+  > {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v3/reference/splits` +
+        `?execution_date.gt=${afterDate}&execution_date.lte=${throughDate}` +
+        `&order=desc&sort=execution_date&limit=1000&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []).map((s: any) => ({
+      ticker: s.ticker,
+      executionDate: s.execution_date,
+      splitFrom: s.split_from,
+      splitTo: s.split_to,
+    }));
+  }
+
+  /**
+   * Live session state straight from the exchange feed, replacing the
+   * hand-maintained holiday set the header pill computed from a local clock.
+   */
+  async getMarketStatus(): Promise<{
+    market: string;
+    earlyHours: boolean;
+    afterHours: boolean;
+    exchanges: Record<string, string>;
+    serverTime: string;
+  }> {
+    return fetchJson(
+      `${this.baseUrl}/v1/marketstatus/now?apiKey=${this.apiKey}`,
+    );
+  }
+
+  /** Upcoming market holidays and early closes. */
+  async getUpcomingMarketHolidays(): Promise<
+    Array<{
+      date: string;
+      exchange: string;
+      name: string;
+      status: string;
+      open?: string;
+      close?: string;
+    }>
+  > {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v1/marketstatus/upcoming?apiKey=${this.apiKey}`,
+    );
+    return Array.isArray(res) ? res : [];
+  }
+
+  /**
+   * US Treasury yield curve. Authorized on this plan and previously unused —
+   * the "10Y Yield" tile was showing TLT, a long-treasury ETF that moves
+   * INVERSELY to the yield it was labelled as.
+   */
+  async getTreasuryYields(limit = 2): Promise<
+    Array<{
+      date: string;
+      yield1Month: number | null;
+      yield3Month: number | null;
+      yield1Year: number | null;
+      yield2Year: number | null;
+      yield5Year: number | null;
+      yield10Year: number | null;
+      yield30Year: number | null;
+      /** Vendor that served this row; absent means Polygon (this method). */
+      source?: "fmp" | "polygon";
+    }>
+  > {
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/fed/v1/treasury-yields?limit=${limit}&sort=date.desc&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []).map((r: any) => ({
+      date: r.date,
+      yield1Month: r.yield_1_month ?? null,
+      yield3Month: r.yield_3_month ?? null,
+      yield1Year: r.yield_1_year ?? null,
+      yield2Year: r.yield_2_year ?? null,
+      yield5Year: r.yield_5_year ?? null,
+      yield10Year: r.yield_10_year ?? null,
+      yield30Year: r.yield_30_year ?? null,
+    }));
+  }
+
+  /**
+   * Universal snapshot. Carries the extended-hours fields the delayed
+   * per-ticker snapshot does not: `early_trading_change_percent` and
+   * `late_trading_change_percent`, which are what the Premarket / After-Hours
+   * feeds need. Still 15-minute delayed like everything else on this plan.
+   */
+  async getUniversalSnapshot(tickers: string[]): Promise<
+    Array<{
+      ticker: string;
+      name: string | null;
+      marketStatus: string | null;
+      price: number | null;
+      change: number | null;
+      changePercent: number | null;
+      earlyTradingChangePercent: number | null;
+      lateTradingChangePercent: number | null;
+      open: number | null;
+      high: number | null;
+      low: number | null;
+      previousClose: number | null;
+      volume: number | null;
+      vwap: number | null;
+      /** Vendor that served this row; absent means Polygon (this method). */
+      source?: "fmp" | "polygon";
+    }>
+  > {
+    if (tickers.length === 0) return [];
+    const res = await fetchJson<any>(
+      `${this.baseUrl}/v3/snapshot?ticker.any_of=${tickers.join(",")}` +
+        `&limit=250&apiKey=${this.apiKey}`,
+    );
+    return (res.results ?? []).map((r: any) => {
+      const s = r.session ?? {};
+      // Every numeric snapshot field is passed through finiteOrNull so a vendor
+      // NaN/Infinity degrades to null (already the field's type) instead of
+      // flowing into the Premarket/After-Hours change math.
+      //
+      // Price is close-aware. `s.price` is the last-trade price; off-hours it can
+      // drift from the official regular-session close (`s.close`) that consumer
+      // finance sites display (this is the ~5% SIRI weekend gap). So OUTSIDE
+      // regular hours we prefer the regular-session close, and DURING regular
+      // hours we keep the live last-trade price. `r.market_status` is Polygon's
+      // outer session state ("open" only during RTH); previous_close is the last
+      // resort. Field names match the snake_case the rest of this map already uses.
+      const marketOpen = r.market_status === "open";
+      const sessionPrice = marketOpen
+        ? finiteOrNull(s.price ?? s.close ?? s.previous_close)
+        : finiteOrNull(s.close ?? s.price ?? s.previous_close);
+
+      /* Price and change have to describe the SAME trade.
+       *
+       * `s.change` / `s.change_percent` are the vendor's, and they are measured
+       * from `s.price` — the last trade, extended hours included. The block
+       * above deliberately does NOT always show `s.price`: outside regular
+       * hours it prefers `s.close`, the official regular-session close, because
+       * that is the number consumer finance sites print.
+       *
+       * Passing the vendor's percentage straight through alongside a
+       * substituted price paired a figure with a base it was not measured from.
+       * On the SIRI weekend case that is the ~5% gap the note above describes,
+       * and it surfaces as a row whose price and percentage cannot both be
+       * right — the Movers board showing one site's price beside another's
+       * percentage.
+       *
+       * So: keep the vendor's numbers when the vendor's price is what we show,
+       * and re-derive them from the close when the close is what we show. The
+       * pair is then internally consistent either way. previousClose is the
+       * base in both cases, so nothing else about the semantics changes. */
+      const prevClose = finiteOrNull(s.previous_close);
+      const usingVendorPrice = sessionPrice != null && sessionPrice === finiteOrNull(s.price);
+      const derived =
+        !usingVendorPrice && sessionPrice != null && prevClose != null && prevClose > 0
+          ? {
+              change: sessionPrice - prevClose,
+              changePercent: ((sessionPrice - prevClose) / prevClose) * 100,
+            }
+          : null;
+
+      return {
+        ticker: r.ticker,
+        name: r.name ?? null,
+        marketStatus: r.market_status ?? null,
+        price: sessionPrice,
+        change: derived ? derived.change : finiteOrNull(s.change),
+        changePercent: derived ? derived.changePercent : finiteOrNull(s.change_percent),
+        earlyTradingChangePercent: finiteOrNull(s.early_trading_change_percent),
+        lateTradingChangePercent: finiteOrNull(s.late_trading_change_percent),
+        open: finiteOrNull(s.open),
+        high: finiteOrNull(s.high),
+        low: finiteOrNull(s.low),
+        previousClose: finiteOrNull(s.previous_close),
+        volume: finiteOrNull(s.volume),
+        vwap: finiteOrNull(s.vwap),
+      };
+    });
   }
 
   async getTickerDetails(ticker: string): Promise<any> {
     const res = await fetchJson<{ results: Record<string, unknown> }>(
-      `${BASE_URL}/v3/reference/tickers/${ticker}?apiKey=${this.apiKey}`,
+      `${this.baseUrl}/v3/reference/tickers/${ticker}?apiKey=${this.apiKey}`,
     );
     return res.results;
   }
 
+  /**
+   * Company logo bytes from Polygon's ticker `branding` (icon preferred, then
+   * logo). The branding URLs require the API key appended, so this must run
+   * server-side — the browser never sees the key. Returns null when Polygon has
+   * no branding for the ticker (caller falls back to a letter tile).
+   */
+  async getBrandingImage(
+    ticker: string,
+  ): Promise<{ data: Buffer; contentType: string } | null> {
+    let details: any = null;
+    try {
+      details = await this.getTickerDetails(ticker);
+    } catch {
+      return null;
+    }
+    const branding = details?.branding as
+      { icon_url?: string; logo_url?: string } | undefined;
+    const base = branding?.icon_url ?? branding?.logo_url;
+    if (!base) return null;
+    const url = base.includes("?")
+      ? `${base}&apiKey=${this.apiKey}`
+      : `${base}?apiKey=${this.apiKey}`;
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const contentType = resp.headers.get("content-type") ?? "image/png";
+    const data = Buffer.from(await resp.arrayBuffer());
+    return { data, contentType };
+  }
+
   async getTtmEps(ticker: string): Promise<number | null> {
+    if (this.massiveFinancialsUnavailable && this.fmp?.enabled) {
+      this.logger.log(
+        `[Financials] Massive financials unavailable for ${ticker} (403/410); falling back to FMP`,
+      );
+      const eps = await this.fmp.getTtmEps(ticker);
+      if (eps != null) {
+        this.logger.log(`[Financials] FMP TTM EPS fetched for ${ticker}: ${eps}`);
+        return eps;
+      }
+    }
+
+    try {
+      const res = await fetchJson<any>(
+        `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
+          `&timeframe=ttm&limit=1&apiKey=${this.apiKey}`,
+      );
+      const inc = res.results?.[0]?.financials?.income_statement;
+      const eps =
+        inc?.diluted_earnings_per_share?.value ??
+        inc?.basic_earnings_per_share?.value;
+      if (typeof eps === "number") return eps;
+      return this.getTtmEpsFromQuarters(ticker);
+    } catch (err: any) {
+      this.massiveFinancialsUnavailable = true;
+      if (this.fmp?.enabled) {
+        this.logger.log(
+          `[Financials] Massive financials unavailable for ${ticker} (403/410); falling back to FMP`,
+        );
+        const eps = await this.fmp.getTtmEps(ticker);
+        if (eps != null) {
+          this.logger.log(`[Financials] FMP TTM EPS fetched for ${ticker}: ${eps}`);
+          return eps;
+        }
+      }
+      return null;
+    }
+  }
+
+  /** TTM EPS approximated as the sum of the last 4 quarterly EPS, else null. */
+  private async getTtmEpsFromQuarters(ticker: string): Promise<number | null> {
     const res = await fetchJson<any>(
-      `${BASE_URL}/vX/reference/financials?ticker=${ticker}` +
-        `&timeframe=ttm&limit=1&apiKey=${this.apiKey}`,
+      `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
+        `&timeframe=quarterly&limit=4&apiKey=${this.apiKey}`,
     );
-    const inc = res.results?.[0]?.financials?.income_statement;
-    const eps =
-      inc?.diluted_earnings_per_share?.value ?? inc?.basic_earnings_per_share?.value;
-    return typeof eps === 'number' ? eps : null;
+    const rows = res.results ?? [];
+    if (rows.length < 4) return null;
+    let sum = 0;
+    for (const r of rows.slice(0, 4)) {
+      const inc = r?.financials?.income_statement;
+      const q =
+        inc?.diluted_earnings_per_share?.value ??
+        inc?.basic_earnings_per_share?.value;
+      if (typeof q !== "number") return null;
+      sum += q;
+    }
+    return Math.round(sum * 100) / 100;
+  }
+
+  /**
+   * Market-wide reported financials filed within a date range, paginated — the
+   * source for the PAST earnings calendar. Polygon has no earnings-calendar or
+   * estimate feed, so `filing_date` (when the 10-Q/10-K reached the SEC) is the
+   * reporting date, and only actuals are returned (no estimates / beat-miss).
+   */
+  async getFinancialsByFilingDate(
+    from: string,
+    to: string,
+  ): Promise<
+    Array<{
+      ticker: string;
+      companyName: string | null;
+      filingDate: string | null;
+      periodEnd: string | null;
+      fiscalPeriod: string | null;
+      fiscalYear: string | null;
+      epsActual: number | null;
+      revenueActual: number | null;
+      netIncome: number | null;
+    }>
+  > {
+    type Row = {
+      ticker: string;
+      companyName: string | null;
+      filingDate: string | null;
+      periodEnd: string | null;
+      fiscalPeriod: string | null;
+      fiscalYear: string | null;
+      epsActual: number | null;
+      revenueActual: number | null;
+      netIncome: number | null;
+    };
+    if (this.massiveFinancialsUnavailable) return [];
+    const out: Row[] = [];
+    // financials caps `limit` at 100 (unlike the 1000 other reference endpoints allow).
+    let url =
+      `${this.baseUrl}/vX/reference/financials?filing_date.gte=${from}` +
+      `&filing_date.lte=${to}&timeframe=quarterly&order=asc&sort=filing_date` +
+      `&limit=100&apiKey=${this.apiKey}`;
+    while (url) {
+      let res: any;
+      try {
+        res = await fetchJson<any>(url);
+      } catch (err: any) {
+        if (err?.message?.includes("410") || err?.message?.includes("403")) {
+          this.massiveFinancialsUnavailable = true;
+          this.logger.warn(
+            `Polygon reference/financials unavailable (${err.message}); halting pagination`,
+          );
+          break;
+        }
+        throw err;
+      }
+      for (const p of res.results ?? []) {
+        const ticker = p.tickers?.[0];
+        if (!ticker) continue;
+        const inc = p.financials?.income_statement ?? {};
+        const v = (k: string) =>
+          typeof inc[k]?.value === "number" ? (inc[k].value as number) : null;
+        out.push({
+          ticker,
+          companyName: p.company_name ?? null,
+          filingDate: p.filing_date ?? null,
+          periodEnd: p.end_date ?? null,
+          fiscalPeriod: p.fiscal_period ?? null,
+          fiscalYear: p.fiscal_year ?? null,
+          epsActual:
+            v("diluted_earnings_per_share") ?? v("basic_earnings_per_share"),
+          revenueActual: v("revenues"),
+          netIncome: v("net_income_loss"),
+        });
+      }
+      url = res.next_url ? `${res.next_url}&apiKey=${this.apiKey}` : null;
+      if (url) await sleep(this.pageDelayMs);
+    }
+    return out;
   }
 
   async getIncomeStatements(
     ticker: string,
-    timeframe = 'annual',
+    timeframe = "annual",
     limit = 2,
   ): Promise<
     Array<{
       fiscalYear: string | null;
+      fiscalPeriod: string | null;
+      endDate: string | null;
       revenue: number | null;
       costOfRevenue: number | null;
       grossProfit: number | null;
+      netIncome: number | null;
+      operatingIncome: number | null;
       dilutedEps: number | null;
     }>
   > {
-    const res = await fetchJson<any>(
-      `${BASE_URL}/vX/reference/financials?ticker=${ticker}` +
-        `&timeframe=${timeframe}&limit=${limit}&apiKey=${this.apiKey}`,
-    );
-    return (res.results ?? []).map((p: any) => {
-      const inc = p.financials?.income_statement ?? {};
-      const v = (k: string) => inc[k]?.value ?? null;
-      return {
+    if (this.massiveFinancialsUnavailable && this.fmp?.enabled) {
+      this.logger.log(
+        `[Financials] Massive financials unavailable for ${ticker} (403/410); falling back to FMP`,
+      );
+      const rows = await this.fmp.getIncomeStatements(ticker, timeframe, limit);
+      this.logger.log(
+        `[Financials] FMP income statements fetched for ${ticker} (${rows.length} records)`,
+      );
+      return rows;
+    }
+
+    try {
+      const res = await fetchJson<any>(
+        `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
+          `&timeframe=${timeframe}&limit=${limit}&apiKey=${this.apiKey}`,
+      );
+      return (res.results ?? []).map((p: any) => {
+        const inc = p.financials?.income_statement ?? {};
+        const v = (k: string) => {
+          const node = inc[k];
+          const badUnit = nonUsdCurrencyUnit(node?.unit);
+          if (badUnit) {
+            this.logger.warn(
+              `Non-USD unit "${badUnit}" on income_statement.${k} for ${ticker}; nulling value.`,
+            );
+            return null;
+          }
+          return node?.value ?? null;
+        };
+        return {
+          fiscalYear: p.fiscal_year ?? null,
+          fiscalPeriod: p.fiscal_period ?? null,
+          endDate: p.end_date ?? null,
+          revenue: v("revenues"),
+          costOfRevenue: v("cost_of_revenue"),
+          grossProfit: v("gross_profit"),
+          netIncome: v("net_income_loss"),
+          operatingIncome: v("operating_income_loss"),
+          dilutedEps: v("diluted_earnings_per_share"),
+        };
+      });
+    } catch (err: any) {
+      this.massiveFinancialsUnavailable = true;
+      if (this.fmp?.enabled) {
+        this.logger.log(
+          `[Financials] Massive financials unavailable for ${ticker} (403/410); falling back to FMP`,
+        );
+        const rows = await this.fmp.getIncomeStatements(ticker, timeframe, limit);
+        this.logger.log(
+          `[Financials] FMP income statements fetched for ${ticker} (${rows.length} records)`,
+        );
+        return rows;
+      }
+      return [];
+    }
+  }
+
+  /**
+   * All three statements for one ticker. `getIncomeStatements` above reads only
+   * the income statement because that is all the growth job needs; the same
+   * response has always carried `balance_sheet` and `cash_flow_statement`
+   * alongside it, so the balance-sheet and cash-flow panels were being
+   * fabricated from data already on the wire.
+   */
+  async getFinancialStatements(
+    ticker: string,
+    timeframe = "quarterly",
+    limit = 10,
+  ): Promise<
+    Array<{
+      fiscalYear: string | null;
+      fiscalPeriod: string | null;
+      endDate: string | null;
+      filingDate: string | null;
+      income: Record<string, number | null>;
+      balanceSheet: Record<string, number | null>;
+      cashFlow: Record<string, number | null>;
+    }>
+  > {
+    if (this.massiveFinancialsUnavailable && this.fmp?.enabled) {
+      this.logger.log(
+        `[Financials] Massive financials unavailable for ${ticker} (403/410); falling back to FMP`,
+      );
+      const rows = await this.fmp.getFinancialStatements(ticker, timeframe, limit);
+      this.logger.log(
+        `[Financials] FMP financial statements fetched for ${ticker} (${rows.length} records)`,
+      );
+      return rows;
+    }
+
+    try {
+      const res = await fetchJson<any>(
+        `${this.baseUrl}/vX/reference/financials?ticker=${ticker}` +
+          `&timeframe=${timeframe}&limit=${limit}&apiKey=${this.apiKey}`,
+      );
+      // Every statement node is `{ value, unit, label, order }`; only `value` is
+      // read. Statements are flattened wholesale rather than field-by-field so a
+      // new panel needs no vendor-layer change.
+      const values = (node: Record<string, any> | undefined, section: string) =>
+        Object.fromEntries(
+          Object.entries(node ?? {}).map(([k, v]) => {
+            // Same non-USD currency assertion as getIncomeStatements: a node
+            // explicitly denominated in a foreign currency is nulled + warned
+            // rather than stored as raw USD dollars. USD / per-share / unitless
+            // (typeof value !== number) nodes pass through unchanged.
+            const badUnit = nonUsdCurrencyUnit(v?.unit);
+            if (badUnit) {
+              this.logger.warn(
+                `Non-USD unit "${badUnit}" on ${section}.${k} for ${ticker}; nulling value.`,
+              );
+              return [k, null];
+            }
+            return [k, typeof v?.value === "number" ? v.value : null];
+          }),
+        );
+      return (res.results ?? []).map((p: any) => ({
         fiscalYear: p.fiscal_year ?? null,
-        revenue: v('revenues'),
-        costOfRevenue: v('cost_of_revenue'),
-        grossProfit: v('gross_profit'),
-        dilutedEps: v('diluted_earnings_per_share'),
-      };
-    });
+        fiscalPeriod: p.fiscal_period ?? null,
+        endDate: p.end_date ?? null,
+        filingDate: p.filing_date ?? null,
+        income: values(p.financials?.income_statement, "income_statement"),
+        balanceSheet: values(p.financials?.balance_sheet, "balance_sheet"),
+        cashFlow: values(p.financials?.cash_flow_statement, "cash_flow_statement"),
+      }));
+    } catch (err: any) {
+      this.massiveFinancialsUnavailable = true;
+      if (this.fmp?.enabled) {
+        this.logger.log(
+          `[Financials] Massive financials unavailable for ${ticker} (403/410); falling back to FMP`,
+        );
+        const rows = await this.fmp.getFinancialStatements(ticker, timeframe, limit);
+        this.logger.log(
+          `[Financials] FMP financial statements fetched for ${ticker} (${rows.length} records)`,
+        );
+        return rows;
+      }
+      return [];
+    }
   }
 
   async getSectorPerformance(): Promise<
@@ -165,17 +939,17 @@ export class PolygonService {
     }>
   > {
     const SECTOR_ETFS = {
-      Technology: 'XLK',
-      'Financial Services': 'XLF',
-      Energy: 'XLE',
-      Healthcare: 'XLV',
-      Industrials: 'XLI',
-      'Consumer Defensive': 'XLP',
-      'Consumer Cyclical': 'XLY',
-      Utilities: 'XLU',
-      'Basic Materials': 'XLB',
-      'Real Estate': 'XLRE',
-      'Communication Services': 'XLC',
+      Technology: "XLK",
+      "Financial Services": "XLF",
+      Energy: "XLE",
+      Healthcare: "XLV",
+      Industrials: "XLI",
+      "Consumer Defensive": "XLP",
+      "Consumer Cyclical": "XLY",
+      Utilities: "XLU",
+      "Basic Materials": "XLB",
+      "Real Estate": "XLRE",
+      "Communication Services": "XLC",
     };
     const out = [];
     for (const [sector, etf] of Object.entries(SECTOR_ETFS)) {
@@ -184,7 +958,7 @@ export class PolygonService {
       out.push({
         date: new Date(q.t).toISOString().slice(0, 10),
         sector,
-        exchange: 'ETF-proxy',
+        exchange: "ETF-proxy",
         averageChange: q.dp,
       });
     }
@@ -227,42 +1001,53 @@ export class PolygonService {
     to: string,
   ): Promise<
     Array<{
+      vendorEventId: string | null;
+      dividendType: string | null;
       symbol: string;
       date: string;
       recordDate: string | null;
       paymentDate: string | null;
       declarationDate: string | null;
-      dividend: number;
+      // Nullable: Polygon can omit cash_amount on a calendar row. Read null-safe
+      // below; the dividends job guards falsy amounts and stores the amount
+      // as-is (never a fabricated 0).
+      dividend: number | null;
       yield: number | null;
       frequency: string | null;
     }>
   > {
     const FREQ = {
-      0: 'One-Time',
-      1: 'Annual',
-      2: 'Semi-Annual',
-      4: 'Quarterly',
-      12: 'Monthly',
+      0: "One-Time",
+      1: "Annual",
+      2: "Semi-Annual",
+      4: "Quarterly",
+      12: "Monthly",
     };
     const out = [];
-    let url = `${BASE_URL}/v3/reference/dividends?ex_dividend_date.gte=${from}` +
+    let url =
+      `${this.baseUrl}/v3/reference/dividends?ex_dividend_date.gte=${from}` +
       `&ex_dividend_date.lte=${to}&limit=1000&apiKey=${this.apiKey}`;
     while (url) {
       const res = await fetchJson<any>(url);
       for (const d of res.results ?? []) {
         out.push({
+          // Vendor's stable per-event id. Required because a company can pay a
+          // regular AND a special dividend on the SAME ex-date (e.g. JBSS: CD
+          // $0.95 + SC $1.05, both ex-2026-08-17), so symbol+date is not unique.
+          vendorEventId: d.id ?? null,
+          dividendType: d.dividend_type ?? null,
           symbol: d.ticker,
           date: d.ex_dividend_date,
           recordDate: d.record_date ?? null,
           paymentDate: d.pay_date ?? null,
           declarationDate: d.declaration_date ?? null,
-          dividend: d.cash_amount,
+          dividend: d.cash_amount ?? null,
           yield: null,
           frequency: d.frequency != null ? (FREQ[d.frequency] ?? null) : null,
         });
       }
       url = res.next_url ? `${res.next_url}&apiKey=${this.apiKey}` : null;
-      if (url) await sleep(PAGE_DELAY_MS);
+      if (url) await sleep(this.pageDelayMs);
     }
     return out;
   }
@@ -277,13 +1062,15 @@ export class PolygonService {
       name: string;
       exchange: string;
       price: string | null;
+      finalPrice: number | null;
       numberOfShares: number | null;
       totalSharesValue: number | null;
       status: string;
     }>
   > {
     const out = [];
-    let url = `${BASE_URL}/vX/reference/ipos?listing_date.gte=${from}` +
+    let url =
+      `${this.baseUrl}/vX/reference/ipos?listing_date.gte=${from}` +
       `&listing_date.lte=${to}&limit=1000&apiKey=${this.apiKey}`;
     while (url) {
       const res = await fetchJson<any>(url);
@@ -299,30 +1086,91 @@ export class PolygonService {
               ? String(lo)
               : null;
         out.push({
-          date: r.listing_date ?? r.announced_date ?? '',
-          symbol: r.ticker ?? '',
-          name: r.issuer_name ?? '',
-          exchange: r.primary_exchange ?? '',
+          date: r.listing_date ?? r.announced_date ?? "",
+          symbol: r.ticker ?? "",
+          name: r.issuer_name ?? "",
+          exchange: r.primary_exchange ?? "",
           price,
+          finalPrice:
+            typeof r.final_issue_price === "number" ? r.final_issue_price : null,
           numberOfShares: r.max_shares_offered ?? r.shares_outstanding ?? null,
           totalSharesValue: r.total_offer_size ?? null,
-          status: r.ipo_status ?? '',
+          status: r.ipo_status ?? "",
         });
       }
       url = res.next_url ? `${res.next_url}&apiKey=${this.apiKey}` : null;
-      if (url) await sleep(PAGE_DELAY_MS);
+      if (url) await sleep(this.pageDelayMs);
     }
     return out;
   }
 
+  /**
+   * Polygon's delisting record for a symbol that left the active list: the
+   * most recent `delisted_utc` (YYYY-MM-DD), or null when Polygon holds no
+   * inactive record — the symbol merely went missing from one listing pull,
+   * which is not proof of a delisting. A reused symbol can carry several
+   * inactive records, hence the newest-wins pick.
+   */
+  /**
+   * Latest FINRA short interest (twice-monthly settlement) — `/stocks/v1/short-interest`.
+   * FMP has no short-interest feed, so this is the only source. Null when none.
+   */
+  async getShortInterest(ticker: string): Promise<{
+    settlementDate: string;
+    shortInterest: number;
+    avgDailyVolume: number | null;
+    daysToCover: number | null;
+  } | null> {
+    const res = await fetchJson<{
+      results?: Array<{
+        settlement_date?: string;
+        short_interest?: number;
+        avg_daily_volume?: number;
+        days_to_cover?: number;
+      }>;
+    }>(
+      `${this.baseUrl}/stocks/v1/short-interest?ticker=${encodeURIComponent(ticker)}` +
+        `&limit=1&sort=settlement_date.desc&apiKey=${this.apiKey}`,
+    );
+    const r = res.results?.[0];
+    if (!r?.settlement_date || typeof r.short_interest !== "number") return null;
+    return {
+      settlementDate: r.settlement_date,
+      shortInterest: r.short_interest,
+      avgDailyVolume: typeof r.avg_daily_volume === "number" ? r.avg_daily_volume : null,
+      daysToCover: typeof r.days_to_cover === "number" ? r.days_to_cover : null,
+    };
+  }
+
+  async getDelisting(
+    ticker: string,
+  ): Promise<{ delistedAt: string | null } | null> {
+    const res = await fetchJson<{
+      results?: Array<{ delisted_utc?: string | null }>;
+    }>(
+      `${this.baseUrl}/v3/reference/tickers?ticker=${encodeURIComponent(ticker)}` +
+        `&active=false&limit=10&apiKey=${this.apiKey}`,
+    );
+    const rows = res.results ?? [];
+    if (rows.length === 0) return null;
+    const dates = rows
+      .map((r) => (r.delisted_utc ? r.delisted_utc.slice(0, 10) : null))
+      .filter((d): d is string => !!d)
+      .sort();
+    return { delistedAt: dates[dates.length - 1] ?? null };
+  }
+
   async getAllTickers(active = true): Promise<PolygonTickerRef[]> {
     const all: PolygonTickerRef[] = [];
-    let url = `${BASE_URL}/v3/reference/tickers?market=stocks&active=${active}&limit=1000&apiKey=${this.apiKey}`;
+    let url = `${this.baseUrl}/v3/reference/tickers?market=stocks&active=${active}&limit=1000&apiKey=${this.apiKey}`;
     while (url) {
-      const res = await fetchJson<{ results?: PolygonTickerRef[]; next_url?: string }>(url);
+      const res = await fetchJson<{
+        results?: PolygonTickerRef[];
+        next_url?: string;
+      }>(url);
       all.push(...(res.results ?? []));
       url = res.next_url ? `${res.next_url}&apiKey=${this.apiKey}` : null;
-      if (url) await sleep(PAGE_DELAY_MS);
+      if (url) await sleep(this.pageDelayMs);
     }
     return all;
   }
@@ -333,7 +1181,7 @@ export class PolygonService {
     limit = 20,
   ): Promise<PolygonOptionContract[]> {
     const res = await fetchJson<{ results?: PolygonOptionContract[] }>(
-      `${BASE_URL}/v3/reference/options/contracts?underlying_ticker=${underlyingTicker}` +
+      `${this.baseUrl}/v3/reference/options/contracts?underlying_ticker=${underlyingTicker}` +
         `&expiration_date.gte=${fromDate}&sort=expiration_date&order=asc&limit=${limit}&apiKey=${this.apiKey}`,
     );
     return res.results ?? [];
@@ -345,7 +1193,7 @@ export class PolygonService {
     toDate: string,
   ): Promise<PolygonAggBar | null> {
     const res = await fetchJson<{ results?: PolygonAggBar[] }>(
-      `${BASE_URL}/v2/aggs/ticker/${optionTicker}/range/1/day/${fromDate}/${toDate}?sort=desc&limit=1&apiKey=${this.apiKey}`,
+      `${this.baseUrl}/v2/aggs/ticker/${optionTicker}/range/1/day/${fromDate}/${toDate}?sort=desc&limit=1&apiKey=${this.apiKey}`,
     );
     return res.results?.[0] ?? null;
   }
@@ -357,8 +1205,35 @@ export class PolygonService {
     limit = 10,
   ): Promise<PolygonNewsArticle[]> {
     const res = await fetchJson<{ results?: PolygonNewsArticle[] }>(
-      `${BASE_URL}/v2/reference/news?ticker=${ticker}` +
+      `${this.baseUrl}/v2/reference/news?ticker=${ticker}` +
         `&published_utc.gte=${from}&published_utc.lte=${to}` +
+        `&order=desc&sort=published_utc&limit=${limit}&apiKey=${this.apiKey}`,
+    );
+    return res.results ?? [];
+  }
+
+  /**
+   * MARKET-WIDE newest news (NO ticker filter) — the freshest stories across the
+   * whole market, newest-first. Feeds the "Live" intraday feed's HEAD so its top
+   * is always the absolute-newest article regardless of the per-ticker cursor
+   * batch (which refreshes only ~80 tickers/run and can lag a fresh story by
+   * hours). `limit` is higher than the per-ticker call because one request must
+   * span many tickers. Same shape as getNews so the adapter maps them identically.
+   */
+  /**
+   * Market-wide news, newest first. `limit` goes to 1000 per call — measured
+   * live, limit=1000 returns 1000 articles spanning 859 DISTINCT tickers in a
+   * single request, which is why the news sync fetches in bulk here rather than
+   * once per ticker.
+   */
+  async getMarketNews(
+    from: string,
+    to: string,
+    limit = 1000,
+  ): Promise<PolygonNewsArticle[]> {
+    const res = await fetchJson<{ results?: PolygonNewsArticle[] }>(
+      `${this.baseUrl}/v2/reference/news` +
+        `?published_utc.gte=${from}&published_utc.lte=${to}` +
         `&order=desc&sort=published_utc&limit=${limit}&apiKey=${this.apiKey}`,
     );
     return res.results ?? [];

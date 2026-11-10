@@ -1,0 +1,108 @@
+{
+ "source": "FMP /stable/batch-quote and /stable/batch-aftermarket-trade, fetched after the 2026-10-26 close",
+ "fetchedAtMs": 1793047699094,
+ "quotes": [
+  {
+   "symbol": "PEP",
+   "name": "PepsiCo, Inc.",
+   "price": 135.45,
+   "changePercentage": -0.23569,
+   "change": -0.32,
+   "volume": 7063291,
+   "dayLow": 135.1,
+   "dayHigh": 137.636,
+   "yearHigh": 171.48,
+   "yearLow": 123.47,
+   "marketCap": 184583280911,
+   "priceAvg50": 134.1154,
+   "priceAvg200": 146.17426,
+   "exchange": "NASDAQ",
+   "open": 135.57,
+   "previousClose": 135.77,
+   "timestamp": 1793044800
+  },
+  {
+   "symbol": "KO",
+   "name": "The Coca-Cola Company",
+   "price": 92.7,
+   "changePercentage": -0.01078632,
+   "change": -0.01,
+   "volume": 20463564,
+   "dayLow": 91.935,
+   "dayHigh": 92.8767,
+   "yearHigh": 95.37,
+   "yearLow": 67.27,
+   "marketCap": 398846314826,
+   "priceAvg50": 89.1014,
+   "priceAvg200": 81.58895,
+   "exchange": "NYSE",
+   "open": 92.69,
+   "previousClose": 92.71,
+   "timestamp": 1793044802
+  },
+  {
+   "symbol": "KR",
+   "name": "The Kroger Co.",
+   "price": 66.77,
+   "changePercentage": 0,
+   "change": 0,
+   "volume": 4478253,
+   "dayLow": 66.19,
+   "dayHigh": 67.61,
+   "yearHigh": 76.58,
+   "yearLow": 54.15,
+   "marketCap": 39433627530,
+   "priceAvg50": 59.6678,
+   "priceAvg200": 63.51795,
+   "exchange": "NYSE",
+   "open": 66.63,
+   "previousClose": 66.77,
+   "timestamp": 1793044803
+  },
+  {
+   "symbol": "CAT",
+   "name": "Caterpillar Inc.",
+   "price": 692.13,
+   "changePercentage": 0.98633,
+   "change": 6.76,
+   "volume": 2310152,
+   "dayLow": 679.5,
+   "dayHigh": 696.2192,
+   "yearHigh": 1073.46,
+   "yearLow": 521.43,
+   "marketCap": 318154857750,
+   "priceAvg50": 799.7366,
+   "priceAvg200": 808.6172,
+   "exchange": "NYSE",
+   "open": 685.41,
+   "previousClose": 685.37,
+   "timestamp": 1793044802
+  }
+ ],
+ "trades": [
+  {
+   "symbol": "PEP",
+   "price": 135.05,
+   "tradeSize": 150,
+   "timestamp": 1793047418000
+  },
+  {
+   "symbol": "KO",
+   "price": 92.64,
+   "tradeSize": 73,
+   "timestamp": 1793047674000
+  },
+  {
+   "symbol": "KR",
+   "price": 66.77,
+   "tradeSize": 60,
+   "timestamp": 1793047205000
+  },
+  {
+   "symbol": "CAT",
+   "price": 692.25,
+   "tradeSize": 774,
+   "timestamp": 1793047110000
+  }
+ ]
+}

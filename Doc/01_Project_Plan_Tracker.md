@@ -1,7 +1,337 @@
+
+> ## ⏱ State sync — 2026-08-16 · FMP NEWS, ON-DEMAND COMPLETENESS, COVERAGE SELF-HEAL, SCALE-TO-ZERO COST (deployed to prod)
+>
+> _This block is newest and authoritative where it differs from the blocks
+> below. It records seven changes deployed to production on 2026-08-16 (worker
+> `market-catalyst-backend` rev 00101, live `market-catalyst-live` rev 00040,
+> UI hosting redeployed, new Cloud Run Job `premarket-job`)._
+>
+> **This doc, specifically:** No plan epic changes. The big item for this plan is
+> **G — cost architecture**: §9 gap 2 ("no scheduled data refresh") was already
+> superseded on 2026-07-26, and the premarket bundle is now a dedicated **Cloud Run
+> Job** (`premarket-job`) triggered by the new `run-premarket-job` scheduler
+> (`0 8 * * 1-5` ET) while the worker runs scale-to-zero — so automated refresh runs
+> in production and the honest monthly bill drops from ~$75–90 to <$15. The Data
+> Layer epic deepens: the news feed adds FMP (A), the earnings calendar reaches
+> full-US coverage (E), and RS/tech-rating coverage self-heals 70 → 376/385 (C).
+>
+> **A · FMP news (new — was previously out of scope).** The news feed now MERGES
+> Polygon + FMP articles, deduped by URL (Polygon wins). Every article carries a
+> `vendor` field ("polygon" | "fmp"), badged in the UI alongside `source` and
+> `sentiment`. Backend: env `NEWS_FMP_SOURCE=fmp`, new `src/adapters/fmp-news.adapter.ts`
+> + `NEWS_FMP_ADAPTER` token, a `news.job.ts` merge loop, and the `/live/news`
+> on-demand path also stamps `vendor`; FMP client `getStockNews()` hits
+> `/stable/news/stock`. Deliberate, licensed expansion of FMP scope; FMP `sentiment`
+> is frequently null.
+>
+> **B · Stock-detail wiring fixes.** The `market-catalyst-live` service (which serves
+> both `/live/*` and `/market-data/*`) was on a stale image and was redeployed.
+> `/live/company` now builds peRatio/eps/dividendYield/dividendPerShare/peers (was
+> profile-only). UI: dashboard analyst popup shows price-target median/low-high +
+> recent grades; commentary thumbnails; IPO "Shares" + "Deal size" columns; dashboard
+> MoverPopup null-guards RVOL/RS (was rendering fake "0×"/"0/99").
+>
+> **C · stock-history self-heal → RS/tech coverage 70 → 376/385.** A ticker whose
+> deep-history fetch once failed was wrongly marked "backfilled" and never
+> re-attempted, so ~250 tickers (incl. every mega-cap) stayed below rs-rating's
+> 65-bar minimum and unscored. `stock-history.job.ts` now runs a `count()` guard that
+> re-triggers the deep window when a "backfilled" ticker has < 65 stored bars.
+> rsRating coverage went 70 → 376/385 (remaining are genuine recent-IPOs with < 65
+> trading days).
+>
+> **D · On-demand completeness + shared compute.** `ondemand.getCompany`'s first-time
+> fetch now returns the FULL detail-page dataset (technicals + ranked RS/tech) and
+> persists ~2yr bars to `ohlcv_bars` so the nightly crons also rank the new ticker.
+> Crons now persist RAW scores (`rsScore`; `techMomentum`/`techTrend`/`techRsi`), and
+> PURE compute functions are shared by both cron and on-demand (`computeIndicators`,
+> `computeRsScore`+`rsPercentile`, `computeTechComponents`+`techRatingFromComponents`).
+>
+> **E · Earnings full-US coverage.** The forward (FMP) earnings calendar no longer
+> filters to the ~385 tracked `companies`: it resolves every FMP symbol against the
+> ~13,106-row Polygon US ticker reference (`tickers`), keeping US CS/ADRC listings and
+> dropping FMP's worldwide rows. Aug 26 2026 went 4 → 38 reporters; `earnings_events`
+> ~7.3k → ~8.8k. `/market-data/earnings` still returns the whole collection.
+>
+> **F · Nightly sync integrity (single field-owner).** `companies.job.ts` no longer
+> merge-writes placeholder nulls for `beta`, `volume`, `averageVolume`, `week52Range`
+> (the profile write was nulling them between runs). Field ownership is now
+> single-owner across the nightly chain: companies (profile) → technical-indicators
+> (indicators+beta+high52/low52+keyLevels) → rs-rating (rsRating+rsScore) → tech-rating
+> (techRating+components+sectorRank); market-quotes owns price/pctChange/volume.
+>
+> **G · Cost architecture → scale-to-zero (~$75–90/mo → <$15/mo).** The dominant cost
+> was the always-on worker (`min-instances=1` + `--no-cpu-throttling` ≈ $65/mo), which
+> existed only to host the DETACHED premarket bundle. The worker
+> `market-catalyst-backend` is now `--min-instances=0` + CPU throttling (scale-to-zero,
+> billed per request). The premarket bundle became a **Cloud Run Job** `premarket-job`
+> (same image, `node dist/job-entry.js`): `src/job-entry.ts` boots a Nest context via
+> the new `src/app-job.module.ts` (worker modules minus ServeStaticModule) and runs
+> `SyncRegistry.get(SYNC_JOB ?? "premarket")()` then exits (task-timeout 3600s,
+> 2Gi/1cpu, ~18 min/weekday ≈ $0.50/mo). Scheduler `run-premarket-job` (`0 8 * * 1-5`
+> ET) triggers it via OAuth POST as `scheduler-invoker@`; the old `sync-premarket`
+> scheduler was DELETED. Intraday syncs relaxed 2 min → 5 min (`*/5 9-16 * * 1-5`).
+> Manual premarket is now `gcloud run jobs execute premarket-job` (NOT
+> `POST /sync/premarket/run`, killed on the scale-to-zero worker).
+
+> ## ⏱ State sync — 2026-07-27 · TWO ENVIRONMENTS (stage + prod), env-driven config
+>
+> _This block is newest and authoritative where it differs from the blocks
+> below. It introduces a second, fully-isolated environment; nothing about the
+> per-environment runtime topology (§6, the on-demand data layer, the CDN
+> rewrite) changes — that topology now simply exists twice, once per project._
+>
+> **This doc, specifically:** No epic/deliverable content changes — a second
+> environment is a deployment-topology milestone, not a plan epic. §9 Known
+> Gaps should register a new, separate gap: "stage backend not deployed
+> (blocked on billing)" — distinct from the prod gaps listed there.
+>
+> **Two isolated Firebase projects = two environments.** Production stays on
+> `market-catalyst-502415`. A new **stage** project `market-catalyst-stage`
+> (project #523639228835) was created as an independent copy: its own Firestore
+> `(default)` in **nam5 / STANDARD / NATIVE** (identical region/edition to prod),
+> the **same `firestore.rules` + `firestore.indexes.json`** deployed to it, its
+> own Auth, and its own `backend-runtime@…` service account (roles
+> `datastore.user` + `secretmanager.secretAccessor`, mirroring prod — keyless,
+> the backend authenticates via ADC). Nothing is shared between the two: a
+> destructive sync, a rules change, or a test signup on stage can never touch
+> prod data or users.
+>
+> **Branch ⇄ environment.** Both repos work on the **`stage`** branch for
+> day-to-day work; `main`/`prod` map to production. `.firebaserc` carries
+> `stage`/`prod` aliases so `firebase deploy … --project stage|prod` targets the
+> right project.
+>
+> **Firebase config is env-driven now, not hardcoded.**
+> · **Backend** reads `FIREBASE_PROJECT_ID` (previously pinned to prod). Stage
+>   `.env` and `deploy/env.stage.yaml` set it to `market-catalyst-stage`;
+>   `deploy/env.production.yaml` keeps prod. Same image, same code — only the env
+>   var differs.
+> · **UI** reads `NEXT_PUBLIC_FIREBASE_*` (`app/firebase.ts`), falling back to
+>   the prod values for zero-regression. The stage build sets them via
+>   `.env.production` to the stage web-app config, so the deployed stage site
+>   authenticates against `market-catalyst-stage`.
+>
+> **UI backend base URL is resolved at RUNTIME** (`app/iq/backend.ts`), so one
+> static build works in every environment without a rebuild:
+> · local dev (`localhost`/`127.0.0.1`) → `http://localhost:4400`;
+> · deployed on Firebase Hosting → **same-origin** (the site's own Firebase base
+>   URL), and `firebase.json` rewrites `/api/**`, `/market-data/**` and
+>   `/live/**` to the public `market-catalyst-live` Cloud Run service (no CORS,
+>   CDN-cacheable). A `localhost` value of `NEXT_PUBLIC_BACKEND_URL` is ignored
+>   once the page is served from a real host, so a dev env baked into a prod
+>   build can never misroute deployed traffic. This is the **same implementation
+>   for stage and prod** — the only per-env difference is which project's
+>   `market-catalyst-live` the rewrite resolves to.
+>
+> **Per-environment Cloud Run topology is unchanged** (see §6): one image → a
+> private `worker` (`market-catalyst-backend`, all sync/admin/plans) and a public
+> `live` (`market-catalyst-live`, serving `LiveModule` + `MarketDataModule` +
+> `UserDataModule`, i.e. `/live` + `/market-data` + `/api`). Each project gets
+> its own pair.
+>
+> **Stage data = a full copy of prod.** All 35 Firestore collections (18,748
+> top-level docs + subcollections: users' portfolios/holdings, watchlists,
+> sessions; fund_holdings' filings/positions) were copied prod → stage so stage
+> mirrors production.
+>
+> **Stage status / open items (2026-07-27).**
+> · Stage **billing is not yet linked** (free/Spark). Firebase Hosting **Cloud
+>   Run rewrites and any Cloud Run deploy require billing**, so the stage
+>   `firebase.json` currently ships the **SPA catch-all only** and the stage
+>   `live`/`worker` services are **not deployed yet**. Re-add the rewrites (see
+>   prod) once billing + the stage `market-catalyst-live` service exist.
+> · The stage **static UI is live** at `https://market-catalyst-stage.web.app`.
+> · Google sign-in on stage reaches Google but needs the stage project's **OAuth
+>   consent screen published / test-users added** to complete; Email/Password
+>   works today.
+
+
+> ## ⏱ State sync — 2026-07-26 (evening) · CDN, zero-poll, spinners, DB reset EXECUTED
+>
+> _Additive to the morning 2026-07-26 on-demand block below; nothing prior is
+> removed. Where they differ, this block is newest._
+>
+> **DB reset executed.** `deploy/empty-market-data.mjs` was RUN against
+> production: **323,575 market-data docs deleted** across 29 collections
+> (ohlcv_bars ~300k, tickers ~13k, news ~5.6k, …). Users, watchlists,
+> portfolios, sessions, settings, plans and feature flags were kept. The DB now
+> starts empty and grows strictly with usage + the premarket warm.
+>
+> **Spinners app-wide (first-fetch UX).** Every on-demand path now shows a
+> spinner while data is being fetched and an honest empty state if none exists:
+> the Dashboard's single grid spinner, the shared `DataState` loading state,
+> the chart pane (spinner while `/live/bars` is in flight — and the last
+> fabricated fallback, `genOHLC`'s seeded random-walk chart, was **removed**),
+> the stock page and stock drawer (`useCompanyState`, ~12 s bounded grace while
+> `/live/company` lands).
+>
+> **Zero vendor/client polling while the market is closed.** Client price poll:
+> one fetch to populate, then silent until 04:00 ET (local clock check, no
+> network); hidden tabs never poll and refresh instantly on return. Snapshot
+> cache: zero Polygon calls when closed (cold-start exception only). Tape:
+> skips the vendor entirely once a clean closing frame exists; a 15-min phase
+> check is the only reopen signal (market-status, 60 s TTL, ~1 light call/min
+> server-wide). WebSocket: never opens (unused path, kept for a future
+> real-time plan).
+>
+> **Firebase Hosting free CDN.** `firebase.json` rewrites `/live/**` on the
+> Hosting origin to the public `market-catalyst-live` Cloud Run service. The UI
+> (`app/iq/backend.ts`) calls same-origin on `*.web.app`/`*.firebaseapp.com`
+> (→ rides Hosting's global CDN, cached per each endpoint's Cache-Control/
+> s-maxage; no CORS) and the direct Cloud Run URL in dev. **SSE stays direct**
+> (Hosting buffers streams). `/live/whoami` is `no-store` so the CDN can never
+> cache one user's IP for another. 11 UI consumers rewired.
+>
+> **SSE decision.** The tape keeps SSE while its compute stays under
+> ~$1/month (roughly ≤300 concurrent viewers; ref-counted, 0 viewers = $0).
+> Past that, the pre-built fallback — polling the CDN-cached `GET /live/tape`
+> (s-maxage=60) — is a ~30-minute switch that collapses 10k viewers to ~1
+> origin request/minute.
+>
+> **Cost (honest, at 10k users).** Firestore **≈ $0.70/mo** — the <$1 target,
+> met. Whole GCP infra **≈ $10–25/mo** at genuinely 10k daily-active (network
+> egress + concurrent compute are bandwidth physics, not design slack); ~$2–5
+> if ~1k are active daily. The Polygon subscription (~$2,000/mo) dominates
+> everything — see `Polygon-vs-Finnhub-Vendor-Comparison.pdf`.
+
+
+> ## ⏱ State sync — 2026-07-26 (ON-DEMAND DATA LAYER redesign)
+>
+> _This block supersedes any earlier description of scheduled full-universe
+> syncing. The data layer is now on-demand._
+>
+> **Design.** The app no longer pre-syncs a fixed ticker universe. Firestore
+> starts EMPTY (market-data collections) and grows strictly with usage:
+> `GET /live/bars?ticker&tf` and `GET /live/company?ticker` check Firestore
+> (every doc carries **`createdAt`** + a per-resolution TTL) → on miss make ONE
+> coalesced Polygon call → write back → serve. Repeat users hit the shared
+> cache; browsers additionally cache via Cache-Control+ETag (304s).
+>
+> **Bars storage.** One doc per (ticker, resolution family) in `stock_bars/`:
+> `_1min` (1H) · `_5min` (1D/1W) · `_30min` (1M) · `_daily` (3M/6M/1Y/5Y,
+> **widen-in-place**: a 1Y request upgrades a 3M doc in place; narrower
+> timeframes are served as slices of the wider doc with zero vendor calls).
+> The old per-bar `ohlcv_bars` (≈300k docs) is retired as a client read path
+> (it remains only as the internal substrate the indicator jobs read).
+>
+> **Usage tracking.** Every on-demand fetch increments **`ticker_usage/{t}`**
+> (batched ≤1 write/min/ticker) — the gradually-built record of which stocks
+> are REALLY used.
+>
+> **One premarket cron.** A single Cloud Scheduler job (`sync-premarket`,
+> 08:00 ET weekdays → `/sync/premarket/run`) replaces all 22 scattered jobs
+> (deleted; in-code `@Cron` decorators removed). Phases: ① warm the
+> high-frequency set's company PROFILES only (tape universe + every user's
+> watchlist/portfolio + `ticker_usage` top-100) — bar history is strictly
+> on-demand and INCREMENTAL (only days since the last stored bar are fetched;
+> a 5-year series is never re-downloaded); ② market-wide jobs
+> (indices, sectors, movers, breadth, F&G, calendars, news, insider);
+> ③ per-ticker compute jobs over the **dynamic universe** (= `companies` ids,
+> i.e. only used tickers — the fixed 241-ticker list is retired);
+> ④ recap (freezes the prior session). Intraday freshness comes from the live
+> layer (SSE tape, /live/snapshot, on-demand TTLs), not from re-running batch
+> syncs — no other cron frequency is required.
+>
+> **Search.** `GET /live/search?q=` — in-memory index over the full ~13k
+> Polygon reference universe, per instance, refreshed daily. The `tickers`
+> collection (10k docs) is retired: search costs ZERO Firestore reads and now
+> matches substrings.
+>
+> **Presence cost fix.** Heartbeat 90s → 30 min (client-gated); ~2-4 writes
+> per active user per day. Presence read convention: online = `isOnline` and
+> `lastSeenAt` fresher than ~35 min.
+>
+> **Firebase cost @ 10k users/month (nam5 pricing, free tier ignored —
+> conservative):** shared/cached reads ≈ $0.04 · owner-scoped reads
+> (watchlist/portfolio/settings, ~10 docs/session) ≈ $0.45 · writes (presence
+> + premarket + usage) ≈ $0.20 · storage < free 1 GB ⇒ **≈ $0.70/month
+> total — under the $1 target.** Reads no longer scale with (users × docs)
+> anywhere; the dominant remaining term is owner-scoped reads, linear in
+> sessions, not in market data.
+>
+> **Reset.** `deploy/empty-market-data.mjs` empties ONLY market-data
+> collections (DRY_RUN by default; users/settings/plans/flags kept).
+
 **MarketCatalyst — Market Intelligence Terminal**
 
-Project Plan \| v1.1 \| June 2026
 
+> ## ⏱ State sync — 2026-07-24 (current deployed reality)
+>
+> _This block reflects what is actually built, deployed, and running as of
+> 2026-07-24. Where anything below predates it, this block is authoritative._
+>
+> **This doc, specifically:** For this plan: the W1–W5 data/UI milestones are delivered; only the AI narrative layer (Anthropic/OpenRouter) and Benzinga-gated estimates remain.
+>
+> **Infrastructure (live).** One image → **two Cloud Run services** split by
+> `APP_ROLE`: a **private `worker`** (`market-catalyst-backend` — all
+> sync/admin/plans) and a **public `live`** (`market-catalyst-live` — `LiveModule`
+> only; `/sync`·`/purge`·`/admin` 404 there). **22 Cloud Scheduler jobs are
+> ENABLED and firing** (OIDC via the `scheduler-invoker` SA). The browser reaches
+> the backend through the public `live` service (`NEXT_PUBLIC_BACKEND_URL`).
+> Vendor keys in **Secret Manager**. Firestore: **34 collections, ~322k docs**.
+>
+> **Live data paths.** SSE ticker tape (`/live/tape/stream`), cached snapshot
+> polling (`/live/snapshot`, backing a **shared live-price subscription** across
+> tape / watchlist / portfolio / search / stock), market status
+> (`/live/market-status`), and a new **`/live/collections`** endpoint that serves
+> the shared, slow-changing collections from a **5-minute server-side cache**
+> (Cache-Control + ETag/304) so per-user Firestore reads no longer scale with
+> user count.
+>
+> **Data completeness (this session).** Real **4-component Fear & Greed** + history
+> backfill (`market_sentiment_history`); **Recaps EOD job** writing `recaps/`
+> per-date docs (prose narrative stays AI, tracked under R36); **macro regime**
+> computed from VIX/breadth/yield; financials now carry **10 quarters + 8 annual
+> years** (income / balance / cash-flow) driving the **EPS & Sales** and **Income
+> statement** *Quarterly / Yearly* tabs; screener filters wired; stock detail
+> fully Polygon-real; **TradingView removed**; heatmap **sector + stock modals**
+> and the dashboard **Market Pulse** wired to real `companies` (fabricated
+> ranges / news / sector rows removed).
+>
+> **Vendor / licensing.** **Polygon/Massive is the ONLY vendor whose data reaches
+> users** (licensed for redistribution). FMP / Finnhub are **worker-only** and are
+> never served to the browser. **15 Polygon endpoints** are in use (see
+> `architecture-map.html`). The one remaining gap is EPS **estimates** (need
+> Polygon's Benzinga add-on). Alpha Vantage was evaluated (~85% data coverage but
+> a redistribution-licensing blocker); OpenRouter is a viable option for the AI
+> layer (AI output is not market-data redistribution).
+>
+> **Delivery plan.** **21 of 36 rows at 100%** (R26 Fear & Greed, R28 Recaps, R30
+> macro complete; R29 capped at 90% pending Benzinga estimates).
+>
+> **Cost.** GCP/Firebase infra ~**$3–5/month** at current usage (scale-to-zero,
+> one vendor call fanned out to all users, shared reads cached); the Polygon data
+> subscription is the dominant fixed cost.
+
+
+Project Plan \| v1.2 \| July 2026
+
+> **⚠ Implementation status (updated 2026-07-22):**
+> A new workstream has since landed that this plan did not anticipate as a
+> separate epic — **Subscriptions, Entitlements & Admin Analytics** (see §2.4).
+> It delivered the *entitlement* half of "Subscription & Billing" without the
+> *payment* half: a `plans` registry with 30 entitlement keys, three plans live
+> in Firestore (`free` / `plus` / `pro` — **not** the Free/Pro/Premium naming in
+> §7), an admin-guarded analytics API, a real-data admin console with a per-plan
+> feature editor, and 48-feature adoption tracking. **Stripe remains entirely
+> unimplemented — there is no Stripe code in either repo**, and the `payments`
+> and `subscriptions` collections are empty. In parallel, the Polygon data
+> wiring was substantially completed (5-year history backfill, intraday bars,
+> dividends/splits, balance sheet + cash flow, real RSI/MA/EMA/VWAP/52-week,
+> real US10Y Treasury yield replacing a TLT-ETF proxy that moved *inversely* to
+> the yield it was labelled as).
+>
+> **Two deployment facts materially qualify every "done" claim below.**
+> (1) `NEXT_PUBLIC_BACKEND_URL` is unset, so `http://localhost:4400` is baked
+> into the production bundle and blocked as mixed content — **the browser cannot
+> reach the backend at all** in production. (2) **No Cloud Scheduler jobs exist
+> in any region** and there is no `scheduler-invoker` service account
+> (`create-scheduler-jobs.sh` was never run); with `min-instances=0` the
+> in-process `@Cron` decorators never fire, so **no sync job has ever run
+> automatically in production** — all Firestore data came from manual runs.
+> Everything Firestore-backed is genuinely live; everything backend-backed is
+> built but unreachable. See §9 for the full gap list.
+>
 > **⚠ Implementation status (updated 2026-07-09, first noted 2026-07-05):**
 > This plan describes the original proposed stack — AWS ECS, Redis,
 > ClickHouse, BullMQ, Fastify, Stripe billing. What was actually built is
@@ -59,6 +389,13 @@ The project (branded **MarketCatalyst**) is structured in two phases: MVP (18 we
   Subscription & Billing   Stripe integration, Free/Pro/Premium tier gates, upgrade flow                                                                                                                                                                                                                 2 weeks        Full Stack     P1
   ------------------------ ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- -------------- -------------- --------------
 
+**Note (2026-07-22):** the *Subscription & Billing* epic above has been split.
+Its tier-gating half shipped and is tracked separately in §2.4; its Stripe half
+is not started and is blocked on infrastructure (§9, gap 1). The *Data Layer*
+epic's \"WebSocket real-time quotes\" was never built and is not planned ---
+data reaches the frontend through Firestore sync jobs, at a measured 15-minute
+vendor delay.
+
 2.3 Phase 2 --- Expansion Epics (Weeks 19--38)
 
   -------------------------- ------------------------------------------------------------------------------------------------------------------------------------- -------------- ----------------- --------------
@@ -73,6 +410,63 @@ The project (branded **MarketCatalyst**) is structured in two phases: MVP (18 we
   Social Sharing             Recap card image generation, share to Twitter/LinkedIn                                                                                1 week         Full Stack        P2
   **Story Stocks Section**   AI-tagged + manually curated story cards (what/why/catalyst date/peer impact), news cluster density trigger, story feed integration   2 weeks        AI + Full Stack   P1
   -------------------------- ------------------------------------------------------------------------------------------------------------------------------------- -------------- ----------------- --------------
+
+2.4 Workstream --- Subscriptions, Entitlements & Admin Analytics (added
+2026-07-22, not in the original plan)
+
+This work was carved out of the \"Subscription & Billing\" epic in §2.2 once it
+became clear that entitlement modelling and payment collection are independent
+problems with different blockers. Entitlements are done; payments are not
+started and are blocked on infrastructure, not on product decisions.
+
+  ------------------------------ --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- ------------------------------- --------------
+  **Deliverable**                **What shipped**                                                                                                                                                                                            **Status**                      **Owner**
+  Plans registry                 `src/plans/plans.registry.ts` --- 30 entitlement keys, 3 plans, `formatAmount()`. `plans.service.ts` seeds/reads the `plans` collection **merge-based, so operator edits survive re-seeding**.                **Done --- live in Firestore**  Backend
+  Subscription resolution        `subscriptions.service.ts` --- resolves the effective subscription. **Expiry is computed, never trusted**, because nothing rewrites a user doc when a subscription lapses. Falls back to FREE, never to no-access.  **Done**                   Backend
+  Entitlements API               `GET /plans`, `POST /plans/seed` (admin), `GET /users/:uid/entitlements`.                                                                                                                                    **Done --- backend only**       Backend
+  Admin analytics API            `GET /admin/users`, `GET /admin/subscriptions`, `GET /admin/revenue`. All admin-guarded. **Staff accounts excluded from every metric.**                                                                      **Done --- backend only**       Backend
+  Two-layer gating model         FF\_\* release flags (\"is it built?\") kept **separate** from plan entitlements (\"may this tier use it?\"). Both must be true. They render different UI: \"coming soon\" vs \"upgrade to unlock\".          **Done**                        Full Stack
+  Frontend entitlement layer     `app/iq/entitlements.tsx` (`EntitlementProvider`, `useSubscription`, `useEntitlement`, `EntitlementGate`) + `entitlement-gate.tsx` (`PlanGate` upgrade panel, `useSlugEntitled` nav hiding).                  **Done --- live**               Frontend
+  Admin console on real data     `app/admin/admin-data.ts` builds the dataset from Firestore and stages it in `sessionStorage` before the iframe mounts; `public/admin/console.html` renders it. Fabricated trend deltas and the fake MRR history chart are **suppressed** on real data.  **Done --- live**  Full Stack
+  Per-plan feature editor        30 toggles per plan writing to `plans/{id}.featureFlags` (optimistic, reverts on failure). The 2 staff-only keys are shown but **locked**.                                                                    **Done --- live**               Full Stack
+  Feature adoption tracking      48 tracked features (screens + in-app actions), 30-second dedupe, failures swallowed so analytics never breaks a screen. Writes client→Firestore directly.                                                    **Done --- live (\~12 rows)**   Full Stack
+  Admin Monitor tab              Embeds the backend ops UI, lazily on first visit to the tab.                                                                                                                                                 **Built --- unreachable in prod**  Full Stack
+  API usage metering             Specified with rules and a collection; **no middleware records anything**. Admin \"Usage & API\" KPIs read 0.                                                                                                **Not started**                 Backend
+  Stripe checkout + webhooks     ---                                                                                                                                                                                                         **Not started --- blocked**     Full Stack
+  ------------------------------ --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- ------------------------------- --------------
+
+Plans as they exist in Firestore today. **Amounts are minor units (cents)** ---
+4999 = \$49.99. The ladder is cumulative.
+
+  ---------- ----------- ------------ ----------- ------------------ ------------------------------------------------------------------------------------
+  **id**     **Name**    **Amount**   **Cycle**   **Entitlements**   **Adds over previous tier**
+  free       Free        0            none        8 / 30             marketCatalyst, news, scanner, heatmap, macro, ipos, chartsDaily, watchlist
+  plus       Plus        2999 USD     monthly     20 / 30             chartsIntraday, chartsHistory, chartIndicators, chartNotes, technicalRatings, dividendHistory, peers, earningsDetail, portfolio, screener, themes, alerts
+  pro        Pro         4999 USD     monthly     28 / 30            fundamentalRatings, ownership, optionsChain, exportData, apiAccess, aiAssistant, backtesting, paperTrading
+  ---------- ----------- ------------ ----------- ------------------ ------------------------------------------------------------------------------------
+
+`adminDashboard` and `userManagement` are **staff-only and false on every
+plan** --- selling them would be privilege escalation. That is why Pro is
+28/30 and not 16/16. `backtesting` and `paperTrading` are granted on Pro but
+**not built**, so the two-layer model correctly shows them as \"coming soon\"
+rather than as a paywall.
+
+Access control is enforced in the live Firestore ruleset, which is deployed
+from **`MarketCatalystUI/firestore.rules`** --- the backend repo\'s copy has
+drifted and now carries a DO-NOT-DEPLOY header. `isAdmin()` is
+`token.admin == true` **or** `token.email == ADMIN_EMAIL`, and deliberately
+does **not** require `email_verified`: the admin is a password account with
+`emailVerified=false`, and requiring it locked the admin out of Firestore while
+the backend guard still admitted the same account. An admin may update a plan\'s
+`featureFlags` + `updatedAt` **only** --- price, currency and cycle are
+server-only, and plan create/delete is denied. `feature_adoption` is the only
+client-writable analytics collection (necessarily, since the browser cannot
+reach the backend) and is constrained so the row must belong to the caller,
+`openCount` may only increase, ownership cannot change, and delete is denied.
+The same pass fixed two pre-existing bugs: `market_sentiment` and
+`stock_comments` had **no rule at all**, so default-deny had been silently
+breaking the Dashboard Fear & Greed gauge (it fell back to a hardcoded
+62/\"Greed\") and the chart-notes feature.
 
 3\. Milestones
 
@@ -115,6 +509,16 @@ Frontend (Current)
 -   **Firebase Authentication** — email/password + Google OAuth
 
 -   **Cloud Firestore** — user profiles (`users/{uid}`), settings (`settings/{uid}`)
+
+-   **Firestore collections added 2026-07-22** — `intraday_bars` (474 docs),
+    `dividend_history` (241), `splits` (241), `plans` (3),
+    `feature_adoption` (\~12). Created with rules but **empty**: `payments`,
+    `subscriptions`, `api_usage`, `audit_logs`, `revenue_summary`,
+    `system_metrics`.
+
+-   **Google Cloud Run** (not AWS ECS) — where the NestJS backend actually
+    runs: `us-central1`, `--no-allow-unauthenticated`, `min-instances=0`,
+    current revision `market-catalyst-backend-00031-wvc`.
 
 Backend (Planned — Phase 1/2)
 
@@ -163,6 +567,16 @@ Data Vendors
 
 7\. Subscription Model
 
+> **⚠ Superseded 2026-07-22.** The Free/Pro/Premium table below is the
+> *original* proposal and is no longer what exists. The shipped model is
+> **free / plus / pro** with concrete prices (\$0 / \$29.99 / \$49.99 per month,
+> stored as minor units) and 16 named entitlement keys --- see §2.4 for the
+> authoritative table. Prices are no longer TBD. Two further corrections to the
+> table below: \"Real-time data\" is **not** achievable on the current Polygon
+> plan (measured delay is exactly 900 s / 15 minutes), and every AI feature
+> listed as included is **not built** --- no Claude API call exists in either
+> repo. The table is kept for historical context only.
+
 Tier Structure
 
   ---------- ----------- ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -189,3 +603,85 @@ Tier Structure
 -   No P0/P1 bugs open at launch
 
 -   Stripe billing live with Free and Pro tiers gated
+
+Status against these criteria as of 2026-07-22: tier **gating** is met (§2.4);
+Stripe **billing** is not started. \"Real-time data latency \< 1 second\" is
+unreachable on the current vendor plan (900 s delay, measured) and needs
+restating or a plan upgrade. The AI-summary and email-alert criteria have no
+implementation behind them at all.
+
+9\. Known Gaps (verified 2026-07-22)
+
+These are stated plainly rather than folded into status percentages. Items 1
+and 2 are infrastructure and gate several \"finished\" features.
+
+> ⚠ **Re-verified 2026-08-03.** A code re-check added a gap not listed below:
+> in the inspected `.env`, only `POLYGON_API_KEY` is funded --- `FMP`,
+> `FINNHUB`, `FRED`, `BENZINGA`, `TRADIER_ACCESS_TOKEN`, `UNUSUAL_WHALES` and
+> `ANTHROPIC` keys are present-but-empty, so every non-Polygon vendor feed and
+> all AI surfaces return nothing at runtime until funded (verify against prod
+> Secret Manager --- this may be a local `.env`). Also confirmed still-open:
+> the `POLYGON_API_KEY` rotation and the `firestore.rules` drift (both R49),
+> and the 2026-08-02 \"Analyst Actions on Polygon not FMP\" request, which is a
+> to-do note only --- no code migration exists (Analyst Actions still resolves
+> from FMP consensus). Item 2 below (\"no scheduled refresh\") predates the
+> 2026-07-26 move to a single `sync-premarket` cron; treat it as superseded and
+> re-verify against live production before relying on it.
+
+1.  **The browser cannot reach the backend.** `NEXT_PUBLIC_BACKEND_URL` is
+    unset, so `http://localhost:4400` is compiled into the production bundle
+    and blocked as mixed content. This disables in production: the admin
+    Monitor tab, extended-hours moves, the vendor market-status pill, and any
+    future Stripe checkout/webhook. The fix is a Firebase Hosting rewrite →
+    Cloud Run, which **requires** setting `ADMIN_GUARD_TRUST_IAM=false` first
+    --- otherwise `/sync/:job/run`, `/purge` and `/retention` become
+    world-callable.
+
+2.  **No scheduled data refresh exists.** No Cloud Scheduler jobs in any
+    region, no `scheduler-invoker` service account; `create-scheduler-jobs.sh`
+    was never run. With `min-instances=0` the in-process `@Cron` decorators
+    never fire, so **no sync job has ever run automatically in production** ---
+    every row in Firestore came from a manual run.
+    > ⚠ **Superseded 2026-08-16 (see the 2026-08-16 block).** Automated refresh
+    > now runs in production: the premarket bundle is a dedicated **Cloud Run Job**
+    > `premarket-job`, fired by the `run-premarket-job` scheduler (`0 8 * * 1-5` ET)
+    > as `scheduler-invoker@`, and the intraday jobs run every 5 min
+    > (`*/5 9-16 * * 1-5`). The worker itself is intentionally scale-to-zero. This
+    > gap is closed; re-verify the remaining item ("browser cannot reach the
+    > backend", gap 1) independently.
+
+3.  **`POLYGON_API_KEY` is un-rotated.** It was exposed in chat. Secret Manager
+    version 4 is enabled. `deploy/rotate-polygon-key.sh` automates the whole
+    rotation except generating the replacement key.
+
+4.  **Stripe is not implemented.** No Stripe code in either repo; `payments`
+    and `subscriptions` are empty collections. Blocked additionally on gap 1.
+
+5.  **`api_usage` is specified but not implemented.** No middleware records API
+    calls, so the admin \"Usage & API\" KPIs read 0. Those tiles mean \"not
+    instrumented\", not \"no traffic\".
+
+6.  **Per-user engagement columns are empty.** watchlists / holdings /
+    apiCalls / alerts in the admin Users view render 0 --- there is no
+    collection behind them yet.
+
+7.  **AI features are all unbuilt.** Every AI surface in the product (earnings
+    summaries, technical analysis, portfolio pulse, Copilot, story stocks,
+    analyst notes) renders hand-written static prose. Backtesting and paper
+    trading are likewise granted as Pro entitlements but not implemented.
+
+8.  **Options greeks, IV, open interest and bid/ask are vendor-blocked.** The
+    Polygon options snapshot endpoint returns 403 `NOT_AUTHORIZED` on the
+    current plan; those columns are seeded pseudo-random values. Also
+    unavailable: index values (I:SPX, I:VIX), trades/quotes/last-trade,
+    Benzinga endpoints, `/v1/summaries`; 404 on short-interest and futures.
+
+9.  **The two repos\' `firestore.rules` have drifted.** The **live** ruleset is
+    deployed from `MarketCatalystUI/firestore.rules`; the backend copy is stale
+    and now carries a DO-NOT-DEPLOY header.
+
+Current deployment: backend on Cloud Run revision
+`market-catalyst-backend-00031-wvc` (us-central1,
+`--no-allow-unauthenticated`, `min-instances=0`); frontend at
+<https://marketcatalyst.web.app> (Firebase Hosting, static export); Firestore
+rules released.
