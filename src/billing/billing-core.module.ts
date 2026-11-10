@@ -1,7 +1,8 @@
 import { Global, Module } from "@nestjs/common";
 import { FeatureFlagsModule } from "../feature-flags/feature-flags.module";
 import { BillingAccessService } from "./billing-access.service";
-import { ConsoleEmailSender, EMAIL_SENDER } from "./email/email-sender";
+import { EMAIL_SENDER } from "./email/email-sender";
+import { emailSenderFactory } from "./email/email-provider";
 import { EmailService } from "./email/email.service";
 import { BILLING_PROVIDER } from "./provider/billing-provider";
 import { billingProviderFactory } from "./provider/provider.factory";
@@ -16,7 +17,7 @@ import { billingProviderFactory } from "./provider/provider.factory";
   providers: [
     billingProviderFactory,
     BillingAccessService,
-    { provide: EMAIL_SENDER, useClass: ConsoleEmailSender },
+    emailSenderFactory,
     EmailService,
   ],
   exports: [

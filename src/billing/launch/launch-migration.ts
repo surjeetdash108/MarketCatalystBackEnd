@@ -1,3 +1,4 @@
+import { STAFF_DOC } from "../../account/staff-access.service";
 import { randomBytes } from "crypto";
 import type { AppClock } from "../../common/app-clock";
 import type { FirebaseAdminService } from "../../common/firebase-admin.provider";
@@ -19,8 +20,10 @@ export interface LaunchMigrationOptions {
   trialDays: number;
   promoPercentOff: number;
   promoPrefix: string;
-  /** Emails never migrated (staff). */
+  /** Emails never migrated (ADMIN_EMAIL); everyone on config/staff_access is excluded too. */
   excludeEmails: string[];
+  /** Legacy currentPlan=pro users (manual grants before billing) get this many days of Pro instead. */
+  legacyProTrialDays: number;
   sendEmails: boolean;
 }
 
@@ -31,6 +34,8 @@ export interface LaunchMigrationResult {
   skippedPaying: number;
   skippedAlreadyMigrated: number;
   skippedStaff: number;
+  /** Of `granted`: legacy currentPlan=pro users who got legacyProTrialDays. */
+  legacyPro: number;
   codesCreated: number;
   emailsSent: number;
 }
@@ -70,13 +75,20 @@ export async function runLaunchMigration(
     skippedPaying: 0,
     skippedAlreadyMigrated: 0,
     skippedStaff: 0,
+    legacyPro: 0,
     codesCreated: 0,
     emailsSent: 0,
   };
-  const staff = new Set(opts.excludeEmails.map((e) => e.trim().toLowerCase()));
-  const endsAt = new Date(
-    deps.clock.now() + opts.trialDays * DAY,
-  ).toISOString();
+  // Staff = ADMIN_EMAIL + the staff allowlist (config/staff_access): never migrated.
+  const listed = (await db.doc(STAFF_DOC).get()).data()?.emails;
+  const staff = new Set(
+    [
+      ...opts.excludeEmails,
+      ...(Array.isArray(listed) ? (listed as string[]) : []),
+    ].map((e) => String(e).trim().toLowerCase()),
+  );
+  const endsAtFor = (days: number) =>
+    new Date(deps.clock.now() + days * DAY).toISOString();
   const users = await db.collection("users").get();
   for (const doc of users.docs) {
     r.scanned++;
@@ -101,8 +113,14 @@ export async function runLaunchMigration(
       r.skippedPaying++;
       continue;
     }
+    // Legacy Pro: a pre-billing manual grant on the user doc (currentPlan=pro).
+    const legacyPro = doc.data().currentPlan === "pro";
+    const endsAt = endsAtFor(
+      legacyPro ? opts.legacyProTrialDays : opts.trialDays,
+    );
     if (!opts.apply) {
       r.granted++;
+      if (legacyPro) r.legacyPro++;
       r.codesCreated++;
       continue;
     }
@@ -114,6 +132,7 @@ export async function runLaunchMigration(
       continue;
     }
     r.granted++;
+    if (legacyPro) r.legacyPro++;
     const code = `${opts.promoPrefix}-${randomBytes(4).toString("hex").toUpperCase()}`;
     const promo = await deps.promos.create(
       {
@@ -134,6 +153,7 @@ export async function runLaunchMigration(
       code: promo.code,
       trialPlanId: opts.planId,
       trialEndsAt: endsAt,
+      legacyPro,
       migratedAt: deps.clock.nowIso(),
     });
     if (opts.sendEmails && email) {

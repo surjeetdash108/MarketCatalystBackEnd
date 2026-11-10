@@ -21,6 +21,7 @@ function setup() {
     promoPercentOff: 25,
     promoPrefix: "LAUNCH",
     excludeEmails: ["admin@example.com"],
+    legacyProTrialDays: 90,
     sendEmails: true,
   };
   return { h, promos, deps, opts };
@@ -75,6 +76,45 @@ describe("launch migration (decision i)", () => {
     expect((await h.subscriptions.forUser("u1")).planId).toBe("free");
     const again = await runLaunchMigration(deps, opts);
     expect(again).toMatchObject({ granted: 0, skippedAlreadyMigrated: 2 });
+  });
+
+  it("excludes everyone on the staff allowlist (and ADMIN_EMAIL); legacy currentPlan=pro users get 90 days of Pro", async () => {
+    const { h, deps, opts } = setup();
+    h.fs.seed("config", "staff_access", { emails: ["ops-staff@example.com"] });
+    h.fs.seed("users", "s1", { email: "Ops-Staff@Example.com" });
+    h.fs.seed("users", "admin", { email: "admin@example.com" });
+    h.fs.seed("users", "legacy", {
+      email: "legacy@example.com",
+      currentPlan: "pro",
+      subscriptionStatus: "ACTIVE",
+    });
+    h.fs.seed("users", "u1", { email: "u1@example.com" });
+    for (const u of ["s1", "admin", "legacy", "u1"])
+      h.auth.add(u, `${u}@example.com`);
+    const r = await runLaunchMigration(deps, opts);
+    expect(r).toMatchObject({
+      scanned: 4,
+      skippedStaff: 2,
+      granted: 2,
+      legacyPro: 1,
+    });
+    expect(h.fs.read("launch_offers", "s1")).toBeUndefined();
+    expect(await h.subscriptions.forUser("legacy")).toMatchObject({
+      planId: "pro",
+      status: "TRIALING",
+      expiryDate: new Date(T0 + 90 * DAY).toISOString(),
+    });
+    expect(h.fs.read("launch_offers", "legacy")).toMatchObject({
+      legacyPro: true,
+    });
+    expect((await h.subscriptions.forUser("u1")).expiryDate).toBe(
+      new Date(T0 + 30 * DAY).toISOString(),
+    );
+    await h.provider.advanceTo(T0 + 31 * DAY);
+    expect((await h.subscriptions.forUser("u1")).planId).toBe("free");
+    expect((await h.subscriptions.forUser("legacy")).planId).toBe("pro");
+    await h.provider.advanceTo(T0 + 91 * DAY);
+    expect((await h.subscriptions.forUser("legacy")).planId).toBe("free");
   });
 
   it("refuses to apply with placeholder offer values", () => {
