@@ -139,7 +139,7 @@ export const ENTITLEMENTS: EntitlementDef[] = [
   // ── Starter ───────────────────────────────────────────────────────────────
   {
     key: "workspaces",
-    label: "All 15 Workspaces",
+    label: "All workspaces",
     group: "Market Desk",
     featureGroup: "marketDesk",
     description:
