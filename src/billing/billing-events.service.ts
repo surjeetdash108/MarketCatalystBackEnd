@@ -154,9 +154,9 @@ export class BillingEventsService implements OnModuleInit {
     if (!this.provider) {
       throw new ServiceUnavailableException("No billing provider configured.");
     }
-    let event: ProviderEvent;
+    let event: ProviderEvent | null;
     try {
-      event = this.provider.parseEvent(rawBody, signature);
+      event = await this.provider.parseEvent(rawBody, signature);
     } catch (err) {
       if (err instanceof InvalidEventSignatureError) {
         throw new BadRequestException({
@@ -221,6 +221,8 @@ export class BillingEventsService implements OnModuleInit {
         await this.onCheckoutCompleted(event);
         if (d.subscriptionId)
           await this.syncSubscription(d.subscriptionId, event);
+        // Stripe: the first invoice.paid IS the checkout completion — record that payment too.
+        if (d.invoiceId) await this.syncInvoice(d.invoiceId, event);
         return;
       case "checkout.expired":
         if (d.checkoutSessionId) {

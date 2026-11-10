@@ -138,6 +138,8 @@ export interface CheckoutSession {
   cancelUrl: string;
   /** Tax included in amountDueToday (provider-computed). */
   tax?: number;
+  /** Embedded checkout: the secret the browser confirms the first payment with (Stripe). */
+  clientSecret?: string | null;
 }
 
 export interface ChangePreview {

@@ -7,6 +7,34 @@ import { AppClock } from "../common/app-clock";
 import { BillingEventsService } from "./billing-events.service";
 
 describe("billing event handler: the only writer of billing state", () => {
+  it("checkout.completed that carries the first invoice (Stripe) also records that payment", async () => {
+    const h = billingHarness();
+    const { subscriptionId, session } = await h.buy("u2", "pro", "monthly");
+    const invoiceId = h.fs
+      .ids("payments")
+      .find((id) => h.fs.read("payments", id)?.userId === "u2")!;
+    await h.fs.collection("payments").doc(invoiceId).delete();
+    expect(h.fs.read("payments", invoiceId)).toBeUndefined();
+    const r = await h.events.handle({
+      id: "evt_stripe_first_invoice",
+      type: "checkout.completed",
+      created: h.clock.now(),
+      provider: "fake",
+      data: {
+        uid: "u2",
+        subscriptionId,
+        checkoutSessionId: session.id,
+        invoiceId,
+      },
+    });
+    expect(r).toBe("processed");
+    expect(h.fs.read("payments", invoiceId)).toMatchObject({
+      userId: "u2",
+      paymentStatus: "SUCCESS",
+      amount: 5900,
+    });
+  });
+
   it("a completed checkout writes mirror, projection, customer, payment, claim, history and emails", async () => {
     const h = billingHarness();
     const { subscriptionId, customerId } = await h.buy("u1", "pro", "monthly");
