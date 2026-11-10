@@ -9,10 +9,10 @@
  *   ... --apply                                  # emulator / staging
  *   ... --apply --confirm-production             # production (owner's OK only)
  *
- * Uses Application Default Credentials, or FIRESTORE_EMULATOR_HOST for the emulator.
+ * Credentials: --auth=adc (default) or --auth=gcloud (signed-in gcloud account,
+ * token in memory only); FIRESTORE_EMULATOR_HOST for the emulator.
  */
-import { applicationDefault, initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { scriptAuthFrom, scriptFirestore } from "./lib/script-firestore";
 import { DEFAULT_PRODUCTION_PROJECT_IDS } from "../src/common/environment";
 import { seedStaff } from "../src/account/staff-seed";
 
@@ -40,13 +40,7 @@ async function main() {
       `${project} is production: add --confirm-production to apply.`,
     );
   }
-  const app = initializeApp(
-    process.env.FIRESTORE_EMULATOR_HOST
-      ? { projectId: project }
-      : { credential: applicationDefault(), projectId: project },
-  );
-  const db =
-    database === "(default)" ? getFirestore(app) : getFirestore(app, database);
+  const db = scriptFirestore(project, database, scriptAuthFrom(process.argv));
   const r = await seedStaff(db, emails, { dryRun: !apply });
   console.log(
     `${r.dryRun ? "DRY RUN" : "APPLIED"} — ${project}/${database} — config/staff_access`,

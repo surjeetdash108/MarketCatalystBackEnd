@@ -15,11 +15,11 @@
  *
  * Idempotent: a second --apply finds nothing to change, writes nothing and
  * takes no backup. Refuses the production project without --confirm-production.
- * Uses Application Default Credentials.
+ * Credentials: --auth=adc (Application Default Credentials, default) or
+ * --auth=gcloud (the signed-in gcloud account; token kept in memory only).
  */
 import { readFileSync } from "fs";
-import { applicationDefault, initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { scriptAuthFrom, scriptFirestore } from "./lib/script-firestore";
 import { DEFAULT_PRODUCTION_PROJECT_IDS } from "../src/common/environment";
 import { CATALOG_VERSION } from "../src/plans/plans.registry";
 import {
@@ -59,12 +59,7 @@ async function main() {
       `${project} is production: add --confirm-production to apply.`,
     );
   }
-  const app = initializeApp({
-    credential: applicationDefault(),
-    projectId: project,
-  });
-  const db =
-    database === "(default)" ? getFirestore(app) : getFirestore(app, database);
+  const db = scriptFirestore(project, database, scriptAuthFrom(process.argv));
   const r = await applyCatalog(db, {
     dryRun: !apply,
     backupDir: arg("backup-dir") ?? "./catalog-backups",
