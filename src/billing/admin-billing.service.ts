@@ -17,6 +17,7 @@ import {
   type SubscriptionMirror,
 } from "../plans/subscriptions.service";
 import { EmailService } from "./email/email.service";
+import { isTestRecord } from "./livemode";
 
 /**
  * Admin read-models over the billing collections. Revenue and MRR come only
@@ -41,6 +42,8 @@ export interface SubscriberRow {
   mrrMinor: number;
   /** On the staff allowlist: full access, never billed, excluded from counts/MRR/revenue. */
   staff: boolean;
+  /** Stripe test mode / fake provider (livemode:false): "Test" badge, excluded from MRR and counts. */
+  test: boolean;
   /** A pre-billing manual Pro grant (users doc currentPlan=pro, no paid subscription): "Legacy Pro". */
   legacyPro: boolean;
 }
@@ -77,7 +80,7 @@ export function mrrByUser(
   const latest = new Map<string, Record<string, unknown>>();
   for (const p of payments) {
     const uid = typeof p.userId === "string" ? p.userId : null;
-    if (!uid || p.paymentStatus !== "SUCCESS") continue;
+    if (!uid || p.paymentStatus !== "SUCCESS" || isTestRecord(p)) continue;
     const end = periodEnd(p.subscriptionExpiryDate);
     if (!Number.isFinite(end) || end < now) continue;
     const prev = latest.get(uid);
@@ -113,6 +116,7 @@ export function toCsv(rows: SubscriberRow[]): string {
     "mrrMinor",
     "staff",
     "legacyPro",
+    "test",
   ];
   const cell = (v: unknown) => {
     let s = v == null ? "" : String(v);
@@ -193,7 +197,8 @@ export class AdminBillingService {
         retentionUsed: retainedUids.has(uid),
         staff: isStaff,
         legacyPro: u.currentPlan === "pro" && m?.source !== "provider",
-        mrrMinor: isStaff ? 0 : (mrr.get(uid) ?? 0),
+        test: isTestRecord(m),
+        mrrMinor: isStaff || isTestRecord(m) ? 0 : (mrr.get(uid) ?? 0),
       });
     }
     const q = (filter.q ?? "").trim().toLowerCase();

@@ -174,7 +174,7 @@ describe("admin: subscribers", () => {
     expect(r.headers["content-type"]).toMatch(/text\/csv/);
     const lines = r.text.trim().split("\n");
     expect(lines[0]).toBe(
-      "uid,name,email,planId,interval,status,startedAt,currentPeriodEnd,cancelAtPeriodEnd,promoCode,retentionUsed,mrrMinor,staff,legacyPro",
+      "uid,name,email,planId,interval,status,startedAt,currentPeriodEnd,cancelAtPeriodEnd,promoCode,retentionUsed,mrrMinor,staff,legacyPro,test",
     );
     expect(lines.length).toBe(5);
     expect(r.text).toContain("'=cmd|' /C calc'!A0");

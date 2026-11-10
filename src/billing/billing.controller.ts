@@ -11,6 +11,7 @@ import {
   Req,
   Res,
   UseGuards,
+  UseInterceptors,
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { CurrentUser } from "../common/current-user.decorator";
@@ -38,6 +39,10 @@ import { RetentionService } from "./retention/retention.service";
 import { RefundService } from "./refund/refund.service";
 import { AuthToken, type AuthTokenInfo } from "../common/auth-token";
 import { StaffAccessService } from "../account/staff-access.service";
+import {
+  CheckoutPreviewInterceptor,
+  inCheckoutPreview,
+} from "./checkout-preview";
 
 function clientIp(req: Request): string | null {
   const fwd = String(req.headers["x-forwarded-for"] ?? "")
@@ -49,6 +54,7 @@ function clientIp(req: Request): string | null {
 /** Self-service billing for the signed-in user. */
 @Controller("api/billing")
 @UseGuards(FirebaseAuthGuard)
+@UseInterceptors(CheckoutPreviewInterceptor)
 export class BillingController {
   constructor(
     private readonly billing: BillingService,
@@ -58,8 +64,13 @@ export class BillingController {
     private readonly refunds: RefundService,
   ) {}
 
-  /** Staff have full access and are never billed: no checkout, plan change or retention. */
+  /**
+   * Staff have full access and are never billed: no checkout, plan change or
+   * retention — except in the staff checkout preview (CHECKOUT_PREVIEW on),
+   * where staff run the real flow in Stripe test mode.
+   */
   private async refuseStaff(token: AuthTokenInfo | undefined): Promise<void> {
+    if (inCheckoutPreview()) return;
     if (await this.staff.isStaff(token)) {
       throw new ConflictException({
         statusCode: 409,
@@ -264,6 +275,7 @@ export class BillingWebhookController {
 /** What the signed-in user's plan includes — the UI renders and gates from this. */
 @Controller("api/me")
 @UseGuards(FirebaseAuthGuard)
+@UseInterceptors(CheckoutPreviewInterceptor)
 export class MeEntitlementsController {
   constructor(
     private readonly access: BillingAccessService,
@@ -314,9 +326,14 @@ export class MeEntitlementsController {
   /** Staff: every built feature (Elite and above), no limits, never billed, never admin. */
   private staffEntitlements(live: boolean) {
     const built = ENTITLEMENTS.filter((e) => !e.unbuilt && !e.staffOnly);
+    const preview = inCheckoutPreview();
     return {
       subscriptionsEnabled: live,
-      paidPlansAvailable: live,
+      // In the staff preview the checkout and plan picker open for this account
+      // only; entitlements below stay staff (full access) either way.
+      paidPlansAvailable: live || preview,
+      checkoutPreview: preview && !live,
+      providerConnected: this.access.providerName !== "none",
       provider: this.access.providerName,
       staff: true,
       planId: "staff",
