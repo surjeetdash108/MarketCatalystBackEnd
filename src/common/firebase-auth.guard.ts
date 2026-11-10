@@ -1,3 +1,4 @@
+import { authTokenInfo, type AuthTokenInfo } from "./auth-token";
 import {
   CanActivate,
   ExecutionContext,
@@ -46,22 +47,28 @@ export class FirebaseAuthGuard implements CanActivate {
     }
 
     let uid: string;
+    let info: AuthTokenInfo;
     try {
-      uid = (await this.firebase.auth.verifyIdToken(token)).uid;
+      const decoded = await this.firebase.auth.verifyIdToken(token);
+      uid = decoded.uid;
+      info = authTokenInfo(
+        decoded as unknown as Record<string, unknown> & { uid: string },
+      );
     } catch (err) {
       this.logger.warn(`rejected invalid ID token: ${(err as Error).message}`);
       throw new UnauthorizedException("Invalid or expired ID token.");
     }
 
-    const skipSession = this.reflector.getAllAndOverride<boolean>(SKIP_SESSION_CHECK, [
-      ctx.getHandler(),
-      ctx.getClass(),
-    ]);
+    const skipSession = this.reflector.getAllAndOverride<boolean>(
+      SKIP_SESSION_CHECK,
+      [ctx.getHandler(), ctx.getClass()],
+    );
     if (!skipSession) {
       await this.sessions.assertCurrent(uid, req.headers?.["x-session-id"]);
     }
 
     req.uid = uid;
+    req.authToken = info;
     return true;
   }
 }

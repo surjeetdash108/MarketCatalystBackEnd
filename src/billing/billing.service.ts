@@ -1,3 +1,8 @@
+import { CONSENT_VERSION, consentText } from "./checkout/consent";
+import { normaliseE164 } from "./checkout/phone";
+import { addInterval as addIntervalMs } from "./provider/fake/fake-billing.provider";
+import { refundPolicy } from "./refund/refund-policy";
+import { EmailVerificationService } from "../account/email-verification.service";
 import {
   BadRequestException,
   ConflictException,
@@ -68,6 +73,7 @@ export class BillingService {
     private readonly subscriptions: SubscriptionsService,
     private readonly clock: AppClock,
     private readonly config: ConfigService,
+    private readonly verification: EmailVerificationService,
   ) {}
 
   private get db() {
@@ -152,6 +158,74 @@ export class BillingService {
 
   // ── checkout ──────────────────────────────────────────────────────────
 
+  /**
+   * Step 2 summary: subtotal, discount, tax and total from the provider's
+   * preview (tax only from the provider), renewal date/price and the consent
+   * text to show. A promo that fails validation counts against the promo
+   * attempt budget (so this can't be used to guess codes).
+   */
+  async checkoutPreview(
+    uid: string,
+    ip: string | null,
+    input: {
+      planId: string;
+      interval: BillingInterval;
+      promoCode?: string | null;
+      region?: {
+        country: string;
+        state?: string | null;
+        postalCode?: string | null;
+      } | null;
+    },
+  ) {
+    const provider = await this.access.requireLive();
+    const price = this.priceRef(input.planId, input.interval);
+    let discount = null;
+    let promo: { code: string; description: string } | null = null;
+    if (input.promoCode) {
+      const v = await this.promos.validate({
+        code: input.promoCode,
+        uid,
+        planId: input.planId,
+        interval: input.interval,
+      });
+      if (v.ok === false) {
+        await this.promos.consumeAttempt(uid, ip);
+        throw new BadRequestException({
+          statusCode: 400,
+          code: "promo_invalid",
+          message: GENERIC_PROMO_ERROR,
+        });
+      }
+      discount = v.discount;
+      promo = { code: v.promo.code, description: describePromo(v.promo) };
+    }
+    const region = input.region
+      ? {
+          country: input.region.country.toUpperCase(),
+          state: input.region.state ? input.region.state.toUpperCase() : null,
+          postalCode: input.region.postalCode ?? null,
+        }
+      : null;
+    const quote = await provider.previewCheckout({ price, discount, region });
+    const renewsAt = new Date(
+      addIntervalMs(this.clock.now(), input.interval),
+    ).toISOString();
+    return {
+      planId: price.planId,
+      interval: price.interval,
+      ...quote,
+      promo,
+      renewsAt,
+      renewalAmount: price.amount,
+      consent: {
+        version: CONSENT_VERSION,
+        text: consentText(price.planId, price.interval),
+      },
+      refundPolicy: refundPolicy(),
+    };
+  }
+
   async checkout(
     uid: string,
     email: string | null,
@@ -159,10 +233,85 @@ export class BillingService {
       planId: string;
       interval: BillingInterval;
       promoCode?: string | null;
+      consent?: { accepted: boolean; version: string } | null;
+      phone?: string | null;
+      marketingOptIn?: boolean;
+      billing?: {
+        name: string;
+        address: {
+          line1: string;
+          line2?: string | null;
+          city: string;
+          state?: string | null;
+          postalCode?: string | null;
+          country: string;
+        };
+      } | null;
     },
+    ip: string | null = null,
   ) {
     const provider = await this.access.requireLive();
     const price = this.priceRef(input.planId, input.interval);
+    if (!(await this.verification.isVerified(uid))) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: "email_unverified",
+        message: "Verify your email address before you buy a plan.",
+      });
+    }
+    if (
+      input.consent?.accepted !== true ||
+      input.consent.version !== CONSENT_VERSION
+    ) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: "consent_required",
+        message: "Please agree to the renewal terms to continue.",
+      });
+    }
+    const phone = normaliseE164(input.phone ?? "");
+    if (!phone)
+      throw new BadRequestException({
+        statusCode: 400,
+        code: "phone_invalid",
+        message: "Enter a valid mobile number.",
+      });
+    const addr = input.billing?.address;
+    const country = String(addr?.country ?? "").toUpperCase();
+    const usOk =
+      country !== "US" ||
+      (!!addr?.state &&
+        /^\d{5}(-\d{4})?$/.test(String(addr?.postalCode ?? "")));
+    if (
+      !input.billing?.name?.trim() ||
+      !addr?.line1?.trim() ||
+      !addr?.city?.trim() ||
+      !/^[A-Z]{2}$/.test(country) ||
+      !usOk
+    ) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: "address_invalid",
+        message: "Enter your full billing address.",
+      });
+    }
+    const billing = {
+      name: input.billing.name.trim(),
+      phone,
+      address: {
+        line1: addr.line1.trim(),
+        line2: addr.line2?.trim() || null,
+        city: addr.city.trim(),
+        state: addr.state ? addr.state.toUpperCase() : null,
+        postalCode: addr.postalCode ?? null,
+        country,
+      },
+    };
+    const region = {
+      country,
+      state: billing.address.state,
+      postalCode: billing.address.postalCode,
+    };
     const m = await this.mirror(uid);
     if (
       m &&
@@ -210,28 +359,61 @@ export class BillingService {
       successUrl: `${this.appUrl}/billing/success?session={CHECKOUT_SESSION_ID}`,
       cancelUrl: `${this.appUrl}/manage-plan?checkout=cancelled&plan=${price.planId}&interval=${price.interval}`,
       idempotencyKey,
+      billing,
     });
-    await this.db.collection("checkout_sessions").doc(session.id).set(
-      {
-        id: session.id,
-        uid,
-        provider: provider.name,
-        customerId,
-        planId: price.planId,
-        interval: price.interval,
-        promoId,
-        promoCode,
-        amountDueToday: session.amountDueToday,
-        status: session.status,
-        createdAt: this.clock.nowIso(),
-      },
-      { merge: true },
-    );
+    const now = this.clock.nowIso();
+    // Ours: phone (backend-only) + region (country/state/ZIP). The full address stays with the provider.
+    await this.db
+      .collection("customers")
+      .doc(uid)
+      .set(
+        {
+          uid,
+          phone,
+          phoneUpdatedAt: now,
+          marketingOptIn: { optedIn: input.marketingOptIn === true, at: now },
+          billingRegion: region,
+        },
+        { merge: true },
+      );
+    await this.db
+      .collection("checkout_sessions")
+      .doc(session.id)
+      .set(
+        {
+          id: session.id,
+          uid,
+          provider: provider.name,
+          customerId,
+          planId: price.planId,
+          interval: price.interval,
+          promoId,
+          promoCode,
+          amountDueToday: session.amountDueToday,
+          tax: session.tax ?? 0,
+          region,
+          consent: {
+            acceptedAt: now,
+            version: CONSENT_VERSION,
+            text: consentText(price.planId, price.interval),
+            planId: price.planId,
+            interval: price.interval,
+            price: price.amount,
+            currency: price.currency,
+            ip,
+          },
+          status: session.status,
+          createdAt: now,
+        },
+        { merge: true },
+      );
     return {
       sessionId: session.id,
       url: session.url,
       amountDueToday: session.amountDueToday,
+      tax: session.tax ?? 0,
       currency: session.currency,
+      payment: { provider: provider.name },
     };
   }
 
@@ -582,5 +764,58 @@ export class BillingService {
     await this.access.requireLive();
     this.priceRef(input.planId, input.interval);
     return this.promos.preview({ ...input, uid, ip });
+  }
+
+  // ── contact (mobile number) ───────────────────────────────────────────
+
+  /** The user's own billing contact (backend-only customer record). */
+  async contact(uid: string) {
+    const c =
+      (await this.db.collection("customers").doc(uid).get()).data() ?? {};
+    return {
+      phone: (c.phone as string) ?? null,
+      marketingOptIn: (c.marketingOptIn as
+        { optedIn: boolean; at: string } | undefined) ?? {
+        optedIn: false,
+        at: null,
+      },
+    };
+  }
+
+  /** Edits the mobile number / product-updates opt-in; the phone is sent to the provider as the customer phone. */
+  async updateContact(
+    uid: string,
+    input: { phone?: string; marketingOptIn?: boolean },
+  ) {
+    const ref = this.db.collection("customers").doc(uid);
+    const c = (await ref.get()).data() ?? {};
+    const now = this.clock.nowIso();
+    const patch: Record<string, unknown> = { uid };
+    if (input.phone !== undefined) {
+      const phone = normaliseE164(input.phone);
+      if (!phone)
+        throw new BadRequestException({
+          statusCode: 400,
+          code: "phone_invalid",
+          message: "Enter a valid mobile number.",
+        });
+      patch.phone = phone;
+      patch.phoneUpdatedAt = now;
+      const provider = this.access.configuredProvider;
+      if (
+        provider &&
+        c.customerId &&
+        (c.provider == null || c.provider === provider.name)
+      ) {
+        await provider.updateCustomerContact(String(c.customerId), { phone });
+      }
+    }
+    if (input.marketingOptIn !== undefined)
+      patch.marketingOptIn = {
+        optedIn: input.marketingOptIn === true,
+        at: now,
+      };
+    await ref.set(patch, { merge: true });
+    return this.contact(uid);
   }
 }

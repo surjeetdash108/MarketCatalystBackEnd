@@ -102,7 +102,9 @@ export function rollupApiStatus(input: StatusInput): {
     return input.workerOnly
       ? {
           status: "unknown",
-          reasons: ["Served by the private worker only — this service does not mount it."],
+          reasons: [
+            "Served by the private worker only — this service does not mount it.",
+          ],
         }
       : {
           status: "missing",
@@ -135,7 +137,9 @@ export function rollupApiStatus(input: StatusInput): {
 
   const judged = input.producers.filter((p) => p.health !== "unknown");
   if (judged.length < input.producers.length) {
-    reasons.push("Run history could not be read, so the freshness of its data is not judged.");
+    reasons.push(
+      "Run history could not be read, so the freshness of its data is not judged.",
+    );
   }
   for (const p of judged) {
     if (p.health === "failing") {
@@ -150,7 +154,9 @@ export function rollupApiStatus(input: StatusInput): {
       );
     } else if (p.health === "never-run") {
       status ??= "degraded";
-      reasons.push(`${p.job} has never recorded a run, so this data may be empty.`);
+      reasons.push(
+        `${p.job} has never recorded a run, so this data may be empty.`,
+      );
     }
   }
 
@@ -246,7 +252,10 @@ export class ScreenApiService {
     let metaError: string | null = null;
     try {
       metaByJob = new Map(
-        (await this.meta.statusAll()).map((m) => [m.job, m as Record<string, unknown>]),
+        (await this.meta.statusAll()).map((m) => [
+          m.job,
+          m as Record<string, unknown>,
+        ]),
       );
     } catch (err) {
       metaError = (err as Error).message;
@@ -258,9 +267,7 @@ export class ScreenApiService {
       if (cached) return cached;
       const entry = jobManifest(job);
       const m = metaByJob.get(job);
-      const assessment = entry
-        ? assessJob(entry, m, now)
-        : null;
+      const assessment = entry ? assessJob(entry, m, now) : null;
       const state: ProducerState = {
         job,
         // A name the manifest does not know cannot be assessed; registry.spec
@@ -299,7 +306,8 @@ export class ScreenApiService {
         group: screen.group,
         route: screen.route,
         source: screen.source,
-        repo: ("repo" in screen ? screen.repo : undefined) ?? "MarketCatalystUI",
+        repo:
+          ("repo" in screen ? screen.repo : undefined) ?? "MarketCatalystUI",
         summary: screen.summary,
         apiKeys: [...screen.apis],
         status: rollupScreenStatus(statuses),
@@ -321,9 +329,12 @@ export class ScreenApiService {
     const apiCounts = emptyCounts();
     for (const row of Object.values(apis)) apiCounts[row.status] += 1;
 
-    const role = String(this.config.get("APP_ROLE", "worker")).trim().toLowerCase();
+    const role = String(this.config.get("APP_ROLE", "worker"))
+      .trim()
+      .toLowerCase();
     return {
-      service: role === "live" ? "market-catalyst-live" : "market-catalyst-backend",
+      service:
+        role === "live" ? "market-catalyst-live" : "market-catalyst-backend",
       role,
       generatedAt: now.toISOString(),
       probeAt: probeReport?.generatedAt ?? null,
@@ -343,7 +354,7 @@ export class ScreenApiService {
         apis: API_DOCS.length,
         byStatus: apiCounts,
         undocumented: undocumented.length,
-        unusedApis: API_DOCS.filter((d) => !(users.get(d.key)?.length)).length,
+        unusedApis: API_DOCS.filter((d) => !users.get(d.key)?.length).length,
       },
     };
   }

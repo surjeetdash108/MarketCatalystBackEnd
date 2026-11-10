@@ -77,56 +77,68 @@ const LLM = ["Groq", "OpenRouter"] as const;
 export const API_CATALOG = {
   // ── Live: streams, quotes and the tape ─────────────────────────────────────
   "GET /live/tape/stream": {
-    summary: "Pushes the ticker-tape frame (index cards, VIX, futures proxies) to every open page.",
+    summary:
+      "Pushes the ticker-tape frame (index cards, VIX, futures proxies) to every open page.",
     sse: true,
     store: ["tape frame (memory)"],
     vendors: ["FMP", "Polygon"],
     check: { skip: "a Server-Sent Events stream" },
-    notes: "Browsers connect straight to the live Cloud Run URL, not through Hosting, because the CDN buffers streams. Falls back to GET /live/tape.",
+    notes:
+      "Browsers connect straight to the live Cloud Run URL, not through Hosting, because the CDN buffers streams. Falls back to GET /live/tape.",
   },
   "GET /live/tape": {
-    summary: "The current tape frame as JSON — the 20 s polling fallback behind the stream.",
+    summary:
+      "The current tape frame as JSON — the 20 s polling fallback behind the stream.",
     vendors: ["FMP", "Polygon"],
   },
   "GET /live/tape/stats": {
-    summary: "Tape service counters (connected viewers, poll state) for diagnostics.",
+    summary:
+      "Tape service counters (connected viewers, poll state) for diagnostics.",
   },
   "GET /live/stream": {
-    summary: "Live price ticks for one ticker, preceded by an opening snapshot.",
+    summary:
+      "Live price ticks for one ticker, preceded by an opening snapshot.",
     params: "ticker",
     sse: true,
     vendors: ["FMP", "Polygon"],
     check: { skip: "a Server-Sent Events stream" },
   },
   "GET /live/quotes": {
-    summary: "Latest price and % change for one or a few tickers (search dropdown, per-ticker fallback).",
+    summary:
+      "Latest price and % change for one or a few tickers (search dropdown, per-ticker fallback).",
     params: "tickers (comma list)",
     vendors: ["FMP", "Polygon"],
     check: { query: "?tickers=AAPL" },
   },
   "GET /live/snapshot": {
-    summary: "Quotes for every ticker on screen in one call, refreshed app-wide every 30 s.",
+    summary:
+      "Quotes for every ticker on screen in one call, refreshed app-wide every 30 s.",
     params: "tickers (comma list, up to 250 per call)",
     vendors: ["FMP", "Polygon"],
     check: { query: "?tickers=AAPL,MSFT" },
-    notes: "The snapshot cache re-fetches tickers someone is watching every 10 s in market hours.",
+    notes:
+      "The snapshot cache re-fetches tickers someone is watching every 10 s in market hours.",
   },
   "GET /live/market-status": {
-    summary: "Market session phase (pre / regular / post / closed), its label, and upcoming market holidays.",
+    summary:
+      "Market session phase (pre / regular / post / closed), its label, and upcoming market holidays.",
     vendors: ["FMP", "Polygon"],
   },
   "GET /live/stats": {
-    summary: "Snapshot cache counters (hits, coalesced fetches) for diagnostics.",
+    summary:
+      "Snapshot cache counters (hits, coalesced fetches) for diagnostics.",
   },
   "GET /live/collections": {
-    summary: "Raw read of named shared collections from the server-side cache; no screen calls it.",
+    summary:
+      "Raw read of named shared collections from the server-side cache; no screen calls it.",
     params: "names (comma list of cacheable collections)",
     check: { skip: "needs a list of collection names" },
   },
 
   // ── Live: feeds ────────────────────────────────────────────────────────────
   "GET /live/news-wire": {
-    summary: "Incremental news feed: only the items newer than the cursor the previous call returned.",
+    summary:
+      "Incremental news feed: only the items newer than the cursor the previous call returned.",
     params: "since (cursor from the last response)",
     vendors: ["Polygon", "FMP"],
   },
@@ -136,22 +148,26 @@ export const API_CATALOG = {
     producers: ["earnings-actuals", "earnings"],
   },
   "GET /live/money-flow": {
-    summary: "Money Flow board: flows, movers, levels and scores built server-side from Polygon bars and FMP quotes; cached 30s.",
+    summary:
+      "Money Flow board: flows, movers, levels and scores built server-side from Polygon bars and FMP quotes; cached 30s.",
     vendors: ["Polygon", "FMP"],
   },
   "GET /live/what-matters-now": {
-    summary: "AI-written market digest, cached an hour; the first viewer after expiry triggers generation.",
+    summary:
+      "AI-written market digest, cached an hour; the first viewer after expiry triggers generation.",
     vendors: LLM,
     check: { skip: "can start an LLM generation" },
   },
   "GET /live/ticker-analysis": {
-    summary: "Stored AI analysis for one ticker (summary, sentiment, factors, risks). Read-only: never generates.",
+    summary:
+      "Stored AI analysis for one ticker (summary, sentiment, factors, risks). Read-only: never generates.",
     params: "ticker",
     store: ["ticker_ai_analysis"],
     check: ASK_FOR_AAPL,
   },
   "GET /live/ticker-announcements": {
-    summary: "Recent AI-analysed announcements (earnings results, 13F) across tickers. Read-only.",
+    summary:
+      "Recent AI-analysed announcements (earnings results, 13F) across tickers. Read-only.",
     params: "limit",
     store: ["ticker_ai_analysis"],
     producers: ["earnings-actuals"],
@@ -159,22 +175,26 @@ export const API_CATALOG = {
     check: { query: "?limit=5" },
   },
   "GET /live/scan/biggest-pct": {
-    summary: "Biggest % gainers and losers grouped by sector, built from the companies universe and recomputed after 2 h.",
+    summary:
+      "Biggest % gainers and losers grouped by sector, built from the companies universe and recomputed after 2 h.",
     store: ["companies"],
   },
   "GET /live/scan/most-active": {
-    summary: "Most active stocks by volume and relative volume, grouped by sector; recomputed after 1 h.",
+    summary:
+      "Most active stocks by volume and relative volume, grouped by sector; recomputed after 1 h.",
     store: ["companies"],
   },
   "GET /live/glance/weekly": {
-    summary: "'Week at a glance' market digests, newest first; the current week is built on demand if older than 12 h.",
+    summary:
+      "'Week at a glance' market digests, newest first; the current week is built on demand if older than 12 h.",
     store: ["market_weekly_glance"],
     alsoWrittenBy: ["market-glance-weekly"],
     vendors: LLM,
     check: { skip: "can start an LLM generation" },
   },
   "GET /live/glance/monthly": {
-    summary: "'Month at a glance' digests; the current month is built on demand if older than 24 h.",
+    summary:
+      "'Month at a glance' digests; the current month is built on demand if older than 24 h.",
     store: ["market_monthly_glance"],
     vendors: LLM,
     check: { skip: "can start an LLM generation" },
@@ -182,12 +202,14 @@ export const API_CATALOG = {
 
   // ── Live: per-ticker ───────────────────────────────────────────────────────
   "GET /live/ai-analysis": {
-    summary: "On-demand AI read of a ticker (headline, volatility, momentum, news and technical summaries).",
+    summary:
+      "On-demand AI read of a ticker (headline, volatility, momentum, news and technical summaries).",
     params: "ticker",
     store: ["ticker_ai_analysis"],
     vendors: LLM,
     check: { skip: "can start an LLM generation" },
-    notes: "A slow model outlives the browser's 20 s timeout, so the page re-polls every 30 s while the backend finishes.",
+    notes:
+      "A slow model outlives the browser's 20 s timeout, so the page re-polls every 30 s while the backend finishes.",
   },
   "POST /live/copilot": {
     summary: "Chat reply for the Stock Intelligence 'Ask AI' box.",
@@ -195,7 +217,8 @@ export const API_CATALOG = {
     vendors: LLM,
   },
   "GET /live/bars": {
-    summary: "OHLCV bars for a ticker by timeframe (tf) or interval; fetches only the days missing from stored history.",
+    summary:
+      "OHLCV bars for a ticker by timeframe (tf) or interval; fetches only the days missing from stored history.",
     params: "ticker, and either tf or interval",
     store: ["ohlcv_bars"],
     alsoWrittenBy: ["stock-history", "history-backfill"],
@@ -203,15 +226,25 @@ export const API_CATALOG = {
     check: { query: "?ticker=AAPL&tf=1M" },
   },
   "GET /live/company": {
-    summary: "Full company document (price, fundamentals, technicals, ratings), rebuilt from vendors when missing or stale.",
+    summary:
+      "Full company document (price, fundamentals, technicals, ratings), rebuilt from vendors when missing or stale.",
     params: "ticker",
     store: ["companies"],
-    alsoWrittenBy: ["company-quotes", "companies", "technical-indicators", "rs-rating", "tech-rating", "fundamentals-growth", "beta"],
+    alsoWrittenBy: [
+      "company-quotes",
+      "companies",
+      "technical-indicators",
+      "rs-rating",
+      "tech-rating",
+      "fundamentals-growth",
+      "beta",
+    ],
     vendors: ["FMP", "Polygon"],
     check: ASK_FOR_AAPL,
   },
   "GET /live/company/summary": {
-    summary: "Fast key stats for a ticker whose company document is not stored yet (marked partial).",
+    summary:
+      "Fast key stats for a ticker whose company document is not stored yet (marked partial).",
     params: "ticker",
     vendors: ["FMP", "Polygon"],
     check: ASK_FOR_AAPL,
@@ -223,19 +256,23 @@ export const API_CATALOG = {
     check: ASK_FOR_AAPL,
   },
   "GET /live/peers-summary": {
-    summary: "Compact peer table: name, market cap, P/E, RS rating, weekly and monthly change.",
+    summary:
+      "Compact peer table: name, market cap, P/E, RS rating, weekly and monthly change.",
     params: "tickers (comma list)",
     check: { query: "?tickers=MSFT,GOOGL" },
   },
   "GET /live/logo": {
-    summary: "Company logo image proxied from Polygon branding so the key stays server-side; 204 when there is none.",
+    summary:
+      "Company logo image proxied from Polygon branding so the key stays server-side; 204 when there is none.",
     params: "ticker",
     vendors: ["Polygon"],
     check: { skip: "returns an image, not JSON" },
-    notes: "Deliberately unauthenticated: it is loaded as an <img src>, which cannot carry an Authorization header.",
+    notes:
+      "Deliberately unauthenticated: it is loaded as an <img src>, which cannot carry an Authorization header.",
   },
   "GET /live/dividend-history": {
-    summary: "Dividend history, annual totals, TTM yield, 5-year CAGR and increase streak for a ticker.",
+    summary:
+      "Dividend history, annual totals, TTM yield, 5-year CAGR and increase streak for a ticker.",
     params: "ticker",
     store: ["dividend_history"],
     alsoWrittenBy: ["corporate-actions"],
@@ -251,13 +288,15 @@ export const API_CATALOG = {
     check: ASK_FOR_AAPL,
   },
   "GET /live/ownership": {
-    summary: "Institutional ownership rollup and top 13F holders (FMP) plus FINRA short interest (Polygon).",
+    summary:
+      "Institutional ownership rollup and top 13F holders (FMP) plus FINRA short interest (Polygon).",
     params: "ticker",
     vendors: ["FMP", "Polygon"],
     check: ASK_FOR_AAPL,
   },
   "GET /live/financials": {
-    summary: "Quarterly and annual financials with reported EPS against estimate, for a ticker.",
+    summary:
+      "Quarterly and annual financials with reported EPS against estimate, for a ticker.",
     params: "ticker",
     store: ["financials"],
     alsoWrittenBy: ["financials"],
@@ -271,19 +310,22 @@ export const API_CATALOG = {
     check: { skip: "a cold request walks up to two dozen SEC filing pages" },
   },
   "GET /live/13f-filings": {
-    summary: "Quarterly 13F institutional holders for a ticker, optionally for a chosen year and quarter.",
+    summary:
+      "Quarterly 13F institutional holders for a ticker, optionally for a chosen year and quarter.",
     params: "ticker, year?, quarter?",
     vendors: ["SEC EDGAR"],
     check: ASK_FOR_AAPL,
   },
   "GET /live/filing": {
-    summary: "A SEC filing's HTML for the sandboxed viewer; a filing is immutable so it is cached a day.",
+    summary:
+      "A SEC filing's HTML for the sandboxed viewer; a filing is immutable so it is cached a day.",
     params: "cik, accession",
     vendors: ["SEC EDGAR"],
     check: { skip: "needs a real filing's cik and accession" },
   },
   "GET /live/news": {
-    summary: "Recent news for one ticker (Polygon and FMP merged and de-duplicated).",
+    summary:
+      "Recent news for one ticker (Polygon and FMP merged and de-duplicated).",
     params: "ticker",
     vendors: ["Polygon", "FMP"],
     check: ASK_FOR_AAPL,
@@ -301,7 +343,8 @@ export const API_CATALOG = {
     check: { skip: "can start an LLM generation" },
   },
   "GET /live/options-chain": {
-    summary: "Options contracts for a ticker in the supported options universe.",
+    summary:
+      "Options contracts for a ticker in the supported options universe.",
     params: "ticker",
     store: ["options_chains"],
     alsoWrittenBy: ["options-chains"],
@@ -309,14 +352,16 @@ export const API_CATALOG = {
     check: { skip: "options data is slow and rate-limited" },
   },
   "GET /live/search": {
-    summary: "Ticker search over the ~10,000 active US tickers by symbol or name.",
+    summary:
+      "Ticker search over the ~10,000 active US tickers by symbol or name.",
     params: "q",
     store: ["ticker universe (memory, reloaded daily)"],
     vendors: ["Polygon"],
     check: { query: "?q=apple" },
   },
   "POST /live/searched-ticker": {
-    summary: "Records that a ticker was searched, feeding Most Searched; typos are ignored.",
+    summary:
+      "Records that a ticker was searched, feeding Most Searched; typos are ignored.",
     params: "body: ticker",
   },
   "GET /live/most-searched-tickers": {
@@ -325,10 +370,12 @@ export const API_CATALOG = {
     check: { query: "?limit=5" },
   },
   "GET /live/ondemand-stats": {
-    summary: "Cache and request-coalescing counters of the on-demand layer, for diagnostics.",
+    summary:
+      "Cache and request-coalescing counters of the on-demand layer, for diagnostics.",
   },
   "GET /live/etf-market": {
-    summary: "ETFs discovered and classified into 10 categories, with price, change, volume and AUM.",
+    summary:
+      "ETFs discovered and classified into 10 categories, with price, change, volume and AUM.",
     store: ["etf_market_current", "etf_market_previous"],
     producers: ["etf-market"],
     vendors: ["FMP", "Polygon"],
@@ -349,13 +396,15 @@ export const API_CATALOG = {
     check: { query: "?symbols=AAPL&tf=d&years=1" },
   },
   "POST /live/strategy-lab/validate": {
-    summary: "Backtests an entry/exit rule spec against the stored price packs and the jobs' precomputed results.",
+    summary:
+      "Backtests an entry/exit rule spec against the stored price packs and the jobs' precomputed results.",
     params: "body: spec, tf, cfg",
     store: ["lab_results", "lab_meta"],
     producers: ["strategy-lab-daily", "strategy-lab-intraday"],
   },
   "POST /live/strategy-lab/ai-rules": {
-    summary: "Turns plain-English strategy text into entry and exit rules with an LLM.",
+    summary:
+      "Turns plain-English strategy text into entry and exit rules with an LLM.",
     params: "body: q",
     vendors: LLM,
   },
@@ -383,23 +432,36 @@ export const API_CATALOG = {
 
   // ── Market data: shared lists filled by sync jobs ──────────────────────────
   "GET /market-data/companies": {
-    summary: "The synced company universe (price, % change, market cap, sector, ratings, technicals) behind the heatmap, screener, movers and search.",
+    summary:
+      "The synced company universe (price, % change, market cap, sector, ratings, technicals) behind the heatmap, screener, movers and search.",
     store: ["companies"],
     producers: ["company-quotes"],
-    alsoWrittenBy: ["companies", "ticker-universe", "technical-indicators", "rs-rating", "tech-rating", "fundamentals-growth", "beta", "news"],
+    alsoWrittenBy: [
+      "companies",
+      "ticker-universe",
+      "technical-indicators",
+      "rs-rating",
+      "tech-rating",
+      "fundamentals-growth",
+      "beta",
+      "news",
+    ],
   },
   "GET /market-data/sectors": {
-    summary: "Sector performance (% change by sector) for leaders, laggards and the heatmap.",
+    summary:
+      "Sector performance (% change by sector) for leaders, laggards and the heatmap.",
     store: ["sectors"],
     producers: ["sectors"],
   },
   "GET /market-data/earnings": {
-    summary: "Earnings calendar: date, session, EPS and revenue estimate and actual.",
+    summary:
+      "Earnings calendar: date, session, EPS and revenue estimate and actual.",
     store: ["earnings_events"],
     producers: ["earnings", "earnings-actuals"],
   },
   "GET /market-data/earnings-announcements": {
-    summary: "8-K earnings announcements with session, price reaction and guidance direction.",
+    summary:
+      "8-K earnings announcements with session, price reaction and guidance direction.",
     store: ["earnings_announcements"],
     producers: ["edgar-8k"],
   },
@@ -409,7 +471,8 @@ export const API_CATALOG = {
     producers: ["news"],
   },
   "GET /market-data/movers": {
-    summary: "Top gainers and losers with price, volume, relative volume and sector.",
+    summary:
+      "Top gainers and losers with price, volume, relative volume and sector.",
     store: ["market_movers", "companies"],
     producers: ["market-movers"],
   },
@@ -448,16 +511,19 @@ export const API_CATALOG = {
     store: ["etf_holdings"],
     alsoWrittenBy: ["etf-holdings"],
     check: { query: "?symbol=SPY" },
-    notes: "Unauthenticated. The etf-holdings job refreshes 16 popular ETFs daily; any other ETF is built on demand when its stored copy is over 7 days old.",
+    notes:
+      "Unauthenticated. The etf-holdings job refreshes 16 popular ETFs daily; any other ETF is built on demand when its stored copy is over 7 days old.",
   },
   "GET /market-data/analyst-actions": {
-    summary: "Analyst consensus per ticker: vote counts, price-target figures and recent grades.",
+    summary:
+      "Analyst consensus per ticker: vote counts, price-target figures and recent grades.",
     params: "ticker?",
     store: ["analyst_actions"],
     producers: ["analyst-actions"],
   },
   "GET /market-data/analyst-firm-stats": {
-    summary: "Measured track record per analyst firm (hit rate, average move after a call).",
+    summary:
+      "Measured track record per analyst firm (hit rate, average move after a call).",
     store: ["analyst_firm_stats"],
     producers: ["analyst-firm-stats"],
   },
@@ -468,14 +534,16 @@ export const API_CATALOG = {
     check: ASK_FOR_AAPL,
   },
   "GET /market-data/analyst-firm-calls": {
-    summary: "Every stored call by one analyst firm, with its outcome, newest first.",
+    summary:
+      "Every stored call by one analyst firm, with its outcome, newest first.",
     params: "firm",
     store: ["analyst_calls"],
     producers: ["analyst-firm-stats"],
     check: { skip: "needs a real firm name" },
   },
   "GET /market-data/market-sentiment": {
-    summary: "The Fear & Greed index: value, label, components and intraday readings.",
+    summary:
+      "The Fear & Greed index: value, label, components and intraday readings.",
     store: ["market_sentiment"],
     producers: ["fear-greed"],
   },
@@ -485,12 +553,14 @@ export const API_CATALOG = {
     producers: ["fear-greed"],
   },
   "GET /market-data/recaps": {
-    summary: "Daily and weekly market recaps: internals, indices, top movers, sector leaders, narrative.",
+    summary:
+      "Daily and weekly market recaps: internals, indices, top movers, sector leaders, narrative.",
     store: ["recaps"],
     producers: ["recaps"],
   },
   "GET /market-data/macro-events": {
-    summary: "Economic calendar: event, importance, date, actual, previous and estimate.",
+    summary:
+      "Economic calendar: event, importance, date, actual, previous and estimate.",
     store: ["macro_events"],
     producers: ["macro-events"],
   },
@@ -520,20 +590,23 @@ export const API_CATALOG = {
     producers: ["edgar-8k"],
   },
   "GET /market-data/mover-catalysts": {
-    summary: "Why-it's-moving explanations for several tickers in one call; no screen calls it.",
+    summary:
+      "Why-it's-moving explanations for several tickers in one call; no screen calls it.",
     params: "tickers (comma list)",
     store: ["mover_catalysts"],
     check: { skip: "can start LLM generations" },
   },
   "GET /market-data/mover-catalyst/:ticker": {
-    summary: "A short explanation of why one ticker is moving, generated on demand and cached.",
+    summary:
+      "A short explanation of why one ticker is moving, generated on demand and cached.",
     params: "path: ticker; query: direction?, pctChange?",
     store: ["mover_catalysts"],
     vendors: LLM,
     check: { skip: "can start an LLM generation" },
   },
   "GET /market-data/ai-infrastructure": {
-    summary: "AI-infrastructure investment themes with company counts and sample tickers.",
+    summary:
+      "AI-infrastructure investment themes with company counts and sample tickers.",
     store: ["companies"],
   },
   "GET /market-data/ai-infrastructure/:theme": {
@@ -549,7 +622,8 @@ export const API_CATALOG = {
     store: ["per-user Firestore documents"],
   },
   "PATCH /api/profile": {
-    summary: "Creates or updates the signed-in user's profile (sign-up, first Google login, profile edit).",
+    summary:
+      "Creates or updates the signed-in user's profile (sign-up, first Google login, profile edit).",
     params: "body: profile fields",
   },
   "GET /api/settings": {
@@ -561,12 +635,15 @@ export const API_CATALOG = {
     params: "body: darkMode?, font?, alert?",
   },
   "GET /api/whoami-user": {
-    summary: "Echoes the verified identity of the caller; diagnostic, no screen calls it.",
+    summary:
+      "Echoes the verified identity of the caller; diagnostic, no screen calls it.",
   },
   "POST /api/session/claim": {
-    summary: "Called after each login: this device becomes the user's only valid session, signing out the others.",
+    summary:
+      "Called after each login: this device becomes the user's only valid session, signing out the others.",
     params: "body: sessionId",
-    notes: "Added after the Oct 24 audit; every authenticated call then carries X-Session-Id and is refused if it is not the claimed one.",
+    notes:
+      "Added after the Oct 24 audit; every authenticated call then carries X-Session-Id and is refused if it is not the claimed one.",
   },
   "POST /api/billing/checkout": {
     summary: `Starts a paid plan: server-created hosted checkout at catalog prices (optional promo code). 503 "launching soon" when subscriptions are off.`,
@@ -574,21 +651,25 @@ export const API_CATALOG = {
     store: ["backend-only billing collections"],
   },
   "GET /api/billing/checkout/:id": {
-    summary: "Status of one checkout, polled by the success page until the plan is active.",
+    summary:
+      "Status of one checkout, polled by the success page until the plan is active.",
     store: ["backend-only billing collections"],
   },
   "POST /api/billing/promo/preview": {
-    summary: "Validates a promo code server-side and returns the discounted price; rate-limited, one generic error.",
+    summary:
+      "Validates a promo code server-side and returns the discounted price; rate-limited, one generic error.",
     params: "body: code, planId, interval",
     store: ["backend-only billing collections"],
   },
   "POST /api/billing/change/preview": {
-    summary: "Previews a plan change: prorated amount due now (upgrade) or the period-end date (downgrade).",
+    summary:
+      "Previews a plan change: prorated amount due now (upgrade) or the period-end date (downgrade).",
     params: "body: planId, interval",
     store: ["backend-only billing collections"],
   },
   "POST /api/billing/change": {
-    summary: "Applies a plan change: immediate prorated upgrade (must match the preview) or downgrade at period end.",
+    summary:
+      "Applies a plan change: immediate prorated upgrade (must match the preview) or downgrade at period end.",
     params: "body: planId, interval, expectedAmountDue, prorationDate",
     store: ["backend-only billing collections"],
   },
@@ -605,15 +686,18 @@ export const API_CATALOG = {
     store: ["backend-only billing collections"],
   },
   "GET /api/billing/retention": {
-    summary: "Whether the retention offer applies (once per email, ever) and what it is.",
+    summary:
+      "Whether the retention offer applies (once per email, ever) and what it is.",
     store: ["backend-only billing collections"],
   },
   "POST /api/billing/retention/accept": {
-    summary: "Accepts the retention offer: 50% off 2 monthly invoices, or a credit on the next annual invoice.",
+    summary:
+      "Accepts the retention offer: 50% off 2 monthly invoices, or a credit on the next annual invoice.",
     store: ["backend-only billing collections"],
   },
   "GET /api/billing/summary": {
-    summary: "Billing page: plan, status, next charge, discount, renewal or end date.",
+    summary:
+      "Billing page: plan, status, next charge, discount, renewal or end date.",
     store: ["backend-only billing collections"],
   },
   "GET /api/billing/invoices": {
@@ -633,12 +717,14 @@ export const API_CATALOG = {
     store: ["backend-only billing collections"],
   },
   "POST /api/billing/webhook": {
-    summary: "Provider webhook; signature-verified, idempotent; the only writer of billing state.",
+    summary:
+      "Provider webhook; signature-verified, idempotent; the only writer of billing state.",
     params: "header: stripe-signature | x-billing-signature",
     store: ["backend-only billing collections"],
   },
   "GET /api/me/entitlements": {
-    summary: "What the signed-in user's plan includes, the plan each locked feature needs, and limits.",
+    summary:
+      "What the signed-in user's plan includes, the plan each locked feature needs, and limits.",
     store: ["backend-only billing collections"],
   },
   "GET /api/billing/fake/checkout/:id": {
@@ -664,13 +750,101 @@ export const API_CATALOG = {
     params: "body: card",
     store: ["backend-only billing collections"],
   },
+  "POST /api/account/sync-claims": {
+    summary:
+      "Sets or clears the staff custom claim from the verified email and the staff allowlist; tells the client to refresh its token.",
+    store: ["config/staff_access", "Firebase Auth custom claims"],
+    check: { skip: "writes custom claims" },
+  },
+  "GET /api/account/email-verification": {
+    summary: "Whether the signed-in user's email is verified.",
+    store: ["Firebase Auth"],
+  },
+  "POST /api/account/email-verification/send": {
+    summary:
+      "Emails a 6-digit verification code (10-minute expiry, resend cooldown, rate limited).",
+    store: ["email_verifications"],
+    check: { skip: "sends email" },
+  },
+  "POST /api/account/email-verification/verify": {
+    summary: "Checks the 6-digit code and marks the account's email verified.",
+    store: ["email_verifications", "Firebase Auth"],
+    check: { skip: "needs a code" },
+  },
+  "GET /api/admin/staff-access": {
+    summary: "The staff allowlist (admin).",
+    store: ["config/staff_access"],
+  },
+  "POST /api/admin/staff-access": {
+    summary: "Adds an email to the staff allowlist (admin; audited).",
+    store: ["config/staff_access", "admin_audit"],
+    check: { skip: "admin write" },
+  },
+  "DELETE /api/admin/staff-access/:email": {
+    summary: "Removes an email from the staff allowlist (admin; audited).",
+    store: ["config/staff_access", "admin_audit"],
+    check: { skip: "admin write" },
+  },
+  "GET /api/billing/fake/outbox": {
+    summary:
+      "Fake provider (dev): emails the console sender would have sent to an address.",
+    store: ["in-memory"],
+    check: { skip: "fake billing provider only (404 otherwise)" },
+  },
+  "POST /api/billing/checkout/preview": {
+    summary:
+      "Checkout step 2 summary: subtotal, discount, tax (from the billing provider) and total, renewal date/price, consent text and refund policy.",
+    store: ["promo_codes"],
+    check: { skip: "needs the billing provider" },
+  },
+  "GET /api/billing/contact": {
+    summary:
+      "The user's mobile number and product-updates opt-in (backend-only customer record).",
+    store: ["customers"],
+  },
+  "POST /api/billing/contact": {
+    summary:
+      "Edits the mobile number (E.164; sent to the billing provider) and the product-updates opt-in.",
+    store: ["customers"],
+    check: { skip: "user write" },
+  },
+  "POST /api/admin/billing/subscribers/:uid/phone/reveal": {
+    summary:
+      "Reveals a subscriber's full mobile number (admin; every reveal is audited).",
+    store: ["customers", "admin_audit"],
+    check: { skip: "admin write (audited)" },
+  },
+  "GET /api/billing/refund": {
+    summary:
+      "Refund eligibility under REFUND_WINDOW_DAYS (404 when refunds are off).",
+    store: ["payments", "refund_claims"],
+    check: { skip: "needs the billing provider" },
+  },
+  "POST /api/billing/refund": {
+    summary:
+      "Refunds the latest eligible payment and ends the plan now (404 when refunds are off).",
+    store: ["refund_claims"],
+    check: { skip: "user write" },
+  },
+  "GET /api/admin/billing/subscribers/:uid/refund": {
+    summary:
+      "Refund eligibility for a subscriber (admin; 404 when refunds are off).",
+    store: ["payments", "refund_claims"],
+  },
+  "POST /api/admin/billing/subscribers/:uid/refund": {
+    summary:
+      "Admin refund action — same policy as the user's button (audited; 404 when refunds are off).",
+    store: ["refund_claims", "admin_audit"],
+    check: { skip: "admin write (audited)" },
+  },
   "GET /api/billing/fake/clock": {
     summary: "Fake provider: the simulated clock.",
     store: ["backend-only billing collections"],
     check: { skip: "fake billing provider only (404 otherwise)" },
   },
   "POST /api/billing/fake/clock/advance": {
-    summary: "Fake provider: move the clock forward, processing renewals, retries and period ends.",
+    summary:
+      "Fake provider: move the clock forward, processing renewals, retries and period ends.",
     params: "body: days | to",
     store: ["backend-only billing collections"],
   },
@@ -684,8 +858,10 @@ export const API_CATALOG = {
     store: ["backend-only billing collections"],
   },
   "GET /api/admin/billing/subscribers": {
-    summary: "Subscribers table: plan, interval, status, dates, promo, retention, MRR from payments; filters; ?format=csv.",
-    params: "query: q, plan, status, interval, cancelAtPeriodEnd, promo, format",
+    summary:
+      "Subscribers table: plan, interval, status, dates, promo, retention, MRR from payments; filters; ?format=csv.",
+    params:
+      "query: q, plan, status, interval, cancelAtPeriodEnd, promo, format",
     store: ["backend-only billing collections"],
   },
   "GET /api/admin/billing/subscribers/:uid": {
@@ -697,7 +873,8 @@ export const API_CATALOG = {
     store: ["backend-only billing collections"],
   },
   "POST /api/admin/billing/promos": {
-    summary: "Creates a promo code (percent/fixed, once/N months/forever, plan & interval limits, expiry, max redemptions, first-time only).",
+    summary:
+      "Creates a promo code (percent/fixed, once/N months/forever, plan & interval limits, expiry, max redemptions, first-time only).",
     params: "body: CreatePromoDto",
     store: ["backend-only billing collections"],
   },
@@ -715,21 +892,26 @@ export const API_CATALOG = {
     store: ["backend-only billing collections"],
   },
   "POST /api/admin/billing/price-change-notice": {
-    summary: "Emails the 30-day price-change notice to subscribers of a plan/interval.",
+    summary:
+      "Emails the 30-day price-change notice to subscribers of a plan/interval.",
     params: "body: planId, interval, newAmount, effectiveAt",
     store: ["backend-only billing collections"],
   },
   "POST /api/admin/billing/reconcile": {
-    summary: "Runs the billing reconcile now (repairs mirrors that drifted from the provider).",
+    summary:
+      "Runs the billing reconcile now (repairs mirrors that drifted from the provider).",
     store: ["backend-only billing collections"],
   },
   "POST /api/stream-ticket": {
-    summary: "Issues a 10-minute signed ticket the browser's live price streams present as ?ticket=, since EventSource cannot send a token.",
+    summary:
+      "Issues a 10-minute signed ticket the browser's live price streams present as ?ticket=, since EventSource cannot send a token.",
     params: "header: X-Session-Id",
-    notes: "Ticket names the uid and session and is HMAC-signed with STREAM_TICKET_SECRET; /live/stream and /live/tape/stream reject requests without a valid one.",
+    notes:
+      "Ticket names the uid and session and is HMAC-signed with STREAM_TICKET_SECRET; /live/stream and /live/tape/stream reject requests without a valid one.",
   },
   "GET /api/watchlists": {
-    summary: "All the user's watchlists with their tickers, and the plan's ticker limit.",
+    summary:
+      "All the user's watchlists with their tickers, and the plan's ticker limit.",
     store: ["per-user Firestore documents"],
   },
   "POST /api/watchlists": {
@@ -741,7 +923,8 @@ export const API_CATALOG = {
     params: "body: name",
   },
   "DELETE /api/watchlists/:id": {
-    summary: "Deletes a watchlist (the server recreates 'My Watchlist' if it was the last).",
+    summary:
+      "Deletes a watchlist (the server recreates 'My Watchlist' if it was the last).",
   },
   "POST /api/watchlists/:id/tickers": {
     summary: "Adds a ticker to a watchlist, subject to the plan's limit.",
@@ -754,14 +937,17 @@ export const API_CATALOG = {
     summary: "The legacy single watchlist (tickers only).",
   },
   "POST /api/watchlist/tickers": {
-    summary: "Legacy: adds a ticker to the single watchlist; no screen calls it.",
+    summary:
+      "Legacy: adds a ticker to the single watchlist; no screen calls it.",
     params: "body: ticker",
   },
   "DELETE /api/watchlist/tickers/:ticker": {
-    summary: "Legacy: removes a ticker from the single watchlist; no screen calls it.",
+    summary:
+      "Legacy: removes a ticker from the single watchlist; no screen calls it.",
   },
   "GET /api/portfolio": {
-    summary: "The user's holdings: shares, cost basis, realised P/L, conviction.",
+    summary:
+      "The user's holdings: shares, cost basis, realised P/L, conviction.",
     store: ["per-user Firestore documents"],
   },
   "POST /api/portfolio/holdings": {
@@ -778,7 +964,8 @@ export const API_CATALOG = {
     summary: "Removes a holding.",
   },
   "GET /api/ai/portfolio": {
-    summary: "AI summary of the user's portfolio (posture, concentration, leaders, laggards).",
+    summary:
+      "AI summary of the user's portfolio (posture, concentration, leaders, laggards).",
     vendors: LLM,
     check: { skip: "can start an LLM generation" },
   },
@@ -827,7 +1014,8 @@ export const API_CATALOG = {
     notes: "Unauthenticated.",
   },
   "GET /plans/catalog-preview": {
-    summary: "Dry run of scripts/apply-catalog.ts: what applying the catalog would change in plans (admin; never writes).",
+    summary:
+      "Dry run of scripts/apply-catalog.ts: what applying the catalog would change in plans (admin; never writes).",
     store: ["plans"],
   },
   "GET /users/:uid/entitlements": {
@@ -856,7 +1044,8 @@ export const API_CATALOG = {
     params: "limit",
   },
   "GET /api/admin/revenue": {
-    summary: "Revenue figures; the console computes its own from users and subscriptions, so it does not call this.",
+    summary:
+      "Revenue figures; the console computes its own from users and subscriptions, so it does not call this.",
   },
   "GET /api/admin/feature-adoption": {
     summary: "Opens and distinct users per tracked feature, staff excluded.",
@@ -866,10 +1055,12 @@ export const API_CATALOG = {
     params: "body: featureFlags {key: boolean}",
   },
   "GET /api/admin/apihealth": {
-    summary: "Route inventory of the running service, a probe of the public no-parameter GETs, and vendor reachability.",
+    summary:
+      "Route inventory of the running service, a probe of the public no-parameter GETs, and vendor reachability.",
   },
   "GET /api/admin/jobs": {
-    summary: "Every sync job with its trigger, schedule, next run, last run, health, lease and latest manual run.",
+    summary:
+      "Every sync job with its trigger, schedule, next run, last run, health, lease and latest manual run.",
   },
   "GET /api/admin/jobs/runs": {
     summary: "Recent manual runs requested from the Jobs tab, newest first.",
@@ -877,12 +1068,14 @@ export const API_CATALOG = {
     store: ["admin_job_runs"],
   },
   "POST /api/admin/jobs/:name/run": {
-    summary: "Starts a job now (a Cloud Run Job execution, or in process on the worker) and records who asked.",
+    summary:
+      "Starts a job now (a Cloud Run Job execution, or in process on the worker) and records who asked.",
     params: "path: job name; body: confirm?, clearStaleLock?",
     store: ["admin_job_runs", "job_locks"],
   },
   "GET /api/admin/screen-apis": {
-    summary: "This catalogue joined with live status: which screen calls which API, and whether it is healthy.",
+    summary:
+      "This catalogue joined with live status: which screen calls which API, and whether it is healthy.",
     params: "fresh?",
   },
   "GET /api/admin/posts": {
@@ -922,11 +1115,14 @@ export const API_CATALOG = {
 
   // ── Other consumers ────────────────────────────────────────────────────────
   "GET /public/landing-tape": {
-    summary: "Four hero figures and the marquee's symbol moves for the marketing landing page.",
-    notes: "Unauthenticated. Called server-to-server by the website's /api/market/tape, which caches it 30 s.",
+    summary:
+      "Four hero figures and the marquee's symbol moves for the marketing landing page.",
+    notes:
+      "Unauthenticated. Called server-to-server by the website's /api/market/tape, which caches it 30 s.",
   },
   "POST /mcp": {
-    summary: "MCP server: JSON-RPC tool calls for managing blog posts (Bearer MCP key).",
+    summary:
+      "MCP server: JSON-RPC tool calls for managing blog posts (Bearer MCP key).",
     check: { skip: "needs an MCP key" },
   },
   "GET /mcp": {
@@ -954,7 +1150,8 @@ export const API_CATALOG = {
     workerOnly: true,
   },
   "POST /sync/:job/run": {
-    summary: "Runs one job and waits for it; Cloud Scheduler's trigger. A finished run leaves a 30-minute lease that refuses the next run.",
+    summary:
+      "Runs one job and waits for it; Cloud Scheduler's trigger. A finished run leaves a 30-minute lease that refuses the next run.",
     workerOnly: true,
   },
   "POST /sync/run-all": {
@@ -1046,7 +1243,8 @@ export const SCREENS = [
     group: "Shared",
     route: "every signed-in screen",
     source: "app/iq/shell.tsx",
-    summary: "The header, left rail, search, notifications and live price plumbing wrapped around every signed-in screen — so these calls happen on all of them.",
+    summary:
+      "The header, left rail, search, notifications and live price plumbing wrapped around every signed-in screen — so these calls happen on all of them.",
     apis: [
       "GET /live/tape/stream",
       "GET /live/tape",
@@ -1077,7 +1275,8 @@ export const SCREENS = [
     group: "Home",
     route: "/dashboard",
     source: "app/iq/screens/dashboard.tsx",
-    summary: "Indices, What Matters Now, movers, news, Fear & Greed, recaps, the user's watchlist and portfolio.",
+    summary:
+      "Indices, What Matters Now, movers, news, Fear & Greed, recaps, the user's watchlist and portfolio.",
     apis: [
       "GET /live/tape/stream",
       "GET /live/tape",
@@ -1107,7 +1306,8 @@ export const SCREENS = [
     group: "Home",
     route: "/menu/commentary",
     source: "app/iq/screens/commentary.tsx",
-    summary: "News wire, earnings announcements, weekly and monthly glance, biggest movers, and a 'my names' tab.",
+    summary:
+      "News wire, earnings announcements, weekly and monthly glance, biggest movers, and a 'my names' tab.",
     apis: [
       "GET /live/snapshot",
       "GET /live/news-wire",
@@ -1131,7 +1331,8 @@ export const SCREENS = [
     group: "Markets",
     route: "/money-flow",
     source: "app/iq/screens/money-flow.tsx",
-    summary: "Where money is moving: flow, movers, levels and scores in one board, with a 1-minute bar chart popover.",
+    summary:
+      "Where money is moving: flow, movers, levels and scores in one board, with a 1-minute bar chart popover.",
     apis: ["GET /live/money-flow", "GET /live/bars"],
   },
   {
@@ -1140,7 +1341,8 @@ export const SCREENS = [
     group: "Markets",
     route: "/menu/earnings",
     source: "app/iq/screens/earnings.tsx",
-    summary: "Earnings calendar with announcements, analyst context, financials, and the call transcript with an AI summary.",
+    summary:
+      "Earnings calendar with announcements, analyst context, financials, and the call transcript with an AI summary.",
     apis: [
       "GET /live/snapshot",
       "GET /live/company",
@@ -1160,7 +1362,8 @@ export const SCREENS = [
     group: "Markets",
     route: "/menu/movers",
     source: "app/iq/screens/movers.tsx",
-    summary: "Top gainers and losers, unusual volume, weekly movers, with a news modal per ticker.",
+    summary:
+      "Top gainers and losers, unusual volume, weekly movers, with a news modal per ticker.",
     apis: [
       "GET /live/snapshot",
       "GET /live/scan/biggest-pct",
@@ -1191,7 +1394,8 @@ export const SCREENS = [
     group: "Markets",
     route: "/menu/analyst",
     source: "app/iq/screens/analyst.tsx",
-    summary: "Consensus, firm track records and per-firm call history; refetches at 08:00, 12:00 and 16:00 Central.",
+    summary:
+      "Consensus, firm track records and per-firm call history; refetches at 08:00, 12:00 and 16:00 Central.",
     apis: [
       "GET /live/snapshot",
       "GET /market-data/analyst-actions",
@@ -1226,7 +1430,8 @@ export const SCREENS = [
     group: "Research",
     route: "/menu/screener",
     source: "app/iq/screens/screener-hub.tsx",
-    summary: "Stock screener with presets and a detail pane; /menu/themes opens the same hub on Themes.",
+    summary:
+      "Stock screener with presets and a detail pane; /menu/themes opens the same hub on Themes.",
     apis: [
       "GET /market-data/companies",
       "GET /market-data/insider-transactions",
@@ -1254,7 +1459,8 @@ export const SCREENS = [
     group: "Research",
     route: "/menu/insider",
     source: "app/iq/screens/insider.tsx",
-    summary: "Insider transactions, institutional rollups, and per-ticker 13F holders and ownership.",
+    summary:
+      "Insider transactions, institutional rollups, and per-ticker 13F holders and ownership.",
     apis: [
       "GET /live/snapshot",
       "GET /live/bars",
@@ -1358,7 +1564,8 @@ export const SCREENS = [
     group: "My Workspace",
     route: "/menu/notes",
     source: "app/iq/screens/notes.tsx",
-    summary: "Notes left on charts. Linked from the profile menu; not in the left rail.",
+    summary:
+      "Notes left on charts. Linked from the profile menu; not in the left rail.",
     apis: [
       "GET /live/snapshot",
       "GET /api/stock-notes/all",
@@ -1374,7 +1581,8 @@ export const SCREENS = [
     group: "Stock tools",
     route: "/menu/stock",
     source: "app/iq/screens/stock.tsx",
-    summary: "The full single-stock page: chart, key stats, financials, ownership, analysts, news, AI read, notes. Search routes here.",
+    summary:
+      "The full single-stock page: chart, key stats, financials, ownership, analysts, news, AI read, notes. Search routes here.",
     apis: [
       "GET /live/snapshot",
       "GET /live/stream",
@@ -1454,7 +1662,8 @@ export const SCREENS = [
     group: "Stock tools",
     route: "/menu/options",
     source: "app/iq/screens/options.tsx",
-    summary: "Options contracts for a short fixed list of tickers. Hidden from the nav.",
+    summary:
+      "Options contracts for a short fixed list of tickers. Hidden from the nav.",
     apis: ["GET /market-data/companies", "GET /live/options-chain"],
   },
   {
@@ -1474,7 +1683,8 @@ export const SCREENS = [
     group: "Account",
     route: "/auth/login, /auth/signup, /auth/forgot-password",
     source: "app/auth",
-    summary: "Firebase sign-in; creates the profile on first login and claims this device's session.",
+    summary:
+      "Firebase sign-in; creates the profile on first login and claims this device's session.",
     apis: ["GET /api/profile", "PATCH /api/profile", "POST /api/session/claim"],
   },
   {
@@ -1492,7 +1702,8 @@ export const SCREENS = [
     group: "Account",
     route: "/manage-plan",
     source: "app/iq/screens/manage-plan.tsx",
-    summary: "Plan comparison. Makes no backend call of its own — it renders from the profile already loaded by the shell.",
+    summary:
+      "Plan comparison. Makes no backend call of its own — it renders from the profile already loaded by the shell.",
     apis: [],
   },
   {
@@ -1521,7 +1732,8 @@ export const SCREENS = [
     group: "Admin",
     route: "/admin",
     source: "app/admin/admin-data.ts",
-    summary: "The console's opening dataset, fetched once when it loads, plus the plan entitlement editor.",
+    summary:
+      "The console's opening dataset, fetched once when it loads, plus the plan entitlement editor.",
     apis: [
       "GET /api/admin/users",
       "GET /api/admin/subscriptions",
@@ -1600,7 +1812,8 @@ export const SCREENS = [
     route: "marketcatalyst.ai/",
     source: "lib/market/tape.ts",
     repo: "MarketCatalystWebsite",
-    summary: "The hero figures and marquee, fetched server-side and cached 30 s; the page renders its designed numbers if this is slow.",
+    summary:
+      "The hero figures and marquee, fetched server-side and cached 30 s; the page renders its designed numbers if this is slow.",
     apis: ["GET /public/landing-tape"],
   },
   {
@@ -1610,7 +1823,8 @@ export const SCREENS = [
     route: "POST /mcp",
     source: "src/mcp",
     repo: "MarketCatalystBackEnd",
-    summary: "External tools that author blog posts through the MCP server, authenticated by an MCP key.",
+    summary:
+      "External tools that author blog posts through the MCP server, authenticated by an MCP key.",
     apis: ["POST /mcp", "GET /mcp", "DELETE /mcp"],
   },
   {
@@ -1620,7 +1834,8 @@ export const SCREENS = [
     route: "/ on the private worker, via gcloud run services proxy",
     source: "public/index.html",
     repo: "MarketCatalystBackEnd",
-    summary: "The worker's own page: run a job, preview and execute a purge, toggle feature flags. Not reachable from the public internet.",
+    summary:
+      "The worker's own page: run a job, preview and execute a purge, toggle feature flags. Not reachable from the public internet.",
     apis: [
       "GET /sync/jobs",
       "GET /sync/status",
@@ -1691,6 +1906,7 @@ export function checkRequest(
   if (doc.check && "skip" in doc.check) return { skip: doc.check.skip };
   if (doc.path.includes(":")) return { skip: "needs a path parameter" };
   const query = doc.check && "query" in doc.check ? doc.check.query : undefined;
-  if (!query && doc.params) return { skip: "needs parameters, and no sample is defined" };
+  if (!query && doc.params)
+    return { skip: "needs parameters, and no sample is defined" };
   return { url: `${doc.path}${query ?? ""}` };
 }

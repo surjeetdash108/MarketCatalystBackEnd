@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unused-vars -- stub: the named parameters document the contract each TODO must implement */
+import type { BillingDetails, BillingRegion, CheckoutQuote } from "../types";
 import { NotImplementedException } from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
 import type { BillingProvider } from "../billing-provider";
@@ -88,6 +89,44 @@ export class StripeBillingProvider implements BillingProvider {
     return this.todo("setCustomerMetadata");
   }
 
+  refund(_paymentId: string, _amount: number): Promise<void> {
+    // TODO Refunds API:
+    //      const inv = await stripe.invoices.retrieve(paymentId, { expand: ["payments"] })
+    //      await stripe.refunds.create({ payment_intent: <inv payment intent id>, amount, metadata: { uid, reason: "refund_policy" } },
+    //        { idempotencyKey: `refund-${paymentId}` })
+    //      await stripe.subscriptions.cancel(inv.subscription, { prorate: false, invoice_now: false })  // ends now → Free
+    //      Events charge.refunded + customer.subscription.deleted reach the handler (STRIPE_EVENT_MAP).
+    return this.todo("refund");
+  }
+
+  updateCustomerContact(
+    _customerId: string,
+    _contact: { phone: string },
+  ): Promise<void> {
+    // TODO stripe.customers.update(customerId, { phone })
+    return this.todo("updateCustomerContact");
+  }
+
+  previewCheckout(_input: {
+    price: PriceRef;
+    discount: AppliedDiscount | null;
+    region: BillingRegion | null;
+  }): Promise<CheckoutQuote> {
+    // TODO Stripe Tax (automatic tax) — no rates in our code or UI:
+    //      const [p] = (await stripe.prices.list({ lookup_keys: [price.lookupKey], active: true })).data
+    //      const inv = await stripe.invoices.createPreview({
+    //        automatic_tax: { enabled: true },
+    //        customer_details: { address: { country: region.country, state: region.state, postal_code: region.postalCode } },
+    //        subscription_details: { items: [{ price: p.id }] },
+    //        discounts: discount?.promoId ? [{ promotion_code: <promo.providerRefs.stripePromotionCodeId> }] : undefined,
+    //      })
+    //      → { subtotal: inv.subtotal, discount: sum(inv.total_discount_amounts), tax: inv.tax ?? 0,
+    //          total: inv.total, taxLabel: inv.total_tax_amounts[0]?.tax_rate display name, taxPending: !region }
+    //      Requires Stripe Tax registrations (placeholder: Texas) and the SaaS product tax code
+    //      (STRIPE_PRODUCT_TAX_CODE) on the Products created by scripts/stripe-seed.ts.
+    return this.todo("previewCheckout");
+  }
+
   createCheckout(_input: {
     uid: string;
     customerId: string;
@@ -96,7 +135,25 @@ export class StripeBillingProvider implements BillingProvider {
     successUrl: string;
     cancelUrl: string;
     idempotencyKey: string;
+    billing?: BillingDetails | null;
   }): Promise<CheckoutSession> {
+    // TODO (embedded checkout, Payment Element + Address Element):
+    //      stripe.customers.update(customerId, { name: billing.name, phone: billing.phone,
+    //        address: { line1, line2, city, state, postal_code, country } })   // full address stays at Stripe
+    //      const sub = await stripe.subscriptions.create({
+    //        customer: customerId, items: [{ price: p.id }],
+    //        automatic_tax: { enabled: true },
+    //        payment_behavior: "default_incomplete",
+    //        payment_settings: { save_default_payment_method: "on_subscription",
+    //          payment_method_types: ["card", "link"] /* + "paypal" only if the account supports it; no crypto/UPI */ },
+    //        discounts: discount?.promoId ? [{ promotion_code: <stripePromotionCodeId> }] : undefined,
+    //        metadata: { uid, planId, interval },
+    //        expand: ["latest_invoice.confirmation_secret"],
+    //      }, { idempotencyKey })
+    //      → CheckoutSession { id: sub.id, clientSecret: sub.latest_invoice.confirmation_secret.client_secret,
+    //          amountDueToday: invoice.amount_due, tax: invoice.tax } — the browser confirms with
+    //          stripe.confirmPayment({ elements, redirect: "if_required" }) (3-D Secure handled by Stripe).
+    //      Legacy hosted Checkout (kept for reference):
     // TODO const [price] = (await stripe.prices.list({ lookup_keys: [price.lookupKey], active: true })).data
     //      stripe.checkout.sessions.create({
     //        mode: "subscription", customer: customerId, client_reference_id: uid,

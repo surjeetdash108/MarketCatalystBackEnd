@@ -1,9 +1,4 @@
-import {
-  HttpException,
-  HttpStatus,
-  Injectable,
-  Logger,
-} from "@nestjs/common";
+import { HttpException, HttpStatus, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { jobManifest, JOB_MANIFEST } from "../common/job-manifest";
@@ -13,12 +8,7 @@ import {
   type LockInfo,
 } from "../common/job-lock.util";
 import { assessJob } from "../common/job-schedule.util";
-import {
-  assessActivity,
-  jobFeeds,
-  jobRole,
-  jobWrites,
-} from "./job-activity";
+import { assessActivity, jobFeeds, jobRole, jobWrites } from "./job-activity";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import {
@@ -62,7 +52,9 @@ export function isLeaseStale(
   meta: { lastSyncedAt?: unknown } | undefined,
 ): boolean {
   const recorded =
-    typeof meta?.lastSyncedAt === "string" ? Date.parse(meta.lastSyncedAt) : NaN;
+    typeof meta?.lastSyncedAt === "string"
+      ? Date.parse(meta.lastSyncedAt)
+      : NaN;
   return Number.isFinite(recorded) && recorded >= lock.acquiredAt;
 }
 
@@ -144,7 +136,10 @@ export class JobsAdminService {
     limit: number = DEFAULT_RUNS_LIMIT,
     now: number = Date.now(),
   ): Promise<AdminJobRun[]> {
-    const bounded = Math.min(Math.max(Math.trunc(limit) || DEFAULT_RUNS_LIMIT, 1), MAX_RUNS_LIMIT);
+    const bounded = Math.min(
+      Math.max(Math.trunc(limit) || DEFAULT_RUNS_LIMIT, 1),
+      MAX_RUNS_LIMIT,
+    );
     const snap = await this.firebase.firestore
       .collection(ADMIN_JOB_RUNS_COLLECTION)
       .orderBy("requestedAt", "desc")
@@ -169,7 +164,10 @@ export class JobsAdminService {
     let metaError: string | null = null;
     try {
       metaByJob = new Map(
-        (await this.meta.statusAll()).map((m) => [m.job, m as Record<string, unknown>]),
+        (await this.meta.statusAll()).map((m) => [
+          m.job,
+          m as Record<string, unknown>,
+        ]),
       );
     } catch (err) {
       metaError = (err as Error).message;
@@ -192,7 +190,8 @@ export class JobsAdminService {
     }
     // `runs` is newest first, so the first one seen per job is its latest.
     const lastRunByJob = new Map<string, AdminJobRun>();
-    for (const run of runs) if (!lastRunByJob.has(run.job)) lastRunByJob.set(run.job, run);
+    for (const run of runs)
+      if (!lastRunByJob.has(run.job)) lastRunByJob.set(run.job, run);
 
     const jobs = JOB_MANIFEST.map((entry) => {
       const m = metaByJob.get(entry.name);
@@ -284,7 +283,11 @@ export class JobsAdminService {
   ): Promise<{ run: AdminJobRun; message: string }> {
     const entry = jobManifest(jobName);
     if (!entry) {
-      throw failure(HttpStatus.NOT_FOUND, "UNKNOWN_JOB", `There is no job named "${jobName}".`);
+      throw failure(
+        HttpStatus.NOT_FOUND,
+        "UNKNOWN_JOB",
+        `There is no job named "${jobName}".`,
+      );
     }
     if (entry.risk?.level === "destructive" && request.confirm !== entry.name) {
       throw failure(
@@ -299,9 +302,16 @@ export class JobsAdminService {
     try {
       runnerConfig = this.runnerConfig();
     } catch (err) {
-      throw failure(HttpStatus.SERVICE_UNAVAILABLE, "RUNNER_MISCONFIGURED", (err as Error).message);
+      throw failure(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "RUNNER_MISCONFIGURED",
+        (err as Error).message,
+      );
     }
-    const dispatcher = pickDispatcher(entry.name, this.dispatcherDeps(runnerConfig));
+    const dispatcher = pickDispatcher(
+      entry.name,
+      this.dispatcherDeps(runnerConfig),
+    );
     if (!dispatcher) {
       throw failure(
         HttpStatus.SERVICE_UNAVAILABLE,
@@ -341,7 +351,9 @@ export class JobsAdminService {
       const inFlight = (
         await tx.get(runs.where("status", "in", IN_FLIGHT_STATUSES))
       ).docs
-        .map((d) => toRunView(d.id, d.data() as Record<string, unknown>, now.getTime()))
+        .map((d) =>
+          toRunView(d.id, d.data() as Record<string, unknown>, now.getTime()),
+        )
         // "lost" runs are old debris, not capacity in use.
         .filter((r) => IN_FLIGHT_STATUSES.includes(r.status));
       const same = inFlight.find((r) => r.job === entry.name);
@@ -372,7 +384,11 @@ export class JobsAdminService {
 
     try {
       if (staleLease) {
-        const cleared = await clearLockIfOwner(firestore, entry.name, staleLease.owner);
+        const cleared = await clearLockIfOwner(
+          firestore,
+          entry.name,
+          staleLease.owner,
+        );
         if (!cleared) {
           // Between the read and the delete the lease changed hands, so it is
           // no longer the stale one the admin approved clearing.
@@ -382,12 +398,17 @@ export class JobsAdminService {
           );
         }
       }
-      const { executionName } = await dispatcher.dispatch({ job: entry.name, runId: ref.id });
+      const { executionName } = await dispatcher.dispatch({
+        job: entry.name,
+        runId: ref.id,
+      });
       if (executionName) await ref.update({ executionName });
     } catch (err) {
       const reason = err instanceof DispatchError ? err : null;
       const message = (err as Error).message;
-      this.logger.error(`dispatch of "${entry.name}" (run ${ref.id}) failed: ${message}`);
+      this.logger.error(
+        `dispatch of "${entry.name}" (run ${ref.id}) failed: ${message}`,
+      );
       await ref
         .update({
           status: "dispatch-failed",
@@ -407,7 +428,8 @@ export class JobsAdminService {
       );
     }
 
-    const created = (await ref.get()).data() as Record<string, unknown> | undefined;
+    const created = (await ref.get()).data() as
+      Record<string, unknown> | undefined;
     return {
       run: toRunView(ref.id, created ?? record, now.getTime()),
       message:
@@ -431,9 +453,13 @@ export class JobsAdminService {
   ): Promise<LockInfo | null> {
     let lock: LockInfo | undefined;
     try {
-      lock = (await readLiveLocks(this.firebase.firestore, now.getTime())).get(job);
+      lock = (await readLiveLocks(this.firebase.firestore, now.getTime())).get(
+        job,
+      );
     } catch (err) {
-      this.logger.warn(`could not read the lease for "${job}": ${(err as Error).message}`);
+      this.logger.warn(
+        `could not read the lease for "${job}": ${(err as Error).message}`,
+      );
       return null;
     }
     if (!lock) return null;

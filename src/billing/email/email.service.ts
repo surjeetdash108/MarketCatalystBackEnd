@@ -266,4 +266,34 @@ export class EmailService {
       `Your one-time code for your first year: ${p.code}`,
     ]);
   }
+
+  /** 6-digit email verification code (no billing footer). */
+  async verificationCode(
+    to: string,
+    code: string,
+    minutes: number,
+  ): Promise<void> {
+    await this.sender.send({
+      tag: "verification_code",
+      to,
+      from: this.from,
+      replyTo: this.replyTo,
+      subject: "Your MarketCatalyst verification code", // never the code: senders log subjects
+      text: [
+        `Your verification code is ${code}.`,
+        `It expires in ${minutes} minutes. If you didn't ask for it, ignore this email.`,
+      ].join("\n"),
+    });
+  }
+
+  async refundIssued(
+    to: string | null,
+    p: { amount: number; currency: string; planId: string; windowDays: number },
+  ) {
+    return this.send("refund", to, "Your refund is on its way", [
+      `We've refunded ${money(p.amount, p.currency)} for your ${planName(p.planId)} plan, as our ${p.windowDays}-day refund policy allows.`,
+      "Your subscription has ended and your account is now on the Free plan.",
+      "The refund usually reaches your card within 5–10 business days.",
+    ]);
+  }
 }

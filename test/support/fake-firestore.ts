@@ -17,7 +17,8 @@ export class FakeFirestore {
   private readonly collections = new Map<string, Map<string, Data>>();
   private counter = 0;
   /** Return an Error to make that operation fail; undefined lets it through. */
-  failOn: (op: string, collection: string) => Error | undefined = () => undefined;
+  failOn: (op: string, collection: string) => Error | undefined = () =>
+    undefined;
 
   seed(collection: string, id: string, data: Data): void {
     this.bucket(collection).set(id, { ...data });
@@ -59,7 +60,11 @@ export class FakeFirestore {
     if (parts.length < 2 || parts.length % 2 !== 0) {
       throw new Error(`FakeFirestore: not a document path: ${path}`);
     }
-    return new FakeDocRef(this, parts.slice(0, -1).join("/"), parts[parts.length - 1]);
+    return new FakeDocRef(
+      this,
+      parts.slice(0, -1).join("/"),
+      parts[parts.length - 1],
+    );
   }
 
   batch(): FakeBatch {
@@ -88,23 +93,36 @@ export class FakeFirestore {
 }
 
 function isPlainObject(v: unknown): v is Data {
-  return typeof v === "object" && v !== null && !Array.isArray(v) && !(v instanceof Date);
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    !Array.isArray(v) &&
+    !(v instanceof Date)
+  );
 }
 
 /** Real Firestore rejects `undefined` anywhere in a document; so does the fake. */
 export function assertNoUndefined(data: unknown, path = ""): void {
   if (data === undefined) {
-    throw new Error(`Cannot use "undefined" as a Firestore value (found in field "${path}")`);
+    throw new Error(
+      `Cannot use "undefined" as a Firestore value (found in field "${path}")`,
+    );
   }
-  if (Array.isArray(data)) data.forEach((v, i) => assertNoUndefined(v, `${path}[${i}]`));
-  else if (isPlainObject(data)) for (const [k, v] of Object.entries(data)) assertNoUndefined(v, path ? `${path}.${k}` : k);
+  if (Array.isArray(data))
+    data.forEach((v, i) => assertNoUndefined(v, `${path}[${i}]`));
+  else if (isPlainObject(data))
+    for (const [k, v] of Object.entries(data))
+      assertNoUndefined(v, path ? `${path}.${k}` : k);
 }
 
 /** Firestore `set(..., { merge: true })` semantics: maps merge recursively. */
 export function deepMerge(base: Data, patch: Data): Data {
   const out: Data = { ...base };
   for (const [k, v] of Object.entries(patch)) {
-    out[k] = isPlainObject(v) && isPlainObject(out[k]) ? deepMerge(out[k] as Data, v) : v;
+    out[k] =
+      isPlainObject(v) && isPlainObject(out[k])
+        ? deepMerge(out[k] as Data, v)
+        : v;
   }
   return out;
 }
@@ -131,7 +149,10 @@ export class FakeDocRef {
 
   async get(): Promise<FakeSnapshot> {
     this.fs.guard("get", this.collectionName);
-    return new FakeSnapshot(this.id, this.fs.bucket(this.collectionName).get(this.id));
+    return new FakeSnapshot(
+      this.id,
+      this.fs.bucket(this.collectionName).get(this.id),
+    );
   }
 
   get path(): string {
@@ -143,7 +164,10 @@ export class FakeDocRef {
     assertNoUndefined(data);
     const bucket = this.fs.bucket(this.collectionName);
     const current = bucket.get(this.id);
-    bucket.set(this.id, opts?.merge && current ? deepMerge(current, data) : { ...data });
+    bucket.set(
+      this.id,
+      opts?.merge && current ? deepMerge(current, data) : { ...data },
+    );
   }
 
   async update(patch: Data): Promise<void> {
@@ -151,7 +175,8 @@ export class FakeDocRef {
     assertNoUndefined(patch);
     const bucket = this.fs.bucket(this.collectionName);
     const current = bucket.get(this.id);
-    if (!current) throw new Error(`NOT_FOUND: ${this.collectionName}/${this.id}`);
+    if (!current)
+      throw new Error(`NOT_FOUND: ${this.collectionName}/${this.id}`);
     bucket.set(this.id, { ...current, ...patch });
   }
 
@@ -185,15 +210,28 @@ export class FakeQuery {
       "<=": (d) => d[field] !== undefined && cmp(d[field], value) <= 0,
       ">": (d) => d[field] !== undefined && cmp(d[field], value) > 0,
       ">=": (d) => d[field] !== undefined && cmp(d[field], value) >= 0,
-      "array-contains": (d) => Array.isArray(d[field]) && (d[field] as unknown[]).includes(value),
+      "array-contains": (d) =>
+        Array.isArray(d[field]) && (d[field] as unknown[]).includes(value),
     };
     const match = ops[op];
     if (!match) throw new Error(`FakeFirestore: unsupported operator ${op}`);
-    return new FakeQuery(this.fs, this.name, [...this.filters, match], this.order, this.max);
+    return new FakeQuery(
+      this.fs,
+      this.name,
+      [...this.filters, match],
+      this.order,
+      this.max,
+    );
   }
 
   orderBy(field: string, dir: "asc" | "desc" = "asc"): FakeQuery {
-    return new FakeQuery(this.fs, this.name, this.filters, { field, dir }, this.max);
+    return new FakeQuery(
+      this.fs,
+      this.name,
+      this.filters,
+      { field, dir },
+      this.max,
+    );
   }
 
   limit(n: number): FakeQuery {
@@ -219,7 +257,9 @@ export class FakeQuery {
     }
     if (this.max !== undefined) rows = rows.slice(0, this.max);
     const docs = rows.map(([id, d]) => {
-      const snap = new FakeSnapshot(id, d) as FakeSnapshot & { ref: FakeDocRef };
+      const snap = new FakeSnapshot(id, d) as FakeSnapshot & {
+        ref: FakeDocRef;
+      };
       snap.ref = new FakeDocRef(this.fs, this.name, id);
       return snap;
     });
@@ -250,7 +290,10 @@ export class FakeTransaction {
     this.writes.push(() => {
       const bucket = this.fs.bucket(ref.collectionName);
       const current = bucket.get(ref.id);
-      bucket.set(ref.id, opts?.merge && current ? deepMerge(current, data) : { ...data });
+      bucket.set(
+        ref.id,
+        opts?.merge && current ? deepMerge(current, data) : { ...data },
+      );
     });
   }
 
@@ -259,7 +302,8 @@ export class FakeTransaction {
     this.writes.push(() => {
       const bucket = this.fs.bucket(ref.collectionName);
       const current = bucket.get(ref.id);
-      if (!current) throw new Error(`NOT_FOUND: ${ref.collectionName}/${ref.id}`);
+      if (!current)
+        throw new Error(`NOT_FOUND: ${ref.collectionName}/${ref.id}`);
       bucket.set(ref.id, { ...current, ...patch });
     });
   }

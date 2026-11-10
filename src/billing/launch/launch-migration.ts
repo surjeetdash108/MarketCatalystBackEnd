@@ -37,25 +37,54 @@ export interface LaunchMigrationResult {
 
 const DAY = 86_400_000;
 
-export function assertNoPlaceholders(opts: Pick<LaunchMigrationOptions, "promoPrefix"> & { promoPercentOffRaw: string }): void {
-  if (/PLACEHOLDER/i.test(opts.promoPrefix) || /PLACEHOLDER/i.test(opts.promoPercentOffRaw)) {
-    throw new Error("LAUNCH_PROMO_PREFIX / LAUNCH_PROMO_PERCENT still hold placeholder values; set the real launch offer first (docs/PLACEHOLDERS.md).");
+export function assertNoPlaceholders(
+  opts: Pick<LaunchMigrationOptions, "promoPrefix"> & {
+    promoPercentOffRaw: string;
+  },
+): void {
+  if (
+    /PLACEHOLDER/i.test(opts.promoPrefix) ||
+    /PLACEHOLDER/i.test(opts.promoPercentOffRaw)
+  ) {
+    throw new Error(
+      "LAUNCH_PROMO_PREFIX / LAUNCH_PROMO_PERCENT still hold placeholder values; set the real launch offer first (docs/PLACEHOLDERS.md).",
+    );
   }
 }
 
 export async function runLaunchMigration(
-  deps: { firebase: FirebaseAdminService; events: BillingEventsService; promos: PromoService; emails: EmailService; clock: AppClock },
+  deps: {
+    firebase: FirebaseAdminService;
+    events: BillingEventsService;
+    promos: PromoService;
+    emails: EmailService;
+    clock: AppClock;
+  },
   opts: LaunchMigrationOptions,
 ): Promise<LaunchMigrationResult> {
   const db = deps.firebase.firestore;
-  const r: LaunchMigrationResult = { dryRun: !opts.apply, scanned: 0, granted: 0, skippedPaying: 0, skippedAlreadyMigrated: 0, skippedStaff: 0, codesCreated: 0, emailsSent: 0 };
+  const r: LaunchMigrationResult = {
+    dryRun: !opts.apply,
+    scanned: 0,
+    granted: 0,
+    skippedPaying: 0,
+    skippedAlreadyMigrated: 0,
+    skippedStaff: 0,
+    codesCreated: 0,
+    emailsSent: 0,
+  };
   const staff = new Set(opts.excludeEmails.map((e) => e.trim().toLowerCase()));
-  const endsAt = new Date(deps.clock.now() + opts.trialDays * DAY).toISOString();
+  const endsAt = new Date(
+    deps.clock.now() + opts.trialDays * DAY,
+  ).toISOString();
   const users = await db.collection("users").get();
   for (const doc of users.docs) {
     r.scanned++;
     const uid = doc.id;
-    const email = typeof doc.data().email === "string" ? String(doc.data().email).trim().toLowerCase() : null;
+    const email =
+      typeof doc.data().email === "string"
+        ? String(doc.data().email).trim().toLowerCase()
+        : null;
     if (email && staff.has(email)) {
       r.skippedStaff++;
       continue;
@@ -65,7 +94,10 @@ export async function runLaunchMigration(
       continue;
     }
     const mirror = (await db.collection("subscriptions").doc(uid).get()).data();
-    if (mirror && ["ACTIVE", "TRIALING", "PAST_DUE"].includes(String(mirror.status))) {
+    if (
+      mirror &&
+      ["ACTIVE", "TRIALING", "PAST_DUE"].includes(String(mirror.status))
+    ) {
       r.skippedPaying++;
       continue;
     }
@@ -74,20 +106,41 @@ export async function runLaunchMigration(
       r.codesCreated++;
       continue;
     }
-    if ((await deps.events.applyLaunchTrial(uid, opts.planId, endsAt)) !== "granted") {
+    if (
+      (await deps.events.applyLaunchTrial(uid, opts.planId, endsAt)) !==
+      "granted"
+    ) {
       r.skippedPaying++;
       continue;
     }
     r.granted++;
     const code = `${opts.promoPrefix}-${randomBytes(4).toString("hex").toUpperCase()}`;
     const promo = await deps.promos.create(
-      { code, percentOff: opts.promoPercentOff, duration: "repeating", durationInMonths: 12, maxRedemptions: 1, firstTimeOnly: true, kind: "launch" },
+      {
+        code,
+        percentOff: opts.promoPercentOff,
+        duration: "repeating",
+        durationInMonths: 12,
+        maxRedemptions: 1,
+        firstTimeOnly: true,
+        kind: "launch",
+      },
       "launch-migration",
     );
     r.codesCreated++;
-    await db.collection("launch_offers").doc(uid).set({ uid, promoId: promo.id, code: promo.code, trialPlanId: opts.planId, trialEndsAt: endsAt, migratedAt: deps.clock.nowIso() });
+    await db.collection("launch_offers").doc(uid).set({
+      uid,
+      promoId: promo.id,
+      code: promo.code,
+      trialPlanId: opts.planId,
+      trialEndsAt: endsAt,
+      migratedAt: deps.clock.nowIso(),
+    });
     if (opts.sendEmails && email) {
-      await deps.emails.launchOffer(email, { code: promo.code, trialEndsAt: endsAt });
+      await deps.emails.launchOffer(email, {
+        code: promo.code,
+        trialEndsAt: endsAt,
+      });
       r.emailsSent++;
     }
   }

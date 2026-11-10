@@ -11,7 +11,11 @@ import {
   Max,
   MaxLength,
   Min,
+  MinLength,
+  Matches,
+  ValidateNested,
 } from "class-validator";
+import { Type } from "class-transformer";
 
 const INTERVALS = ["monthly", "annual"] as const;
 const CARDS = [
@@ -22,10 +26,46 @@ const CARDS = [
   "renewal_failure",
 ] as const;
 
+export class RegionDto {
+  @IsString() @Matches(/^[A-Z]{2}$/) country: string;
+  @IsOptional() @IsString() @MaxLength(40) state?: string | null;
+  @IsOptional() @IsString() @MaxLength(12) postalCode?: string | null;
+}
+
+export class AddressDto extends RegionDto {
+  @IsString() @MinLength(1) @MaxLength(200) line1: string;
+  @IsOptional() @IsString() @MaxLength(200) line2?: string | null;
+  @IsString() @MinLength(1) @MaxLength(100) city: string;
+}
+
+export class BillingDetailsDto {
+  @IsString() @MinLength(1) @MaxLength(200) name: string;
+  @ValidateNested() @Type(() => AddressDto) address: AddressDto;
+}
+
+export class ConsentDto {
+  @IsBoolean() accepted: boolean;
+  @IsString() @MaxLength(40) version: string;
+}
+
+export class CheckoutPreviewDto {
+  @IsString() @MaxLength(40) planId: string;
+  @IsIn(INTERVALS) interval: "monthly" | "annual";
+  @IsOptional() @IsString() @MaxLength(40) promoCode?: string;
+  @IsOptional() @ValidateNested() @Type(() => RegionDto) region?: RegionDto;
+}
+
 export class CheckoutDto {
   @IsString() @MaxLength(40) planId: string;
   @IsIn(INTERVALS) interval: "monthly" | "annual";
   @IsOptional() @IsString() @MaxLength(40) promoCode?: string;
+  /** The renewal consent checkbox (required, unticked by default). */
+  @ValidateNested() @Type(() => ConsentDto) consent: ConsentDto;
+  /** Mobile number, E.164 (validated server-side; not verified). */
+  @IsString() @MaxLength(32) phone: string;
+  /** Optional "Text me product updates" (stored with a timestamp; nothing is sent). */
+  @IsOptional() @IsBoolean() marketingOptIn?: boolean;
+  @ValidateNested() @Type(() => BillingDetailsDto) billing: BillingDetailsDto;
 }
 
 export class PlanTargetDto {
@@ -79,4 +119,9 @@ export class CreatePromoDto {
 export class PriceChangeNoticeDto extends PlanTargetDto {
   @IsInt() @Min(1) newAmount: number;
   @IsISO8601() effectiveAt: string;
+}
+
+export class ContactDto {
+  @IsOptional() @IsString() @MaxLength(32) phone?: string;
+  @IsOptional() @IsBoolean() marketingOptIn?: boolean;
 }

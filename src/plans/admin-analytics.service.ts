@@ -1,4 +1,5 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { StaffAccessService } from "../account/staff-access.service";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { PlansService } from "./plans.service";
@@ -55,7 +56,16 @@ export class AdminAnalyticsService {
     private readonly plans: PlansService,
     private readonly subscriptions: SubscriptionsService,
     private readonly config: ConfigService,
+    @Optional() private readonly staffAccess?: StaffAccessService,
   ) {}
+
+  /** The staff allowlist (config/staff_access), refreshed at the start of each read-model. */
+  private staffList = new Set<string>();
+  private async refreshStaff(): Promise<void> {
+    this.staffList = new Set(
+      this.staffAccess ? await this.staffAccess.list() : [],
+    );
+  }
 
   /**
    * Staff accounts, excluded from every figure these read-models produce.
@@ -71,6 +81,7 @@ export class AdminAnalyticsService {
         .get("ADMIN_EMAIL", "admin@marketcatalyst.ai")
         .trim()
         .toLowerCase(),
+      ...this.staffList,
     ]);
   }
 
@@ -83,6 +94,7 @@ export class AdminAnalyticsService {
 
   /** Users with their effective (expiry-aware) subscription. */
   async users(limit = 500) {
+    await this.refreshStaff();
     const [snap, mirrorSnap] = await Promise.all([
       this.firebase.firestore.collection("users").limit(limit).get(),
       this.firebase.firestore.collection("subscriptions").limit(5000).get(),
@@ -205,6 +217,7 @@ export class AdminAnalyticsService {
       lastOpened: string | null;
     }>
   > {
+    await this.refreshStaff();
     const [adoptSnap, userSnap] = await Promise.all([
       this.firebase.firestore.collection("feature_adoption").get(),
       this.firebase.firestore.collection("users").get(),
@@ -252,6 +265,7 @@ export class AdminAnalyticsService {
 
   /** One row per payment, joined to its user. */
   async subscriptionRows(limit = 1000) {
+    await this.refreshStaff();
     const [pay, userSnap] = await Promise.all([
       this.firebase.firestore
         .collection("payments")
@@ -294,6 +308,7 @@ export class AdminAnalyticsService {
    * (dollars) before summing would accumulate float error across thousands of rows.
    */
   async revenue(): Promise<RevenueSummary> {
+    await this.refreshStaff();
     const [paySnap, userSnap, plans] = await Promise.all([
       this.firebase.firestore.collection("payments").get(),
       this.firebase.firestore.collection("users").get(),
@@ -301,6 +316,11 @@ export class AdminAnalyticsService {
     ]);
 
     const planName = new Map(plans.map((p) => [p.id, p.name]));
+    const staffRevenueUids = new Set(
+      userSnap.docs
+        .filter((d) => this.isStaff(d.data().email))
+        .map((d) => d.id),
+    );
     const byPlan = new Map<
       string,
       { minor: number; payments: number; users: Set<string> }
@@ -321,6 +341,7 @@ export class AdminAnalyticsService {
     for (const doc of paySnap?.docs ?? []) {
       const p = doc.data();
       if (p.paymentStatus !== "SUCCESS") continue;
+      if (p.userId && staffRevenueUids.has(String(p.userId))) continue; // staff are never revenue
       // Fallback matches the USD plan catalog (plans.registry.ts), not INR — see
       // subscriptionRows above (BUG-DATA-013).
       const cur = p.currency ?? "USD";
@@ -446,7 +467,8 @@ export function subscriptionCountsFromPayments(
     const annual = cycle === "annual" || cycle === "yearly";
     const planId = typeof p.planId === "string" ? p.planId : "";
     const fallback = typeof p.amount === "number" ? p.amount : 0;
-    const list = catalogPrice(planId, annual ? "annual" : "monthly")?.amount ?? fallback;
+    const list =
+      catalogPrice(planId, annual ? "annual" : "monthly")?.amount ?? fallback;
     mrrMinor += annual ? Math.round(list / 12) : list;
   }
   const active = covering.size;

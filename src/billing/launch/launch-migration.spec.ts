@@ -7,8 +7,22 @@ import { assertNoPlaceholders, runLaunchMigration } from "./launch-migration";
 function setup() {
   const h = billingHarness();
   const promos = new PromoService(h.firebase, h.provider, h.clock);
-  const deps = { firebase: h.firebase, events: h.events, promos, emails: h.emails, clock: h.clock };
-  const opts = { apply: true, planId: "pro", trialDays: 30, promoPercentOff: 25, promoPrefix: "LAUNCH", excludeEmails: ["admin@example.com"], sendEmails: true };
+  const deps = {
+    firebase: h.firebase,
+    events: h.events,
+    promos,
+    emails: h.emails,
+    clock: h.clock,
+  };
+  const opts = {
+    apply: true,
+    planId: "pro",
+    trialDays: 30,
+    promoPercentOff: 25,
+    promoPrefix: "LAUNCH",
+    excludeEmails: ["admin@example.com"],
+    sendEmails: true,
+  };
   return { h, promos, deps, opts };
 }
 
@@ -32,11 +46,29 @@ describe("launch migration (decision i)", () => {
     await h.buy("payer", "elite", "monthly");
     h.fs.seed("users", "payer", { email: "payer@example.com" });
     const r = await runLaunchMigration(deps, opts);
-    expect(r).toMatchObject({ scanned: 4, granted: 2, skippedPaying: 1, skippedStaff: 1, codesCreated: 2, emailsSent: 2 });
-    expect(await h.subscriptions.forUser("u1")).toMatchObject({ planId: "pro", status: "TRIALING", expiryDate: new Date(T0 + 30 * DAY).toISOString() });
+    expect(r).toMatchObject({
+      scanned: 4,
+      granted: 2,
+      skippedPaying: 1,
+      skippedStaff: 1,
+      codesCreated: 2,
+      emailsSent: 2,
+    });
+    expect(await h.subscriptions.forUser("u1")).toMatchObject({
+      planId: "pro",
+      status: "TRIALING",
+      expiryDate: new Date(T0 + 30 * DAY).toISOString(),
+    });
     const offer = h.fs.read("launch_offers", "u1")!;
     const promo = (await promos.list()).find((p) => p.code === offer.code)!;
-    expect(promo).toMatchObject({ percentOff: 25, duration: "repeating", durationInMonths: 12, maxRedemptions: 1, firstTimeOnly: true, kind: "launch" });
+    expect(promo).toMatchObject({
+      percentOff: 25,
+      duration: "repeating",
+      durationInMonths: 12,
+      maxRedemptions: 1,
+      firstTimeOnly: true,
+      kind: "launch",
+    });
     expect(h.tags().filter((t) => t === "launch_offer").length).toBe(2);
     expect((await h.subscriptions.forUser("payer")).planId).toBe("elite");
     await h.provider.advanceTo(T0 + 30 * DAY + 1);
@@ -46,13 +78,28 @@ describe("launch migration (decision i)", () => {
   });
 
   it("refuses to apply with placeholder offer values", () => {
-    expect(() => assertNoPlaceholders({ promoPrefix: "LAUNCH_PLACEHOLDER", promoPercentOffRaw: "20" })).toThrow(/placeholder/);
-    expect(() => assertNoPlaceholders({ promoPrefix: "LAUNCH", promoPercentOffRaw: "__PLACEHOLDER__" })).toThrow(/placeholder/);
-    expect(() => assertNoPlaceholders({ promoPrefix: "LAUNCH", promoPercentOffRaw: "20" })).not.toThrow();
+    expect(() =>
+      assertNoPlaceholders({
+        promoPrefix: "LAUNCH_PLACEHOLDER",
+        promoPercentOffRaw: "20",
+      }),
+    ).toThrow(/placeholder/);
+    expect(() =>
+      assertNoPlaceholders({
+        promoPrefix: "LAUNCH",
+        promoPercentOffRaw: "__PLACEHOLDER__",
+      }),
+    ).toThrow(/placeholder/);
+    expect(() =>
+      assertNoPlaceholders({ promoPrefix: "LAUNCH", promoPercentOffRaw: "20" }),
+    ).not.toThrow();
   });
 
   it("the script refuses production without --confirm-production", () => {
-    const src = readFileSync(join(__dirname, "../../../scripts/launch-migration.ts"), "utf8");
+    const src = readFileSync(
+      join(__dirname, "../../../scripts/launch-migration.ts"),
+      "utf8",
+    );
     expect(src).toMatch(/confirm-production/);
     expect(src).toMatch(/flag\("apply"\)/);
   });

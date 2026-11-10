@@ -96,9 +96,21 @@ describe("admin: subscribers", () => {
     a = await billingApp();
     const { u } = await a.subscribe("up", "pro", "monthly");
     await a.advanceDays(1); // the upgrade happens after the first payment
-    const p = (await u.post("/api/billing/change/preview", { planId: "elite", interval: "monthly" })).body;
-    await u.post("/api/billing/change", { planId: "elite", interval: "monthly", expectedAmountDue: p.amountDueNow, prorationDate: p.prorationDate });
-    const row = (await a.admin.get("/api/admin/billing/subscribers")).body.subscribers.find((r: { uid: string }) => r.uid === "up");
+    const p = (
+      await u.post("/api/billing/change/preview", {
+        planId: "elite",
+        interval: "monthly",
+      })
+    ).body;
+    await u.post("/api/billing/change", {
+      planId: "elite",
+      interval: "monthly",
+      expectedAmountDue: p.amountDueNow,
+      prorationDate: p.prorationDate,
+    });
+    const row = (
+      await a.admin.get("/api/admin/billing/subscribers")
+    ).body.subscribers.find((r: { uid: string }) => r.uid === "up");
     expect(row).toMatchObject({ planId: "elite", mrrMinor: 19900 });
   });
 
@@ -142,7 +154,7 @@ describe("admin: subscribers", () => {
     expect(r.headers["content-type"]).toMatch(/text\/csv/);
     const lines = r.text.trim().split("\n");
     expect(lines[0]).toBe(
-      "uid,name,email,planId,interval,status,startedAt,currentPeriodEnd,cancelAtPeriodEnd,promoCode,retentionUsed,mrrMinor",
+      "uid,name,email,planId,interval,status,startedAt,currentPeriodEnd,cancelAtPeriodEnd,promoCode,retentionUsed,mrrMinor,staff",
     );
     expect(lines.length).toBe(5);
     expect(r.text).toContain("'=cmd|' /C calc'!A0");

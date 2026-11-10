@@ -83,6 +83,8 @@ export function mapStatus(s: ProviderSubscriptionStatus): SubscriptionStatus {
 
 export interface MirrorDoc extends SubscriptionMirror {
   provider: string;
+  /** Renewal consent from checkout (copied from checkout_sessions). */
+  consent?: Record<string, unknown> | null;
   customerId: string | null;
   subscriptionId: string | null;
   providerStatus: string | null;
@@ -106,7 +108,8 @@ export type HandleResult = "processed" | "duplicate" | "ignored";
  * provider field that happens to be absent can never fail an event.
  */
 export function clean<T>(value: T): T {
-  if (Array.isArray(value)) return value.map((v: unknown) => clean(v)) as unknown as T;
+  if (Array.isArray(value))
+    return value.map((v: unknown) => clean(v)) as unknown as T;
   if (value && typeof value === "object" && !(value instanceof Date)) {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
@@ -340,16 +343,24 @@ export class BillingEventsService implements OnModuleInit {
       );
   }
 
-  /** The promo code used at checkout for this subscription, if any. */
-  private async promoCodeFor(subscriptionId: string): Promise<string | null> {
+  /** Our checkout record for this subscription (promo code, renewal consent), if any. */
+  private async checkoutRecordFor(
+    subscriptionId: string,
+  ): Promise<Record<string, unknown> | null> {
     const snap = await this.db
       .collection(BILLING_COLLECTIONS.checkouts)
       .where("subscriptionId", "==", subscriptionId)
       .limit(1)
       .get();
-    return snap.empty
-      ? null
-      : ((snap.docs[0].data().promoCode as string | null) ?? null);
+    return snap.empty ? null : snap.docs[0].data();
+  }
+
+  /** The promo code used at checkout for this subscription, if any. */
+  private async promoCodeFor(subscriptionId: string): Promise<string | null> {
+    return (
+      ((await this.checkoutRecordFor(subscriptionId))?.promoCode as
+        string | null) ?? null
+    );
   }
 
   // ── subscriptions ─────────────────────────────────────────────────────
@@ -427,6 +438,12 @@ export class BillingEventsService implements OnModuleInit {
       lastEventCreated:
         Math.max(event?.created ?? 0, prev?.lastEventCreated ?? 0) || null,
       promoCode: prev?.promoCode ?? (await this.promoCodeFor(sub.id)),
+      // Renewal consent shown and ticked at checkout (timestamp, text version, plan, price, IP).
+      consent:
+        (prev?.consent as Record<string, unknown> | undefined) ??
+        ((await this.checkoutRecordFor(sub.id))?.consent as
+          Record<string, unknown> | undefined) ??
+        null,
       updatedAt: this.clock.nowIso(),
     };
     await ref.set(clean(next));
@@ -450,7 +467,9 @@ export class BillingEventsService implements OnModuleInit {
       await this.addHistory(
         uid,
         "subscribed",
-        prev?.planId ? { planId: prev.planId, status: prev.status ?? null } : null,
+        prev?.planId
+          ? { planId: prev.planId, status: prev.status ?? null }
+          : null,
         { planId: next.planId, interval: next.interval, status: next.status },
         ctx,
       );

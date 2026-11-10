@@ -1,3 +1,4 @@
+import { RefundService } from "./refund/refund.service";
 import { Module } from "@nestjs/common";
 import { PlansModule } from "../plans/plans.module";
 import { BillingEventsService } from "./billing-events.service";
@@ -30,6 +31,7 @@ import { BillingReconcileJob } from "./reconcile.job";
     RetentionService,
     AdminBillingService,
     BillingReconcileJob,
+    RefundService,
   ],
   exports: [
     BillingEventsService,

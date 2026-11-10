@@ -1,3 +1,5 @@
+import { StaffAccessService } from "../account/staff-access.service";
+import { maskPhone } from "./checkout/phone";
 import {
   BadRequestException,
   Injectable,
@@ -37,6 +39,8 @@ export interface SubscriberRow {
   promoCode: string | null;
   retentionUsed: boolean;
   mrrMinor: number;
+  /** On the staff allowlist: full access, never billed, excluded from counts/MRR/revenue. */
+  staff: boolean;
 }
 
 export interface SubscriberFilter {
@@ -46,6 +50,8 @@ export interface SubscriberFilter {
   interval?: string;
   cancelAtPeriodEnd?: string;
   promo?: string;
+  /** "true" = staff only, "false" = customers only. */
+  staff?: string;
 }
 
 const DAY = 86_400_000;
@@ -62,7 +68,10 @@ function periodEnd(iso: unknown): number {
  * charge or a one-off first-invoice discount is real revenue but not the
  * recurring rate.
  */
-export function mrrByUser(payments: Array<Record<string, unknown>>, now: number): Map<string, number> {
+export function mrrByUser(
+  payments: Array<Record<string, unknown>>,
+  now: number,
+): Map<string, number> {
   const latest = new Map<string, Record<string, unknown>>();
   for (const p of payments) {
     const uid = typeof p.userId === "string" ? p.userId : null;
@@ -70,12 +79,17 @@ export function mrrByUser(payments: Array<Record<string, unknown>>, now: number)
     const end = periodEnd(p.subscriptionExpiryDate);
     if (!Number.isFinite(end) || end < now) continue;
     const prev = latest.get(uid);
-    if (!prev || String(p.paymentDate ?? "") > String(prev.paymentDate ?? "")) latest.set(uid, p);
+    if (!prev || String(p.paymentDate ?? "") > String(prev.paymentDate ?? ""))
+      latest.set(uid, p);
   }
   const out = new Map<string, number>();
   for (const [uid, p] of latest) {
-    const interval = (p.billingCycle === "annual" ? "annual" : "monthly") as BillingInterval;
-    const list = catalogPrice(typeof p.planId === "string" ? p.planId : "", interval)?.amount ?? 0;
+    const interval = (
+      p.billingCycle === "annual" ? "annual" : "monthly"
+    ) as BillingInterval;
+    const list =
+      catalogPrice(typeof p.planId === "string" ? p.planId : "", interval)
+        ?.amount ?? 0;
     out.set(uid, interval === "annual" ? Math.round(list / 12) : list);
   }
   return out;
@@ -95,6 +109,7 @@ export function toCsv(rows: SubscriberRow[]): string {
     "promoCode",
     "retentionUsed",
     "mrrMinor",
+    "staff",
   ];
   const cell = (v: unknown) => {
     let s = v == null ? "" : String(v);
@@ -116,6 +131,7 @@ export class AdminBillingService {
     private readonly subscriptions: SubscriptionsService,
     private readonly emails: EmailService,
     private readonly clock: AppClock,
+    private readonly staff: StaffAccessService,
   ) {}
 
   private async all(
@@ -157,6 +173,7 @@ export class AdminBillingService {
       const u = userBy.get(uid) ?? {};
       const m = mirrorBy.get(uid) ?? null;
       const eff = await this.subscriptions.resolve(uid, u, m);
+      const isStaff = await this.staff.isListed((u.email as string) ?? null);
       rows.push({
         uid,
         name: (u.name as string) ?? null,
@@ -171,7 +188,8 @@ export class AdminBillingService {
         cancelAtPeriodEnd: m?.cancelAtPeriodEnd === true,
         promoCode: (m?.promoCode as string) ?? null,
         retentionUsed: retainedUids.has(uid),
-        mrrMinor: mrr.get(uid) ?? 0,
+        staff: isStaff,
+        mrrMinor: isStaff ? 0 : (mrr.get(uid) ?? 0),
       });
     }
     const q = (filter.q ?? "").trim().toLowerCase();
@@ -189,6 +207,7 @@ export class AdminBillingService {
           filter.cancelAtPeriodEnd == null ||
           String(r.cancelAtPeriodEnd) === filter.cancelAtPeriodEnd,
       )
+      .filter((r) => filter.staff == null || String(r.staff) === filter.staff)
       .filter(
         (r) =>
           !filter.promo ||
@@ -204,7 +223,7 @@ export class AdminBillingService {
   async subscriber(uid: string) {
     const row = (await this.subscribers()).find((r) => r.uid === uid);
     if (!row) throw new NotFoundException("subscriber not found");
-    const [payments, history, effective, mirror] = await Promise.all([
+    const [payments, history, effective, mirror, customer] = await Promise.all([
       this.firebase.firestore
         .collection("payments")
         .where("userId", "==", uid)
@@ -215,10 +234,21 @@ export class AdminBillingService {
         .get(),
       this.subscriptions.forUser(uid),
       this.firebase.firestore.collection("subscriptions").doc(uid).get(),
+      this.firebase.firestore.collection("customers").doc(uid).get(),
     ]);
+    const c = customer.data() ?? {};
     return {
       ...row,
       mirror: mirror.exists ? mirror.data() : null,
+      // Renewal consent recorded at checkout (time, text version, plan, interval, price, IP).
+      consent:
+        (mirror.data()?.consent as Record<string, unknown> | undefined) ?? null,
+      // Masked except the last 4 digits; the full number only via the audited reveal.
+      phoneMasked: maskPhone((c.phone as string) ?? null),
+      marketingOptIn:
+        (c.marketingOptIn as Record<string, unknown> | undefined) ?? null,
+      billingRegion:
+        (c.billingRegion as Record<string, unknown> | undefined) ?? null,
       invoices: payments.docs
         .map((d) => d.data())
         .sort((a, b) =>
@@ -229,6 +259,15 @@ export class AdminBillingService {
         .sort((a, b) => String(b.at).localeCompare(String(a.at))),
       entitlements: effective.entitlements,
     };
+  }
+
+  /** Full mobile number for an admin who clicked "reveal" (the POST is audited by AdminAuditInterceptor). */
+  async revealPhone(uid: string): Promise<{ phone: string | null }> {
+    const c = (
+      await this.firebase.firestore.collection("customers").doc(uid).get()
+    ).data();
+    if (!c) throw new NotFoundException("no customer record");
+    return { phone: (c.phone as string) ?? null };
   }
 
   async audit(limit = 200) {

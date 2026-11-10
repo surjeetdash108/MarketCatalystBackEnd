@@ -29,10 +29,14 @@ async function main() {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const Stripe = require("stripe");
   const stripe = new Stripe(key);
+  // Stripe Tax: the product tax code for SaaS (to confirm with tax counsel) and
+  // automatic tax; tax registrations (Texas first) are set in the Stripe dashboard.
+  const taxCode = process.env.STRIPE_PRODUCT_TAX_CODE ?? "__PLACEHOLDER__";
+  if (taxCode.includes("PLACEHOLDER")) throw new Error("STRIPE_PRODUCT_TAX_CODE is a placeholder: confirm the SaaS tax code first.");
   const out: Record<string, string> = {};
   for (const p of plan.products) {
     const found = await stripe.products.search({ query: `metadata['planId']:'${p.planId}'` });
-    const product = found.data[0] ?? (await stripe.products.create({ name: p.name, description: p.description, metadata: p.metadata }));
+    const product = found.data[0] ?? (await stripe.products.create({ name: p.name, description: p.description, metadata: p.metadata, tax_code: taxCode }));
     out[`product_${p.planId}`] = product.id;
     for (const pr of plan.prices.filter((x) => x.planId === p.planId)) {
       const existing = await stripe.prices.list({ lookup_keys: [pr.lookupKey], active: true });

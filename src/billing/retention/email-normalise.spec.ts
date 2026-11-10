@@ -11,8 +11,12 @@ describe("normaliseEmail (retention once-per-email)", () => {
     expect(normaliseEmail(input)).toBe(out);
   });
   it("hashes all spellings of one inbox to the same id, and different inboxes differently", () => {
-    expect(emailHash("JaneDoe@gmail.com")).toBe(emailHash("jane.doe+x@googlemail.com"));
-    expect(emailHash("jane.doe@outlook.com")).not.toBe(emailHash("janedoe@outlook.com"));
+    expect(emailHash("JaneDoe@gmail.com")).toBe(
+      emailHash("jane.doe+x@googlemail.com"),
+    );
+    expect(emailHash("jane.doe@outlook.com")).not.toBe(
+      emailHash("janedoe@outlook.com"),
+    );
     expect(emailHash("a@example.com")).toMatch(/^[0-9a-f]{64}$/);
   });
 });

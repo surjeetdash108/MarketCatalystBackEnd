@@ -1,3 +1,4 @@
+import type { BillingDetails, BillingRegion, CheckoutQuote } from "./types";
 import type {
   AppliedDiscount,
   ChangePreview,
@@ -57,8 +58,19 @@ export interface BillingProvider {
     customerId: string,
     metadata: Record<string, string>,
   ): Promise<void>;
+  /** The customer's phone on the provider's record (no verification). */
+  updateCustomerContact(
+    customerId: string,
+    contact: { phone: string },
+  ): Promise<void>;
 
   // ── checkout ───────────────────────────────────────────────────────────
+  /** Price of a new subscription incl. tax for the billing region (Stripe: automatic tax). */
+  previewCheckout(input: {
+    price: PriceRef;
+    discount: AppliedDiscount | null;
+    region: BillingRegion | null;
+  }): Promise<CheckoutQuote>;
   createCheckout(input: {
     uid: string;
     customerId: string;
@@ -67,6 +79,8 @@ export interface BillingProvider {
     successUrl: string;
     cancelUrl: string;
     idempotencyKey: string;
+    /** Name/address/phone for the provider's customer record and tax. */
+    billing?: BillingDetails | null;
   }): Promise<CheckoutSession>;
   getCheckout(sessionId: string): Promise<CheckoutSession | null>;
 
@@ -99,6 +113,14 @@ export interface BillingProvider {
   getInvoice(invoiceId: string): Promise<ProviderInvoice | null>;
   listInvoices(customerId: string): Promise<ProviderInvoice[]>;
   getInvoiceDocument(invoiceId: string): Promise<InvoiceDocument>;
+
+  // ── refunds ────────────────────────────────────────────────────────────
+  /**
+   * Refunds `amount` of payment `paymentId` (an invoice id) and ends the
+   * subscription immediately. Billing state changes arrive as events
+   * (charge.refunded, subscription.deleted) for the handler to write.
+   */
+  refund(paymentId: string, amount: number): Promise<void>;
 
   // ── customer portal (card updates only) ────────────────────────────────
   createPortalSession(input: {

@@ -16,8 +16,10 @@ import { PlansService } from "./plans.service";
 import { applyCatalog } from "./catalog-apply";
 import {
   uiCatalogSource,
+  uiRefundPolicySource,
   websiteCatalogJson,
 } from "../../scripts/export-catalog";
+import { refundPolicy } from "../billing/refund/refund-policy";
 
 /** The one catalog (doc Step 1, decision a) — exactly what the website sells. */
 const EXPECTED = {
@@ -310,5 +312,19 @@ describe("catalog copies in other repos", () => {
         "utf8",
       ),
     ).toBe(websiteCatalogJson());
+  });
+  it("the UI refund policy copy is the generated one (REFUND_WINDOW_DAYS)", () => {
+    expect(
+      readFileSync(
+        join(
+          root,
+          "MarketCatalystUI/app/iq/billing/refund-policy.generated.ts",
+        ),
+        "utf8",
+      ),
+    ).toBe(uiRefundPolicySource());
+    expect(JSON.parse(websiteCatalogJson()).refundPolicy).toEqual(
+      refundPolicy(),
+    );
   });
 });

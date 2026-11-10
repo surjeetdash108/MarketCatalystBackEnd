@@ -1,3 +1,4 @@
+import { RefundService } from "./refund/refund.service";
 import {
   Body,
   Controller,
@@ -29,6 +30,7 @@ export class AdminBillingController {
     private readonly admin: AdminBillingService,
     private readonly promos: PromoService,
     private readonly reconcile: BillingReconcileJob,
+    private readonly refunds: RefundService,
   ) {}
 
   @Get("subscribers")
@@ -48,12 +50,34 @@ export class AdminBillingController {
     return {
       subscribers: rows,
       totalMrrMinor: rows.reduce((a, r) => a + r.mrrMinor, 0),
+      // Paying customers only: staff are never counted.
+      subscriberCount: rows.filter((r) => !r.staff && r.mrrMinor > 0).length,
+      staffCount: rows.filter((r) => r.staff).length,
     };
   }
 
   @Get("subscribers/:uid")
   subscriber(@Param("uid") uid: string) {
     return this.admin.subscriber(uid);
+  }
+
+  /** Admin refund action — same policy as the user's button; 404 when refunds are off. Audited. */
+  @Post("subscribers/:uid/refund")
+  @HttpCode(200)
+  refund(@Param("uid") uid: string) {
+    return this.refunds.refund(uid, "admin");
+  }
+
+  @Get("subscribers/:uid/refund")
+  refundEligibility(@Param("uid") uid: string) {
+    return this.refunds.eligibility(uid);
+  }
+
+  /** Click-to-reveal of the masked mobile number. POST so the audit log records every reveal. */
+  @Post("subscribers/:uid/phone/reveal")
+  @HttpCode(200)
+  revealPhone(@Param("uid") uid: string) {
+    return this.admin.revealPhone(uid);
   }
 
   @Get("promos")

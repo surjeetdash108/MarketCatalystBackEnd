@@ -1,5 +1,5 @@
 import request from "supertest";
-import { billingApp } from "../../test/support/billing-app";
+import { billingApp, checkoutBody } from "../../test/support/billing-app";
 import { DAY, T0 } from "../../test/support/billing-harness";
 import { SUBSCRIPTIONS_FLAG } from "../feature-flags/feature-flags.registry";
 import { emailHash } from "./retention/email-normalise";
@@ -17,10 +17,10 @@ describe("SUBSCRIPTIONS_ENABLED and provider safety", () => {
   it("flag OFF: paid flows say launching soon and everyone keeps every built feature", async () => {
     a = await billingApp({ env: { SUBSCRIPTIONS_ENABLED: "false" } });
     const u = a.user("u1");
-    const co = await u.post("/api/billing/checkout", {
-      planId: "pro",
-      interval: "monthly",
-    });
+    const co = await u.post(
+      "/api/billing/checkout",
+      checkoutBody("pro", "monthly"),
+    );
     expect(co.status).toBe(503);
     expect(co.body).toMatchObject({
       code: "paid_plans_unavailable",
@@ -41,10 +41,26 @@ describe("SUBSCRIPTIONS_ENABLED and provider safety", () => {
     a = await billingApp({ env: { SUBSCRIPTIONS_ENABLED: "false" } });
     // The shapes found in production users docs on 2026-11-10 (counts only were read).
     const legacy = {
-      legacyPro: { currentPlan: "pro", tier: "pro", subscriptionStatus: "ACTIVE" },
-      legacyProNone: { currentPlan: "pro", tier: "pro", subscriptionStatus: "NONE" },
-      legacyFree: { currentPlan: "free", tier: "free", subscriptionStatus: "NONE" },
-      retiredPlus: { currentPlan: "plus", tier: "plus", subscriptionStatus: "ACTIVE" },
+      legacyPro: {
+        currentPlan: "pro",
+        tier: "pro",
+        subscriptionStatus: "ACTIVE",
+      },
+      legacyProNone: {
+        currentPlan: "pro",
+        tier: "pro",
+        subscriptionStatus: "NONE",
+      },
+      legacyFree: {
+        currentPlan: "free",
+        tier: "free",
+        subscriptionStatus: "NONE",
+      },
+      retiredPlus: {
+        currentPlan: "plus",
+        tier: "plus",
+        subscriptionStatus: "ACTIVE",
+      },
       bare: {},
     };
     for (const [uid, doc] of Object.entries(legacy)) {
@@ -60,21 +76,13 @@ describe("SUBSCRIPTIONS_ENABLED and provider safety", () => {
     a = await billingApp({ env: { SUBSCRIPTIONS_ENABLED: "false" } });
     const u = a.user("u1");
     expect(
-      (
-        await u.post("/api/billing/checkout", {
-          planId: "pro",
-          interval: "monthly",
-        })
-      ).status,
+      (await u.post("/api/billing/checkout", checkoutBody("pro", "monthly")))
+        .status,
     ).toBe(503);
     await a.flags.setOverride(SUBSCRIPTIONS_FLAG, true);
     expect(
-      (
-        await u.post("/api/billing/checkout", {
-          planId: "pro",
-          interval: "monthly",
-        })
-      ).status,
+      (await u.post("/api/billing/checkout", checkoutBody("pro", "monthly")))
+        .status,
     ).toBe(200);
     expect(
       (await u.get("/api/me/entitlements")).body.entitlements.strategyLab,
@@ -88,12 +96,8 @@ describe("SUBSCRIPTIONS_ENABLED and provider safety", () => {
     });
     const u = a.user("u1");
     expect(
-      (
-        await u.post("/api/billing/checkout", {
-          planId: "pro",
-          interval: "monthly",
-        })
-      ).status,
+      (await u.post("/api/billing/checkout", checkoutBody("pro", "monthly")))
+        .status,
     ).toBe(503);
     expect(
       (await request(a.server).post("/api/billing/webhook").send({ id: "evt" }))
@@ -157,27 +161,19 @@ describe("plan choice at signup and checkout", () => {
     a = await billingApp();
     const u = a.user("u1");
     expect(
-      (
-        await u.post("/api/billing/checkout", {
-          planId: "plus",
-          interval: "monthly",
-        })
-      ).body.code,
+      (await u.post("/api/billing/checkout", checkoutBody("plus", "monthly")))
+        .body.code,
+    ).toBe("unknown_plan");
+    expect(
+      (await u.post("/api/billing/checkout", checkoutBody("free", "monthly")))
+        .body.code,
     ).toBe("unknown_plan");
     expect(
       (
-        await u.post("/api/billing/checkout", {
-          planId: "free",
-          interval: "monthly",
-        })
-      ).body.code,
-    ).toBe("unknown_plan");
-    expect(
-      (
-        await u.post("/api/billing/checkout", {
-          planId: "pro",
-          interval: "weekly",
-        })
+        await u.post(
+          "/api/billing/checkout",
+          checkoutBody("pro", "weekly" as "monthly"),
+        )
       ).status,
     ).toBe(400);
   });
@@ -227,10 +223,10 @@ describe("plan choice at signup and checkout", () => {
   it("an existing subscriber cannot buy a second subscription", async () => {
     a = await billingApp();
     const { u } = await a.subscribe("u1", "pro", "monthly");
-    const again = await u.post("/api/billing/checkout", {
-      planId: "elite",
-      interval: "monthly",
-    });
+    const again = await u.post(
+      "/api/billing/checkout",
+      checkoutBody("elite", "monthly"),
+    );
     expect(again.status).toBe(409);
     expect(again.body.code).toBe("already_subscribed");
   });
@@ -288,11 +284,12 @@ describe("plan choice at signup and checkout", () => {
     });
     expect(
       (
-        await a.as("u2").post("/api/billing/checkout", {
-          planId: "pro",
-          interval: "annual",
-          promoCode: "LAUNCH20",
-        })
+        await a
+          .as("u2")
+          .post(
+            "/api/billing/checkout",
+            checkoutBody("pro", "annual", { promoCode: "LAUNCH20" }),
+          )
       ).body.code,
     ).toBe("promo_invalid");
   });

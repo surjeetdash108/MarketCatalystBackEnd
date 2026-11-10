@@ -1,3 +1,4 @@
+import { StaffAccessService } from "../account/staff-access.service";
 import {
   BadRequestException,
   Controller,
@@ -61,6 +62,7 @@ export class WatchlistController {
     private readonly aiAnalysis: AiAnalysisService,
     private readonly subscriptions: SubscriptionsService,
     private readonly access: BillingAccessService,
+    private readonly staff: StaffAccessService,
   ) {}
 
   /**
@@ -126,6 +128,7 @@ export class WatchlistController {
   private async tickerLimitFor(uid: string): Promise<number | null> {
     try {
       if (!(await this.access.subscriptionsLive())) return null;
+      if (await this.staff.isStaffUid(uid)) return null; // staff: no limits
       const { planId } = await this.subscriptions.forUser(uid);
       return planById(planId)?.limits.watchlistTickers ?? null;
     } catch {

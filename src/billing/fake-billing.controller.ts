@@ -4,7 +4,9 @@ import {
   ForbiddenException,
   Get,
   HttpCode,
+  Inject,
   NotFoundException,
+  Query,
   Param,
   Post,
   UseGuards,
@@ -18,6 +20,11 @@ import { BillingAccessService } from "./billing-access.service";
 import { assertFake } from "./billing.controller";
 import { FakeAdvanceDto, FakeApproveDto, FakeCardDto } from "./billing.dto";
 import { FakeBillingProvider } from "./provider/fake/fake-billing.provider";
+import {
+  EMAIL_SENDER,
+  type EmailSender,
+  type EmailMessage,
+} from "./email/email-sender";
 
 /**
  * The fake provider's "hosted pages" (checkout, 3-D Secure, portal) and test
@@ -30,6 +37,7 @@ export class FakeBillingController {
     private readonly access: BillingAccessService,
     private readonly firebase: FirebaseAdminService,
     private readonly clock: AppClock,
+    @Inject(EMAIL_SENDER) private readonly sender: EmailSender,
   ) {}
 
   private get fake(): FakeBillingProvider {
@@ -131,6 +139,19 @@ export class FakeBillingController {
       : this.clock.now() + (body.days ?? 0) * 86_400_000;
     const r = await this.fake.advanceTo(target);
     return { now: this.clock.nowIso(), processed: r.processed };
+  }
+
+  /** Dev only (fake provider): what the console email sender would have sent to `to`. */
+  @UseGuards(AdminGuard)
+  @Get("outbox")
+  outbox(@Query("to") to: string) {
+    assertFake(this.access);
+    const box = (this.sender as { outbox?: EmailMessage[] }).outbox ?? [];
+    return {
+      messages: box
+        .filter((m) => !to || m.to.toLowerCase() === String(to).toLowerCase())
+        .slice(-20),
+    };
   }
 
   @UseGuards(AdminGuard)
