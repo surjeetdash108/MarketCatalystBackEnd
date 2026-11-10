@@ -13,7 +13,7 @@ import { getFirestore } from "firebase-admin/firestore";
  * FIRESTORE_EMULATOR_HOST set → the emulator (no credentials).
  *
  * The REST shim implements only what those scripts use: doc(path).get/set,
- * collection(name).get(), collection(name).doc(id), batch().set/update/commit.
+ * collection(name).get(), collection(name).doc(id), batch().set/update/delete/commit.
  */
 export type ScriptAuth = "adc" | "gcloud";
 
@@ -196,6 +196,8 @@ export class RestFirestore {
         void writes.push({
           update: { name: ref._name, fields: encodeFields(data) },
         }),
+      delete: (ref: { _name: string }) =>
+        void writes.push({ delete: ref._name }),
       update: (ref: { _name: string }, data: Record<string, unknown>) =>
         void writes.push({
           update: { name: ref._name, fields: encodeFields(data) },
