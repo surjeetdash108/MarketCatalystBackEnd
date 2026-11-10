@@ -114,6 +114,26 @@ describe("admin: subscribers", () => {
     expect(row).toMatchObject({ planId: "elite", mrrMinor: 19900 });
   });
 
+  it("legacy currentPlan=pro users (no paid subscription) are flagged Legacy Pro", async () => {
+    a = await billingApp();
+    a.fs.seed("users", "old", {
+      name: "Old Pro",
+      email: "old@example.com",
+      currentPlan: "pro",
+      subscriptionStatus: "ACTIVE",
+    });
+    a.fs.seed("users", "new", { name: "New", email: "new@example.com" });
+    const rows = (await a.admin.get("/api/admin/billing/subscribers")).body
+      .subscribers;
+    expect(rows.find((r: { uid: string }) => r.uid === "old")).toMatchObject({
+      legacyPro: true,
+      mrrMinor: 0,
+    });
+    expect(rows.find((r: { uid: string }) => r.uid === "new")).toMatchObject({
+      legacyPro: false,
+    });
+  });
+
   it("a user document claiming a paid plan without a mirror shows as Free with no MRR", async () => {
     a = await billingApp();
     a.fs.seed("users", "faker", {
@@ -154,7 +174,7 @@ describe("admin: subscribers", () => {
     expect(r.headers["content-type"]).toMatch(/text\/csv/);
     const lines = r.text.trim().split("\n");
     expect(lines[0]).toBe(
-      "uid,name,email,planId,interval,status,startedAt,currentPeriodEnd,cancelAtPeriodEnd,promoCode,retentionUsed,mrrMinor,staff",
+      "uid,name,email,planId,interval,status,startedAt,currentPeriodEnd,cancelAtPeriodEnd,promoCode,retentionUsed,mrrMinor,staff,legacyPro",
     );
     expect(lines.length).toBe(5);
     expect(r.text).toContain("'=cmd|' /C calc'!A0");

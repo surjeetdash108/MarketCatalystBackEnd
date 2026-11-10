@@ -41,6 +41,8 @@ export interface SubscriberRow {
   mrrMinor: number;
   /** On the staff allowlist: full access, never billed, excluded from counts/MRR/revenue. */
   staff: boolean;
+  /** A pre-billing manual Pro grant (users doc currentPlan=pro, no paid subscription): "Legacy Pro". */
+  legacyPro: boolean;
 }
 
 export interface SubscriberFilter {
@@ -110,6 +112,7 @@ export function toCsv(rows: SubscriberRow[]): string {
     "retentionUsed",
     "mrrMinor",
     "staff",
+    "legacyPro",
   ];
   const cell = (v: unknown) => {
     let s = v == null ? "" : String(v);
@@ -189,6 +192,7 @@ export class AdminBillingService {
         promoCode: (m?.promoCode as string) ?? null,
         retentionUsed: retainedUids.has(uid),
         staff: isStaff,
+        legacyPro: u.currentPlan === "pro" && m?.source !== "provider",
         mrrMinor: isStaff ? 0 : (mrr.get(uid) ?? 0),
       });
     }
