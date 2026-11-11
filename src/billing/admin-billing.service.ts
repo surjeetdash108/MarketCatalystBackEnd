@@ -329,4 +329,13 @@ export class AdminBillingService {
     }
     return { sent: recipients.length };
   }
+
+  async abandonedCheckouts() {
+    try {
+      const snap = await this.db.collection("abandoned_checkouts").limit(100).get();
+      return snap.docs.map((d) => ({ uid: d.id, ...(d.data() as Record<string, unknown>) }));
+    } catch {
+      return [];
+    }
+  }
 }

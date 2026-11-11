@@ -123,6 +123,22 @@ export class BillingController {
     @Req() req: Request,
   ) {
     await this.refuseStaff(token);
+    try {
+      const email = await this.email(uid);
+      await this.firebase.firestore.collection("abandoned_checkouts").doc(uid).set(
+        {
+          uid,
+          email,
+          planId: body.planId,
+          interval: body.interval,
+          step: "Step 2: Checkout",
+          at: new Date().toISOString(),
+        },
+        { merge: true },
+      );
+    } catch {
+      /* non-blocking */
+    }
     return this.billing.checkoutPreview(uid, clientIp(req), body);
   }
 

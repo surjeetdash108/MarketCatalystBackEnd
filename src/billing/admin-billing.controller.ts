@@ -82,6 +82,11 @@ export class AdminBillingController {
     return this.admin.revealPhone(uid);
   }
 
+  @Get("abandoned")
+  async abandonedCheckouts() {
+    return { leads: await this.admin.abandonedCheckouts() };
+  }
+
   @Get("promos")
   async listPromos() {
     return { promos: await this.promos.list() };
