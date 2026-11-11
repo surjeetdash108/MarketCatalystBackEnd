@@ -476,8 +476,10 @@ export class BillingEventsService implements OnModuleInit {
     const ctx = { eventId: event?.id, subscriptionId: next.subscriptionId };
     const email = await this.emailFor(uid);
     const samesub = prev?.subscriptionId === next.subscriptionId;
+    const nowLive = LIVE.includes(next.status);
+    const wasLive = prev ? LIVE.includes(prev.status) : false;
 
-    if (!prev || !samesub) {
+    if ((!prev || !samesub || (!wasLive && nowLive)) && nowLive) {
       await this.addHistory(
         uid,
         "subscribed",

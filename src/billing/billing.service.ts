@@ -893,6 +893,11 @@ export class BillingService {
       .get();
     return snap.docs
       .map((d) => d.data())
+      .filter((e) => {
+        // Filter out phantom "subscribed" events where subscription was incomplete / NONE
+        if (e.type === "subscribed" && (e.to as Record<string, unknown> | undefined)?.status === "NONE") return false;
+        return true;
+      })
       .sort((a, b) => String(b.at).localeCompare(String(a.at)));
   }
 
