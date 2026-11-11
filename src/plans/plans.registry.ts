@@ -639,6 +639,7 @@ export const ROUTE_FEATURES: Record<string, RouteRequirement> = {
   "POST /live/searched-ticker": ["marketCatalyst", "stockIntelligence"],
   "GET /live/news-wire": ["news"],
   "GET /market-data/news": ["news"],
+  "GET /market-data/news/breaking": ["news"],
   "GET /live/news": ["news", "stockIntelligence"],
   "GET /live/scan/biggest-pct": ["scanner"],
   "GET /live/scan/most-active": ["scanner"],
