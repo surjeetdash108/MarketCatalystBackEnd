@@ -31,8 +31,10 @@ export interface EntitlementDef {
    * or capability rather than the code path. Keep it to one line.
    */
   description: string;
-  /** Section heading in the admin editor. */
+  /** Section heading in the admin editor (the feature group's name for sold features). */
   group: string;
+  /** The feature group that sells this capability; absent for unbuilt/staff rows. */
+  featureGroup?: FeatureGroupId;
   /** Staff capability — never sold with a plan. */
   staffOnly?: boolean;
   /** No implementation exists yet; hidden in the app and never sold. */
@@ -51,161 +53,209 @@ export interface EntitlementDef {
  * could plausibly be given or denied on its own.
  */
 export const ENTITLEMENTS: EntitlementDef[] = [
-  // ── Core market data (Free) ───────────────────────────────────────────────
+  // ── Market Desk (Starter and up) ──────────────────────────────────────────
   {
     key: "marketCatalyst",
     label: "Market Dashboard",
-    group: "Core",
+    group: "Market Desk",
+    featureGroup: "marketDesk",
     description:
       "See the main dashboard with market pulse, movers and heatmap.",
   },
   {
     key: "news",
     label: "News & Commentary",
-    group: "Core",
+    group: "Market Desk",
+    featureGroup: "marketDesk",
     description: "Read the live news feed and commentary screen.",
   },
   {
     key: "scanner",
     label: "Market Movers",
-    group: "Core",
+    group: "Market Desk",
+    featureGroup: "marketDesk",
     description: "See daily gainers, losers and unusual-volume lists.",
   },
   {
     key: "heatmap",
     label: "Sector Heatmap",
-    group: "Core",
+    group: "Market Desk",
+    featureGroup: "marketDesk",
     description: "View the sector and stock heatmap with day/week performance.",
   },
   {
     key: "macro",
     label: "Macro & Calendars",
-    group: "Core",
+    group: "Market Desk",
+    featureGroup: "marketDesk",
     description: "Access the economic calendar, VIX and dividend calendars.",
   },
   {
     key: "ipos",
     label: "IPO Corner",
-    group: "Core",
+    group: "Market Desk",
+    featureGroup: "marketDesk",
     description: "Browse upcoming and recent IPOs with offer prices.",
+  },
+  {
+    key: "earningsHub",
+    label: "Earnings Hub",
+    group: "Market Desk",
+    featureGroup: "marketDesk",
+    description:
+      "See the earnings calendar and the latest earnings announcements.",
+  },
+  {
+    key: "recaps",
+    label: "Market Recaps",
+    group: "Market Desk",
+    featureGroup: "marketDesk",
+    description: "Read the daily and weekly market recaps.",
+  },
+  // ── Stock Intelligence (Starter and up) ───────────────────────────────────
+  {
+    key: "stockIntelligence",
+    label: "Stock Intelligence",
+    group: "Stock Intelligence",
+    featureGroup: "stockIntelligence",
+    description:
+      "Open any stock's page: quote, profile, news and key statistics.",
   },
   {
     key: "chartsDaily",
     label: "Daily Charts",
-    group: "Charting",
+    group: "Stock Intelligence",
+    featureGroup: "stockIntelligence",
     description: "View 3-month, 6-month and 1-year price charts.",
   },
   {
     key: "watchlist",
     label: "Watchlist",
-    group: "My Money",
+    group: "Market Desk",
+    featureGroup: "marketDesk",
     description: "Build and track a personal watchlist of stocks.",
   },
 
   // ── Starter ───────────────────────────────────────────────────────────────
   {
     key: "workspaces",
-    label: "All 15 Workspaces",
-    group: "Core",
+    label: "All workspaces",
+    group: "Market Desk",
+    featureGroup: "marketDesk",
     description:
       "Open every Market Desk workspace, including Analyst Actions, Recaps, ETF Corner and AI Companies.",
   },
   {
     key: "chartsIntraday",
     label: "Intraday Charts",
-    group: "Charting",
+    group: "Stock Intelligence",
+    featureGroup: "stockIntelligence",
     description:
       "View 1-day, 1-week and 1-month charts built from minute bars.",
   },
   {
     key: "chartsHistory",
     label: "Long History (5Y)",
-    group: "Charting",
+    group: "Stock Intelligence",
+    featureGroup: "stockIntelligence",
     description: "View the full five-year price history on any chart.",
   },
   {
     key: "chartIndicators",
     label: "Chart Indicators",
-    group: "Charting",
+    group: "Stock Intelligence",
+    featureGroup: "stockIntelligence",
     description: "Overlay moving averages, EMAs, volume and the RSI pane.",
   },
   {
     key: "chartNotes",
     label: "Chart Notes",
-    group: "Charting",
+    group: "Stock Intelligence",
+    featureGroup: "stockIntelligence",
     description: "Save personal notes pinned to a chart.",
   },
   {
     key: "screener",
     label: "Stock Screener",
-    group: "Research",
+    group: "Market Desk",
+    featureGroup: "marketDesk",
     description:
       "Filter the universe by growth, technical and liquidity criteria.",
   },
   {
     key: "ownership",
     label: "13F & Insider",
-    group: "Research",
+    group: "Market Desk",
+    featureGroup: "marketDesk",
     description: "See insider trades and institutional fund holdings.",
   },
   {
     key: "technicalRatings",
     label: "Technical Ratings",
-    group: "Research",
+    group: "Stock Intelligence",
+    featureGroup: "stockIntelligence",
     description:
       "See the technical rating gauge, RSI, MACD and moving-average table.",
   },
   {
     key: "fundamentalRatings",
     label: "Financial Statements",
-    group: "Research",
+    group: "Stock Intelligence",
+    featureGroup: "stockIntelligence",
     description: "See quarterly revenue, EPS, balance sheet and cash flow.",
   },
   {
     key: "dividendHistory",
     label: "Dividend History",
-    group: "Research",
+    group: "Stock Intelligence",
+    featureGroup: "stockIntelligence",
     description:
       "See full dividend history, yield, growth rate and payment dates.",
   },
   {
     key: "peers",
     label: "Peer Comparison",
-    group: "Research",
+    group: "Stock Intelligence",
+    featureGroup: "stockIntelligence",
     description:
       "See comparable companies and how the stock ranks against them.",
   },
   {
     key: "earningsDetail",
     label: "Earnings Detail",
-    group: "Research",
+    group: "Stock Intelligence",
+    featureGroup: "stockIntelligence",
     description:
       "See EPS history, estimate-vs-actual, transcripts and the earnings calendar.",
   },
   {
     key: "aiAssistant",
     label: "AI Research",
-    group: "Research",
+    group: "Stock Intelligence",
+    featureGroup: "stockIntelligence",
     description:
       "Ask the AI copilot questions and read AI-generated stock research.",
   },
   {
     key: "tradeTracker",
     label: "Trade Builder & Tracker",
-    group: "My Money",
+    group: "Stock Intelligence",
+    featureGroup: "stockIntelligence",
     description:
       "Build trades with entry, stop and target and track them over time.",
   },
   {
     key: "portfolio",
     label: "Portfolio Tracking",
-    group: "My Money",
+    group: "Market Desk",
+    featureGroup: "marketDesk",
     description: "Track holdings with live prices and profit/loss.",
   },
   {
     key: "themes",
     label: "Sector Themes",
-    group: "My Money",
+    group: "Stock Intelligence",
+    featureGroup: "stockIntelligence",
     description: "Browse curated theme baskets such as Mag7 and AI & Semis.",
   },
 
@@ -213,19 +263,22 @@ export const ENTITLEMENTS: EntitlementDef[] = [
   {
     key: "moneyFlow",
     label: "Money Flow",
-    group: "Institutional",
+    group: "Money Flow",
+    featureGroup: "moneyFlow",
     description: "See where institutional money is moving, by sector.",
   },
   {
     key: "institutionalMovers",
     label: "Institutional Movers",
-    group: "Institutional",
+    group: "Money Flow",
+    featureGroup: "moneyFlow",
     description: "See the biggest institutional gainers and losers.",
   },
   {
     key: "optionsChain",
     label: "Options Chain",
-    group: "Institutional",
+    group: "Money Flow",
+    featureGroup: "moneyFlow",
     description:
       "View the options chain with strikes, expirations and traded prices.",
     note: "some data simulated",
@@ -235,14 +288,16 @@ export const ENTITLEMENTS: EntitlementDef[] = [
   {
     key: "strategyLab",
     label: "Strategy Lab",
-    group: "Strategy",
+    group: "Strategy Lab",
+    featureGroup: "strategyLab",
     description:
       "Build strategies from presets or plain English and get entry, stop and target levels.",
   },
   {
     key: "backtesting",
     label: "Backtesting",
-    group: "Strategy",
+    group: "Strategy Lab",
+    featureGroup: "strategyLab",
     description:
       "Backtest any strategy against historical prices before you trade.",
   },
@@ -343,10 +398,10 @@ export interface PlanDefinition {
  * changes. PlansService.seed() rewrites plan documents stored under an older
  * version, so a deploy is what changes production prices — never a stale doc.
  */
-export const CATALOG_VERSION = 2;
+export const CATALOG_VERSION = 3;
 
 /** Plan ids that existed before and must be deactivated on seed. */
-export const RETIRED_PLAN_IDS = ["plus"];
+export const RETIRED_PLAN_IDS = ["free", "plus"];
 
 function allEntitlements(value: boolean): Record<EntitlementKey, boolean> {
   return Object.fromEntries(ENTITLEMENT_KEYS.map((k) => [k, value]));
@@ -356,45 +411,75 @@ const NEVER_GRANTED: EntitlementKey[] = ENTITLEMENTS.filter(
   (e) => e.staffOnly || e.unbuilt,
 ).map((e) => e.key);
 
-/** The tier ladder (doc Step 1). Cumulative: each tier adds to the one below. */
-const FREE_GRANTS: EntitlementKey[] = [
-  "marketCatalyst",
-  "news",
-  "scanner",
-  "heatmap",
-  "macro",
-  "ipos",
-  "chartsDaily",
-  "watchlist",
-];
-const STARTER_ADDS: EntitlementKey[] = [
-  "workspaces",
-  "chartsIntraday",
-  "chartsHistory",
-  "chartIndicators",
-  "chartNotes",
-  "screener",
-  "ownership",
-  "technicalRatings",
-  "fundamentalRatings",
-  "dividendHistory",
-  "peers",
-  "earningsDetail",
-  "aiAssistant",
-  "tradeTracker",
-  "portfolio",
-  "themes",
-];
-const PRO_ADDS: EntitlementKey[] = [
-  "moneyFlow",
-  "institutionalMovers",
-  "optionsChain",
-];
-const ELITE_ADDS: EntitlementKey[] = ["strategyLab", "backtesting"];
+// ── Feature groups: the unit plans are sold in ─────────────────────────────
 
-function grants(granted: EntitlementKey[]): Record<EntitlementKey, boolean> {
+export type FeatureGroupId =
+  | "marketDesk"
+  | "stockIntelligence"
+  | "moneyFlow"
+  | "strategyLab";
+
+export interface FeatureGroup {
+  id: FeatureGroupId;
+  /** User-facing name — always the full name, never an abbreviation. */
+  name: string;
+  /** One line for plan cards and locked screens. */
+  summary: string;
+}
+
+/** In ladder order: each plan adds the next group(s). */
+export const FEATURE_GROUPS: FeatureGroup[] = [
+  {
+    id: "marketDesk",
+    name: "Market Desk",
+    summary:
+      "Every workspace: dashboard, live feed, movers, heatmap, calendar, IPOs, screener, recaps, earnings, analyst actions, 13F & insider, ETFs, AI companies, portfolio and watchlist.",
+  },
+  {
+    id: "stockIntelligence",
+    name: "Stock Intelligence",
+    summary:
+      "Every stock's page: financials, ratings, peers, dividends, AI research, earnings detail, intraday charts, Trade Builder and Trade Tracker.",
+  },
+  {
+    id: "moneyFlow",
+    name: "Money Flow",
+    summary:
+      "Where institutional money is moving, by sector, with the biggest institutional gainers and losers and the options chain.",
+  },
+  {
+    id: "strategyLab",
+    name: "Strategy Lab",
+    summary:
+      "Build or pick a strategy, backtest it, and get entry, stop and target levels.",
+  },
+];
+
+/** Plan id → the feature groups it grants (cumulative ladder). */
+export const PLAN_GROUPS: Record<string, FeatureGroupId[]> = {
+  starter: ["marketDesk", "stockIntelligence"],
+  pro: ["marketDesk", "stockIntelligence", "moneyFlow"],
+  elite: ["marketDesk", "stockIntelligence", "moneyFlow", "strategyLab"],
+};
+
+export function groupOf(key: EntitlementKey): FeatureGroupId | undefined {
+  return ENTITLEMENTS.find((e) => e.key === key)?.featureGroup;
+}
+
+/** Entitlement keys a set of groups grants (never staff-only or unbuilt rows). */
+export function keysForGroups(groups: FeatureGroupId[]): EntitlementKey[] {
+  return ENTITLEMENTS.filter(
+    (e) =>
+      e.featureGroup &&
+      groups.includes(e.featureGroup) &&
+      !e.staffOnly &&
+      !e.unbuilt,
+  ).map((e) => e.key);
+}
+
+function grants(groups: FeatureGroupId[]): Record<EntitlementKey, boolean> {
   const flags = allEntitlements(false);
-  for (const k of granted) flags[k] = true;
+  for (const k of keysForGroups(groups)) flags[k] = true;
   for (const k of NEVER_GRANTED) flags[k] = false;
   return flags;
 }
@@ -404,30 +489,23 @@ const price = (amount: number, lookupKey: string): PlanPrice => ({
   lookupKey,
 });
 
+/**
+ * The plans. There is no free plan: an account without an active paid plan
+ * (never paid, cancelled and ended, refunded, or past the past-due grace) has
+ * NO_PLAN_ID — sign-in, account settings, Manage Plan, checkout, billing
+ * history and legal pages only (PLAN_EXEMPT_ROUTES), and "Choose a plan"
+ * everywhere else. The old "free" plan is in RETIRED_PLAN_IDS: apply-catalog
+ * marks its Firestore document inactive; it is never deleted.
+ */
 export const PLAN_DEFINITIONS: PlanDefinition[] = [
-  {
-    id: "free",
-    name: "Free",
-    amount: 0,
-    currency: "USD",
-    billingCycle: "none",
-    description: "Core market screens, daily charts and a watchlist.",
-    featureFlags: grants(FREE_GRANTS),
-    active: true,
-    sortOrder: 0,
-    stripePriceId: null,
-    prices: {},
-    limits: { watchlistTickers: 5 },
-  },
   {
     id: "starter",
     name: "Starter",
     amount: 3900,
     currency: "USD",
     billingCycle: "monthly",
-    description:
-      "For investors who want the daily picture and research on any stock.",
-    featureFlags: grants([...FREE_GRANTS, ...STARTER_ADDS]),
+    description: "Market Desk and Stock Intelligence.",
+    featureFlags: grants(PLAN_GROUPS.starter),
     active: true,
     sortOrder: 1,
     stripePriceId: null,
@@ -443,9 +521,8 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
     amount: 5900,
     currency: "USD",
     billingCycle: "monthly",
-    description:
-      "For active traders who want to see where institutions are moving.",
-    featureFlags: grants([...FREE_GRANTS, ...STARTER_ADDS, ...PRO_ADDS]),
+    description: "Everything in Starter, plus Money Flow.",
+    featureFlags: grants(PLAN_GROUPS.pro),
     active: true,
     sortOrder: 2,
     stripePriceId: null,
@@ -461,13 +538,8 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
     amount: 19900,
     currency: "USD",
     billingCycle: "monthly",
-    description: "For traders who backtest before every trade.",
-    featureFlags: grants([
-      ...FREE_GRANTS,
-      ...STARTER_ADDS,
-      ...PRO_ADDS,
-      ...ELITE_ADDS,
-    ]),
+    description: "Everything in Pro, plus Strategy Lab.",
+    featureFlags: grants(PLAN_GROUPS.elite),
     active: true,
     sortOrder: 3,
     stripePriceId: null,
@@ -479,8 +551,11 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
   },
 ];
 
-/** The plan assigned to a user who has never paid. */
-export const DEFAULT_PLAN_ID = "free";
+
+/** The effective plan of an account with no active paid plan. Not a plan anyone can buy. */
+export const NO_PLAN_ID = "none";
+/** @deprecated There is no default plan any more; kept as an alias of NO_PLAN_ID. */
+export const DEFAULT_PLAN_ID = NO_PLAN_ID;
 
 export type SubscriptionStatus =
   "ACTIVE" | "EXPIRED" | "CANCELLED" | "PAST_DUE" | "TRIALING" | "NONE";
@@ -518,3 +593,279 @@ export function catalogPrice(
 ): PlanPrice | undefined {
   return planById(planId)?.prices[interval];
 }
+
+// ── Where each feature lives: backend routes ───────────────────────────────
+//
+// The ONLY hand-kept list of route → feature. EntitlementGuard (a global
+// guard) reads it at request time; route-groups.spec.ts fails when a
+// controller route is neither here nor exempt; scripts/export-catalog.ts
+// writes the generated feature map from it.
+//
+// A route lists the feature(s) that use its data; holding ANY of them is
+// enough (shared data routes such as /market-data/companies serve several
+// screens). "bars" is resolved from the query: intraday ranges need
+// chartsIntraday, the 5-year range chartsHistory, the rest chartsDaily.
+
+export type RouteRequirement = EntitlementKey[] | "bars";
+
+export const ROUTE_FEATURES: Record<string, RouteRequirement> = {
+  // Market Desk
+  "GET /api/feature-requests": ["marketCatalyst"],
+  "POST /api/feature-requests": ["marketCatalyst"],
+  "GET /api/notifications": ["marketCatalyst"],
+  "POST /api/notifications/mark-all-read": ["marketCatalyst"],
+  "POST /api/stream-ticket": ["marketCatalyst"],
+  "GET /live/collections": ["marketCatalyst"],
+  "GET /live/market-status": ["marketCatalyst"],
+  "GET /live/most-searched-tickers": ["marketCatalyst"],
+  "GET /live/ondemand-stats": ["marketCatalyst"],
+  "GET /live/snapshot": ["marketCatalyst"],
+  "GET /live/stats": ["marketCatalyst"],
+  "GET /live/tape": ["marketCatalyst"],
+  "GET /live/tape/stats": ["marketCatalyst"],
+  "GET /live/what-matters-now": ["marketCatalyst"],
+  "GET /market-data/market-sentiment": ["marketCatalyst"],
+  "GET /market-data/market-sentiment-history": ["marketCatalyst"],
+  "GET /market-data/companies": [
+    "marketCatalyst",
+    "screener",
+    "themes",
+    "technicalRatings",
+    "chartIndicators",
+    "stockIntelligence",
+  ],
+  "GET /live/quotes": ["marketCatalyst", "stockIntelligence"],
+  "GET /live/search": ["marketCatalyst", "stockIntelligence"],
+  "POST /live/searched-ticker": ["marketCatalyst", "stockIntelligence"],
+  "GET /live/news-wire": ["news"],
+  "GET /market-data/news": ["news"],
+  "GET /live/news": ["news", "stockIntelligence"],
+  "GET /live/scan/biggest-pct": ["scanner"],
+  "GET /live/scan/most-active": ["scanner"],
+  "GET /market-data/movers": ["scanner"],
+  "GET /market-data/volume-leaders": ["scanner"],
+  "GET /market-data/sectors": ["heatmap"],
+  "GET /market-data/macro-events": ["macro"],
+  "GET /market-data/macro-regime": ["macro"],
+  "GET /market-data/dividends": ["macro"],
+  "GET /market-data/ipos": ["ipos"],
+  "GET /market-data/ipo-pipeline": ["ipos"],
+  "GET /market-data/recaps": ["recaps"],
+  "GET /market-data/earnings": ["earningsHub"],
+  "GET /market-data/earnings-announcements": ["earningsHub"],
+  "GET /live/earnings-wire": ["earningsHub"],
+  "GET /market-data/analyst-actions": ["workspaces"],
+  "GET /market-data/analyst-firm-calls": ["workspaces"],
+  "GET /market-data/analyst-firm-stats": ["workspaces"],
+  "GET /market-data/analyst-history": ["workspaces"],
+  "GET /market-data/ai-infrastructure": ["workspaces"],
+  "GET /market-data/ai-infrastructure/:theme": ["workspaces"],
+  "GET /market-data/etf-holdings": ["workspaces"],
+  "GET /market-data/filings-wire": ["workspaces"],
+  "GET /market-data/mover-catalysts": ["workspaces"],
+  "GET /market-data/mover-catalyst/:ticker": ["workspaces"],
+  "GET /live/etf-market": ["workspaces"],
+  "GET /live/etfs/market-funds": ["workspaces"],
+  "GET /live/filing": ["workspaces"],
+  "GET /live/glance/weekly": ["workspaces"],
+  "GET /live/glance/monthly": ["workspaces"],
+  "GET /live/ticker-announcements": ["workspaces"],
+  "GET /market-data/insider-transactions": ["ownership"],
+  "GET /market-data/institutional-ownership": ["ownership"],
+  "GET /market-data/fund-holdings": ["ownership"],
+  "GET /market-data/fund-holdings/positions": ["ownership"],
+  "GET /live/ownership": ["ownership"],
+  "GET /live/ownership-13dg": ["ownership"],
+  "GET /live/13f-filings": ["ownership"],
+  "GET /api/portfolio": ["portfolio"],
+  "POST /api/portfolio/holdings": ["portfolio"],
+  "DELETE /api/portfolio/holdings/:ticker": ["portfolio"],
+  "GET /api/portfolio/holdings/:ticker/transactions": ["portfolio"],
+  "DELETE /api/portfolio/holdings/:ticker/transactions/:txnId": ["portfolio"],
+  "GET /api/watchlist": ["watchlist"],
+  "POST /api/watchlist/tickers": ["watchlist"],
+  "DELETE /api/watchlist/tickers/:ticker": ["watchlist"],
+  "GET /api/watchlists": ["watchlist"],
+  "POST /api/watchlists": ["watchlist"],
+  "PATCH /api/watchlists/:id": ["watchlist"],
+  "DELETE /api/watchlists/:id": ["watchlist"],
+  "POST /api/watchlists/:id/tickers": ["watchlist"],
+  "DELETE /api/watchlists/:id/tickers/:ticker": ["watchlist"],
+  // Stock Intelligence
+  "GET /live/company": ["stockIntelligence", "screener"],
+  "GET /live/company/summary": ["stockIntelligence"],
+  "GET /live/splits": ["stockIntelligence"],
+  "GET /live/bars": "bars",
+  "GET /live/financials": ["fundamentalRatings"],
+  "GET /live/peers-summary": ["peers"],
+  "GET /live/dividend-history": ["dividendHistory"],
+  "GET /live/estimates": ["earningsDetail"],
+  "GET /live/earnings-transcript": ["earningsDetail"],
+  "GET /live/earnings-transcript-summary": ["earningsDetail"],
+  "GET /live/ai-analysis": ["aiAssistant"],
+  "GET /live/ticker-analysis": ["aiAssistant"],
+  "POST /live/copilot": ["aiAssistant"],
+  "GET /api/ai/portfolio": ["aiAssistant"],
+  "GET /api/ai/watchlist": ["aiAssistant"],
+  "GET /api/stock-notes": ["chartNotes"],
+  "GET /api/stock-notes/all": ["chartNotes"],
+  "POST /api/stock-notes": ["chartNotes"],
+  "DELETE /api/stock-notes/:id": ["chartNotes"],
+  // Money Flow
+  "GET /live/money-flow": ["moneyFlow", "institutionalMovers"],
+  "GET /live/options-chain": ["optionsChain"],
+  // Strategy Lab
+  "GET /live/strategy-lab/universe": ["strategyLab"],
+  "POST /live/strategy-lab/validate": ["strategyLab"],
+  "POST /live/strategy-lab/ai-rules": ["strategyLab"],
+  "GET /live/strategy-lab/saved": ["strategyLab"],
+  "POST /live/strategy-lab/saved/:id": ["strategyLab"],
+  "DELETE /live/strategy-lab/saved/:id": ["strategyLab"],
+  "GET /live/strategy-lab/bars": ["backtesting"],
+};
+
+/**
+ * Routes an account WITHOUT a plan may use: sign-in and account settings,
+ * Manage Plan, checkout and billing history, the public catalog, legal and
+ * health. Prefix match. Admin-guarded and @Public routes are exempt anyway.
+ */
+export const PLAN_EXEMPT_ROUTES: Array<{ prefix: string; reason: string }> = [
+  { prefix: "/api/account", reason: "sign-in, email verification, claims" },
+  { prefix: "/api/session", reason: "sign-in session" },
+  { prefix: "/api/whoami-user", reason: "sign-in identity" },
+  { prefix: "/api/profile", reason: "account settings" },
+  { prefix: "/api/settings", reason: "account settings" },
+  { prefix: "/api/billing", reason: "Manage Plan, checkout, billing history" },
+  { prefix: "/api/me", reason: "entitlements (drives Choose a plan)" },
+  { prefix: "/plans", reason: "the public plan catalog" },
+  { prefix: "/health", reason: "health check" },
+  { prefix: "/public", reason: "website landing data" },
+  { prefix: "/mcp", reason: "admin-issued API keys (McpApiKeyGuard)" },
+  { prefix: "/live/stream", reason: "needs a stream ticket, issued only on a plan" },
+  { prefix: "/live/tape/stream", reason: "needs a stream ticket, issued only on a plan" },
+];
+
+/** Intraday ranges served by /live/bars (minute bars). */
+export const INTRADAY_TFS = new Set(["1H", "1D", "5D", "1W", "1M"]);
+
+/** The entitlement keys a request to `routeKey` needs (any of them), or null if exempt/unknown. */
+export function routeRequirement(
+  routeKey: string,
+  query: Record<string, unknown> = {},
+): EntitlementKey[] | null {
+  const r = ROUTE_FEATURES[routeKey];
+  if (!r) return null;
+  if (r !== "bars") return r;
+  if (query.interval != null) return ["chartsIntraday"];
+  const tf = String(query.tf ?? "")
+    .toUpperCase()
+    .trim();
+  if (INTRADAY_TFS.has(tf)) return ["chartsIntraday"];
+  if (tf === "5Y") return ["chartsHistory"];
+  return ["chartsDaily"];
+}
+
+export function isPlanExempt(path: string): boolean {
+  return PLAN_EXEMPT_ROUTES.some(
+    (e) => path === e.prefix || path.startsWith(e.prefix + "/"),
+  );
+}
+
+// ── Where each feature lives: UI screens and widgets ───────────────────────
+
+/** UI screen slug (app/dashboard/menu-items.ts and top-level routes) → feature. */
+export const SCREEN_FEATURES: Record<string, EntitlementKey> = {
+  dashboard: "marketCatalyst",
+  commentary: "news",
+  movers: "scanner",
+  heatmap: "heatmap",
+  macro: "macro",
+  ipos: "ipos",
+  screener: "screener",
+  recap: "recaps",
+  "weekly-recap": "recaps",
+  earnings: "earningsHub",
+  analyst: "workspaces",
+  insider: "ownership",
+  "etf-corner": "workspaces",
+  "ai-infrastructure": "workspaces",
+  filing: "workspaces",
+  portfolio: "portfolio",
+  watchlist: "watchlist",
+  requests: "marketCatalyst",
+  themes: "themes",
+  notes: "chartNotes",
+  stock: "stockIntelligence",
+  si: "stockIntelligence",
+  "money-flow": "moneyFlow",
+  options: "optionsChain",
+  sl: "strategyLab",
+};
+
+/** Screens an account without a plan can open (everything else: "Choose a plan"). */
+export const PLAN_EXEMPT_SCREENS = [
+  "auth",
+  "verify-email",
+  "settings",
+  "profile",
+  "manage-plan",
+  "checkout",
+  "billing",
+  "legal",
+  "version",
+] as const;
+
+/** Widgets inside a screen that are gated on their own (they make no call when locked). */
+export const WIDGET_FEATURES: Record<string, EntitlementKey> = {
+  "dashboard.analyst": "workspaces",
+  "dashboard.portfolio": "portfolio",
+  "dashboard.insider": "ownership",
+  "commentary.portfolio": "portfolio",
+  "stock.aiResearch": "aiAssistant",
+  "stock.financials": "fundamentalRatings",
+  "stock.tradeBuilder": "tradeTracker",
+};
+
+// ── Where each feature lives: Firestore client reads ───────────────────────
+
+/**
+ * Collections no browser reads (every screen goes through the backend, which
+ * uses the Admin SDK). Their old plan gates were dead; they now deny client
+ * reads outright. Written into firestore.rules' generated section.
+ */
+export const CLIENT_DENIED_COLLECTIONS = [
+  "earnings_summaries",
+  "options_flow",
+  "block_trades",
+  "fund_holdings",
+  "story_stocks",
+] as const;
+
+// ── Plan-card copy (website tiles, signup and Manage Plan cards) ───────────
+
+export const PLAN_CARD_BULLETS: Record<string, string[]> = {
+  starter: [
+    "Market Desk: all workspaces",
+    "Stock Intelligence and AI research",
+    "Trade Builder and Trade Tracker",
+  ],
+  pro: [
+    "Everything in Starter",
+    "Money Flow by sector",
+    "Biggest institutional gainers and losers",
+  ],
+  elite: [
+    "Everything in Pro",
+    "Strategy Lab",
+    "Backtest any strategy",
+    "Strategy Lab entry, stop and target levels",
+  ],
+};
+
+/** What all three plans share — the "Every plan includes" list. */
+export const EVERY_PLAN_INCLUDES = [
+  "Market Desk — every workspace: dashboard, live feed, movers, heatmap, calendar, IPOs, screener, recaps, Earnings Hub, analyst actions, 13F & insider, ETF Corner and AI Companies",
+  "Stock Intelligence — any stock's financials, ratings, peers, dividends, earnings detail and transcripts, AI research, and intraday and five-year charts with indicators",
+  "Portfolio — track holdings with live prices and profit/loss",
+  "Watchlist — unlimited tickers",
+];

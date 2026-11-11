@@ -14,7 +14,6 @@ import {
   classifyAiInfrastructure,
 } from "../common/ai-infrastructure-themes";
 import { capBucket } from "../adapters/types";
-import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
 
 /** `companies.description` is a full paragraph; the tile/detail views need a
  *  single "what they do" line, so take the first sentence. */
@@ -43,7 +42,6 @@ export class AiInfrastructureController {
     private readonly cached: CachedCollectionsService,
   ) {}
 
-  @RequiresEntitlement("workspaces")
   @Get("ai-infrastructure")
   @Header(
     "Cache-Control",
@@ -69,7 +67,6 @@ export class AiInfrastructureController {
     });
   }
 
-  @RequiresEntitlement("workspaces")
   @Get("ai-infrastructure/:theme")
   @Header(
     "Cache-Control",

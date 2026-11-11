@@ -3,7 +3,6 @@ import { Controller, Get, Header, UseGuards } from "@nestjs/common";
 import { CachedCollectionsService } from "../live/cached-collections.service";
 import { MarketDataService } from "./market-data.service";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
-import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
 
 /**
  * GET /market-data/institutional-ownership — ticker-indexed 13F ownership
@@ -24,7 +23,6 @@ export class InstitutionalOwnershipController {
     private readonly cached: CachedCollectionsService,
   ) { }
 
-  @RequiresEntitlement("ownership")
   @Get("institutional-ownership")
   @Header(
     "Cache-Control",

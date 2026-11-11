@@ -83,7 +83,17 @@ export interface InvoiceLine {
   /** Minor units; negative for credits. */
   amount: number;
   proration: boolean;
+  /** The service period this line covers (ISO), when the provider reports one. */
+  periodStart?: string | null;
+  periodEnd?: string | null;
 }
+
+/**
+ * upgrade   immediate, prorated, charged now
+ * downgrade immediate, prorated, the difference credited to the customer balance
+ * scheduled annual → monthly: takes effect at the end of the annual period
+ */
+export type ProviderChangeKind = "upgrade" | "downgrade" | "scheduled";
 
 export interface ProviderInvoice {
   id: string;
@@ -138,15 +148,22 @@ export interface CheckoutSession {
   cancelUrl: string;
   /** Tax included in amountDueToday (provider-computed). */
   tax?: number;
+  /** Embedded checkout: the secret the browser confirms the first payment with (Stripe). */
+  clientSecret?: string | null;
 }
 
 export interface ChangePreview {
-  kind: "upgrade" | "downgrade";
+  kind: ProviderChangeKind;
   planId: string;
   interval: BillingInterval;
   currency: string;
   /** Charged now (upgrades); 0 for downgrades. Minor units. */
   amountDueNow: number;
+  /** Credited to the customer balance now (downgrades); 0 otherwise. */
+  creditToBalance: number;
+  /** The current period the proration splits (ISO). */
+  currentPeriodStart: string;
+  currentPeriodEnd: string;
   /** Proration reference time (ms); pass back to changePlan for the same amount. */
   prorationDate: number;
   effectiveAt: string;
@@ -160,6 +177,8 @@ export type ChangeResult =
       status: "applied";
       invoiceId: string | null;
       amountCharged: number;
+      /** Credited to the customer balance (downgrades). */
+      creditToBalance?: number;
       effectiveAt: string;
     }
   | { status: "scheduled"; effectiveAt: string }

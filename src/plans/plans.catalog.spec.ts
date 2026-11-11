@@ -7,9 +7,13 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import {
   CATALOG_VERSION,
   ENTITLEMENTS,
+  FEATURE_GROUPS,
   PLAN_DEFINITIONS,
+  PLAN_GROUPS,
+  RETIRED_PLAN_IDS,
   catalogPrice,
   lowestPlanFor,
+  planById,
   planRank,
 } from "./plans.registry";
 import { PlansService } from "./plans.service";
@@ -23,21 +27,39 @@ import { refundPolicy } from "../billing/refund/refund-policy";
 
 /** The one catalog (doc Step 1, decision a) — exactly what the website sells. */
 const EXPECTED = {
-  free: { monthly: undefined, annual: undefined },
   starter: { monthly: 3900, annual: 37440 },
   pro: { monthly: 5900, annual: 56640 },
   elite: { monthly: 19900, annual: 179100 },
 };
 
 describe("plan catalog", () => {
-  it("is exactly Free, Starter, Pro, Elite in that order", () => {
+  it("is exactly Starter, Pro, Elite in that order — no free plan", () => {
     expect(PLAN_DEFINITIONS.map((p) => p.id)).toEqual([
-      "free",
       "starter",
       "pro",
       "elite",
     ]);
-    expect(PLAN_DEFINITIONS.map((p) => planRank(p.id))).toEqual([0, 1, 2, 3]);
+    expect(PLAN_DEFINITIONS.map((p) => planRank(p.id))).toEqual([1, 2, 3]);
+    expect(PLAN_DEFINITIONS.every((p) => Object.keys(p.prices).length === 2)).toBe(true);
+    expect(planById("free")).toBeUndefined();
+    expect(RETIRED_PLAN_IDS).toEqual(expect.arrayContaining(["free", "plus"]));
+    expect(CATALOG_VERSION).toBe(3);
+  });
+
+  it("plans are built from feature groups: Starter = Market Desk + Stock Intelligence, Pro + Money Flow, Elite + Strategy Lab", () => {
+    expect(PLAN_GROUPS).toEqual({
+      starter: ["marketDesk", "stockIntelligence"],
+      pro: ["marketDesk", "stockIntelligence", "moneyFlow"],
+      elite: ["marketDesk", "stockIntelligence", "moneyFlow", "strategyLab"],
+    });
+    expect(FEATURE_GROUPS.map((g) => g.name)).toEqual(["Market Desk", "Stock Intelligence", "Money Flow", "Strategy Lab"]);
+    for (const p of PLAN_DEFINITIONS)
+      for (const e of ENTITLEMENTS)
+        expect([p.id, e.key, p.featureFlags[e.key]]).toEqual([
+          p.id,
+          e.key,
+          !!e.featureGroup && !e.unbuilt && !e.staffOnly && PLAN_GROUPS[p.id].includes(e.featureGroup),
+        ]);
   });
 
   it.each(Object.entries(EXPECTED))(
@@ -89,9 +111,12 @@ describe("plan catalog", () => {
     }
   });
 
-  it("puts features on the plans the doc's Step 1 table says", () => {
-    expect(lowestPlanFor("watchlist")?.id).toBe("free");
-    expect(lowestPlanFor("chartsDaily")?.id).toBe("free");
+  it("puts features on the plans the feature groups say", () => {
+    expect(lowestPlanFor("watchlist")?.id).toBe("starter");
+    expect(lowestPlanFor("chartsDaily")?.id).toBe("starter");
+    expect(lowestPlanFor("screener")?.id).toBe("starter");
+    expect(lowestPlanFor("tradeTracker")?.id).toBe("starter");
+    expect(lowestPlanFor("institutionalMovers")?.id).toBe("pro");
     expect(lowestPlanFor("workspaces")?.id).toBe("starter");
     expect(lowestPlanFor("ownership")?.id).toBe("starter");
     expect(lowestPlanFor("aiAssistant")?.id).toBe("starter");
@@ -128,9 +153,8 @@ describe("plan catalog", () => {
     );
   });
 
-  it("caps the Free watchlist at 5 tickers and paid plans at none", () => {
+  it("no watchlist limit on any plan", () => {
     expect(PLAN_DEFINITIONS.map((p) => p.limits.watchlistTickers)).toEqual([
-      5,
       null,
       null,
       null,
@@ -183,10 +207,10 @@ describe("catalog apply (scripts/apply-catalog.ts)", () => {
     const r = await applyCatalog(db(fs), { dryRun: true, now: T });
     expect(r.backupFile).toBeNull();
     expect(r.changes.map((c) => `${c.op} ${c.id}`)).toEqual([
-      "rewrite free",
       "create starter",
       "rewrite pro",
       "create elite",
+      "retire free",
       "retire plus",
     ]);
     const pro = r.changes.find((c) => c.id === "pro")!;
@@ -221,6 +245,8 @@ describe("catalog apply (scripts/apply-catalog.ts)", () => {
       prices: { annual: { amount: 56640 } },
     });
     expect(fs.read("plans", "plus")?.active).toBe(false);
+    // Free is set inactive, never deleted.
+    expect(fs.read("plans", "free")).toMatchObject({ id: "free", amount: 0, active: false });
   });
 
   it("is idempotent: a second run changes nothing and takes no backup", async () => {
@@ -271,7 +297,6 @@ describe("catalog apply (scripts/apply-catalog.ts)", () => {
     seedV1(fs);
     const before = await service(fs).listActive();
     expect(before.map((p) => [p.id, p.amount])).toEqual([
-      ["free", 0],
       ["starter", 3900],
       ["pro", 5900],
       ["elite", 19900],
@@ -280,7 +305,7 @@ describe("catalog apply (scripts/apply-catalog.ts)", () => {
     const pro = fs.read("plans", "pro");
     fs.seed("plans", "pro", { ...pro, description: "edited after apply" });
     const after = await service(fs).listActive();
-    expect(after.map((p) => p.id)).toEqual(["free", "starter", "pro", "elite"]);
+    expect(after.map((p) => p.id)).toEqual(["starter", "pro", "elite"]);
     expect(after.find((p) => p.id === "pro")?.description).toBe(
       "edited after apply",
     );

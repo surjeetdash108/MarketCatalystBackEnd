@@ -298,8 +298,12 @@ export class PromoService {
   }
 
   /** One attempt against the per-user and per-IP hourly budgets; 429 when exceeded. */
-  async consumeAttempt(uid: string, ip: string | null): Promise<void> {
-    const keys = [`uid:${uid}`, ...(ip ? [`ip:${ip}`] : [])];
+  async consumeAttempt(uid: string | null, ip: string | null): Promise<void> {
+    // Signed out (signup): the IP budget only; with no IP, one shared bucket.
+    const keys = [
+      ...(uid ? [`uid:${uid}`] : []),
+      ...(ip ? [`ip:${ip}`] : uid ? [] : ["ip:unknown"]),
+    ];
     const now = this.clock.now();
     for (const key of keys) {
       const ref = this.firebase.firestore
@@ -336,13 +340,14 @@ export class PromoService {
   /** Server-side preview for the signup/upgrade screen. One generic error for every rejection. */
   async preview(input: {
     code: string;
-    uid: string;
+    /** null on the signup page (signed out): rate-limited by IP only. */
+    uid: string | null;
     planId: string;
     interval: BillingInterval;
     ip: string | null;
   }) {
     await this.consumeAttempt(input.uid, input.ip);
-    const v = await this.validate(input);
+    const v = await this.validate({ ...input, uid: input.uid ?? "" });
     if (v.ok === false) {
       this.logger.log(`promo preview rejected (${v.reason})`);
       throw new BadRequestException({

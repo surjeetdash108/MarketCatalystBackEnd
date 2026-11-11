@@ -151,6 +151,19 @@ export function windowStats(
  * before the last bar; intraday runs flatten at the session close when the
  * candle is ≤ 30 minutes. Null when the engine has too little history.
  */
+/** Default backtest window when a run has no `years`: 1 year, matching the Strategy Lab UI default. */
+export const DEFAULT_BACKTEST_YEARS = 1;
+
+/** Daily runs start `years` (default 1) before the last bar. */
+export function backtestStartDate(
+  lastBarDate: string | number | Date,
+  years?: number | null,
+): string {
+  const d = new Date(lastBarDate);
+  d.setFullYear(d.getFullYear() - (years || DEFAULT_BACKTEST_YEARS));
+  return d.toISOString().slice(0, 10);
+}
+
 export function runOne(
   t: string,
   name: string,
@@ -167,9 +180,7 @@ export function runOne(
     c.intraday = true;
     c.flatEOD = T.flat;
   } else {
-    const d = new Date(b[b.length - 1].date);
-    d.setFullYear(d.getFullYear() - (cfg.years || 5));
-    c.startDate = d.toISOString().slice(0, 10);
+    c.startDate = backtestStartDate(b[b.length - 1].date, cfg.years);
   }
   const r = Engine.runRules(b, spec, c);
   if (!r) return null;

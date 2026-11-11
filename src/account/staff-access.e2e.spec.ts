@@ -85,7 +85,7 @@ describe("staff claim sync", () => {
     });
   });
 
-  it("an UNVERIFIED account using a staff email gets no claim and Free entitlements", async () => {
+  it("an UNVERIFIED account using a staff email gets no claim and no plan", async () => {
     a = await billingApp({ env: { SUBSCRIPTIONS_ENABLED: "true" } });
     await withStaffList(a, [STAFF]);
     a.user("x1", STAFF, { emailVerified: false });
@@ -94,7 +94,7 @@ describe("staff claim sync", () => {
       refreshToken: false,
     });
     const me = (await a.as("x1").get("/api/me/entitlements")).body;
-    expect(me.planId).toBe("free");
+    expect(me.planId).toBe("none");
     expect(me.staff).toBeUndefined();
     expect(me.entitlements.moneyFlow).toBe(false);
   });

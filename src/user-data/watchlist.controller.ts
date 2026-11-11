@@ -24,7 +24,7 @@ import { BillingAccessService } from "../billing/billing-access.service";
 
 /**
  * Watchlist ticker cap: the user's plan limit from the catalog
- * (plans.registry → limits.watchlistTickers; Free = 5, paid = unlimited),
+ * (plans.registry → limits.watchlistTickers; every paid plan = unlimited),
  * enforced only while subscriptions are live (SUBSCRIPTIONS_ENABLED + a billing
  * provider). Off → no cap, today's behaviour.
  *
@@ -115,7 +115,7 @@ export class WatchlistController {
       code: "plan_required",
       entitlement: "watchlistTickers",
       requiredPlan: "starter",
-      message: `The Free plan holds up to ${limit} tickers per watchlist. Remove one, or upgrade to add more.`,
+      message: `Your plan holds up to ${limit} tickers per watchlist. Remove one, or upgrade to add more.`,
     });
   }
 

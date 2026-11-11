@@ -19,6 +19,7 @@ const UI_CATALOG_FILE = existsSync(join(UI_APP_ROOT, "iq/entitlements.tsx"))
   ? join(UI_APP_ROOT, "iq/entitlements.tsx")
   : join(UI_APP_ROOT, "admin/entitlement-catalog.ts");
 const UI_GATE_FILE = join(UI_APP_ROOT, "iq/entitlement-gate.tsx");
+const UI_FEATURE_MAP_FILE = join(UI_APP_ROOT, "iq/feature-map.generated.ts");
 
 function catalogKeysInUi(): Set<string> {
   const src = readFileSync(UI_CATALOG_FILE, "utf8");
@@ -26,23 +27,20 @@ function catalogKeysInUi(): Set<string> {
 }
 
 /**
- * Parses SLUG_ENTITLEMENT out of the UI gate file. Throws — never returns an
- * empty list — when the file or the map is missing: an empty list made every
- * assertion below pass vacuously while the UI had no gate at all.
+ * Parses SCREEN_FEATURES out of the UI generated feature map file.
  */
 function slugMappings(): Array<{ slug: string; key: string }> {
-  if (!existsSync(UI_GATE_FILE)) {
-    throw new Error(`UI gate file missing: ${UI_GATE_FILE}`);
+  if (!existsSync(UI_FEATURE_MAP_FILE)) {
+    throw new Error(`UI feature map file missing: ${UI_FEATURE_MAP_FILE}`);
   }
-  const src = readFileSync(UI_GATE_FILE, "utf8");
-  const start = src.indexOf("SLUG_ENTITLEMENT");
+  const src = readFileSync(UI_FEATURE_MAP_FILE, "utf8");
+  const start = src.indexOf("SCREEN_FEATURES");
   if (start === -1) {
-    throw new Error(`SLUG_ENTITLEMENT not found in ${UI_GATE_FILE}`);
+    throw new Error(`SCREEN_FEATURES not found in ${UI_FEATURE_MAP_FILE}`);
   }
-  const block = src.slice(start, src.indexOf("};", start));
-  return [...block.matchAll(/"?([a-zA-Z-]+)"?: "([a-zA-Z]+)"/g)]
-    .map((m) => ({ slug: m[1], key: m[2] }))
-    .filter((m) => m.slug !== "SLUG_ENTITLEMENT");
+  const block = src.slice(start, src.indexOf("} as const;", start));
+  return [...block.matchAll(/"([a-zA-Z-]+)": "([a-zA-Z]+)"/g)]
+    .map((m) => ({ slug: m[1], key: m[2] }));
 }
 
 describe("entitlement catalog", () => {
@@ -97,7 +95,13 @@ describe("frontend catalog mirror", () => {
   });
 });
 
-describe("SLUG_ENTITLEMENT", () => {
+describe("SCREEN_FEATURES", () => {
+  it("the UI gate uses the generated map and does not define a hand-kept SLUG_ENTITLEMENT", () => {
+    const src = readFileSync(UI_GATE_FILE, "utf8");
+    expect(src.includes("SLUG_ENTITLEMENT")).toBe(false);
+    expect(src.includes("SCREEN_FEATURES")).toBe(true);
+  });
+
   it("exists in the UI and maps at least the core screens", () => {
     const slugs = new Set(slugMappings().map((m) => m.slug));
     for (const s of ["dashboard", "screener", "portfolio", "insider"]) {

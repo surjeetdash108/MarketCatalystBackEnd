@@ -1,4 +1,9 @@
-import type { BillingDetails, BillingRegion, CheckoutQuote } from "./types";
+import type {
+  BillingDetails,
+  BillingRegion,
+  CheckoutQuote,
+  ProviderChangeKind,
+} from "./types";
 import type {
   AppliedDiscount,
   ChangePreview,
@@ -48,6 +53,12 @@ export class InvalidEventSignatureError extends Error {}
  */
 export interface BillingProvider {
   readonly name: ProviderName;
+  /**
+   * false for test-mode providers (the fake, Stripe sk_test_ keys). Every
+   * billing record written through this provider carries it, so test data is
+   * excluded from MRR/revenue/counts and can be purged.
+   */
+  readonly livemode: boolean;
 
   // ── customers ──────────────────────────────────────────────────────────
   createCustomer(input: {
@@ -91,16 +102,23 @@ export interface BillingProvider {
   previewChange(input: {
     subscriptionId: string;
     target: PriceRef;
-    kind: "upgrade" | "downgrade";
+    kind: ProviderChangeKind;
   }): Promise<ChangePreview>;
-  /** Upgrade: immediate, prorated, charged now. Downgrade: scheduled for period end. */
+  /**
+   * upgrade: immediate, prorated, charged now (must equal expectedAmountDue).
+   * downgrade: immediate, prorated, credited to the balance (must equal expectedCredit).
+   * scheduled: annual → monthly at the end of the annual period.
+   */
   changePlan(input: {
     subscriptionId: string;
     target: PriceRef;
-    kind: "upgrade" | "downgrade";
+    kind: ProviderChangeKind;
     prorationDate: number;
     expectedAmountDue: number | null;
+    expectedCredit?: number | null;
   }): Promise<ChangeResult>;
+  /** The customer's account credit (minor units, ≥ 0) used on future invoices. */
+  getCreditBalance(customerId: string): Promise<number>;
   cancelScheduledChange(subscriptionId: string): Promise<void>;
   cancelAtPeriodEnd(subscriptionId: string): Promise<void>;
   resume(subscriptionId: string): Promise<void>;
@@ -133,9 +151,9 @@ export interface BillingProvider {
   deactivatePromotion(promo: PromoMirror): Promise<void>;
 
   // ── events ─────────────────────────────────────────────────────────────
-  /** Verifies the signature over the raw body and returns the event. */
+  /** Verifies the signature over the raw body and returns the event (null = not ours, ignore). */
   parseEvent(
     rawBody: Buffer | string,
     signature: string | undefined,
-  ): ProviderEvent;
+  ): ProviderEvent | null | Promise<ProviderEvent | null>;
 }

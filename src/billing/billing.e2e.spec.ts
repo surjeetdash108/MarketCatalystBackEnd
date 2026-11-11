@@ -30,7 +30,7 @@ describe("SUBSCRIPTIONS_ENABLED and provider safety", () => {
     expect(me).toMatchObject({
       subscriptionsEnabled: false,
       paidPlansAvailable: false,
-      planId: "free",
+      planId: "none",
     });
     expect(Object.values(me.entitlements).every(Boolean)).toBe(true);
     expect(me.entitlements.strategyLab).toBe(true);
@@ -178,7 +178,7 @@ describe("plan choice at signup and checkout", () => {
     ).toBe(400);
   });
 
-  it("a declined card or an abandoned checkout leaves the account on Free", async () => {
+  it("a declined card or an abandoned checkout leaves the account with no plan", async () => {
     a = await billingApp();
     const { complete, u } = await a.subscribe(
       "u1",
@@ -187,7 +187,7 @@ describe("plan choice at signup and checkout", () => {
       "decline",
     );
     expect(complete.body).toEqual({ status: "failed", code: "card_declined" });
-    expect((await u.get("/api/me/entitlements")).body.planId).toBe("free");
+    expect((await u.get("/api/me/entitlements")).body.planId).toBe("none");
     await a.advanceDays(2);
     expect(
       a.fs.read(
@@ -197,7 +197,7 @@ describe("plan choice at signup and checkout", () => {
           : "",
       ),
     ).toMatchObject({ status: "expired" });
-    expect((await u.get("/api/me/entitlements")).body.planId).toBe("free");
+    expect((await u.get("/api/me/entitlements")).body.planId).toBe("none");
   });
 
   it("3-D Secure: the challenge must be approved before the plan activates", async () => {
@@ -209,7 +209,7 @@ describe("plan choice at signup and checkout", () => {
       "requires_3ds",
     );
     expect(complete.body.status).toBe("requires_action");
-    expect((await u.get("/api/me/entitlements")).body.planId).toBe("free");
+    expect((await u.get("/api/me/entitlements")).body.planId).toBe("none");
     expect(
       (
         await u.post(`/api/billing/fake/actions/${complete.body.actionId}`, {
@@ -376,90 +376,170 @@ describe("upgrade and downgrade", () => {
     expect(stale.body.code).toBe("preview_stale");
   });
 
-  it("downgrade is scheduled for period end; 'keep my current plan' cancels it", async () => {
+  it("upgrade mid-period (day 10 of 30): the breakdown equals the charge to the cent; features unlock now", async () => {
     a = await billingApp();
-    const { u } = await a.subscribe("u1", "elite", "monthly");
-    const p = (
-      await u.post("/api/billing/change/preview", {
-        planId: "starter",
-        interval: "monthly",
-      })
-    ).body;
-    expect(p).toMatchObject({ kind: "downgrade", amountDueNow: 0 });
-    expect(
-      (
-        await u.post("/api/billing/change", {
-          planId: "starter",
-          interval: "monthly",
-        })
-      ).body,
-    ).toMatchObject({ status: "scheduled" });
-    expect(
-      (await u.get("/api/billing/summary")).body.scheduledChange,
-    ).toMatchObject({ planId: "starter" });
-    expect((await u.get("/api/me/entitlements")).body.planId).toBe("elite");
-    expect((await u.post("/api/billing/change/keep")).body).toMatchObject({
-      kept: true,
-      planId: "elite",
+    const { u } = await a.subscribe("u1", "starter", "monthly");
+    a.clock.freeze(T0 + 10 * DAY);
+    const p = (await u.post("/api/billing/change/preview", { planId: "pro", interval: "monthly" })).body;
+    // Starter $39 → Pro $59 with 20 of 30 days left.
+    expect(p.breakdown).toEqual({
+      fromPlanName: "Starter",
+      toPlanName: "Pro",
+      periodStart: new Date(T0).toISOString(),
+      today: new Date(T0 + 10 * DAY).toISOString(),
+      periodEnd: new Date(T0 + 30 * DAY).toISOString(),
+      usedOnCurrent: 1300, // Starter: start to today
+      newPlanCharge: 3933, // Pro: today to period end
+      alreadyPaid: 3900,
+      net: 1333,
+      chargedNow: 1333,
+      creditToBalance: 0,
     });
-    expect(
-      (await u.get("/api/billing/summary")).body.scheduledChange,
-    ).toBeNull();
-    await a.advanceDays(31);
-    expect((await u.get("/api/me/entitlements")).body.planId).toBe("elite");
+    expect(p.amountDueNow).toBe(1333);
+    expect(p).toMatchObject({ nextRenewalAmount: 5900, nextRenewalDate: new Date(T0 + 30 * DAY).toISOString() });
+    const r = await u.post("/api/billing/change", { planId: "pro", interval: "monthly", expectedAmountDue: 1333, prorationDate: p.prorationDate });
+    expect(r.body).toMatchObject({ kind: "upgrade", status: "applied", amountCharged: 1333 });
+    expect((await u.get("/api/me/entitlements")).body.entitlements.moneyFlow).toBe(true);
   });
 
-  it("a scheduled downgrade happens at period end, billed at the new price", async () => {
+  it("downgrade mid-period (day 10 of 30): applies now, credit to the account equals the breakdown, used on the next invoice", async () => {
+    a = await billingApp();
+    const { u } = await a.subscribe("u1", "elite", "monthly");
+    a.clock.freeze(T0 + 10 * DAY);
+    const p = (await u.post("/api/billing/change/preview", { planId: "starter", interval: "monthly" })).body;
+    // Elite $199 → Starter $39 with 20 of 30 days left.
+    expect(p.kind).toBe("downgrade");
+    expect(p.breakdown).toMatchObject({
+      fromPlanName: "Elite",
+      toPlanName: "Starter",
+      usedOnCurrent: 6633, // 19900 − unused 13267
+      newPlanCharge: 2600,
+      alreadyPaid: 19900,
+      net: -10667,
+      chargedNow: 0,
+      creditToBalance: 10667,
+    });
+    expect(p.breakdown.usedOnCurrent + p.breakdown.newPlanCharge - p.breakdown.alreadyPaid).toBe(-p.creditToBalance);
+    expect(p).toMatchObject({ amountDueNow: 0, creditToBalance: 10667, creditBalanceAfter: 10667, nextInvoiceAfterCredit: 0 });
+    // A downgrade also needs the preview, and the credit must match it exactly.
+    expect((await u.post("/api/billing/change", { planId: "starter", interval: "monthly" })).body.code).toBe("preview_required");
+    expect((await u.post("/api/billing/change", { planId: "starter", interval: "monthly", expectedCredit: 10666, prorationDate: p.prorationDate })).body.code).toBe("preview_stale");
+    const r = await u.post("/api/billing/change", { planId: "starter", interval: "monthly", expectedCredit: 10667, prorationDate: p.prorationDate });
+    expect(r.body).toMatchObject({ kind: "downgrade", status: "applied", amountCharged: 0, creditToBalance: 10667 });
+    // Features drop now.
+    const me = (await u.get("/api/me/entitlements")).body;
+    expect(me.planId).toBe("starter");
+    expect(me.entitlements.strategyLab).toBe(false);
+    expect((await u.get("/api/billing/summary")).body).toMatchObject({ planId: "starter", creditBalance: 10667, scheduledChange: null });
+    // The credit pays the next invoices automatically: 3900 at renewal, then 3900, then the remaining 2867 credit.
+    await a.advanceDays(21);
+    let inv = (await u.get("/api/billing/invoices")).body.invoices[0];
+    expect(inv).toMatchObject({ planId: "starter", amount: 0, creditApplied: 3900 });
+    await a.advanceDays(30);
+    await a.advanceDays(31);
+    inv = (await u.get("/api/billing/invoices")).body.invoices[0];
+    expect(inv).toMatchObject({ amount: 3900 - (10667 - 7800), creditApplied: 10667 - 7800 });
+    expect((await u.get("/api/billing/summary")).body.creditBalance).toBe(0);
+  });
+
+  it("annual → monthly is still scheduled for the end of the annual period; 'keep my current plan' cancels it", async () => {
     a = await billingApp();
     const { u } = await a.subscribe("u1", "elite", "annual");
-    await u.post("/api/billing/change", { planId: "pro", interval: "annual" });
+    const p = (await u.post("/api/billing/change/preview", { planId: "pro", interval: "monthly" })).body;
+    expect(p).toMatchObject({ kind: "scheduled", amountDueNow: 0, creditToBalance: 0, breakdown: null });
+    expect((await u.post("/api/billing/change", { planId: "pro", interval: "monthly" })).body).toMatchObject({ status: "scheduled" });
+    expect((await u.get("/api/billing/summary")).body.scheduledChange).toMatchObject({ planId: "pro", interval: "monthly" });
+    expect((await u.get("/api/me/entitlements")).body.planId).toBe("elite");
+    expect((await u.post("/api/billing/change/keep")).body).toMatchObject({ kept: true, planId: "elite" });
+    await u.post("/api/billing/change", { planId: "pro", interval: "monthly" });
     await a.advanceDays(364);
     expect((await u.get("/api/me/entitlements")).body.planId).toBe("elite");
     await a.advanceDays(2);
-    expect((await u.get("/api/me/entitlements")).body.planId).toBe("pro");
-    expect(
-      (await u.get("/api/billing/invoices")).body.invoices[0],
-    ).toMatchObject({ amount: 56640, planId: "pro" });
+    expect((await u.get("/api/me/entitlements")).body).toMatchObject({ planId: "pro", interval: "monthly" });
+    expect((await u.get("/api/billing/invoices")).body.invoices[0]).toMatchObject({ amount: 5900, planId: "pro" });
   });
 
-  it("upgrading while a downgrade is scheduled drops the downgrade; while cancelling, it resumes", async () => {
+  it("downgrade edge case: a retention discount continues at 50% of the new price for its remaining months", async () => {
+    a = await billingApp();
+    const { u } = await a.subscribe("u1", "elite", "monthly");
+    await u.post("/api/billing/cancel");
+    await u.post("/api/billing/retention/accept"); // 50% off the next 2 invoices
+    await a.advanceDays(31); // first discounted invoice: 9950
+    a.clock.freeze(Date.parse((await u.get("/api/billing/summary")).body.currentPeriodStart ?? new Date(T0).toISOString()) + 10 * DAY);
+    const p = (await u.post("/api/billing/change/preview", { planId: "pro", interval: "monthly" })).body;
+    expect(p.breakdown.alreadyPaid).toBe(9950);
+    await u.post("/api/billing/change", { planId: "pro", interval: "monthly", expectedCredit: p.creditToBalance, prorationDate: p.prorationDate });
+    await a.advanceDays(31);
+    const inv = (await u.get("/api/billing/invoices")).body.invoices[0];
+    expect(inv).toMatchObject({ planId: "pro", discountAmount: 2950 }); // 50% of 5900
+    await a.advanceDays(31);
+    expect((await u.get("/api/billing/invoices")).body.invoices[0]).toMatchObject({ planId: "pro", discountAmount: 0 });
+  });
+
+  it("downgrade edge case: while cancelling, the downgrade applies now and keeps the cancel date", async () => {
     a = await billingApp();
     const { u } = await a.subscribe("u1", "pro", "monthly");
-    await u.post("/api/billing/change", {
-      planId: "starter",
-      interval: "monthly",
-    });
-    let p = (
-      await u.post("/api/billing/change/preview", {
-        planId: "elite",
-        interval: "monthly",
-      })
-    ).body;
+    await u.post("/api/billing/cancel");
+    const before = (await u.get("/api/billing/summary")).body;
+    expect(before.cancelAtPeriodEnd).toBe(true);
+    const p = (await u.post("/api/billing/change/preview", { planId: "starter", interval: "monthly" })).body;
+    expect(p.keepsCancelDate).toBe(true);
+    await u.post("/api/billing/change", { planId: "starter", interval: "monthly", expectedCredit: p.creditToBalance, prorationDate: p.prorationDate });
+    const after = (await u.get("/api/billing/summary")).body;
+    expect(after).toMatchObject({ planId: "starter", cancelAtPeriodEnd: true, currentPeriodEnd: before.currentPeriodEnd });
+  });
+
+  it("downgrade edge case: past due is refused until paid", async () => {
+    a = await billingApp();
+    const { u } = await a.subscribe("u1", "pro", "monthly", "renewal_failure");
+    await a.advanceDays(31);
+    const r = await u.post("/api/billing/change/preview", { planId: "starter", interval: "monthly" });
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe("past_due");
+  });
+
+  it("upgrading while an annual → monthly change is scheduled drops it; while cancelling, it resumes", async () => {
+    a = await billingApp();
+    const { u } = await a.subscribe("u1", "pro", "annual");
+    await u.post("/api/billing/change", { planId: "pro", interval: "monthly" });
+    let p = (await u.post("/api/billing/change/preview", { planId: "elite", interval: "annual" })).body;
     expect(p.cancelsPendingDowngrade).toBe(true);
-    await u.post("/api/billing/change", {
-      planId: "elite",
-      interval: "monthly",
-      expectedAmountDue: p.amountDueNow,
-      prorationDate: p.prorationDate,
-    });
+    await u.post("/api/billing/change", { planId: "elite", interval: "annual", expectedAmountDue: p.amountDueNow, prorationDate: p.prorationDate });
     let s = (await u.get("/api/billing/summary")).body;
     expect(s).toMatchObject({ planId: "elite", scheduledChange: null });
     await u.post("/api/billing/cancel");
-    p = (
-      await u.post("/api/billing/change/preview", {
-        planId: "elite",
-        interval: "annual",
-      })
-    ).body;
+    a.clock.freeze(a.clock.now() + DAY);
+    const sub = await a.subscribe("u2", "starter", "monthly");
+    await sub.u.post("/api/billing/cancel");
+    p = (await sub.u.post("/api/billing/change/preview", { planId: "pro", interval: "monthly" })).body;
     expect(p.resumesCancelledPlan).toBe(true);
-    await u.post("/api/billing/change", {
-      planId: "elite",
-      interval: "annual",
-      expectedAmountDue: p.amountDueNow,
-      prorationDate: p.prorationDate,
-    });
-    s = (await u.get("/api/billing/summary")).body;
-    expect(s).toMatchObject({ cancelAtPeriodEnd: false, interval: "annual" });
+    await sub.u.post("/api/billing/change", { planId: "pro", interval: "monthly", expectedAmountDue: p.amountDueNow, prorationDate: p.prorationDate });
+    s = (await sub.u.get("/api/billing/summary")).body;
+    expect(s).toMatchObject({ planId: "pro", cancelAtPeriodEnd: false });
+  });
+
+  it("history: payment records carry line items (description, period, amount, proration, credits); older records show totals", async () => {
+    a = await billingApp();
+    const { u } = await a.subscribe("u1", "elite", "monthly");
+    a.clock.freeze(T0 + 10 * DAY);
+    const p = (await u.post("/api/billing/change/preview", { planId: "starter", interval: "monthly" })).body;
+    await u.post("/api/billing/change", { planId: "starter", interval: "monthly", expectedCredit: p.creditToBalance, prorationDate: p.prorationDate });
+    const invs = (await u.get("/api/billing/invoices")).body.invoices;
+    const change = invs.find((i: { reason: string }) => i.reason === "subscription_update");
+    expect(change.lines).toEqual([
+      { description: "Unused time on elite (monthly)", amount: -13267, proration: true, periodStart: new Date(T0 + 10 * DAY).toISOString(), periodEnd: new Date(T0 + 30 * DAY).toISOString() },
+      { description: "Remaining time on starter (monthly)", amount: 2600, proration: true, periodStart: new Date(T0 + 10 * DAY).toISOString(), periodEnd: new Date(T0 + 30 * DAY).toISOString() },
+      { description: "Credit to your account balance", amount: 10667, proration: false, periodStart: null, periodEnd: null },
+    ]);
+    const first = invs.find((i: { reason: string }) => i.reason === "subscription_create");
+    expect(first.lines[0]).toMatchObject({ amount: 19900, proration: false });
+    await a.advanceDays(21);
+    const renewal = (await u.get("/api/billing/invoices")).body.invoices[0];
+    expect(renewal.lines).toEqual(expect.arrayContaining([expect.objectContaining({ description: "Account credit applied", amount: -3900 })]));
+    // A record written before lines were stored shows its totals as before.
+    a.fs.seed("payments", "in_old", { paymentId: "in_old", userId: "u1", planId: "elite", amount: 19900, paymentStatus: "SUCCESS", paymentDate: "2026-01-01T00:00:00.000Z" });
+    const old = (await u.get("/api/billing/invoices")).body.invoices.find((i: { id: string }) => i.id === "in_old");
+    expect(old).toMatchObject({ amount: 19900, lines: null });
   });
 
   it("changing plan while past due is refused until the card is fixed", async () => {
@@ -505,7 +585,7 @@ describe("upgrade and downgrade", () => {
 
 describe("cancel anytime", () => {
   it.each([["monthly"], ["annual"]] as const)(
-    "%s: cancel at period end, exact end date shown, Free after it",
+    "%s: cancel at period end, exact end date shown, no plan after it",
     async (interval) => {
       a = await billingApp();
       const { u } = await a.subscribe("u1", "pro", interval);
@@ -523,7 +603,7 @@ describe("cancel anytime", () => {
       expect((await u.get("/api/me/entitlements")).body.planId).toBe("pro");
       await a.admin.post("/api/billing/fake/clock/advance", { to: end });
       expect((await u.get("/api/me/entitlements")).body).toMatchObject({
-        planId: "free",
+        planId: "none",
         status: "CANCELLED",
       });
       expect((await u.get("/api/billing/invoices")).body.invoices.length).toBe(
@@ -791,7 +871,7 @@ describe("nightly reconcile", () => {
       planId: "starter",
       status: "CANCELLED",
     });
-    expect((await u.get("/api/me/entitlements")).body.planId).toBe("free");
+    expect((await u.get("/api/me/entitlements")).body.planId).toBe("none");
     const r = await a.admin.post("/api/admin/billing/reconcile");
     expect(r.body.repaired).toEqual([
       { uid: "u1", fields: ["planId", "status"] },

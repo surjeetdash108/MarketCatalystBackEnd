@@ -2,6 +2,7 @@ import { Injectable, Optional } from "@nestjs/common";
 import { AppClock } from "../common/app-clock";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { PlansService } from "./plans.service";
+import { isLifetimeElite } from "./lifetime-elite";
 import {
   DEFAULT_PLAN_ID,
   ENTITLEMENT_KEYS,
@@ -23,7 +24,7 @@ import {
  *              event can arrive a little after the period boundary)
  *   TRIALING   entitled until currentPeriodEnd, exactly
  *   PAST_DUE   entitled for PAST_DUE_GRACE_DAYS after the failed payment
- *   otherwise  Free
+ *   otherwise  no plan (NO_PLAN_ID): sign-in, account, Manage Plan, checkout only
  */
 
 /** How long after period end an ACTIVE mirror is still honoured, waiting for the renewal event. */
@@ -80,9 +81,18 @@ export class SubscriptionsService {
       this.firebase.firestore.collection("subscriptions").doc(userId).get(),
       this.firebase.firestore.collection("users").doc(userId).get(),
     ]);
+    const uData = (userSnap.data() ?? {}) as Record<string, unknown>;
+    if (!uData.email) {
+      try {
+        const authUser = await this.firebase.auth.getUser(userId);
+        if (authUser.email) uData.email = authUser.email;
+      } catch {
+        /* ignore */
+      }
+    }
     return this.resolve(
       userId,
-      userSnap.data() ?? {},
+      uData,
       (mirrorSnap.exists
         ? mirrorSnap.data()
         : null) as SubscriptionMirror | null,
@@ -98,6 +108,29 @@ export class SubscriptionsService {
     u: Record<string, unknown>,
     mirror: SubscriptionMirror | null = null,
   ): Promise<EffectiveSubscription> {
+    if (isLifetimeElite((u.email as string) ?? null)) {
+      const plan = await this.plans.get("elite");
+      return {
+        userId,
+        planId: "elite",
+        planName: plan?.name ?? "Elite",
+        status: "ACTIVE",
+        storedStatus: "ACTIVE",
+        interval: mirror?.interval ?? "annual",
+        startDate: mirror?.startedAt ?? mirror?.currentPeriodStart ?? null,
+        expiryDate: null,
+        cancelAtPeriodEnd: false,
+        expiredSinceLastWrite: false,
+        daysRemaining: null,
+        inGrace: false,
+        graceEndsAt: null,
+        entitled: true,
+        entitlements: Object.fromEntries(
+          ENTITLEMENT_KEYS.map((k) => [k, true]),
+        ) as Record<EntitlementKey, boolean>,
+      };
+    }
+
     const now = this.clock.now();
     const storedStatus: SubscriptionStatus | null = mirror?.status ?? null;
     const end = mirror?.currentPeriodEnd

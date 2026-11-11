@@ -1,49 +1,66 @@
-/* eslint-disable @typescript-eslint/no-unused-vars -- stub: the named parameters document the contract each TODO must implement */
-import type { BillingDetails, BillingRegion, CheckoutQuote } from "../types";
-import { NotImplementedException } from "@nestjs/common";
+import { createHash } from "crypto";
+import { Logger } from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
-import type { BillingProvider } from "../billing-provider";
+import Stripe from "stripe";
+import {
+  PLAN_DEFINITIONS,
+  type BillingInterval,
+} from "../../../plans/plans.registry";
+import {
+  InvalidEventSignatureError,
+  PreviewStaleError,
+  type BillingProvider,
+} from "../billing-provider";
 import type {
   AppliedDiscount,
+  BillingDetails,
+  BillingRegion,
   ChangePreview,
   ChangeResult,
+  CheckoutQuote,
   CheckoutSession,
   InvoiceDocument,
+  InvoiceLine,
   PriceRef,
   PromoMirror,
   ProviderEvent,
   ProviderEventType,
   ProviderInvoice,
+  ProviderInvoiceStatus,
   ProviderSubscription,
+  ProviderSubscriptionStatus,
   RetentionDiscountInput,
+  ProviderChangeKind,
 } from "../types";
 
 /**
- * StripeBillingProvider — STUB. Selected with BILLING_PROVIDER=stripe.
+ * StripeBillingProvider — selected with BILLING_PROVIDER=stripe.
  *
- * Every method documents the exact Stripe API it must call. Implementing this
- * file (plus running scripts/stripe-seed.ts) is the remaining Stripe work; the
- * rest of the app talks only to the BillingProvider interface and is already
- * exercised end to end by FakeBillingProvider.
- *
- * Setup when implementing:
- *   npm install stripe
- *   import Stripe from "stripe";
- *   this.stripe = new Stripe(config.get("STRIPE_SECRET_KEY"), { apiVersion: "<pinned version>" });
- *
- * Config (Secret Manager in staging/production; see docs/PLACEHOLDERS.md):
- *   STRIPE_SECRET_KEY            sk_test_… / sk_live_…
- *   STRIPE_WEBHOOK_SECRET        whsec_… for POST /api/billing/webhook
- *   STRIPE_PORTAL_CONFIGURATION  bpc_… (payment method update + invoice history only)
- *   STRIPE_RETENTION_COUPON_ID   coupon for the monthly retention offer (50%, repeating, 2 months)
- *   NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY (UI, for Stripe.js 3-D Secure confirmation)
+ * Embedded checkout ("deferred intent"): the browser collects payment details
+ * with the Payment Element + Address Element; POST /api/billing/checkout then
+ * creates the subscription here with payment_behavior=default_incomplete and
+ * returns the first invoice's confirmation secret; the browser confirms with
+ * stripe.confirmPayment (Stripe runs 3-D Secure and reports declines). In our
+ * model the checkout "session" id IS the subscription id; Stripe's first
+ * invoice.paid (billing_reason=subscription_create) becomes checkout.completed.
  *
  * Mapping conventions:
- *   - Catalog price → Stripe Price via lookup key (prices.list({ lookup_keys: [ref.lookupKey], active: true })).
- *   - uid lives in metadata on Customer, Checkout Session and Subscription
- *     (metadata.uid), so every event can be tied to a user.
- *   - Amounts are minor units on both sides; no conversion needed.
+ *   - catalog price ↔ Stripe Price by lookup key (scripts/stripe-seed.ts creates them);
+ *   - uid/planId/interval live in Subscription metadata (and Customer metadata.uid);
+ *     scheduled downgrades are Subscription Schedules whose next phase carries the
+ *     new metadata, so it follows the plan automatically;
+ *   - tax: Stripe Tax (automatic_tax) — no rates in our code;
+ *   - amounts are minor units on both sides.
+ *
+ * Config (Secret Manager / env; see docs/PLACEHOLDERS.md):
+ *   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET                    (secrets)
+ *   STRIPE_PORTAL_CONFIGURATION   bpc_… (optional; Stripe's default portal otherwise)
+ *   STRIPE_RETENTION_COUPON_ID    optional override of the generated retention coupon
+ *   STRIPE_PAYMENT_METHOD_TYPES   default "card,link" (Apple Pay / Google Pay ride on card);
+ *                                 add ",paypal" only if the account supports it — never crypto/UPI.
+ *                                 Must match NEXT_PUBLIC_STRIPE_PAYMENT_METHOD_TYPES in the UI.
  */
+export const STRIPE_API_VERSION = "2025-08-27.basil" as const;
 
 /** Stripe event type → provider event type the handler understands. */
 export const STRIPE_EVENT_MAP: Record<string, ProviderEventType> = {
@@ -59,75 +76,290 @@ export const STRIPE_EVENT_MAP: Record<string, ProviderEventType> = {
   "charge.refunded": "charge.refunded",
   "charge.dispute.created": "charge.dispute_created",
 };
+/** Register exactly these on the webhook endpoint. */
+export const STRIPE_WEBHOOK_EVENTS = Object.keys(STRIPE_EVENT_MAP);
+
+const ALLOWED_PAYMENT_METHODS = new Set([
+  "card",
+  "link",
+  "paypal",
+  "us_bank_account",
+  "cashapp",
+  "amazon_pay",
+]);
+const lineOf = (l: Stripe.InvoiceLineItem): InvoiceLine => ({
+  description: l.description ?? "",
+  amount: l.amount,
+  periodStart: l.period?.start ? new Date(l.period.start * 1000).toISOString() : null,
+  periodEnd: l.period?.end ? new Date(l.period.end * 1000).toISOString() : null,
+  proration:
+    (
+      l as unknown as {
+        parent?: { subscription_item_details?: { proration?: boolean } };
+      }
+    ).parent?.subscription_item_details?.proration ?? false,
+});
+const iso = (sec: number | null | undefined) =>
+  sec ? new Date(sec * 1000).toISOString() : null;
+const idOf = (
+  x: string | { id?: string | null } | null | undefined,
+): string | null =>
+  x == null ? null : typeof x === "string" ? x : (x.id ?? null);
+const sumAmounts = (xs: Array<{ amount: number }> | null | undefined) =>
+  (xs ?? []).reduce((a, t) => a + t.amount, 0);
+
+/** lookup key → catalog plan/interval/amount. */
+const CATALOG = new Map<
+  string,
+  {
+    planId: string;
+    interval: BillingInterval;
+    amount: number;
+    currency: string;
+  }
+>(
+  PLAN_DEFINITIONS.flatMap((p) =>
+    (["monthly", "annual"] as const).flatMap((i) => {
+      const pr = p.prices[i];
+      return pr
+        ? [
+            [
+              pr.lookupKey,
+              {
+                planId: p.id,
+                interval: i,
+                amount: pr.amount,
+                currency: p.currency,
+              },
+            ] as const,
+          ]
+        : [];
+    }),
+  ),
+);
 
 export class StripeBillingProvider implements BillingProvider {
   readonly name = "stripe" as const;
+  private readonly logger = new Logger(StripeBillingProvider.name);
+  private client: Stripe | null;
+  private readonly priceIds = new Map<string, string>();
+  private readonly priceKeys = new Map<string, string>();
 
-  constructor(private readonly config: ConfigService) {}
+  /** `client` is for tests; production builds it from STRIPE_SECRET_KEY on first use. */
+  constructor(
+    private readonly config: ConfigService,
+    client?: Stripe,
+  ) {
+    this.client = client ?? null;
+  }
 
-  private todo(method: string): never {
-    throw new NotImplementedException(
-      `StripeBillingProvider.${method} is not implemented yet (see the TODO in stripe-billing.provider.ts).`,
+  /** Live mode only with an sk_live_ key (refused at startup unless STRIPE_LIVE_APPROVED). */
+  get livemode(): boolean {
+    return String(this.config.get("STRIPE_SECRET_KEY", "") ?? "").startsWith(
+      "sk_live_",
     );
   }
 
-  createCustomer(_input: {
+  private get stripe(): Stripe {
+    if (!this.client) {
+      const key = String(this.config.get("STRIPE_SECRET_KEY", "") ?? "");
+      if (!key || key.includes("PLACEHOLDER"))
+        throw new Error("STRIPE_SECRET_KEY is not configured");
+      this.client = new Stripe(key, {
+        apiVersion: STRIPE_API_VERSION,
+        appInfo: { name: "MarketCatalyst" },
+      });
+    }
+    return this.client;
+  }
+
+  private get paymentMethodTypes(): Stripe.SubscriptionCreateParams.PaymentSettings.PaymentMethodType[] {
+    const raw = String(
+      this.config.get("STRIPE_PAYMENT_METHOD_TYPES", "card,link") ??
+        "card,link",
+    );
+    const types = raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => ALLOWED_PAYMENT_METHODS.has(s));
+    return (
+      types.length ? types : ["card"]
+    ) as Stripe.SubscriptionCreateParams.PaymentSettings.PaymentMethodType[];
+  }
+
+  // ── prices ────────────────────────────────────────────────────────────
+
+  private async priceId(lookupKey: string): Promise<string> {
+    const hit = this.priceIds.get(lookupKey);
+    if (hit) return hit;
+    const found = await this.stripe.prices.list({
+      lookup_keys: [lookupKey],
+      active: true,
+      limit: 1,
+    });
+    const p = found.data[0];
+    if (!p)
+      throw new Error(
+        `No active Stripe Price with lookup key ${lookupKey} (run scripts/stripe-seed.ts)`,
+      );
+    this.priceIds.set(lookupKey, p.id);
+    if (p.lookup_key) this.priceKeys.set(p.id, p.lookup_key);
+    return p.id;
+  }
+
+  private async lookupKeyOf(
+    price: string | Stripe.Price | null | undefined,
+  ): Promise<string | null> {
+    if (!price) return null;
+    if (typeof price !== "string") return price.lookup_key ?? null;
+    const hit = this.priceKeys.get(price);
+    if (hit) return hit;
+    const p = await this.stripe.prices.retrieve(price);
+    if (p.lookup_key) this.priceKeys.set(p.id, p.lookup_key);
+    return p.lookup_key ?? null;
+  }
+
+  // ── discounts ─────────────────────────────────────────────────────────
+
+  /**
+   * Our promo engine validates codes; Stripe only applies the result. A coupon
+   * with a deterministic id mirrors the discount (created once, then reused).
+   */
+  async couponFor(d: AppliedDiscount, currency: string): Promise<string> {
+    const override = String(
+      this.config.get("STRIPE_RETENTION_COUPON_ID", "") ?? "",
+    );
+    if (
+      d.source === "retention" &&
+      override &&
+      !override.includes("PLACEHOLDER")
+    )
+      return override;
+    const spec: Record<string, unknown> = { duration: d.duration };
+    if (d.percentOff != null) spec.percent_off = d.percentOff;
+    else {
+      spec.amount_off = d.amountOff ?? 0;
+      spec.currency = currency.toLowerCase();
+    }
+    if (d.duration === "repeating")
+      spec.duration_in_months = d.durationInMonths ?? 1;
+    const id = `mc_${d.source}_${createHash("sha256").update(JSON.stringify(spec)).digest("hex").slice(0, 16)}`;
+    try {
+      await this.stripe.coupons.retrieve(id);
+    } catch {
+      await this.stripe.coupons.create({
+        id,
+        name:
+          d.source === "retention"
+            ? "Retention offer"
+            : (d.code ?? "Promotion"),
+        ...spec,
+      } as Stripe.CouponCreateParams);
+    }
+    return id;
+  }
+
+  private discountOf(sub: Stripe.Subscription): AppliedDiscount | null {
+    const d = (sub.discounts ?? []).find(
+      (x): x is Stripe.Discount => typeof x !== "string",
+    );
+    if (!d) return null;
+    const raw = d as unknown as {
+      coupon?: Stripe.Coupon | string;
+      source?: { coupon?: Stripe.Coupon | string };
+    };
+    const c = raw.coupon ?? raw.source?.coupon;
+    if (!c || typeof c === "string") return null;
+    const override = String(
+      this.config.get("STRIPE_RETENTION_COUPON_ID", "") ?? "",
+    );
+    return {
+      source:
+        c.id.startsWith("mc_retention") ||
+        (override !== "" && c.id === override)
+          ? "retention"
+          : "promo",
+      code:
+        (typeof d.promotion_code === "object" && d.promotion_code
+          ? d.promotion_code.code
+          : null) ??
+        c.name ??
+        null,
+      percentOff: c.percent_off ?? null,
+      amountOff: c.amount_off ?? null,
+      duration: c.duration,
+      durationInMonths: c.duration_in_months ?? null,
+      endsAt: iso(d.end),
+    };
+  }
+
+  // ── customers ─────────────────────────────────────────────────────────
+
+  async createCustomer(input: {
     uid: string;
     email: string | null;
   }): Promise<{ customerId: string }> {
-    // TODO stripe.customers.create({ email, metadata: { uid } }, { idempotencyKey: `customer-${uid}` })
-    //      → { customerId: customer.id }
-    return this.todo("createCustomer");
+    const c = await this.stripe.customers.create(
+      { email: input.email ?? undefined, metadata: { uid: input.uid } },
+      { idempotencyKey: `customer-${input.uid}` },
+    );
+    return { customerId: c.id };
   }
 
-  setCustomerMetadata(
-    _customerId: string,
-    _metadata: Record<string, string>,
+  async setCustomerMetadata(
+    customerId: string,
+    metadata: Record<string, string>,
   ): Promise<void> {
-    // TODO stripe.customers.update(customerId, { metadata })
-    //      (retention: { retention_offer_used: "true", retention_email_hash: <hash> })
-    return this.todo("setCustomerMetadata");
+    await this.stripe.customers.update(customerId, { metadata });
   }
 
-  refund(_paymentId: string, _amount: number): Promise<void> {
-    // TODO Refunds API:
-    //      const inv = await stripe.invoices.retrieve(paymentId, { expand: ["payments"] })
-    //      await stripe.refunds.create({ payment_intent: <inv payment intent id>, amount, metadata: { uid, reason: "refund_policy" } },
-    //        { idempotencyKey: `refund-${paymentId}` })
-    //      await stripe.subscriptions.cancel(inv.subscription, { prorate: false, invoice_now: false })  // ends now → Free
-    //      Events charge.refunded + customer.subscription.deleted reach the handler (STRIPE_EVENT_MAP).
-    return this.todo("refund");
-  }
-
-  updateCustomerContact(
-    _customerId: string,
-    _contact: { phone: string },
+  async updateCustomerContact(
+    customerId: string,
+    contact: { phone: string },
   ): Promise<void> {
-    // TODO stripe.customers.update(customerId, { phone })
-    return this.todo("updateCustomerContact");
+    await this.stripe.customers.update(customerId, { phone: contact.phone });
   }
 
-  previewCheckout(_input: {
+  // ── checkout ──────────────────────────────────────────────────────────
+
+  async previewCheckout(input: {
     price: PriceRef;
     discount: AppliedDiscount | null;
     region: BillingRegion | null;
   }): Promise<CheckoutQuote> {
-    // TODO Stripe Tax (automatic tax) — no rates in our code or UI:
-    //      const [p] = (await stripe.prices.list({ lookup_keys: [price.lookupKey], active: true })).data
-    //      const inv = await stripe.invoices.createPreview({
-    //        automatic_tax: { enabled: true },
-    //        customer_details: { address: { country: region.country, state: region.state, postal_code: region.postalCode } },
-    //        subscription_details: { items: [{ price: p.id }] },
-    //        discounts: discount?.promoId ? [{ promotion_code: <promo.providerRefs.stripePromotionCodeId> }] : undefined,
-    //      })
-    //      → { subtotal: inv.subtotal, discount: sum(inv.total_discount_amounts), tax: inv.tax ?? 0,
-    //          total: inv.total, taxLabel: inv.total_tax_amounts[0]?.tax_rate display name, taxPending: !region }
-    //      Requires Stripe Tax registrations (placeholder: Texas) and the SaaS product tax code
-    //      (STRIPE_PRODUCT_TAX_CODE) on the Products created by scripts/stripe-seed.ts.
-    return this.todo("previewCheckout");
+    const price = await this.priceId(input.price.lookupKey);
+    const coupon = input.discount
+      ? await this.couponFor(input.discount, input.price.currency)
+      : null;
+    const inv = await this.stripe.invoices.createPreview({
+      automatic_tax: { enabled: !!input.region },
+      ...(input.region
+        ? {
+            customer_details: {
+              address: {
+                country: input.region.country,
+                state: input.region.state ?? undefined,
+                postal_code: input.region.postalCode ?? undefined,
+              },
+            },
+          }
+        : {}),
+      subscription_details: { items: [{ price }] },
+      ...(coupon ? { discounts: [{ coupon }] } : {}),
+    });
+    const tax = sumAmounts(inv.total_taxes);
+    return {
+      currency: inv.currency.toUpperCase(),
+      subtotal: inv.subtotal,
+      discount: sumAmounts(inv.total_discount_amounts),
+      tax,
+      total: inv.total,
+      taxLabel: tax > 0 ? "Sales tax" : null,
+      taxPending: !input.region,
+    };
   }
 
-  createCheckout(_input: {
+  async createCheckout(input: {
     uid: string;
     customerId: string;
     price: PriceRef;
@@ -137,172 +369,789 @@ export class StripeBillingProvider implements BillingProvider {
     idempotencyKey: string;
     billing?: BillingDetails | null;
   }): Promise<CheckoutSession> {
-    // TODO (embedded checkout, Payment Element + Address Element):
-    //      stripe.customers.update(customerId, { name: billing.name, phone: billing.phone,
-    //        address: { line1, line2, city, state, postal_code, country } })   // full address stays at Stripe
-    //      const sub = await stripe.subscriptions.create({
-    //        customer: customerId, items: [{ price: p.id }],
-    //        automatic_tax: { enabled: true },
-    //        payment_behavior: "default_incomplete",
-    //        payment_settings: { save_default_payment_method: "on_subscription",
-    //          payment_method_types: ["card", "link"] /* + "paypal" only if the account supports it; no crypto/UPI */ },
-    //        discounts: discount?.promoId ? [{ promotion_code: <stripePromotionCodeId> }] : undefined,
-    //        metadata: { uid, planId, interval },
-    //        expand: ["latest_invoice.confirmation_secret"],
-    //      }, { idempotencyKey })
-    //      → CheckoutSession { id: sub.id, clientSecret: sub.latest_invoice.confirmation_secret.client_secret,
-    //          amountDueToday: invoice.amount_due, tax: invoice.tax } — the browser confirms with
-    //          stripe.confirmPayment({ elements, redirect: "if_required" }) (3-D Secure handled by Stripe).
-    //      Legacy hosted Checkout (kept for reference):
-    // TODO const [price] = (await stripe.prices.list({ lookup_keys: [price.lookupKey], active: true })).data
-    //      stripe.checkout.sessions.create({
-    //        mode: "subscription", customer: customerId, client_reference_id: uid,
-    //        line_items: [{ price: price.id, quantity: 1 }],
-    //        discounts: discount?.promoId ? [{ promotion_code: <promo.providerRefs.stripePromotionCodeId> }] : undefined,
-    //        allow_promotion_codes: false,              // codes enter only through our validation
-    //        subscription_data: { metadata: { uid, planId, interval } },
-    //        metadata: { uid, planId, interval },
-    //        success_url: successUrl,                   // contains {CHECKOUT_SESSION_ID}
-    //        cancel_url: cancelUrl,
-    //      }, { idempotencyKey })
-    //      → map to CheckoutSession (url = session.url, expiresAt = session.expires_at)
-    return this.todo("createCheckout");
+    if (input.billing) {
+      // The full address stays at Stripe (it is also what Stripe Tax uses).
+      const a = input.billing.address;
+      await this.stripe.customers.update(input.customerId, {
+        name: input.billing.name,
+        phone: input.billing.phone,
+        address: {
+          line1: a.line1,
+          line2: a.line2 ?? undefined,
+          city: a.city,
+          state: a.state ?? undefined,
+          postal_code: a.postalCode ?? undefined,
+          country: a.country,
+        },
+      });
+    }
+    const price = await this.priceId(input.price.lookupKey);
+    const coupon = input.discount
+      ? await this.couponFor(input.discount, input.price.currency)
+      : null;
+    const sub = await this.stripe.subscriptions.create(
+      {
+        customer: input.customerId,
+        items: [{ price }],
+        payment_behavior: "default_incomplete",
+        payment_settings: {
+          save_default_payment_method: "on_subscription",
+          payment_method_types: this.paymentMethodTypes,
+        },
+        automatic_tax: { enabled: true },
+        ...(coupon ? { discounts: [{ coupon }] } : {}),
+        metadata: {
+          uid: input.uid,
+          planId: input.price.planId,
+          interval: input.price.interval,
+        },
+        expand: ["latest_invoice.confirmation_secret"],
+      },
+      { idempotencyKey: `checkout-${input.idempotencyKey}` },
+    );
+    return this.sessionOf(sub, input.successUrl, input.cancelUrl);
   }
 
-  getCheckout(_sessionId: string): Promise<CheckoutSession | null> {
-    // TODO stripe.checkout.sessions.retrieve(sessionId) → CheckoutSession
-    return this.todo("getCheckout");
+  private sessionOf(
+    sub: Stripe.Subscription,
+    successUrl = "",
+    cancelUrl = "",
+  ): CheckoutSession {
+    const inv =
+      typeof sub.latest_invoice === "object" ? sub.latest_invoice : null;
+    const item = sub.items.data[0];
+    const cat = CATALOG.get(item?.price?.lookup_key ?? "");
+    const status =
+      sub.status === "active" || sub.status === "trialing"
+        ? "complete"
+        : sub.status === "incomplete_expired"
+          ? "expired"
+          : "open";
+    return {
+      id: sub.id,
+      url: "",
+      status,
+      uid: sub.metadata?.uid ?? "",
+      customerId: idOf(sub.customer) ?? "",
+      planId: sub.metadata?.planId || cat?.planId || "",
+      interval:
+        (sub.metadata?.interval as BillingInterval) ||
+        cat?.interval ||
+        "monthly",
+      discount: this.discountOf(sub),
+      amountDueToday: inv
+        ? status === "complete"
+          ? inv.amount_paid
+          : inv.amount_due
+        : 0,
+      tax: inv ? sumAmounts(inv.total_taxes) : 0,
+      currency: (inv?.currency ?? item?.price?.currency ?? "usd").toUpperCase(),
+      expiresAt: iso(sub.created + 23 * 3600) ?? new Date().toISOString(),
+      subscriptionId: sub.id,
+      successUrl: successUrl.replace("{CHECKOUT_SESSION_ID}", sub.id),
+      cancelUrl,
+      clientSecret: inv?.confirmation_secret?.client_secret ?? null,
+    };
   }
 
-  getSubscription(
-    _subscriptionId: string,
+  async getCheckout(sessionId: string): Promise<CheckoutSession | null> {
+    try {
+      return this.sessionOf(
+        await this.stripe.subscriptions.retrieve(sessionId, {
+          expand: ["latest_invoice", "discounts"],
+        }),
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  // ── subscriptions ─────────────────────────────────────────────────────
+
+  private async mapSubscription(
+    sub: Stripe.Subscription,
+  ): Promise<ProviderSubscription> {
+    const item = sub.items.data[0];
+    const key = item?.price?.lookup_key ?? "";
+    const cat = CATALOG.get(key);
+    let scheduledChange: ProviderSubscription["scheduledChange"] = null;
+    const sched =
+      typeof sub.schedule === "string"
+        ? await this.stripe.subscriptionSchedules.retrieve(sub.schedule)
+        : (sub.schedule ?? null);
+    if (sched && sched.status === "active") {
+      const now = Math.floor(Date.now() / 1000);
+      const next = sched.phases.find((p) => p.start_date > now);
+      const nextKey = next
+        ? await this.lookupKeyOf(next.items[0]?.price as string | Stripe.Price)
+        : null;
+      const nextCat = nextKey ? CATALOG.get(nextKey) : null;
+      if (next && nextCat)
+        scheduledChange = {
+          planId: nextCat.planId,
+          interval: nextCat.interval,
+          effectiveAt: iso(next.start_date)!,
+        };
+    }
+    const inv =
+      typeof sub.latest_invoice === "object" ? sub.latest_invoice : null;
+    const status = (
+      sub.status === "paused" ? "unpaid" : sub.status
+    ) as ProviderSubscriptionStatus;
+    return {
+      id: sub.id,
+      customerId: idOf(sub.customer) ?? "",
+      uid: sub.metadata?.uid ?? "",
+      planId: cat?.planId ?? sub.metadata?.planId ?? "",
+      interval:
+        cat?.interval ??
+        ((sub.metadata?.interval as BillingInterval) || "monthly"),
+      priceLookupKey: key,
+      amount: item?.price?.unit_amount ?? cat?.amount ?? 0,
+      currency: (item?.price?.currency ?? "usd").toUpperCase(),
+      status,
+      startedAt: iso(sub.start_date)!,
+      currentPeriodStart: iso(item?.current_period_start)!,
+      currentPeriodEnd: iso(item?.current_period_end)!,
+      cancelAtPeriodEnd: sub.cancel_at_period_end,
+      canceledAt: iso(sub.canceled_at),
+      endedAt: iso(sub.ended_at),
+      discount: this.discountOf(sub),
+      scheduledChange,
+      pastDueSince:
+        status === "past_due" && inv
+          ? iso(inv.status_transitions?.finalized_at ?? inv.created)
+          : null,
+      latestInvoiceId: idOf(
+        sub.latest_invoice as string | Stripe.Invoice | null,
+      ),
+      updatedAt: Date.now(),
+    };
+  }
+
+  private retrieveSub(id: string) {
+    return this.stripe.subscriptions.retrieve(id, {
+      expand: ["latest_invoice", "discounts.promotion_code", "schedule"],
+    });
+  }
+
+  async getSubscription(
+    subscriptionId: string,
   ): Promise<ProviderSubscription | null> {
-    // TODO stripe.subscriptions.retrieve(id, { expand: ["discount", "schedule"] })
-    //      planId/interval from items.data[0].price.lookup_key; period from items.data[0].current_period_start/end
-    //      (or subscription.current_period_* on older API versions); scheduledChange from schedule.phases[1];
-    //      pastDueSince = latest_invoice.created when status === "past_due".
-    return this.todo("getSubscription");
+    try {
+      return await this.mapSubscription(await this.retrieveSub(subscriptionId));
+    } catch (err) {
+      if ((err as { statusCode?: number }).statusCode === 404) return null;
+      throw err;
+    }
   }
 
-  listSubscriptions(): Promise<ProviderSubscription[]> {
-    // TODO for await (const s of stripe.subscriptions.list({ status: "all", limit: 100 })) — skip ended ones
-    return this.todo("listSubscriptions");
+  async listSubscriptions(): Promise<ProviderSubscription[]> {
+    const out: ProviderSubscription[] = [];
+    for await (const s of this.stripe.subscriptions.list({
+      status: "all",
+      limit: 100,
+      expand: ["data.latest_invoice", "data.discounts"],
+    })) {
+      if (
+        s.status === "canceled" ||
+        s.status === "incomplete_expired" ||
+        s.status === "incomplete"
+      )
+        continue;
+      out.push(await this.mapSubscription(s));
+    }
+    return out;
   }
 
-  previewChange(_input: {
+  /** Upgrades charge now; a change of interval restarts the billing period (anchor now). */
+  private changeParams(
+    sub: Stripe.Subscription,
+    target: PriceRef,
+    priceId: string,
+    prorationDate: number,
+  ) {
+    const item = sub.items.data[0];
+    const intervalChange =
+      CATALOG.get(item.price.lookup_key ?? "")?.interval !== target.interval;
+    return {
+      items: [{ id: item.id, price: priceId }],
+      proration_behavior: "always_invoice" as const,
+      proration_date: Math.floor(prorationDate / 1000),
+      ...(intervalChange ? { billing_cycle_anchor: "now" as const } : {}),
+    };
+  }
+
+  async getCreditBalance(customerId: string): Promise<number> {
+    const c = await this.stripe.customers.retrieve(customerId);
+    // Stripe: a negative balance is credit the customer can spend.
+    const bal = (c as Stripe.Customer).balance ?? 0;
+    return bal < 0 ? -bal : 0;
+  }
+
+  async previewChange(input: {
     subscriptionId: string;
     target: PriceRef;
-    kind: "upgrade" | "downgrade";
+    kind: ProviderChangeKind;
   }): Promise<ChangePreview> {
-    // TODO upgrade: const prorationDate = Math.floor(Date.now() / 1000)
-    //      stripe.invoices.createPreview({ customer, subscription: id,
-    //        subscription_details: { items: [{ id: itemId, price: targetPriceId }], proration_behavior: "always_invoice",
-    //          proration_date: prorationDate, billing_cycle_anchor: intervalChanges ? "now" : undefined } })
-    //      → amountDueNow = preview.amount_due; prorationDate returned for changePlan.
-    //      downgrade: amountDueNow 0, effectiveAt = current_period_end.
-    return this.todo("previewChange");
+    const sub = await this.retrieveSub(input.subscriptionId);
+    const current = await this.mapSubscription(sub);
+    const prorationDate = Date.now();
+    const period = {
+      currentPeriodStart: current.currentPeriodStart,
+      currentPeriodEnd: current.currentPeriodEnd,
+    };
+    if (input.kind === "scheduled") {
+      return {
+        kind: "scheduled",
+        planId: input.target.planId,
+        interval: input.target.interval,
+        currency: input.target.currency,
+        amountDueNow: 0,
+        creditToBalance: 0,
+        ...period,
+        prorationDate,
+        effectiveAt: current.currentPeriodEnd,
+        nextRenewalAmount: input.target.amount,
+        nextRenewalDate: current.currentPeriodEnd,
+        lines: [],
+      };
+    }
+    const priceId = await this.priceId(input.target.lookupKey);
+    const p = this.changeParams(sub, input.target, priceId, prorationDate);
+    const inv = await this.stripe.invoices.createPreview({
+      customer: idOf(sub.customer)!,
+      subscription: sub.id,
+      subscription_details: {
+        items: p.items,
+        proration_behavior: p.proration_behavior,
+        proration_date: p.proration_date,
+        ...(p.billing_cycle_anchor
+          ? { billing_cycle_anchor: p.billing_cycle_anchor }
+          : {}),
+      },
+    });
+    const lines: InvoiceLine[] = inv.lines.data.map(lineOf);
+    const nextEnd = inv.lines.data
+      .map((l) => l.period?.end ?? 0)
+      .filter((x) => x > 0)
+      .sort((a, b) => a - b)
+      .at(-1);
+    // A downgrade's proration invoice totals < 0: Stripe credits the customer balance.
+    const net = inv.total;
+    return {
+      kind: input.kind,
+      planId: input.target.planId,
+      interval: input.target.interval,
+      currency: inv.currency.toUpperCase(),
+      amountDueNow: input.kind === "upgrade" ? Math.max(0, inv.amount_due) : 0,
+      creditToBalance: input.kind === "downgrade" ? Math.max(0, -net) : 0,
+      ...period,
+      prorationDate,
+      effectiveAt: new Date(prorationDate).toISOString(),
+      nextRenewalAmount: input.target.amount,
+      nextRenewalDate: iso(nextEnd) ?? current.currentPeriodEnd,
+      lines,
+    };
   }
 
-  changePlan(_input: {
+  async changePlan(input: {
     subscriptionId: string;
     target: PriceRef;
-    kind: "upgrade" | "downgrade";
+    kind: ProviderChangeKind;
     prorationDate: number;
     expectedAmountDue: number | null;
+    expectedCredit?: number | null;
   }): Promise<ChangeResult> {
-    // TODO upgrade: re-run the preview with the same proration_date; if amount_due !== expectedAmountDue → PreviewStaleError.
-    //      If the subscription has a schedule (pending downgrade): stripe.subscriptionSchedules.release(scheduleId) first.
-    //      stripe.subscriptions.update(id, { items: [{ id: itemId, price: targetPriceId }],
-    //        proration_behavior: "always_invoice", proration_date, payment_behavior: "pending_if_incomplete",
-    //        cancel_at_period_end: false, billing_cycle_anchor: intervalChanges ? "now" : "unchanged" })
-    //      latest_invoice.payment_intent.status === "requires_action" → { status: "requires_action", clientSecret }
-    //      failed → { status: "payment_failed" } (pending_if_incomplete leaves the old price in place).
-    //      downgrade: stripe.subscriptionSchedules.create({ from_subscription: id }) then
-    //        subscriptionSchedules.update(schedule.id, { end_behavior: "release", phases: [
-    //          { items: [current], start_date: phase0.start_date, end_date: current_period_end },
-    //          { items: [{ price: targetPriceId }], start_date: current_period_end } ] })
-    return this.todo("changePlan");
+    const sub = await this.retrieveSub(input.subscriptionId);
+    const priceId = await this.priceId(input.target.lookupKey);
+    const scheduleId = idOf(
+      sub.schedule as string | Stripe.SubscriptionSchedule | null,
+    );
+    if (input.kind === "scheduled") {
+      // Annual → monthly: keep the annual plan to period end, then the new price via a schedule.
+      const item = sub.items.data[0];
+      const schedId =
+        scheduleId ??
+        (
+          await this.stripe.subscriptionSchedules.create({
+            from_subscription: sub.id,
+          })
+        ).id;
+      await this.stripe.subscriptionSchedules.update(schedId, {
+        end_behavior: "release",
+        phases: [
+          {
+            items: [{ price: item.price.id }],
+            start_date: item.current_period_start,
+            end_date: item.current_period_end,
+            metadata: { ...sub.metadata },
+          },
+          {
+            items: [{ price: priceId }],
+            metadata: {
+              ...sub.metadata,
+              planId: input.target.planId,
+              interval: input.target.interval,
+            },
+            proration_behavior: "none",
+          },
+        ],
+      });
+      return {
+        status: "scheduled",
+        effectiveAt: iso(item.current_period_end)!,
+      };
+    }
+    // The charge (or credit) must equal the preview exactly, or nothing changes.
+    const expected =
+      input.kind === "upgrade" ? input.expectedAmountDue : (input.expectedCredit ?? null);
+    if (expected != null) {
+      const fresh = await this.previewChange({
+        subscriptionId: sub.id,
+        target: input.target,
+        kind: input.kind,
+      });
+      const actual =
+        input.kind === "upgrade" ? fresh.amountDueNow : fresh.creditToBalance;
+      if (actual !== expected) throw new PreviewStaleError(expected, actual);
+    }
+    // A change drops a pending (scheduled) change.
+    if (scheduleId) await this.stripe.subscriptionSchedules.release(scheduleId);
+    const p = this.changeParams(
+      sub,
+      input.target,
+      priceId,
+      input.prorationDate,
+    );
+    const updated = await this.stripe.subscriptions.update(sub.id, {
+      ...p,
+      // An upgrade resumes a cancelling plan; a downgrade keeps the cancel date.
+      ...(input.kind === "upgrade" ? { cancel_at_period_end: false } : {}),
+      payment_behavior: "pending_if_incomplete",
+      metadata: {
+        ...sub.metadata,
+        planId: input.target.planId,
+        interval: input.target.interval,
+      },
+      expand: ["latest_invoice.confirmation_secret"],
+    });
+    const inv =
+      typeof updated.latest_invoice === "object"
+        ? updated.latest_invoice
+        : null;
+    if (!updated.pending_update) {
+      return {
+        status: "applied",
+        invoiceId: inv?.id ?? null,
+        amountCharged: inv?.amount_paid ?? 0,
+        ...(input.kind === "downgrade"
+          ? { creditToBalance: Math.max(0, -(inv?.total ?? 0)) }
+          : {}),
+        effectiveAt: new Date().toISOString(),
+      };
+    }
+    const secret = inv?.confirmation_secret?.client_secret ?? null;
+    if (inv && secret)
+      return {
+        status: "requires_action",
+        actionId: inv.id ?? "",
+        clientSecret: secret,
+        amountDue: inv.amount_due,
+      };
+    return { status: "payment_failed", reason: "card_declined" };
   }
 
-  cancelScheduledChange(_subscriptionId: string): Promise<void> {
-    // TODO stripe.subscriptionSchedules.release(subscription.schedule)
-    return this.todo("cancelScheduledChange");
+  async cancelScheduledChange(subscriptionId: string): Promise<void> {
+    const sub = await this.stripe.subscriptions.retrieve(subscriptionId);
+    const s = idOf(sub.schedule as string | Stripe.SubscriptionSchedule | null);
+    if (s) await this.stripe.subscriptionSchedules.release(s);
   }
 
-  cancelAtPeriodEnd(_subscriptionId: string): Promise<void> {
-    // TODO release any schedule, then stripe.subscriptions.update(id, { cancel_at_period_end: true })
-    return this.todo("cancelAtPeriodEnd");
+  async cancelAtPeriodEnd(subscriptionId: string): Promise<void> {
+    const sub = await this.stripe.subscriptions.retrieve(subscriptionId);
+    const s = idOf(sub.schedule as string | Stripe.SubscriptionSchedule | null);
+    if (s) await this.stripe.subscriptionSchedules.release(s);
+    await this.stripe.subscriptions.update(subscriptionId, {
+      cancel_at_period_end: true,
+    });
   }
 
-  resume(_subscriptionId: string): Promise<void> {
-    // TODO stripe.subscriptions.update(id, { cancel_at_period_end: false })
-    return this.todo("resume");
+  async resume(subscriptionId: string): Promise<void> {
+    await this.stripe.subscriptions.update(subscriptionId, {
+      cancel_at_period_end: false,
+    });
   }
 
-  applyRetentionDiscount(
-    _input: RetentionDiscountInput,
+  async applyRetentionDiscount(
+    input: RetentionDiscountInput,
   ): Promise<{ description: string; appliesTo: string }> {
-    // TODO monthly: stripe.subscriptions.update(id, { discounts: [{ coupon: STRIPE_RETENTION_COUPON_ID }],
-    //        cancel_at_period_end: false })   // coupon: percent_off 50, duration "repeating", duration_in_months 2
-    //      annual: stripe.customers.createBalanceTransaction(customerId, { amount: -amount, currency,
-    //        description: "Retention offer credit" }); then subscriptions.update(id, { cancel_at_period_end: false })
-    return this.todo("applyRetentionDiscount");
+    if (input.mode === "percent_next_invoices") {
+      const coupon = await this.couponFor(
+        {
+          source: "retention",
+          percentOff: input.percentOff,
+          duration: "repeating",
+          durationInMonths: input.invoices,
+        },
+        "USD",
+      );
+      await this.stripe.subscriptions.update(input.subscriptionId, {
+        discounts: [{ coupon }],
+      });
+      return {
+        description: `${input.percentOff}% off your next ${input.invoices} invoices`,
+        appliesTo: "next_invoices",
+      };
+    }
+    await this.stripe.customers.createBalanceTransaction(input.customerId, {
+      amount: -Math.abs(input.amount),
+      currency: input.currency.toLowerCase(),
+      description: "Retention offer credit",
+    });
+    return {
+      description: `${(input.amount / 100).toFixed(2)} ${input.currency} credit on your next invoice`,
+      appliesTo: "next_invoice",
+    };
   }
 
-  getUpcomingInvoice(_subscriptionId: string): Promise<ProviderInvoice | null> {
-    // TODO stripe.invoices.createPreview({ subscription: id }) (invoices.retrieveUpcoming on older API versions)
-    return this.todo("getUpcomingInvoice");
+  // ── invoices ──────────────────────────────────────────────────────────
+
+  private async mapInvoice(
+    inv: Stripe.Invoice,
+    billingReason?: ProviderInvoice["billingReason"],
+  ): Promise<ProviderInvoice> {
+    const sd = inv.parent?.subscription_details ?? null;
+    const subId = idOf(
+      sd?.subscription as string | Stripe.Subscription | null | undefined,
+    );
+    let planId = sd?.metadata?.planId ?? "";
+    let interval = (sd?.metadata?.interval as BillingInterval) || "monthly";
+    const line0 = inv.lines?.data?.[0] as unknown as
+      | {
+          pricing?: { price_details?: { price?: string | Stripe.Price } };
+          period?: { start: number; end: number };
+        }
+      | undefined;
+    const key = await this.lookupKeyOf(
+      line0?.pricing?.price_details?.price ?? null,
+    ).catch(() => null);
+    const cat = key ? CATALOG.get(key) : null;
+    if (cat) {
+      planId = cat.planId;
+      interval = cat.interval;
+    }
+    const reason: ProviderInvoice["billingReason"] =
+      billingReason ??
+      (inv.billing_reason === "subscription_create"
+        ? "subscription_create"
+        : inv.billing_reason === "subscription_cycle"
+          ? "subscription_cycle"
+          : "subscription_update");
+    return {
+      id: inv.id ?? "upcoming",
+      number: inv.number ?? "",
+      customerId: idOf(inv.customer) ?? "",
+      subscriptionId: subId,
+      uid: sd?.metadata?.uid ?? "",
+      planId,
+      interval,
+      status: (inv.status === "draft" || !inv.status
+        ? "open"
+        : inv.status) as ProviderInvoiceStatus,
+      billingReason: reason,
+      createdAt: iso(inv.created)!,
+      periodStart: iso(line0?.period?.start ?? inv.period_start)!,
+      periodEnd: iso(line0?.period?.end ?? inv.period_end)!,
+      currency: inv.currency.toUpperCase(),
+      subtotal: inv.subtotal,
+      discountAmount: sumAmounts(inv.total_discount_amounts),
+      creditApplied: Math.max(
+        0,
+        (inv.starting_balance ?? 0) - (inv.ending_balance ?? 0),
+      ),
+      total: inv.total,
+      amountPaid: inv.amount_paid,
+      amountDue: inv.amount_remaining,
+      amountRefunded: Number(inv.metadata?.amount_refunded ?? 0) || 0,
+      lines: (inv.lines?.data ?? []).map(lineOf),
+      discount: null,
+      attemptCount: inv.attempt_count,
+      nextPaymentAttempt: iso(inv.next_payment_attempt),
+      paidAt: iso(inv.status_transitions?.paid_at),
+      hostedInvoiceUrl: inv.hosted_invoice_url ?? null,
+      invoicePdfUrl: inv.invoice_pdf ?? null,
+    };
   }
 
-  getInvoice(_invoiceId: string): Promise<ProviderInvoice | null> {
-    // TODO stripe.invoices.retrieve(id) → hostedInvoiceUrl = hosted_invoice_url, invoicePdfUrl = invoice_pdf
-    return this.todo("getInvoice");
+  async getUpcomingInvoice(
+    subscriptionId: string,
+  ): Promise<ProviderInvoice | null> {
+    try {
+      const sub = await this.stripe.subscriptions.retrieve(subscriptionId);
+      if (sub.cancel_at_period_end || sub.ended_at) return null;
+      const inv = await this.stripe.invoices.createPreview({
+        subscription: subscriptionId,
+        customer: idOf(sub.customer)!,
+      });
+      const mapped = await this.mapInvoice(inv, "upcoming");
+      return {
+        ...mapped,
+        uid: mapped.uid || sub.metadata?.uid || "",
+        subscriptionId,
+      };
+    } catch {
+      return null;
+    }
   }
 
-  listInvoices(_customerId: string): Promise<ProviderInvoice[]> {
-    // TODO stripe.invoices.list({ customer: customerId, limit: 100 })
-    return this.todo("listInvoices");
+  async getInvoice(invoiceId: string): Promise<ProviderInvoice | null> {
+    try {
+      return await this.mapInvoice(
+        await this.stripe.invoices.retrieve(invoiceId),
+      );
+    } catch {
+      return null;
+    }
   }
 
-  getInvoiceDocument(_invoiceId: string): Promise<InvoiceDocument> {
-    // TODO const inv = await stripe.invoices.retrieve(id); return { kind: "redirect", url: inv.invoice_pdf ?? inv.hosted_invoice_url }
-    return this.todo("getInvoiceDocument");
+  async listInvoices(customerId: string): Promise<ProviderInvoice[]> {
+    const out: ProviderInvoice[] = [];
+    for await (const inv of this.stripe.invoices.list({
+      customer: customerId,
+      limit: 100,
+    })) {
+      if (inv.status === "draft") continue;
+      out.push(await this.mapInvoice(inv));
+    }
+    return out;
   }
 
-  createPortalSession(_input: {
+  async getInvoiceDocument(invoiceId: string): Promise<InvoiceDocument> {
+    const inv = await this.stripe.invoices.retrieve(invoiceId);
+    const url = inv.invoice_pdf ?? inv.hosted_invoice_url;
+    if (!url) throw new Error(`invoice ${invoiceId} has no document yet`);
+    return { kind: "redirect", url };
+  }
+
+  // ── refunds ───────────────────────────────────────────────────────────
+
+  /** Refunds the invoice's payment, then ends the subscription now (→ no plan via subscription.deleted). */
+  async refund(paymentId: string, amount: number): Promise<void> {
+    const pays = await this.stripe.invoicePayments.list({
+      invoice: paymentId,
+      status: "paid",
+      limit: 10,
+    });
+    const pi =
+      pays.data
+        .map((p) =>
+          idOf(
+            p.payment?.payment_intent as
+              string | Stripe.PaymentIntent | undefined,
+          ),
+        )
+        .find(Boolean) ?? null;
+    const charge =
+      pays.data
+        .map((p) =>
+          idOf(p.payment?.charge as string | Stripe.Charge | undefined),
+        )
+        .find(Boolean) ?? null;
+    if (!pi && !charge)
+      throw new Error(`invoice ${paymentId} has no captured payment to refund`);
+    await this.stripe.refunds.create(
+      {
+        ...(pi ? { payment_intent: pi } : { charge: charge! }),
+        amount,
+        reason: "requested_by_customer",
+        metadata: { invoice: paymentId, reason: "refund_policy" },
+      },
+      { idempotencyKey: `refund-${paymentId}` },
+    );
+    // Record the refunded amount on the invoice so getInvoice reports it.
+    await this.stripe.invoices.update(paymentId, {
+      metadata: { amount_refunded: String(amount) },
+    });
+    const inv = await this.stripe.invoices.retrieve(paymentId);
+    const subId = idOf(
+      inv.parent?.subscription_details?.subscription as
+        string | Stripe.Subscription | undefined,
+    );
+    if (!subId) return;
+    const sub = await this.stripe.subscriptions.retrieve(subId);
+    const s = idOf(sub.schedule as string | Stripe.SubscriptionSchedule | null);
+    if (s) await this.stripe.subscriptionSchedules.release(s);
+    if (!sub.ended_at)
+      await this.stripe.subscriptions.cancel(subId, {
+        prorate: false,
+        invoice_now: false,
+      });
+  }
+
+  // ── customer portal (card updates) ────────────────────────────────────
+
+  async createPortalSession(input: {
     customerId: string;
     returnUrl: string;
   }): Promise<{ url: string }> {
-    // TODO stripe.billingPortal.sessions.create({ customer: customerId, return_url: returnUrl,
-    //        configuration: STRIPE_PORTAL_CONFIGURATION })   // configured: payment_method_update + invoice_history only
-    return this.todo("createPortalSession");
+    const configuration = String(
+      this.config.get("STRIPE_PORTAL_CONFIGURATION", "") ?? "",
+    );
+    const s = await this.stripe.billingPortal.sessions.create({
+      customer: input.customerId,
+      return_url: input.returnUrl,
+      ...(configuration && !configuration.includes("PLACEHOLDER")
+        ? { configuration }
+        : {}),
+    });
+    return { url: s.url };
   }
 
-  syncPromotion(_promo: PromoMirror): Promise<Record<string, string>> {
-    // TODO const coupon = await stripe.coupons.create({ percent_off | amount_off+currency, duration,
-    //        duration_in_months, applies_to: { products: <product ids of appliesToPlans> }, metadata: { promoId } })
-    //      const pc = await stripe.promotionCodes.create({ coupon: coupon.id, code, max_redemptions,
-    //        expires_at, restrictions: { first_time_transaction: firstTimeOnly }, metadata: { promoId, intervals } })
-    //      → { stripeCouponId: coupon.id, stripePromotionCodeId: pc.id }
-    //      (interval restrictions have no Stripe equivalent; our engine enforces them before checkout.)
-    return this.todo("syncPromotion");
+  // ── promotions (a mirror for the dashboard; our engine validates, checkout applies coupons) ──
+
+  async syncPromotion(promo: PromoMirror): Promise<Record<string, string>> {
+    const coupon = await this.couponFor(
+      {
+        source: "promo",
+        code: promo.code,
+        percentOff: promo.percentOff,
+        amountOff: promo.amountOff,
+        duration: promo.duration,
+        durationInMonths: promo.durationInMonths,
+      },
+      promo.currency,
+    );
+    const pc = await this.stripe.promotionCodes.create(
+      {
+        promotion: { type: "coupon", coupon },
+        code: promo.code,
+        ...(promo.maxRedemptions
+          ? { max_redemptions: promo.maxRedemptions }
+          : {}),
+        ...(promo.expiresAt
+          ? { expires_at: Math.floor(Date.parse(promo.expiresAt) / 1000) }
+          : {}),
+        ...(promo.firstTimeOnly
+          ? { restrictions: { first_time_transaction: true } }
+          : {}),
+        metadata: { promoId: promo.id },
+      } as unknown as Stripe.PromotionCodeCreateParams,
+      { idempotencyKey: `promo-${promo.id}` },
+    );
+    return { stripeCouponId: coupon, stripePromotionCodeId: pc.id };
   }
 
-  deactivatePromotion(_promo: PromoMirror): Promise<void> {
-    // TODO stripe.promotionCodes.update(promo.providerRefs.stripePromotionCodeId, { active: false })
-    return this.todo("deactivatePromotion");
+  async deactivatePromotion(promo: PromoMirror): Promise<void> {
+    const id = promo.providerRefs?.stripePromotionCodeId;
+    if (id) await this.stripe.promotionCodes.update(id, { active: false });
   }
 
-  parseEvent(
-    _rawBody: Buffer | string,
-    _signature: string | undefined,
-  ): ProviderEvent {
-    // TODO const e = stripe.webhooks.constructEvent(rawBody, signature, STRIPE_WEBHOOK_SECRET)  // throws → InvalidEventSignatureError
-    //      const type = STRIPE_EVENT_MAP[e.type]; ignore unknown types
-    //      return { id: e.id, type, created: e.created * 1000, provider: "stripe",
-    //        data: { uid: obj.metadata?.uid ?? obj.client_reference_id, customerId: obj.customer,
-    //                subscriptionId: obj.subscription ?? (obj.object === "subscription" ? obj.id : null),
-    //                invoiceId: obj.object === "invoice" ? obj.id : obj.invoice, checkoutSessionId: obj.object === "checkout.session" ? obj.id : null } }
-    return this.todo("parseEvent");
+  // ── events ────────────────────────────────────────────────────────────
+
+  async parseEvent(
+    rawBody: Buffer | string,
+    signature: string | undefined,
+  ): Promise<ProviderEvent | null> {
+    const secret = String(this.config.get("STRIPE_WEBHOOK_SECRET", "") ?? "");
+    let e: Stripe.Event;
+    try {
+      if (!signature || !secret || secret.includes("PLACEHOLDER"))
+        throw new Error("missing signature or webhook secret");
+      e = this.stripe.webhooks.constructEvent(rawBody, signature, secret);
+    } catch (err) {
+      throw new InvalidEventSignatureError((err as Error).message);
+    }
+    let type = STRIPE_EVENT_MAP[e.type];
+    if (!type) return null;
+    // A test-mode event never changes live state, and vice versa.
+    if (e.livemode !== this.livemode) return null;
+    const obj = e.data.object as unknown as Record<string, unknown> & {
+      id: string;
+      object: string;
+      metadata?: Record<string, string>;
+    };
+    const base = {
+      id: e.id,
+      created: e.created * 1000,
+      provider: "stripe" as const,
+    };
+    if (obj.object === "subscription") {
+      return {
+        ...base,
+        type,
+        data: {
+          uid: obj.metadata?.uid ?? null,
+          customerId: idOf(obj.customer as string),
+          subscriptionId: obj.id,
+        },
+      };
+    }
+    if (obj.object === "invoice") {
+      const inv = obj as unknown as Stripe.Invoice;
+      const sd = inv.parent?.subscription_details;
+      const subscriptionId = idOf(
+        sd?.subscription as string | Stripe.Subscription | undefined,
+      );
+      const first = inv.billing_reason === "subscription_create";
+      // The buyer is still on the checkout page: Stripe shows the decline / 3-D Secure there.
+      if (
+        first &&
+        (type === "invoice.payment_failed" ||
+          type === "invoice.action_required")
+      )
+        return null;
+      if (first && type === "invoice.paid") type = "checkout.completed";
+      return {
+        ...base,
+        type,
+        data: {
+          uid: sd?.metadata?.uid ?? null,
+          customerId: idOf(inv.customer),
+          subscriptionId,
+          invoiceId: inv.id ?? null,
+          checkoutSessionId: first ? subscriptionId : null,
+          amount:
+            type === "invoice.upcoming" ? inv.amount_due : inv.amount_paid,
+        },
+      };
+    }
+    if (obj.object === "charge" || obj.object === "dispute") {
+      const pi = idOf((obj.payment_intent ?? null) as string | null);
+      let invoiceId: string | null = null;
+      if (pi) {
+        const pays = await this.stripe.invoicePayments.list({
+          payment: { type: "payment_intent", payment_intent: pi },
+          limit: 1,
+        });
+        invoiceId = idOf(
+          pays.data[0]?.invoice as string | Stripe.Invoice | undefined,
+        );
+      }
+      if (!invoiceId) return null;
+      return {
+        ...base,
+        type,
+        data: {
+          customerId: idOf(obj.customer as string),
+          invoiceId,
+          amount: Number(obj.amount_refunded ?? obj.amount ?? 0),
+        },
+      };
+    }
+    if (obj.object === "checkout.session") {
+      return {
+        ...base,
+        type,
+        data: {
+          uid: obj.metadata?.uid ?? (obj.client_reference_id as string) ?? null,
+          customerId: idOf(obj.customer as string),
+          subscriptionId: idOf(obj.subscription as string),
+          checkoutSessionId: obj.id,
+        },
+      };
+    }
+    this.logger.warn(`unhandled Stripe object ${obj.object} for ${e.type}`);
+    return null;
   }
 }

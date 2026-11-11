@@ -11,6 +11,7 @@ import {
   Req,
   Res,
   UseGuards,
+  UseInterceptors,
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { CurrentUser } from "../common/current-user.decorator";
@@ -36,8 +37,14 @@ import {
 } from "./billing.dto";
 import { RetentionService } from "./retention/retention.service";
 import { RefundService } from "./refund/refund.service";
+import { PromoService } from "./promo/promo.service";
 import { AuthToken, type AuthTokenInfo } from "../common/auth-token";
 import { StaffAccessService } from "../account/staff-access.service";
+import { isLifetimeElite } from "../plans/lifetime-elite";
+import {
+  CheckoutPreviewInterceptor,
+  inCheckoutPreview,
+} from "./checkout-preview";
 
 function clientIp(req: Request): string | null {
   const fwd = String(req.headers["x-forwarded-for"] ?? "")
@@ -49,6 +56,7 @@ function clientIp(req: Request): string | null {
 /** Self-service billing for the signed-in user. */
 @Controller("api/billing")
 @UseGuards(FirebaseAuthGuard)
+@UseInterceptors(CheckoutPreviewInterceptor)
 export class BillingController {
   constructor(
     private readonly billing: BillingService,
@@ -58,13 +66,25 @@ export class BillingController {
     private readonly refunds: RefundService,
   ) {}
 
-  /** Staff have full access and are never billed: no checkout, plan change or retention. */
+  /**
+   * Staff have full access and are never billed: no checkout, plan change or
+   * retention — except in the staff checkout preview (CHECKOUT_PREVIEW on),
+   * where staff run the real flow in Stripe test mode.
+   */
   private async refuseStaff(token: AuthTokenInfo | undefined): Promise<void> {
+    if (inCheckoutPreview()) return;
     if (await this.staff.isStaff(token)) {
       throw new ConflictException({
         statusCode: 409,
         code: "staff_access",
         message: "Staff accounts have full access and are never billed.",
+      });
+    }
+    if (isLifetimeElite(token?.email)) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: "lifetime_elite",
+        message: "Your account has complimentary lifetime Elite access and is never billed.",
       });
     }
   }
@@ -205,7 +225,32 @@ export class BillingController {
   }
 
   @Get("summary")
-  summary(@CurrentUser() uid: string) {
+  summary(@CurrentUser() uid: string, @AuthToken() token?: AuthTokenInfo) {
+    if (isLifetimeElite(token?.email)) {
+      return {
+        subscriptionsLive: true,
+        paidPlansAvailable: true,
+        checkoutPreview: false,
+        provider: "none",
+        planId: "elite",
+        planName: "Elite",
+        status: "ACTIVE",
+        interval: "annual",
+        source: "lifetime",
+        creditBalance: 0,
+        currentPeriodStart: null,
+        currentPeriodEnd: null,
+        cancelAtPeriodEnd: false,
+        renewsAt: null,
+        endsAt: null,
+        inGrace: false,
+        graceEndsAt: null,
+        scheduledChange: null,
+        discount: null,
+        nextCharge: null,
+        hasBillingAccount: false,
+      };
+    }
     return this.billing.summary(uid);
   }
 
@@ -242,6 +287,30 @@ export class BillingController {
   }
 }
 
+/**
+ * Promo check on the signup page, before the account exists. Server-side,
+ * one generic error for every rejection, and the same hourly per-IP budget as
+ * signed-in checks. It only quotes: the code is applied (and re-validated) at
+ * checkout.
+ */
+@Controller("api/billing")
+export class SignupPromoController {
+  constructor(private readonly promos: PromoService) {}
+
+  @Public("signup page promo check, before sign-in; rate limited per IP")
+  @Post("signup/promo")
+  @HttpCode(200)
+  check(@Body() body: PromoPreviewDto, @Req() req: Request) {
+    return this.promos.preview({
+      code: body.code,
+      uid: null,
+      planId: body.planId,
+      interval: body.interval,
+      ip: clientIp(req),
+    });
+  }
+}
+
 /** Provider webhooks. Authenticated by the provider signature over the raw body. */
 @Controller("api/billing")
 export class BillingWebhookController {
@@ -264,6 +333,7 @@ export class BillingWebhookController {
 /** What the signed-in user's plan includes — the UI renders and gates from this. */
 @Controller("api/me")
 @UseGuards(FirebaseAuthGuard)
+@UseInterceptors(CheckoutPreviewInterceptor)
 export class MeEntitlementsController {
   constructor(
     private readonly access: BillingAccessService,
@@ -277,6 +347,7 @@ export class MeEntitlementsController {
     @AuthToken() token?: AuthTokenInfo,
   ) {
     const live = await this.access.subscriptionsLive();
+    if (isLifetimeElite(token?.email)) return this.lifetimeEliteEntitlements(live);
     if (await this.staff.isStaff(token)) return this.staffEntitlements(live);
     const effective = await this.subscriptions.forUser(uid);
     const built = ENTITLEMENTS.filter((e) => !e.unbuilt && !e.staffOnly);
@@ -311,12 +382,43 @@ export class MeEntitlementsController {
     };
   }
 
-  /** Staff: every built feature (Elite and above), no limits, never billed, never admin. */
-  private staffEntitlements(live: boolean) {
+  /** Lifetime Elite: every built feature (Elite and above), no limits, never billed. */
+  private lifetimeEliteEntitlements(live: boolean) {
     const built = ENTITLEMENTS.filter((e) => !e.unbuilt && !e.staffOnly);
     return {
       subscriptionsEnabled: live,
       paidPlansAvailable: live,
+      checkoutPreview: false,
+      providerConnected: this.access.providerName !== "none",
+      provider: this.access.providerName,
+      planId: "elite",
+      planName: "Elite",
+      status: "ACTIVE",
+      interval: "annual",
+      cancelAtPeriodEnd: false,
+      currentPeriodEnd: null,
+      inGrace: false,
+      graceEndsAt: null,
+      entitlements: Object.fromEntries(built.map((e) => [e.key, true])),
+      requiredPlan: Object.fromEntries(
+        built.map((e) => [e.key, lowestPlanFor(e.key)?.id ?? null]),
+      ),
+      hidden: ENTITLEMENTS.filter((e) => e.unbuilt).map((e) => e.key),
+      limits: { watchlistTickers: null },
+    };
+  }
+
+  /** Staff: every built feature (Elite and above), no limits, never billed, never admin. */
+  private staffEntitlements(live: boolean) {
+    const built = ENTITLEMENTS.filter((e) => !e.unbuilt && !e.staffOnly);
+    const preview = inCheckoutPreview();
+    return {
+      subscriptionsEnabled: live,
+      // In the staff preview the checkout and plan picker open for this account
+      // only; entitlements below stay staff (full access) either way.
+      paidPlansAvailable: live || preview,
+      checkoutPreview: preview && !live,
+      providerConnected: this.access.providerName !== "none",
       provider: this.access.providerName,
       staff: true,
       planId: "staff",

@@ -1,7 +1,6 @@
 import { Controller, Get, Header, Param, Query, UseGuards } from "@nestjs/common";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 import { MoverCatalystService } from "../live/mover-catalyst.service";
-import { RequiresEntitlement } from "../entitlements/requires-entitlement.decorator";
 
 @Controller("market-data")
 @UseGuards(FirebaseAuthGuard)
@@ -12,7 +11,6 @@ export class MoverCatalystsController {
    * GET /market-data/mover-catalysts?tickers=AAPL,NVDA,TSLA
    * Query catalyst reasons for multiple mover tickers in batch.
    */
-  @RequiresEntitlement("workspaces")
   @Get("mover-catalysts")
   @Header(
     "Cache-Control",
@@ -30,7 +28,6 @@ export class MoverCatalystsController {
    * GET /market-data/mover-catalyst/:ticker
    * Query catalyst reason for a single stock ticker.
    */
-  @RequiresEntitlement("workspaces")
   @Get("mover-catalyst/:ticker")
   @Header(
     "Cache-Control",

@@ -256,13 +256,34 @@ describe("FakeBillingProvider: renewals, cancel, downgrade", () => {
     );
   });
 
-  it("a downgrade takes effect at period end and bills the new price", async () => {
+  it("a downgrade applies now; the prorated difference goes to the customer's credit balance", async () => {
+    const t = setup();
+    const { done } = await subscribe(t, "elite", "monthly");
+    const sub0 = await t.provider.getSubscription(done.subscriptionId);
+    const r = await t.provider.changePlan({
+      subscriptionId: done.subscriptionId,
+      target: price("starter", "monthly"),
+      kind: "downgrade",
+      prorationDate: T0,
+      expectedAmountDue: null,
+      expectedCredit: 19900 - 3900,
+    });
+    expect(r).toMatchObject({ status: "applied", amountCharged: 0, creditToBalance: 16000 });
+    const sub = await t.provider.getSubscription(done.subscriptionId);
+    expect(sub).toMatchObject({ planId: "starter", amount: 3900, currentPeriodEnd: sub0.currentPeriodEnd });
+    expect(await t.provider.getCreditBalance(sub.customerId)).toBe(16000);
+    const inv = await t.provider.getInvoice(sub.latestInvoiceId);
+    expect(inv.total).toBe(0);
+    expect(inv.lines.map((l) => l.amount)).toEqual([-19900, 3900, 16000]);
+  });
+
+  it("a scheduled change (annual → monthly) takes effect at period end and bills the new price", async () => {
     const t = setup();
     const { done } = await subscribe(t, "elite", "monthly");
     const r = await t.provider.changePlan({
       subscriptionId: done.subscriptionId,
       target: price("starter", "monthly"),
-      kind: "downgrade",
+      kind: "scheduled",
       prorationDate: T0,
       expectedAmountDue: null,
     });
@@ -479,10 +500,67 @@ describe("provider factory safety", () => {
       ),
     ).toBeInstanceOf(FakeBillingProvider);
   });
+  it("Stripe without a usable secret key is no provider (paid plans stay unavailable)", () => {
+    for (const key of [
+      undefined,
+      "",
+      "__PLACEHOLDER__",
+      "pk_test_wrong_kind",
+    ]) {
+      expect(
+        createBillingProvider(
+          cfg({
+            BILLING_PROVIDER: "stripe",
+            ...(key !== undefined ? { STRIPE_SECRET_KEY: key } : {}),
+          }),
+          fb,
+          new AppClock(),
+        ),
+      ).toBeNull();
+    }
+  });
+  it.each([
+    ["production", "market-catalyst-502415"],
+    ["staging", "market-catalyst-stage"],
+  ])(
+    "refuses a live-mode Stripe key at startup unless STRIPE_LIVE_APPROVED=true (%s)",
+    (_env, project) => {
+      const live = (extra: Record<string, string> = {}) =>
+        createBillingProvider(
+          cfg({
+            BILLING_PROVIDER: "stripe",
+            STRIPE_SECRET_KEY: "sk_live_x",
+            FIREBASE_PROJECT_ID: project,
+            ...extra,
+          }),
+          fb,
+          new AppClock(),
+        );
+      expect(() => live()).toThrow(/live-mode key but STRIPE_LIVE_APPROVED/);
+      expect(() => live({ STRIPE_LIVE_APPROVED: "false" })).toThrow();
+      expect(() => live({ STRIPE_LIVE_APPROVED: "yes" })).toThrow();
+      const approved = live({ STRIPE_LIVE_APPROVED: "true" });
+      expect(approved).toBeInstanceOf(StripeBillingProvider);
+      expect(approved?.livemode).toBe(true);
+    },
+  );
+  it("test-mode Stripe keys run in production (staff checkout preview) and report livemode:false", () => {
+    const p = createBillingProvider(
+      cfg({
+        BILLING_PROVIDER: "stripe",
+        STRIPE_SECRET_KEY: "sk_test_x",
+        FIREBASE_PROJECT_ID: "market-catalyst-502415",
+      }),
+      fb,
+      new AppClock(),
+    );
+    expect(p).toBeInstanceOf(StripeBillingProvider);
+    expect(p?.livemode).toBe(false);
+  });
   it("selects Stripe by config only, and nothing when unset", () => {
     expect(
       createBillingProvider(
-        cfg({ BILLING_PROVIDER: "stripe" }),
+        cfg({ BILLING_PROVIDER: "stripe", STRIPE_SECRET_KEY: "sk_test_x" }),
         fb,
         new AppClock(),
       ),

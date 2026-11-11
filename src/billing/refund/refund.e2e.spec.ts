@@ -8,7 +8,7 @@ afterEach(async () => {
 });
 
 describe("refunds (REFUND_WINDOW_DAYS = 14)", () => {
-  it("first payment within the window: full refund, plan ends now → Free, email sent, claim recorded", async () => {
+  it("first payment within the window: full refund, plan ends now → no plan, email sent, claim recorded", async () => {
     a = await billingApp({ env: { SUBSCRIPTIONS_ENABLED: "true" } });
     const { u } = await a.subscribe("r1", "pro", "monthly");
     await a.advanceDays(3);
@@ -33,7 +33,7 @@ describe("refunds (REFUND_WINDOW_DAYS = 14)", () => {
       paymentStatus: "REFUNDED",
       amountRefunded: 5900,
     });
-    expect((await u.get("/api/me/entitlements")).body.planId).toBe("free");
+    expect((await u.get("/api/me/entitlements")).body.planId).toBe("none");
     expect(a.fs.read("subscriptions", "r1")?.endedAt).toBeTruthy();
     expect(a.tags()).toContain("refund");
     expect((await u.get("/api/billing/refund")).body).toMatchObject({
@@ -103,7 +103,7 @@ describe("refunds (REFUND_WINDOW_DAYS = 14)", () => {
     expect((await u.post("/api/billing/refund")).body.kind).toBe(
       "annual_renewal",
     );
-    expect((await u.get("/api/me/entitlements")).body.planId).toBe("free");
+    expect((await u.get("/api/me/entitlements")).body.planId).toBe("none");
   });
 
   it("a monthly renewal charge is not refundable", async () => {

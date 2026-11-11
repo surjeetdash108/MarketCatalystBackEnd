@@ -1,6 +1,10 @@
 import { CONSENT_VERSION, consentText } from "./checkout/consent";
 import { normaliseE164 } from "./checkout/phone";
-import { addInterval as addIntervalMs } from "./provider/fake/fake-billing.provider";
+import {
+  addInterval as addIntervalMs,
+  discountAmountFor,
+  normaliseDiscount,
+} from "./provider/fake/fake-billing.provider";
 import { refundPolicy } from "./refund/refund-policy";
 import { EmailVerificationService } from "../account/email-verification.service";
 import {
@@ -26,12 +30,13 @@ import {
 } from "../plans/plans.registry";
 import { SubscriptionsService } from "../plans/subscriptions.service";
 import { BillingAccessService } from "./billing-access.service";
+import { inCheckoutPreview } from "./checkout-preview";
 import type { MirrorDoc } from "./billing-events.service";
 import {
   PreviewStaleError,
   type BillingProvider,
 } from "./provider/billing-provider";
-import type { PriceRef } from "./provider/types";
+import type { AppliedDiscount, PriceRef } from "./provider/types";
 import {
   describePromo,
   GENERIC_PROMO_ERROR,
@@ -48,20 +53,116 @@ import {
 
 const LIVE = ["ACTIVE", "TRIALING", "PAST_DUE"];
 
-export type ChangeKind = "upgrade" | "downgrade" | "same";
+export type ChangeKind = "upgrade" | "downgrade" | "scheduled" | "same";
 
-/** Upgrade = higher plan, or same plan monthly → annual. Downgrade = the reverse. */
+/**
+ * upgrade   higher plan on the same interval, or monthly → annual (any plan):
+ *           immediate, prorated, charged now
+ * downgrade lower plan on the same interval: immediate, prorated, the
+ *           difference credited to the account balance
+ * scheduled annual → monthly (any plan): at the end of the annual period
+ */
 export function classifyChange(
   current: { planId: string; interval: BillingInterval },
   target: { planId: string; interval: BillingInterval },
 ): ChangeKind {
   if (current.planId === target.planId && current.interval === target.interval)
     return "same";
-  const a = planRank(current.planId);
-  const b = planRank(target.planId);
-  if (b > a) return "upgrade";
-  if (b < a) return "downgrade";
-  return target.interval === "annual" ? "upgrade" : "downgrade";
+  if (current.interval === "annual" && target.interval === "monthly")
+    return "scheduled";
+  if (current.interval === "monthly" && target.interval === "annual")
+    return "upgrade";
+  return planRank(target.planId) > planRank(current.planId)
+    ? "upgrade"
+    : "downgrade";
+}
+
+/** The current period's price after an active percent discount (what was paid). */
+export function paidForPeriod(m: {
+  amount?: number | null;
+  discount?: unknown;
+}): number | null {
+  if (typeof m.amount !== "number") return null;
+  const d = (m.discount ?? null) as {
+    percentOff?: number | null;
+    remainingInvoices?: number | null;
+  } | null;
+  const pct =
+    d?.percentOff != null &&
+    (d.remainingInvoices == null || d.remainingInvoices > 0)
+      ? d.percentOff
+      : 0;
+  return Math.round(m.amount * (1 - pct / 100));
+}
+
+export interface ChangeBreakdown {
+  fromPlanName: string;
+  toPlanName: string;
+  periodStart: string;
+  today: string;
+  periodEnd: string;
+  /** <Plan 1>: <period start> to today (what the time used costs). */
+  usedOnCurrent: number;
+  /** <Plan 2>: today to <period end> (or the new full period on an interval change). */
+  newPlanCharge: number;
+  /** Already paid for <Plan 1> this period. */
+  alreadyPaid: number;
+  /** usedOnCurrent + newPlanCharge − alreadyPaid. > 0 charged now; < 0 credit. */
+  net: number;
+  chargedNow: number;
+  creditToBalance: number;
+}
+
+/**
+ * The breakdown shown in the change dialog, from the provider's proration
+ * lines: the unused-time credit (negative proration lines) and the new plan's
+ * charge (the positive lines). "Already paid" is the unused credit scaled to the
+ * whole period, so used + new − paid equals the provider's net to the cent.
+ */
+export function changeBreakdown(
+  preview: {
+    lines: Array<{ amount: number; proration: boolean }>;
+    currentPeriodStart: string;
+    currentPeriodEnd: string;
+    prorationDate: number;
+    amountDueNow: number;
+    creditToBalance: number;
+  },
+  names: { from: string; to: string },
+  /** What was paid for the current period, when known (price after an active percent discount). */
+  paidForPeriod?: number | null,
+): ChangeBreakdown {
+  const unused = -preview.lines
+    .filter((l) => l.proration && l.amount < 0)
+    .reduce((a, l) => a + l.amount, 0);
+  const newPlanCharge = preview.lines
+    .filter((l) => l.amount > 0)
+    .reduce((a, l) => a + l.amount, 0);
+  const start = Date.parse(preview.currentPeriodStart);
+  const end = Date.parse(preview.currentPeriodEnd);
+  const remaining = Math.max(
+    1e-9,
+    (end - preview.prorationDate) / Math.max(1, end - start),
+  );
+  const alreadyPaid =
+    paidForPeriod != null && paidForPeriod >= unused
+      ? paidForPeriod
+      : Math.round(unused / remaining);
+  const usedOnCurrent = alreadyPaid - unused;
+  const net = usedOnCurrent + newPlanCharge - alreadyPaid;
+  return {
+    fromPlanName: names.from,
+    toPlanName: names.to,
+    periodStart: preview.currentPeriodStart,
+    today: new Date(preview.prorationDate).toISOString(),
+    periodEnd: preview.currentPeriodEnd,
+    usedOnCurrent,
+    newPlanCharge,
+    alreadyPaid,
+    net,
+    chargedNow: preview.amountDueNow,
+    creditToBalance: preview.creditToBalance,
+  };
 }
 
 @Injectable()
@@ -141,8 +242,15 @@ export class BillingService {
     email: string | null,
     provider: BillingProvider,
   ): Promise<string> {
+    // A test-mode customer is never reused in live mode (or the reverse).
+    const sameMode = (x: Record<string, unknown>) =>
+      x.livemode === undefined || x.livemode === provider.livemode;
     const c = (await this.db.collection("customers").doc(uid).get()).data();
-    if (c?.customerId && (c.provider == null || c.provider === provider.name))
+    if (
+      c?.customerId &&
+      (c.provider == null || c.provider === provider.name) &&
+      sameMode(c)
+    )
       return String(c.customerId);
     // Reuse the customer from an earlier, unfinished checkout before creating another.
     const pending = await this.db
@@ -151,7 +259,7 @@ export class BillingService {
       .get();
     const reuse = pending.docs
       .map((d) => d.data())
-      .find((s) => s.provider === provider.name && s.customerId);
+      .find((s) => s.provider === provider.name && s.customerId && sameMode(s));
     if (reuse) return String(reuse.customerId);
     return (await provider.createCustomer({ uid, email })).customerId;
   }
@@ -178,9 +286,9 @@ export class BillingService {
       } | null;
     },
   ) {
-    const provider = await this.access.requireLive();
+    const provider = await this.access.requireQuoteProvider();
     const price = this.priceRef(input.planId, input.interval);
-    let discount = null;
+    let discount: AppliedDiscount | null = null;
     let promo: { code: string; description: string } | null = null;
     if (input.promoCode) {
       const v = await this.promos.validate({
@@ -207,7 +315,11 @@ export class BillingService {
           postalCode: input.region.postalCode ?? null,
         }
       : null;
-    const quote = await provider.previewCheckout({ price, discount, region });
+    // Staff preview with no provider connected yet: a local quote (no tax —
+    // tax only ever comes from the provider) so steps 1–2 still render.
+    const quote = provider
+      ? await provider.previewCheckout({ price, discount, region })
+      : localQuote(price, discount, this.clock.now());
     const renewsAt = new Date(
       addIntervalMs(this.clock.now(), input.interval),
     ).toISOString();
@@ -223,6 +335,7 @@ export class BillingService {
         text: consentText(price.planId, price.interval),
       },
       refundPolicy: refundPolicy(),
+      providerConnected: provider !== null,
     };
   }
 
@@ -369,6 +482,7 @@ export class BillingService {
       .set(
         {
           uid,
+          livemode: provider.livemode,
           phone,
           phoneUpdatedAt: now,
           marketingOptIn: { optedIn: input.marketingOptIn === true, at: now },
@@ -384,6 +498,7 @@ export class BillingService {
           id: session.id,
           uid,
           provider: provider.name,
+          livemode: provider.livemode,
           customerId,
           planId: price.planId,
           interval: price.interval,
@@ -413,7 +528,11 @@ export class BillingService {
       amountDueToday: session.amountDueToday,
       tax: session.tax ?? 0,
       currency: session.currency,
-      payment: { provider: provider.name },
+      // Stripe: the browser confirms the first payment with this (Payment Element).
+      payment: {
+        provider: provider.name,
+        clientSecret: session.clientSecret ?? null,
+      },
     };
   }
 
@@ -484,12 +603,34 @@ export class BillingService {
       target,
       kind,
     });
+    const credit = m.customerId
+      ? await provider.getCreditBalance(m.customerId).catch(() => 0)
+      : 0;
+    const balanceAfter = credit + preview.creditToBalance;
     return {
       ...preview,
       fromPlanId: m.planId,
       fromInterval: m.interval,
-      cancelsPendingDowngrade: !!m.scheduledChange && kind === "upgrade",
+      breakdown:
+        kind === "scheduled"
+          ? null
+          : changeBreakdown(
+              preview,
+              {
+                from: planById(m.planId)?.name ?? m.planId,
+                to: planById(target.planId)?.name ?? target.planId,
+              },
+              paidForPeriod(m),
+            ),
+      creditBalanceAfter: balanceAfter,
+      /** The next invoice after the account credit is used. */
+      nextInvoiceAfterCredit: Math.max(
+        0,
+        preview.nextRenewalAmount - balanceAfter,
+      ),
+      cancelsPendingDowngrade: !!m.scheduledChange && kind !== "scheduled",
       resumesCancelledPlan: m.cancelAtPeriodEnd && kind === "upgrade",
+      keepsCancelDate: m.cancelAtPeriodEnd && kind === "downgrade",
     };
   }
 
@@ -499,6 +640,7 @@ export class BillingService {
       planId: string;
       interval: BillingInterval;
       expectedAmountDue?: number | null;
+      expectedCredit?: number | null;
       prorationDate?: number | null;
     },
   ) {
@@ -508,7 +650,7 @@ export class BillingService {
       input.interval,
     );
     if (
-      kind === "downgrade" &&
+      kind === "scheduled" &&
       m.scheduledChange?.planId === target.planId &&
       m.scheduledChange?.interval === target.interval
     ) {
@@ -518,7 +660,10 @@ export class BillingService {
         message: "This change is already scheduled.",
       });
     }
-    if (kind === "upgrade" && input.expectedAmountDue == null) {
+    if (
+      (kind === "upgrade" && input.expectedAmountDue == null) ||
+      (kind === "downgrade" && input.expectedCredit == null)
+    ) {
       throw new BadRequestException({
         statusCode: 400,
         code: "preview_required",
@@ -532,6 +677,7 @@ export class BillingService {
         kind,
         prorationDate: input.prorationDate ?? this.clock.now(),
         expectedAmountDue: kind === "upgrade" ? input.expectedAmountDue : null,
+        expectedCredit: kind === "downgrade" ? input.expectedCredit : null,
       });
       if (result.status === "payment_failed") {
         throw new HttpException(
@@ -551,6 +697,7 @@ export class BillingService {
           statusCode: 409,
           code: "preview_stale",
           amountDue: err.actual,
+          expected: err.expected,
           message: "The price changed since your preview. Review it again.",
         });
       }
@@ -653,13 +800,19 @@ export class BillingService {
     } | null;
     return {
       subscriptionsLive: live,
-      paidPlansAvailable: live,
+      paidPlansAvailable: live || inCheckoutPreview(),
+      checkoutPreview: !live && inCheckoutPreview(),
       provider: this.access.providerName,
       planId: effective.planId,
       planName: effective.planName,
       status: effective.status,
       interval: m?.interval ?? null,
       source: m?.source ?? null,
+      /** Account credit (downgrades, annual retention) used automatically on the next invoices. */
+      creditBalance:
+        provider && m?.customerId
+          ? await provider.getCreditBalance(m.customerId).catch(() => 0)
+          : 0,
       currentPeriodStart: m?.currentPeriodStart ?? null,
       currentPeriodEnd: m?.currentPeriodEnd ?? null,
       cancelAtPeriodEnd: m?.cancelAtPeriodEnd === true,
@@ -711,6 +864,8 @@ export class BillingService {
         discountAmount: p.discountAmount ?? 0,
         creditApplied: p.creditApplied ?? 0,
         amountRefunded: p.amountRefunded ?? 0,
+        /** Line items; null for records written before lines were stored (show totals). */
+        lines: Array.isArray(p.lines) ? (p.lines as unknown[]) : null,
         status: p.paymentStatus,
         reason: p.billingReason ?? null,
         periodStart: p.subscriptionStartDate,
@@ -761,7 +916,7 @@ export class BillingService {
     ip: string | null,
     input: { code: string; planId: string; interval: BillingInterval },
   ) {
-    await this.access.requireLive();
+    await this.access.requireQuoteProvider();
     this.priceRef(input.planId, input.interval);
     return this.promos.preview({ ...input, uid, ip });
   }
@@ -818,4 +973,23 @@ export class BillingService {
     await ref.set(patch, { merge: true });
     return this.contact(uid);
   }
+}
+
+/** Quote without a provider (staff preview before Stripe keys are set): tax pending. */
+export function localQuote(
+  price: PriceRef,
+  discount: AppliedDiscount | null,
+  now: number,
+) {
+  const d = discount ? normaliseDiscount(discount, price.interval, now) : null;
+  const off = discountAmountFor(d, price.amount);
+  return {
+    currency: price.currency,
+    subtotal: price.amount,
+    discount: off,
+    tax: 0,
+    total: price.amount - off,
+    taxLabel: null,
+    taxPending: true,
+  };
 }

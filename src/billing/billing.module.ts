@@ -1,3 +1,7 @@
+import {
+  CheckoutPreviewInterceptor,
+  CheckoutPreviewService,
+} from "./checkout-preview";
 import { RefundService } from "./refund/refund.service";
 import { Module } from "@nestjs/common";
 import { PlansModule } from "../plans/plans.module";
@@ -7,6 +11,7 @@ import {
   BillingController,
   BillingWebhookController,
   MeEntitlementsController,
+  SignupPromoController,
 } from "./billing.controller";
 import { FakeBillingController } from "./fake-billing.controller";
 import { PromoService } from "./promo/promo.service";
@@ -20,6 +25,7 @@ import { BillingReconcileJob } from "./reconcile.job";
   controllers: [
     BillingController,
     BillingWebhookController,
+    SignupPromoController,
     MeEntitlementsController,
     FakeBillingController,
     AdminBillingController,
@@ -32,6 +38,8 @@ import { BillingReconcileJob } from "./reconcile.job";
     AdminBillingService,
     BillingReconcileJob,
     RefundService,
+    CheckoutPreviewService,
+    CheckoutPreviewInterceptor,
   ],
   exports: [
     BillingEventsService,

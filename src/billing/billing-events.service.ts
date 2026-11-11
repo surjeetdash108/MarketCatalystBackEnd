@@ -83,6 +83,8 @@ export function mapStatus(s: ProviderSubscriptionStatus): SubscriptionStatus {
 
 export interface MirrorDoc extends SubscriptionMirror {
   provider: string;
+  /** false = written by a test-mode provider (excluded from revenue; purgeable). */
+  livemode?: boolean;
   /** Renewal consent from checkout (copied from checkout_sessions). */
   consent?: Record<string, unknown> | null;
   customerId: string | null;
@@ -154,9 +156,9 @@ export class BillingEventsService implements OnModuleInit {
     if (!this.provider) {
       throw new ServiceUnavailableException("No billing provider configured.");
     }
-    let event: ProviderEvent;
+    let event: ProviderEvent | null;
     try {
-      event = this.provider.parseEvent(rawBody, signature);
+      event = await this.provider.parseEvent(rawBody, signature);
     } catch (err) {
       if (err instanceof InvalidEventSignatureError) {
         throw new BadRequestException({
@@ -185,6 +187,7 @@ export class BillingEventsService implements OnModuleInit {
         created: event.created,
         receivedAt: this.clock.nowIso(),
         status: "processing",
+        ...this.mode(),
       });
       return true;
     });
@@ -221,6 +224,8 @@ export class BillingEventsService implements OnModuleInit {
         await this.onCheckoutCompleted(event);
         if (d.subscriptionId)
           await this.syncSubscription(d.subscriptionId, event);
+        // Stripe: the first invoice.paid IS the checkout completion — record that payment too.
+        if (d.invoiceId) await this.syncInvoice(d.invoiceId, event);
         return;
       case "checkout.expired":
         if (d.checkoutSessionId) {
@@ -252,6 +257,11 @@ export class BillingEventsService implements OnModuleInit {
 
   // ── helpers ───────────────────────────────────────────────────────────
 
+  /** { livemode } of the active provider; nothing when there is none (trials). */
+  private mode(): { livemode?: boolean } {
+    return this.provider ? { livemode: this.provider.livemode } : {};
+  }
+
   private async emailFor(uid: string): Promise<string | null> {
     const c = (
       await this.db.collection(BILLING_COLLECTIONS.customers).doc(uid).get()
@@ -278,6 +288,7 @@ export class BillingEventsService implements OnModuleInit {
       {
         uid,
         provider: this.provider?.name ?? null,
+        ...this.mode(),
         customerId,
         email: email ? email.trim().toLowerCase() : null,
         createdAt:
@@ -339,6 +350,7 @@ export class BillingEventsService implements OnModuleInit {
           at: this.clock.nowIso(),
           eventId: ctx.eventId ?? null,
           subscriptionId: ctx.subscriptionId ?? null,
+          ...this.mode(),
         }),
       );
   }
@@ -413,6 +425,7 @@ export class BillingEventsService implements OnModuleInit {
     const next: MirrorDoc = {
       uid,
       provider: this.provider?.name ?? "unknown",
+      ...this.mode(),
       source: "provider",
       customerId: sub.customerId,
       subscriptionId: sub.id,
@@ -593,6 +606,7 @@ export class BillingEventsService implements OnModuleInit {
       clean({
         status: "complete",
         completedAt: this.clock.nowIso(),
+        ...this.mode(),
         subscriptionId: session.subscriptionId,
         promoCode:
           (record.promoCode as string | undefined) ??
@@ -659,6 +673,7 @@ export class BillingEventsService implements OnModuleInit {
         planId,
         interval,
         redeemedAt: this.clock.nowIso(),
+        ...this.mode(),
       });
       tx.set(
         promoRef,
@@ -700,6 +715,7 @@ export class BillingEventsService implements OnModuleInit {
           invoiceNumber: inv.number,
           userId: inv.uid,
           provider: this.provider.name,
+          livemode: this.provider.livemode,
           customerId: inv.customerId,
           subscriptionId: inv.subscriptionId,
           planId: inv.planId,
@@ -709,6 +725,16 @@ export class BillingEventsService implements OnModuleInit {
           discountAmount: inv.discountAmount,
           creditApplied: inv.creditApplied,
           amountRefunded: inv.amountRefunded,
+          // Line items (description, period, amount, proration flag), incl.
+          // discount and credit lines — what Manage Plan history and the admin
+          // detail show. Written here only (the event handler).
+          lines: (inv.lines ?? []).map((l) => ({
+            description: l.description,
+            amount: l.amount,
+            proration: l.proration === true,
+            periodStart: l.periodStart ?? null,
+            periodEnd: l.periodEnd ?? null,
+          })),
           currency: inv.currency,
           paymentStatus: status,
           billingReason: inv.billingReason,
@@ -734,15 +760,14 @@ export class BillingEventsService implements OnModuleInit {
           { firstPaidAt: inv.paidAt ?? this.clock.nowIso() },
           { merge: true },
         );
-      // Stripe sends its own receipts; the fake provider stands in for them.
-      if (this.provider instanceof FakeBillingProvider) {
-        await this.emails.receipt(email, {
-          planId: inv.planId,
-          amount: inv.amountPaid,
-          currency: inv.currency,
-          invoiceNumber: inv.number,
-        });
-      }
+      // Every receipt goes through our EmailSender (SendGrid); turn off Stripe's
+      // own customer receipt emails so customers don't get two (docs/GO-LIVE.md).
+      await this.emails.receipt(email, {
+        planId: inv.planId,
+        amount: inv.amountPaid,
+        currency: inv.currency,
+        invoiceNumber: inv.number,
+      });
     } else if (event.type === "invoice.action_required") {
       await this.emails.actionRequired(email, {
         planId: inv.planId,

@@ -666,10 +666,15 @@ export const API_CATALOG = {
       "Validates a promo code server-side and returns the discounted price; rate-limited, one generic error.",
     params: "body: code, planId, interval",
     store: ["backend-only billing collections"],
+  },  "POST /api/billing/signup/promo": {
+    summary:
+      "Validates a promo code server-side and returns the discounted price; rate-limited, one generic error.",
+    params: "body: code, planId, interval",
+    store: ["backend-only billing collections"],
   },
   "POST /api/billing/change/preview": {
     summary:
-      "Previews a plan change: prorated amount due now (upgrade) or the period-end date (downgrade).",
+      "Previews a plan change: prorated charge now (upgrade), prorated account credit now (downgrade), or the period-end date (annual → monthly), with the line-by-line breakdown.",
     params: "body: planId, interval",
     store: ["backend-only billing collections"],
   },

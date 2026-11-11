@@ -1,3 +1,4 @@
+import { Logger } from "@nestjs/common";
 import type { FactoryProvider } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AppClock } from "../../common/app-clock";
@@ -15,6 +16,15 @@ export function configuredProvider(config: ConfigService): ConfiguredProvider {
     .trim()
     .toLowerCase();
   return v === "fake" || v === "stripe" ? v : "none";
+}
+
+/** STRIPE_LIVE_APPROVED=true: live-mode Stripe keys may be used. Default off. */
+export function stripeLiveApproved(config: ConfigService): boolean {
+  return (
+    String(config.get("STRIPE_LIVE_APPROVED", "") ?? "")
+      .trim()
+      .toLowerCase() === "true"
+  );
 }
 
 /**
@@ -46,7 +56,27 @@ export function createBillingProvider(
       webhookSecret: config.get<string>("FAKE_BILLING_WEBHOOK_SECRET"),
     });
   }
-  if (name === "stripe") return new StripeBillingProvider(config);
+  if (name === "stripe") {
+    // No usable key → no provider: paid plans show "launching soon" rather than
+    // a checkout that fails. (Keys come from Secret Manager; never logged.)
+    const key = String(config.get("STRIPE_SECRET_KEY", "") ?? "");
+    if (!/^sk_(test|live)_/.test(key) || key.includes("PLACEHOLDER")) {
+      new Logger("BillingProvider").error(
+        "BILLING_PROVIDER=stripe but STRIPE_SECRET_KEY is missing or not a Stripe secret key: paid plans stay unavailable.",
+      );
+      return null;
+    }
+    // Live keys need an explicit, separate approval; until then only test-mode
+    // keys run (the staff checkout preview). Refusing at startup means a live
+    // key pasted into the wrong secret can never take real payments.
+    if (key.startsWith("sk_live_") && !stripeLiveApproved(config)) {
+      throw new Error(
+        "FATAL: STRIPE_SECRET_KEY is a live-mode key but STRIPE_LIVE_APPROVED is not 'true'. " +
+          "Use a test-mode key (sk_test_…) or set STRIPE_LIVE_APPROVED=true once live payments are approved.",
+      );
+    }
+    return new StripeBillingProvider(config);
+  }
   return null;
 }
 

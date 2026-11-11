@@ -49,7 +49,7 @@ export const REQUIRED_PRODUCTION_ENV = [
   { name: "STRIPE_SECRET_KEY", secret: true, services: [LIVE, WORKER] },
   { name: "STRIPE_WEBHOOK_SECRET", secret: true, services: [LIVE] },
   { name: "STRIPE_PORTAL_CONFIGURATION", secret: false, services: [LIVE] },
-  { name: "STRIPE_RETENTION_COUPON_ID", secret: false, services: [LIVE] },
+  { name: "EMAIL_PROVIDER", secret: false, services: [LIVE, WORKER] },
   { name: "EMAIL_PROVIDER_API_KEY", secret: true, services: [LIVE, WORKER] },
   { name: "EMAIL_FROM_ADDRESS", secret: false, services: [LIVE, WORKER] },
   { name: "EMAIL_REPLY_TO", secret: false, services: [LIVE, WORKER] },

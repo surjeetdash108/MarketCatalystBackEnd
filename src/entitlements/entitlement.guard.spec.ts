@@ -3,390 +3,249 @@ jest.mock("marked", () => ({ marked: { parse: (s: string) => s } }));
 
 import { StaffAccessService } from "../account/staff-access.service";
 import type { AuthTokenInfo } from "../common/auth-token";
-import { readdirSync, statSync } from "fs";
-import { join } from "path";
 import {
   Controller,
   ExecutionContext,
   ForbiddenException,
   Get,
   INestApplication,
-  Query,
 } from "@nestjs/common";
-import { Reflector } from "@nestjs/core";
+import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
-import {
-  GUARDS_METADATA,
-  METHOD_METADATA,
-  PATH_METADATA,
-} from "@nestjs/common/constants";
 import request from "supertest";
 import { billingHarness, configOf } from "../../test/support/billing-harness";
 import { BillingAccessService } from "../billing/billing-access.service";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
+import {
+  ENTITLEMENTS,
+  PLAN_DEFINITIONS,
+  PLAN_GROUPS,
+  ROUTE_FEATURES,
+  groupOf,
+  isPlanExempt,
+} from "../plans/plans.registry";
 import { SubscriptionsService } from "../plans/subscriptions.service";
 import { EntitlementGuard } from "./entitlement.guard";
-import {
-  REQUIRED_ENTITLEMENT,
-  RequiresEntitlement,
-  type EntitlementRequirement,
-} from "./requires-entitlement.decorator";
+import { routeInventory, type RouteInfo } from "./route-inventory";
 
-// Many HTTP round-trips per test; the 5 s default flakes under parallel load.
-jest.setTimeout(30_000);
+// Many guard calls per test; the 5 s default flakes under parallel load.
+jest.setTimeout(60_000);
 
 /**
- * Route access matrix: every route carrying @RequiresEntitlement, called as a
- * Free, Starter, Pro and Elite user, through the real EntitlementGuard and
- * resolver. Expected plan per route group = the doc's route map.
+ * Access matrix: EVERY controller route × no plan / Starter / Pro / Elite /
+ * staff, through the real EntitlementGuard and resolver, with the
+ * expectation derived from the registry's feature groups (not restated here).
  */
+const ROUTES = routeInventory();
+const key = (r: RouteInfo) => `${r.method} ${r.path}`;
+const exempt = (r: RouteInfo) =>
+  r.isPublic || r.guards.includes("AdminGuard") || isPlanExempt(r.path);
+const PLANS = ["none", "starter", "pro", "elite"] as const;
+const RANK: Record<string, number> = { none: 0, starter: 1, pro: 2, elite: 3 };
 
-const SRC = join(__dirname, "..");
-function controllerFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((f) => {
-    const p = join(dir, f);
-    return statSync(p).isDirectory()
-      ? controllerFiles(p)
-      : p.endsWith(".controller.ts")
-        ? [p]
-        : [];
-  });
+/** Lowest plan that grants ANY of the route's features, from PLAN_GROUPS. */
+function minPlanFor(features: string[]): string {
+  const ladder = PLAN_DEFINITIONS.slice().sort((a, b) => a.sortOrder - b.sortOrder);
+  for (const p of ladder)
+    if (features.some((f) => PLAN_GROUPS[p.id].includes(groupOf(f)!))) return p.id;
+  throw new Error(`no plan grants ${features.join(",")}`);
 }
 
-interface GatedRoute {
-  key: string;
-  handler: (...a: unknown[]) => unknown;
-  cls: new (...a: unknown[]) => unknown;
-  requirement: EntitlementRequirement;
-}
+const TOKENS: Record<string, AuthTokenInfo> = {};
+const tokenFor = (uid: string, email: string, emailVerified: boolean) => {
+  TOKENS[uid] = { uid, email, emailVerified, claims: {}, signInProvider: emailVerified ? "google.com" : "password" };
+};
 
-/* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment */
-function gatedRoutes(): GatedRoute[] {
-  const out: GatedRoute[] = [];
-  for (const file of controllerFiles(SRC)) {
-    for (const C of Object.values(require(file) as Record<string, unknown>)) {
-      if (
-        typeof C !== "function" ||
-        Reflect.getMetadata(PATH_METADATA, C) === undefined
-      )
-        continue;
-      const base = String(
-        [Reflect.getMetadata(PATH_METADATA, C)].flat()[0] ?? "",
-      );
-      const proto = (C as { prototype: object }).prototype;
-      for (const name of Object.getOwnPropertyNames(proto)) {
-        const handler = Object.getOwnPropertyDescriptor(proto, name)?.value;
-        if (typeof handler !== "function") continue;
-        const method = Reflect.getMetadata(METHOD_METADATA, handler);
-        if (method === undefined) continue;
-        const requirement =
-          Reflect.getMetadata(REQUIRED_ENTITLEMENT, handler) ??
-          Reflect.getMetadata(REQUIRED_ENTITLEMENT, C);
-        if (!requirement) continue;
-        const guards = [
-          ...(Reflect.getMetadata(GUARDS_METADATA, C) ?? []),
-          ...(Reflect.getMetadata(GUARDS_METADATA, handler) ?? []),
-        ].map((g: { name: string }) => g.name);
-        expect(guards).toContain("EntitlementGuard");
-        const path = String(
-          [Reflect.getMetadata(PATH_METADATA, handler)].flat()[0] ?? "",
-        );
-        out.push({
-          key: `${["GET", "POST", "PUT", "DELETE", "PATCH"][method as number] ?? method} /${[base, path].filter(Boolean).join("/").replace(/\/+/g, "/")}`,
-          handler,
-          cls: C as never,
-          requirement,
-        });
-      }
-    }
-  }
-  return out;
-}
-/* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment */
-
-/** The doc's route map: lowest plan each gated route group needs. */
-const ROUTE_MAP: Array<[RegExp, "starter" | "pro" | "elite"]> = [
-  [
-    /^GET \/market-data\/(institutional-ownership|fund-holdings|insider-transactions)/,
-    "starter",
-  ],
-  [
-    /^GET \/market-data\/(analyst-|filings-wire|ai-infrastructure|etf-holdings|mover-catalyst)/,
-    "starter",
-  ],
-  [
-    /^(GET|POST) \/live\/(ticker-analysis|ticker-announcements|glance\/|ai-analysis|copilot|estimates|peers-summary|dividend-history|ownership|financials|13f-filings|filing|earnings-transcript|etf-market|etfs\/market-funds)/,
-    "starter",
-  ],
-  [/^(GET|POST|DELETE) \/api\/(portfolio|stock-notes|ai\/)/, "starter"],
-  [/^GET \/live\/(money-flow|options-chain)/, "pro"],
-  [/\/live\/strategy-lab\//, "elite"],
-];
-const RANK = { free: 0, starter: 1, pro: 2, elite: 3 } as const;
-
-function ctxFor(
-  route: GatedRoute,
-  uid: string,
-  query: Record<string, unknown> = {},
-): ExecutionContext {
+function ctxFor(r: RouteInfo, uid: string, query: Record<string, unknown> = {}): ExecutionContext {
   const req = { uid, query, params: {}, headers: {}, authToken: TOKENS[uid] };
   return {
-    getHandler: () => route.handler,
-    getClass: () => route.cls,
+    getType: () => "http",
+    getHandler: () => r.handler,
+    getClass: () => r.cls,
     switchToHttp: () => ({ getRequest: () => req }),
   } as unknown as ExecutionContext;
 }
 
-/** Token info per test uid (what FirebaseAuthGuard would attach). */
-const TOKENS: Record<string, AuthTokenInfo> = {};
-const tokenFor = (uid: string, email: string, emailVerified: boolean) => {
-  TOKENS[uid] = {
-    uid,
-    email,
-    emailVerified,
-    claims: {},
-    signInProvider: emailVerified ? "google.com" : "password",
-  };
-};
-
 async function guardWith(env: Record<string, string>, providerOn = true) {
   const h = billingHarness(env);
   const flags = new FeatureFlagsService(h.firebase, configOf(env));
-  const access = new BillingAccessService(
-    flags,
-    providerOn ? h.provider : null,
-  );
-  const auth = {
-    canActivate: () =>
-      Promise.reject(new Error("should not be needed: uid already set")),
-  } as unknown as FirebaseAuthGuard;
-  const staff = () => new StaffAccessService(h.firebase);
-  const guard = new EntitlementGuard(
-    new Reflector(),
-    access,
-    h.subscriptions,
-    auth,
-    staff(),
-  );
+  const access = new BillingAccessService(flags, providerOn ? h.provider : null);
+  const auth = { canActivate: () => Promise.reject(new Error("uid already set")) } as unknown as FirebaseAuthGuard;
+  const fresh = () => new EntitlementGuard(access, h.subscriptions, auth, new StaffAccessService(h.firebase));
   await h.buy("starter-user", "starter", "monthly");
   await h.buy("pro-user", "pro", "monthly");
   await h.buy("elite-user", "elite", "annual");
-  const fresh = () =>
-    new EntitlementGuard(
-      new Reflector(),
-      access,
-      h.subscriptions,
-      auth,
-      staff(),
-    );
-  return { h, guard, fresh };
+  return { h, guard: fresh(), fresh };
 }
 
-async function verdict(
-  guard: EntitlementGuard,
-  route: GatedRoute,
-  uid: string,
-  query?: Record<string, unknown>,
-): Promise<number> {
+async function verdict(guard: EntitlementGuard, r: RouteInfo, uid: string, query?: Record<string, unknown>): Promise<number> {
   try {
-    await guard.canActivate(ctxFor(route, uid, query));
+    await guard.canActivate(ctxFor(r, uid, query));
     return 200;
   } catch (e) {
     if (e instanceof ForbiddenException) return 403;
     throw e;
   }
 }
+const uidFor = (p: string) => (p === "none" ? "nobody" : `${p}-user`);
 
-describe("route access matrix (SUBSCRIPTIONS_ENABLED on, provider configured)", () => {
-  const routes = gatedRoutes();
+describe("route ↔ feature-group contract (plans.registry.ts is the only list)", () => {
+  it("every controller route is either exempt or mapped to a feature", () => {
+    const unmapped = ROUTES.filter((r) => !exempt(r) && !ROUTE_FEATURES[key(r)]).map(key);
+    expect(unmapped).toEqual([]);
+    expect(ROUTES.length).toBeGreaterThan(150);
+  });
+  it("no stale entries: every mapped route exists", () => {
+    const real = new Set(ROUTES.map(key));
+    expect(Object.keys(ROUTE_FEATURES).filter((k) => !real.has(k))).toEqual([]);
+  });
+  it("every mapped feature belongs to a feature group and is sold", () => {
+    for (const [k, req] of Object.entries(ROUTE_FEATURES)) {
+      const features = req === "bars" ? ["chartsDaily", "chartsIntraday", "chartsHistory"] : req;
+      for (const f of features) {
+        const e = ENTITLEMENTS.find((x) => x.key === f);
+        expect([k, f, !!e?.featureGroup, !!e?.unbuilt, !!e?.staffOnly]).toEqual([k, f, true, false, false]);
+      }
+    }
+  });
+  it("the previously unguarded features are enforced on a backend route", () => {
+    const used = new Set(Object.values(ROUTE_FEATURES).flatMap((r) => (r === "bars" ? [] : r)));
+    for (const f of ["screener", "recaps", "technicalRatings", "chartIndicators", "institutionalMovers", "backtesting"])
+      expect([f, used.has(f)]).toEqual([f, true]);
+  });
+});
+
+describe("access matrix (SUBSCRIPTIONS_ENABLED on, provider configured)", () => {
   let g: Awaited<ReturnType<typeof guardWith>>;
   beforeAll(async () => {
     g = await guardWith({ SUBSCRIPTIONS_ENABLED: "true" });
   });
 
-  it("dashboard data that is Free is not gated: recaps and earnings announcements", async () => {
-    for (const key of [
-      "GET /market-data/recaps",
-      "GET /market-data/earnings-announcements",
-    ]) {
-      expect([key, routes.some((r) => r.key === key)]).toEqual([key, false]);
-    }
-    // ...while the two Starter dashboard widgets stay gated.
-    for (const key of [
-      "GET /market-data/insider-transactions",
-      "GET /market-data/analyst-actions",
-    ]) {
-      const r = routes.find((x) => x.key === key);
-      expect(r).toBeDefined();
-      expect(await verdict(g.guard, r, "nobody")).toBe(403);
-      expect(await verdict(g.guard, r, "starter-user")).toBe(200);
+  it("every mapped route: allowed exactly from its feature group's lowest plan; no plan → 403", async () => {
+    for (const r of ROUTES.filter((x) => !exempt(x) && ROUTE_FEATURES[key(x)])) {
+      const req = ROUTE_FEATURES[key(r)];
+      const need = minPlanFor(req === "bars" ? ["chartsDaily"] : req);
+      const got: Record<string, number> = {};
+      for (const p of PLANS) got[p] = await verdict(g.guard, r, uidFor(p), { tf: "1Y" });
+      const want = Object.fromEntries(PLANS.map((p) => [p, RANK[p] >= RANK[need] ? 200 : 403]));
+      expect([key(r), got]).toEqual([key(r), want]);
     }
   });
 
-  it("finds every gated route group from the doc's route map", () => {
-    const fixed = routes.filter((r) => typeof r.requirement === "string");
-    expect(fixed.length).toBeGreaterThanOrEqual(40);
-    for (const r of fixed)
-      expect([r.key, ROUTE_MAP.some(([re]) => re.test(r.key))]).toEqual([
-        r.key,
-        true,
-      ]);
+  it("exempt routes (sign-in, account, Manage Plan, checkout, billing history, catalog) stay open without a plan", async () => {
+    const open = ROUTES.filter((r) => isPlanExempt(r.path));
+    expect(open.map(key)).toEqual(expect.arrayContaining(["GET /api/billing/summary", "POST /api/billing/checkout", "GET /api/billing/history", "GET /api/me/entitlements", "GET /api/profile", "GET /plans"]));
+    for (const r of open) expect([key(r), await verdict(g.guard, r, "nobody")]).toEqual([key(r), 200]);
   });
 
-  it("every fixed-requirement route: Free 403; Starter/Pro/Elite allowed exactly from their plan", async () => {
-    const rows: string[] = [];
-    for (const r of routes.filter((x) => typeof x.requirement === "string")) {
-      const need = ROUTE_MAP.find(([re]) => re.test(r.key))[1];
-      const got = {
-        free: await verdict(g.guard, r, "nobody"),
-        starter: await verdict(g.guard, r, "starter-user"),
-        pro: await verdict(g.guard, r, "pro-user"),
-        elite: await verdict(g.guard, r, "elite-user"),
-      };
-      const want = Object.fromEntries(
-        (["free", "starter", "pro", "elite"] as const).map((p) => [
-          p,
-          RANK[p] >= RANK[need] ? 200 : 403,
-        ]),
-      );
-      rows.push(
-        `${r.key.padEnd(52)} need=${need.padEnd(7)} free=${got.free} starter=${got.starter} pro=${got.pro} elite=${got.elite}`,
-      );
-      expect([r.key, got]).toEqual([r.key, want]);
+  it("Market Desk and Stock Intelligence on Starter; Money Flow from Pro; Strategy Lab only on Elite", async () => {
+    const at = (k: string) => ROUTES.find((r) => key(r) === k)!;
+    const row = async (k: string) => Promise.all(PLANS.map((p) => verdict(g.guard, at(k), uidFor(p))));
+    expect(await row("GET /market-data/recaps")).toEqual([403, 200, 200, 200]);
+    expect(await row("GET /market-data/companies")).toEqual([403, 200, 200, 200]);
+    expect(await row("GET /live/financials")).toEqual([403, 200, 200, 200]);
+    expect(await row("GET /live/money-flow")).toEqual([403, 403, 200, 200]);
+    expect(await row("GET /live/options-chain")).toEqual([403, 403, 200, 200]);
+    expect(await row("GET /live/strategy-lab/bars")).toEqual([403, 403, 403, 200]);
+  });
+
+  it("/live/bars: every range needs Stock Intelligence (no plan → 403)", async () => {
+    const bars = ROUTES.find((r) => key(r) === "GET /live/bars")!;
+    for (const q of [{ tf: "1Y" }, { tf: "1D" }, { interval: "5min" }, { tf: "5Y" }]) {
+      expect(await verdict(g.guard, bars, "nobody", q)).toBe(403);
+      expect(await verdict(g.guard, bars, "starter-user", q)).toBe(200);
     }
-    expect(rows.length).toBeGreaterThan(0);
   });
 
-  it("/live/bars: daily ranges Free; intraday needs Starter; 5Y needs Starter", async () => {
-    const bars = routes.find((r) => r.key === "GET /live/bars");
-    expect(await verdict(g.guard, bars, "nobody", { tf: "1Y" })).toBe(200);
-    expect(await verdict(g.guard, bars, "nobody", { tf: "1D" })).toBe(403);
-    expect(await verdict(g.guard, bars, "nobody", { interval: "5min" })).toBe(
-      403,
-    );
-    expect(await verdict(g.guard, bars, "nobody", { tf: "5Y" })).toBe(403);
-    expect(await verdict(g.guard, bars, "starter-user", { tf: "1D" })).toBe(
-      200,
-    );
-  });
-
-  it("a past-due user keeps access during the 7-day grace, then loses it", async () => {
+  it("past due keeps access for the 7-day grace, then no plan", async () => {
     const h = g.h;
     await h.buy("late-payer", "pro", "monthly", "renewal_failure");
-    const moneyFlow = routes.find((r) => r.key === "GET /live/money-flow");
+    const mf = ROUTES.find((r) => key(r) === "GET /live/money-flow")!;
     await h.provider.advanceDays(31);
-    expect(await verdict(g.fresh(), moneyFlow, "late-payer")).toBe(200);
+    expect(await verdict(g.fresh(), mf, "late-payer")).toBe(200);
     await h.provider.advanceDays(8);
-    expect(await verdict(g.fresh(), moneyFlow, "late-payer")).toBe(403);
-    expect((await h.subscriptions.forUser("late-payer")).planId).toBe("free");
+    expect(await verdict(g.fresh(), mf, "late-payer")).toBe(403);
+    expect((await h.subscriptions.forUser("late-payer")).planId).toBe("none");
   });
 });
 
 describe("staff full access", () => {
-  const routes = gatedRoutes();
-  const seedStaff = async (
-    h: {
-      firebase: {
-        firestore: {
-          doc: (p: string) => { set: (d: object) => Promise<unknown> };
-        };
-      };
-    },
-    emails: string[],
-  ) => h.firebase.firestore.doc("config/staff_access").set({ emails });
+  const seedStaff = (h: { firebase: { firestore: { doc: (p: string) => { set: (d: object) => Promise<unknown> } } } }, emails: string[]) =>
+    h.firebase.firestore.doc("config/staff_access").set({ emails });
 
-  it.each([["true"], ["false"]])(
-    "a verified staff email passes every gated route group (SUBSCRIPTIONS_ENABLED=%s)",
-    async (flag) => {
-      const g = await guardWith({ SUBSCRIPTIONS_ENABLED: flag });
-      await seedStaff(g.h, ["ops-staff@example.com"]);
-      tokenFor("staffer", "Ops-Staff@Example.com", true);
-      const guard = g.fresh();
-      for (const r of routes) {
-        expect([
-          r.key,
-          await verdict(guard, r, "staffer", { tf: "1D", interval: "5min" }),
-        ]).toEqual([r.key, 200]);
-      }
-    },
-  );
+  it.each([["true"], ["false"]])("a verified staff email passes every route (SUBSCRIPTIONS_ENABLED=%s)", async (flag) => {
+    const g = await guardWith({ SUBSCRIPTIONS_ENABLED: flag });
+    await seedStaff(g.h, ["ops-staff@example.com"]);
+    tokenFor("staffer", "Ops-Staff@Example.com", true);
+    const guard = g.fresh();
+    for (const r of ROUTES) expect([key(r), await verdict(guard, r, "staffer", { tf: "1D", interval: "5min" })]).toEqual([key(r), 200]);
+  });
 
-  it("an UNVERIFIED account using a staff email gets nothing extra (Free)", async () => {
+  it("an UNVERIFIED account using a staff email gets nothing (no plan)", async () => {
     const g = await guardWith({ SUBSCRIPTIONS_ENABLED: "true" });
     await seedStaff(g.h, ["ops-staff@example.com"]);
     tokenFor("impostor", "ops-staff@example.com", false);
-    const moneyFlow = routes.find((r) => r.key === "GET /live/money-flow");
-    expect(await verdict(g.fresh(), moneyFlow, "impostor")).toBe(403);
+    const mf = ROUTES.find((r) => key(r) === "GET /market-data/news")!;
+    expect(await verdict(g.fresh(), mf, "impostor")).toBe(403);
   });
 
   it("removed from the list → access drops", async () => {
     const g = await guardWith({ SUBSCRIPTIONS_ENABLED: "true" });
     await seedStaff(g.h, ["ops-staff@example.com"]);
     tokenFor("leaver", "ops-staff@example.com", true);
-    const moneyFlow = routes.find((r) => r.key === "GET /live/money-flow");
-    expect(await verdict(g.fresh(), moneyFlow, "leaver")).toBe(200);
+    const mf = ROUTES.find((r) => key(r) === "GET /live/money-flow")!;
+    expect(await verdict(g.fresh(), mf, "leaver")).toBe(200);
     await seedStaff(g.h, []);
-    expect(await verdict(g.fresh(), moneyFlow, "leaver")).toBe(403);
+    expect(await verdict(g.fresh(), mf, "leaver")).toBe(403);
   });
 });
 
-describe("enforcement switches", () => {
-  const route = gatedRoutes().find(
-    (r) => r.key === "GET /live/strategy-lab/universe",
-  );
-
-  it("flag OFF: no route is gated (today's behaviour)", async () => {
+describe("enforcement switches (flag off = today's behaviour)", () => {
+  it("flag OFF: every route open to an account with no plan", async () => {
     const { guard } = await guardWith({ SUBSCRIPTIONS_ENABLED: "false" });
-    expect(await verdict(guard, route, "nobody")).toBe(200);
+    for (const r of ROUTES) expect([key(r), await verdict(guard, r, "nobody")]).toEqual([key(r), 200]);
   });
-
-  it("no provider configured: no route is gated even with the flag on", async () => {
+  it("no provider configured: nothing gated even with the flag on", async () => {
     const { guard } = await guardWith({ SUBSCRIPTIONS_ENABLED: "true" }, false);
-    expect(await verdict(guard, route, "nobody")).toBe(200);
+    for (const r of ROUTES) expect([key(r), await verdict(guard, r, "nobody")]).toEqual([key(r), 200]);
   });
 });
 
+@Controller("live")
+class ProbeMoneyFlow {
+  @Get("money-flow")
+  mf() {
+    return { ok: true };
+  }
+}
 @Controller("probe")
-class ProbeController {
-  @RequiresEntitlement("moneyFlow")
-  @Get("pro-only")
-  proOnly(@Query("x") _x?: string) {
+class ProbeUnmapped {
+  @Get("unmapped")
+  u() {
     return { ok: true };
   }
 }
 
-describe("403 response body", () => {
+describe("403 body (global guard over a Nest app)", () => {
   let app: INestApplication;
   afterAll(() => app?.close());
-
-  it("is { code: plan_required, requiredPlan, entitlement, message }", async () => {
+  it("is { code: plan_required, requiredPlan, entitlement, message }; unmapped routes default to Market Desk", async () => {
     const { h } = await guardWith({ SUBSCRIPTIONS_ENABLED: "true" });
-    const flags = new FeatureFlagsService(
-      h.firebase,
-      configOf({ SUBSCRIPTIONS_ENABLED: "true" }),
-    );
+    const flags = new FeatureFlagsService(h.firebase, configOf({ SUBSCRIPTIONS_ENABLED: "true" }));
     const mod = await Test.createTestingModule({
-      controllers: [ProbeController],
+      controllers: [ProbeMoneyFlow, ProbeUnmapped],
       providers: [
         EntitlementGuard,
-        {
-          provide: BillingAccessService,
-          useValue: new BillingAccessService(flags, h.provider),
-        },
+        { provide: APP_GUARD, useExisting: EntitlementGuard },
+        { provide: BillingAccessService, useValue: new BillingAccessService(flags, h.provider) },
         { provide: SubscriptionsService, useValue: h.subscriptions },
-        {
-          provide: StaffAccessService,
-          useValue: new StaffAccessService(h.firebase),
-        },
+        { provide: StaffAccessService, useValue: new StaffAccessService(h.firebase) },
         {
           provide: FirebaseAuthGuard,
           useValue: {
             canActivate: (c: ExecutionContext) => {
-              const req = c.switchToHttp().getRequest<{
-                headers: Record<string, string>;
-                uid?: string;
-              }>();
+              const req = c.switchToHttp().getRequest<{ headers: Record<string, string>; uid?: string }>();
               req.uid = req.headers["x-test-uid"];
               return true;
             },
@@ -396,23 +255,12 @@ describe("403 response body", () => {
     }).compile();
     app = mod.createNestApplication();
     await app.init();
-    const r = await request(app.getHttpServer())
-      .get("/probe/pro-only")
-      .set("x-test-uid", "starter-user");
+    const s = app.getHttpServer();
+    const r = await request(s).get("/live/money-flow").set("x-test-uid", "starter-user");
     expect(r.status).toBe(403);
-    expect(r.body).toEqual({
-      statusCode: 403,
-      code: "plan_required",
-      entitlement: "moneyFlow",
-      requiredPlan: "pro",
-      message: "Available on Pro.",
-    });
-    expect(
-      (
-        await request(app.getHttpServer())
-          .get("/probe/pro-only")
-          .set("x-test-uid", "pro-user")
-      ).status,
-    ).toBe(200);
+    expect(r.body).toEqual({ statusCode: 403, code: "plan_required", entitlement: "moneyFlow", requiredPlan: "pro", message: "Available on Pro." });
+    expect((await request(s).get("/live/money-flow").set("x-test-uid", "pro-user")).status).toBe(200);
+    const u = await request(s).get("/probe/unmapped").set("x-test-uid", "nobody");
+    expect(u.body).toMatchObject({ code: "plan_required", requiredPlan: "starter" });
   });
 });

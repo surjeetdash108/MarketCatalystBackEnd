@@ -2,9 +2,12 @@ import { StaffAccessService } from "../account/staff-access.service";
 import { maskPhone } from "./checkout/phone";
 import {
   BadRequestException,
+  Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
+import { BILLING_PROVIDER, type BillingProvider } from "./provider/billing-provider";
 import { AppClock } from "../common/app-clock";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import {
@@ -17,6 +20,7 @@ import {
   type SubscriptionMirror,
 } from "../plans/subscriptions.service";
 import { EmailService } from "./email/email.service";
+import { isTestRecord } from "./livemode";
 
 /**
  * Admin read-models over the billing collections. Revenue and MRR come only
@@ -41,6 +45,10 @@ export interface SubscriberRow {
   mrrMinor: number;
   /** On the staff allowlist: full access, never billed, excluded from counts/MRR/revenue. */
   staff: boolean;
+  /** Stripe test mode / fake provider (livemode:false): "Test" badge, excluded from MRR and counts. */
+  test: boolean;
+  /** A pre-billing manual Pro grant (users doc currentPlan=pro, no paid subscription): "Legacy Pro". */
+  legacyPro: boolean;
 }
 
 export interface SubscriberFilter {
@@ -75,7 +83,7 @@ export function mrrByUser(
   const latest = new Map<string, Record<string, unknown>>();
   for (const p of payments) {
     const uid = typeof p.userId === "string" ? p.userId : null;
-    if (!uid || p.paymentStatus !== "SUCCESS") continue;
+    if (!uid || p.paymentStatus !== "SUCCESS" || isTestRecord(p)) continue;
     const end = periodEnd(p.subscriptionExpiryDate);
     if (!Number.isFinite(end) || end < now) continue;
     const prev = latest.get(uid);
@@ -110,6 +118,8 @@ export function toCsv(rows: SubscriberRow[]): string {
     "retentionUsed",
     "mrrMinor",
     "staff",
+    "legacyPro",
+    "test",
   ];
   const cell = (v: unknown) => {
     let s = v == null ? "" : String(v);
@@ -132,6 +142,7 @@ export class AdminBillingService {
     private readonly emails: EmailService,
     private readonly clock: AppClock,
     private readonly staff: StaffAccessService,
+    @Optional() @Inject(BILLING_PROVIDER) private readonly provider?: BillingProvider | null,
   ) {}
 
   private async all(
@@ -189,7 +200,9 @@ export class AdminBillingService {
         promoCode: (m?.promoCode as string) ?? null,
         retentionUsed: retainedUids.has(uid),
         staff: isStaff,
-        mrrMinor: isStaff ? 0 : (mrr.get(uid) ?? 0),
+        legacyPro: u.currentPlan === "pro" && m?.source !== "provider",
+        test: isTestRecord(m),
+        mrrMinor: isStaff || isTestRecord(m) ? 0 : (mrr.get(uid) ?? 0),
       });
     }
     const q = (filter.q ?? "").trim().toLowerCase();
@@ -237,8 +250,14 @@ export class AdminBillingService {
       this.firebase.firestore.collection("customers").doc(uid).get(),
     ]);
     const c = customer.data() ?? {};
+    const provider = this.provider;
+    const creditBalance =
+      provider && c.customerId
+        ? await provider.getCreditBalance(String(c.customerId)).catch(() => 0)
+        : 0;
     return {
       ...row,
+      creditBalance,
       mirror: mirror.exists ? mirror.data() : null,
       // Renewal consent recorded at checkout (time, text version, plan, interval, price, IP).
       consent:
