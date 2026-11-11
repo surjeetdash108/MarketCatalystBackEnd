@@ -479,13 +479,15 @@ describe("JobsAdminService.inventory", () => {
     const byName = Object.fromEntries(inv.jobs.map((j) => [j.name, j]));
 
     expect(inv.jobs.length).toBeGreaterThanOrEqual(50);
+    // News is fetched on demand now: no schedule, so no next run, and the tab
+    // shows it as run by hand rather than judging it against a schedule.
     expect(byName.news).toMatchObject({
-      health: "ok",
+      health: "manual",
       lastCount: 40,
-      trigger: "scheduler",
+      trigger: "none",
       timeZone: "America/New_York",
     });
-    expect(byName.news.nextRunAt).toBe("2026-10-30T14:10:00.000Z");
+    expect(byName.news.nextRunAt ?? null).toBeNull();
     expect(byName.news.lastAdminRun).toMatchObject({
       id: "run00000000000000001",
       status: "succeeded",

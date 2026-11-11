@@ -61,6 +61,13 @@ export const RETENTION_RULES: RetentionRule[] = [
     note: "Articles age out of relevance; 4 months is generous for a news feed.",
   },
   {
+    collection: "news_breaking",
+    dateField: "publishedAt",
+    dateFormat: "datetime",
+    retentionDays: 120,
+    note: "Subset of `news`; same window so the two age out together.",
+  },
+  {
     collection: "ohlcv_bars",
     dateField: "barDate",
     dateFormat: "date",

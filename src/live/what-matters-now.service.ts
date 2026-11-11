@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { NewsRefreshService } from "./news-refresh.service";
 import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { coerceBody, extractJson } from "./ticker-ai-analysis.service";
 import { SYSTEM_PROMPT } from "./ticker-ai-analysis.prompt";
@@ -51,6 +52,7 @@ export class WhatMattersNowService {
   constructor(
     private readonly firebase: FirebaseAdminService,
     private readonly llm: LlmGatewayService,
+    private readonly newsRefresh: NewsRefreshService,
   ) {}
 
   private get col() {
@@ -89,6 +91,8 @@ export class WhatMattersNowService {
   }
 
   private async generate(): Promise<WhatMattersNowDoc | null> {
+    // Ask for fresh news; do not wait for it (the digest uses what is stored).
+    await this.newsRefresh.ensureFresh();
     const end = new Date();
     // A 3-hour lookback, not 1: an hour of overnight or weekend market time can
     // legitimately contain nothing, and an empty digest is worse than a

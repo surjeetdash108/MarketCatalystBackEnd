@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { NewsRefreshService } from "../live/news-refresh.service";
 import { chunkedBatchSet } from "../common/firestore-batch.util";
 import { TickerAiAnalysisService } from "../live/ticker-ai-analysis.service";
 import { SyncMetaService } from "../common/sync-meta.service";
@@ -108,6 +109,7 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
     private readonly registry: SyncRegistry,
     private readonly fmp: FmpService,
     private readonly tickerAi: TickerAiAnalysisService,
+    private readonly newsRefresh: NewsRefreshService,
   ) {}
 
   onModuleInit() {
@@ -240,6 +242,11 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
         });
         return { count: 0, note: "fmp disabled" };
       }
+
+      // The per-ticker announcements below read stored news. The news cron is going
+      // away, so make sure it is fresh once, up front (waits if this call wins the
+      // refresh; never throws).
+      await this.newsRefresh.ensureFresh(true);
 
       // Discover the most recent published (year, quarter) once, against a
       // reference large cap, so the per-ticker calls don't each re-probe.

@@ -13,6 +13,7 @@ import { SyncMetaService } from "./sync-meta.service";
 import { SyncRegistry } from "./sync-registry.service";
 import { UserSessionService } from "./user-session.service";
 import { AppClock } from "./app-clock";
+import { CacheStatusService } from "./cache-status.service";
 import { StreamTicketService } from "./stream-ticket.service";
 import { StreamTicketGuard } from "./stream-ticket.guard";
 
@@ -30,6 +31,7 @@ import { StreamTicketGuard } from "./stream-ticket.guard";
     StreamTicketGuard,
     SyncRegistry,
     SyncMetaService,
+    CacheStatusService,
     NotificationsService,
     ApiUsageService,
     // Global metering: every authenticated request bumps a per-user counter
@@ -50,6 +52,7 @@ import { StreamTicketGuard } from "./stream-ticket.guard";
     StreamTicketGuard,
     SyncRegistry,
     SyncMetaService,
+    CacheStatusService,
     NotificationsService,
     ApiUsageService,
   ],

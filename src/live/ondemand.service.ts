@@ -13,6 +13,13 @@ import {
 } from "../adapters/types";
 import type { EarningsEstimatesAdapter } from "../adapters/earnings-estimates.adapter";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import {
+  CacheStatusService,
+  type EnsureOptions,
+  type EnsureOutcome,
+} from "../common/cache-status.service";
+import { newsTickerKey } from "./news-cache-keys";
+import { nextEtDayStart } from "../common/market-calendar.util";
 import { DelistedTickersService } from "../common/delisted-tickers.service";
 import { quoteRow, type QuoteRow } from "./official-quote.util";
 import type { SnapshotQuote } from "./snapshot-cache.service";
@@ -348,10 +355,13 @@ const FIN_PENDING_RETRY_MS = 30 * 60_000;
 const FIN_STATEMENT_LAG_DAYS = 45;
 const FIN_STATEMENT_RETRY_MS = 6 * 3600_000;
 
-// news.job.ts's own cron runs every 30 min; this on-demand path only fills the
-// gap for a ticker the bulk sweep hasn't reached recently, so a shorter TTL is
-// fine — articles that age out just mean the next request re-checks the vendor.
-const NEWS_TTL_MS = 15 * 60_000;
+// A ticker's detail news is refreshed once a day: it expires at the next New
+// York midnight whatever time it was fetched (nextEtDayStart), so a 17:00 fetch
+// does not move tomorrow's refresh to 17:00. In between it is refreshed when
+// breaking news names the ticker with a story newer than its last fetch; that
+// refresh keeps the same midnight expiry. The 24 h figure is recorded in
+// cache_status for reading only.
+const NEWS_TICKER_TTL_MS = 24 * 3600_000;
 /** 13F tab holder list: FMP pages of 100, largest holders first (~10 calls). */
 const MAX_13F_HOLDERS = 1_000;
 /**
@@ -569,6 +579,9 @@ export class OnDemandService implements OnModuleDestroy {
     private readonly secEdgar: SecEdgarService,
     private readonly delisted: DelistedTickersService,
     private readonly monthlyBeta: MonthlyBetaService,
+    // Optional only so older test harnesses that build this class by hand still
+    // compile; Nest always injects it (CommonModule is global).
+    private readonly cacheStatus?: CacheStatusService,
   ) {}
 
   onModuleDestroy() {
@@ -2674,119 +2687,175 @@ export class OnDemandService implements OnModuleDestroy {
   // ── Per-ticker news ─────────────────────────────────────────────────────
 
   /**
-   * Per-ticker news, cache-aside on the SAME `news` collection news.job.ts's
-   * bulk sweep already writes to (doc id `${ticker}_${articleId}`) — this only
-   * fills the gap for a ticker the sweep hasn't reached recently. No `where`
-   * + `orderBy` combination is used (no composite index is deployed for
-   * `news`): freshness is judged from each doc's own `updatedAt`, and results
-   * are sorted by `publishedAt` in memory rather than in the query.
+   * Per-ticker news, from the SAME `news` collection the bulk refresh writes to
+   * (doc id `${ticker}_${articleId}`).
+   *
+   * Always answers from what is stored. Freshness is tracked in
+   * `cache_status/news:ticker:{SYM}` (see CacheStatusService): when it has
+   * expired (at the next New York midnight, or sooner if breaking news names
+   * the ticker), the first
+   * request starts a vendor fetch in the background and everyone, including that
+   * request, gets the stored articles. Only a ticker with nothing stored yet
+   * waits for its first fetch.
+   *
+   * No `where` + `orderBy` combination is used (no composite index is deployed
+   * for `news`): results are sorted by `publishedAt` in memory.
    */
   async getNews(ticker: string): Promise<Record<string, unknown>[]> {
     const mem = this.memNews.get(ticker);
     if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
 
+    let docs = await this.readStoredNews(ticker);
+    // Articles the bulk refresh already stored count (hasData): serve them and
+    // refresh behind.
+    const outcome = await this.cacheStatus.ensureFresh(
+      this.tickerNewsOptions(ticker, docs.length > 0, false),
+    );
+    // Nothing was stored, so the request waited for the first fetch: read it now.
+    if (outcome.kind === "first-fill" && outcome.ok) {
+      docs = await this.readStoredNews(ticker);
+    }
+
+    const sorted = [...docs].sort(byPublishedAtDesc);
+    // Do not remember an empty answer: another request may be filling it.
+    if (sorted.length > 0) {
+      this.memNews.set(ticker, { data: sorted, at: Date.now() });
+    }
+    return sorted;
+  }
+
+  /**
+   * The one definition of a ticker's detail-news cache (key, TTL, how to fetch),
+   * used both when a user opens the ticker and by the proactive refresh below.
+   */
+  private tickerNewsOptions(
+    ticker: string,
+    hasData: boolean,
+    awaitRefresh: boolean,
+  ): EnsureOptions {
+    return {
+      key: newsTickerKey(ticker),
+      location: "news",
+      ttlMs: NEWS_TICKER_TTL_MS,
+      expiresAtFor: nextEtDayStart,
+      hasData,
+      awaitRefresh,
+      refresh: () => this.fetchTickerNews(ticker),
+    };
+  }
+
+  /**
+   * Refresh one ticker's detail news NOW and wait for it. It still expires at
+   * the next New York midnight, like every daily fetch. Called when breaking
+   * news names the ticker, so the next person to open it finds current
+   * articles instead of triggering the fetch.
+   *
+   * Goes through the same cache_status record as a user read, so it cannot run
+   * twice at once: if a refresh is already in progress, or the copy is already
+   * fresh, this returns at once and does nothing. Never throws.
+   */
+  async refreshTickerNews(ticker: string): Promise<EnsureOutcome> {
+    return this.cacheStatus.ensureFresh(
+      this.tickerNewsOptions(ticker, true, true),
+    );
+  }
+
+  private async readStoredNews(
+    ticker: string,
+  ): Promise<Record<string, unknown>[]> {
     const snap = await this.firebase.firestore
       .collection("news")
       .where("ticker", "==", ticker)
       .get();
-    const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Array<Record<string, unknown>>;
-    const freshestUpdate = docs.reduce((max, d) => {
-      const t = typeof d.updatedAt === "string" ? Date.parse(d.updatedAt) : NaN;
-      return Number.isFinite(t) ? Math.max(max, t) : max;
-    }, 0);
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  }
 
-    if (docs.length > 0 && Date.now() - freshestUpdate < NEWS_TTL_MS) {
-      const sorted = [...docs].sort(byPublishedAtDesc);
-      this.memNews.set(ticker, { data: sorted, at: Date.now() });
-      return sorted;
+  /**
+   * Fetch one ticker's news from the vendors and merge it into `news`.
+   * Throws only when EVERY vendor failed, so cache_status records `failed` and
+   * retries; a vendor that answered with no articles is a normal result.
+   */
+  private async fetchTickerNews(ticker: string): Promise<void> {
+    const to = new Date();
+    const from = new Date(to.getTime() - NEWS_LOOKBACK_DAYS * 86_400_000);
+    const isoDate = (d: Date) => d.toISOString().slice(0, 10);
+    let failures = 0;
+    let vendors = 1;
+    // Pull FMP (primary) AND Polygon (backup) in parallel and merge — FMP
+    // usually has the "why it moved" headline for micro-caps, Polygon fills
+    // gaps on large caps. Each is best-effort: one failing degrades to [].
+    const [polyData, fmpData] = await Promise.all([
+      this.news
+        .fetchNews(ticker, isoDate(from), isoDate(to))
+        .then((r) => r.data)
+        .catch(() => {
+          failures++;
+          return [] as CanonicalNewsArticle[];
+        }),
+      this.newsFmp
+        ? (vendors++,
+          this.newsFmp
+            .fetchNews(ticker, isoDate(from), isoDate(to))
+            .then((r) => r.data)
+            .catch(() => {
+              failures++;
+              return [] as CanonicalNewsArticle[];
+            }))
+        : Promise.resolve([] as CanonicalNewsArticle[]),
+    ]);
+    if (failures >= vendors) {
+      throw new Error(`every news vendor failed for ${ticker}`);
     }
-
-    const key = `news_${ticker}`;
-    const existing = this.inflight.get(key) as
-      Promise<Record<string, unknown>[]> | undefined;
-    if (existing) return existing;
-
-    const p = (async () => {
-      const to = new Date();
-      const from = new Date(to.getTime() - NEWS_LOOKBACK_DAYS * 86_400_000);
-      const isoDate = (d: Date) => d.toISOString().slice(0, 10);
-      // Pull FMP (primary) AND Polygon (backup) in parallel and merge — FMP
-      // usually has the "why it moved" headline for micro-caps, Polygon fills
-      // gaps on large caps. Each is best-effort: a failure degrades to [].
-      const [polyData, fmpData] = await Promise.all([
-        this.news
-          .fetchNews(ticker, isoDate(from), isoDate(to))
-          .then((r) => r.data)
-          .catch(() => [] as CanonicalNewsArticle[]),
-        this.newsFmp
-          ? this.newsFmp
-              .fetchNews(ticker, isoDate(from), isoDate(to))
-              .then((r) => r.data)
-              .catch(() => [] as CanonicalNewsArticle[])
-          : Promise.resolve([] as CanonicalNewsArticle[]),
-      ]);
-      // Dedupe across vendors by url (fall back to id), newest first. FMP is
-      // listed first so its copy of a shared article wins.
-      const seenNews = new Set<string>();
-      const merged: CanonicalNewsArticle[] = [];
-      for (const a of [...fmpData, ...polyData]) {
-        const k = (a.url || a.id || "").toLowerCase();
-        if (k && seenNews.has(k)) continue;
-        if (k) seenNews.add(k);
-        merged.push(a);
-      }
-      merged.sort((x, y) =>
-        String(y.publishedAt).localeCompare(String(x.publishedAt)),
-      );
-      const now = new Date().toISOString();
-      const articles = merged.slice(0, NEWS_ARTICLE_CAP).map((a) => {
-        const docId = `${ticker}_${a.id}`;
-        return {
-          docId,
-          // Same field set news.job.ts's bulk sweep writes — no `id` field,
-          // since the doc id itself carries it (added back on read below).
-          data: {
-            ticker: a.ticker,
-            headline: a.headline,
-            summary: a.summary,
-            source: a.source,
-            // Vendor badge parity with news.job.ts's bulk sweep — the stock
-            // screen renders a Polygon/FMP pill off this field, so the
-            // on-demand cache-fill must carry it too or the pill never shows.
-            vendor: a.vendor,
-            url: a.url,
-            category: a.category,
-            sentiment: a.sentiment,
-            sentimentReasoning: a.sentimentReasoning,
-            keywords: a.keywords,
-            imageUrl: a.imageUrl,
-            publishedAt: a.publishedAt,
-            updatedAt: now,
-          },
-        };
-      });
-      if (articles.length > 0) {
-        const batch = this.firebase.firestore.batch();
-        for (const a of articles) {
-          batch.set(
-            this.firebase.firestore.collection("news").doc(a.docId),
-            a.data,
-            { merge: true },
-          );
-        }
-        await batch.commit();
-      }
-      const sorted = articles
-        .map((a) => ({ id: a.docId, ...a.data }))
-        .sort((a, b) =>
-          String(b.publishedAt).localeCompare(String(a.publishedAt)),
+    // Dedupe across vendors by url (fall back to id), newest first. FMP is
+    // listed first so its copy of a shared article wins.
+    const seenNews = new Set<string>();
+    const merged: CanonicalNewsArticle[] = [];
+    for (const a of [...fmpData, ...polyData]) {
+      const k = (a.url || a.id || "").toLowerCase();
+      if (k && seenNews.has(k)) continue;
+      if (k) seenNews.add(k);
+      merged.push(a);
+    }
+    merged.sort((x, y) =>
+      String(y.publishedAt).localeCompare(String(x.publishedAt)),
+    );
+    const now = new Date().toISOString();
+    const articles = merged.slice(0, NEWS_ARTICLE_CAP).map((a) => ({
+      docId: `${ticker}_${a.id}`,
+      // Same field set the bulk refresh writes — no `id` field, since the doc id
+      // itself carries it (added back on read).
+      data: {
+        ticker: a.ticker,
+        headline: a.headline,
+        summary: a.summary,
+        source: a.source,
+        // Vendor badge parity with the bulk refresh — the stock screen renders a
+        // Polygon/FMP pill off this field, so this fill must carry it too or the
+        // pill never shows.
+        vendor: a.vendor,
+        url: a.url,
+        category: a.category,
+        sentiment: a.sentiment,
+        sentimentReasoning: a.sentimentReasoning,
+        keywords: a.keywords,
+        imageUrl: a.imageUrl,
+        publishedAt: a.publishedAt,
+        updatedAt: now,
+      },
+    }));
+    if (articles.length > 0) {
+      const batch = this.firebase.firestore.batch();
+      for (const a of articles) {
+        batch.set(
+          this.firebase.firestore.collection("news").doc(a.docId),
+          a.data,
+          { merge: true },
         );
-      this.memNews.set(ticker, { data: sorted, at: Date.now() });
-      return sorted;
-    })().finally(() => this.inflight.delete(key));
-
-    this.inflight.set(key, p);
-    return p;
+      }
+      await batch.commit();
+      // Drop the memory copy so the next read sees the new articles.
+      this.memNews.delete(ticker);
+    }
   }
 
   // ── Options chain (curated 8-ticker universe) ──────────────────────────

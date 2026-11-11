@@ -1,7 +1,8 @@
 import { Controller, Get, Header, UseGuards } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
-import { MarketDataService } from "./market-data.service";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
+import { NEWS_BREAKING_COLLECTION } from "../live/news-cache-keys";
+import { NewsRefreshService } from "../live/news-refresh.service";
 
 // A bounded, sorted view of `news` — NOT routed through CachedCollectionsService's
 // allow-list, since that does a full unfiltered collection().get() per entry;
@@ -19,10 +20,8 @@ import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 // gzipped, behind a 2-min server cache + 120s CDN cache.
 const NEWS_FEED_LIMIT = 300;
 const NEWS_FEED_CACHE_MS = 2 * 60_000;
-// news.job.ts's own cron runs every 30 min — ensureFresh only needs to trigger
-// a refresh when nothing has synced in roughly that window, not MarketDataService's
-// default 20h (built for ~daily jobs).
-const NEWS_STALE_MS = 15 * 60_000;
+
+type Feed = { data: Record<string, unknown>[]; at: number } | null;
 
 /**
  * GET /market-data/news — the global "most recent across every ticker" feed
@@ -30,6 +29,14 @@ const NEWS_STALE_MS = 15 * 60_000;
  * Per-ticker news (Stock Detail, commentary's per-symbol drawer) is served by
  * GET /live/news?ticker=X (src/live/ondemand.controller.ts) instead — that's a
  * cache-aside fill against the same `news` collection, scoped to one ticker.
+ *
+ * GET /market-data/news/breaking — the same shape, but only the market-moving
+ * stories (`news_breaking`: important per the importance rules, and not filler).
+ *
+ * Both answer from what is stored and never wait on a news provider. If the
+ * stored news is older than 15 minutes, the first request to notice starts a
+ * refresh in the background (NewsRefreshService.ensureFresh / cache_status) and
+ * everyone, including that request, is served the stored copy.
  */
 @Controller("market-data")
 // Market data is the product. These read surfaces answered anonymous
@@ -37,12 +44,22 @@ const NEWS_STALE_MS = 15 * 60_000;
 // rules file that nothing enforces, because no client talks to Firestore.
 @UseGuards(FirebaseAuthGuard)
 export class NewsController {
-  private cache: { data: Record<string, unknown>[]; at: number } | null = null;
+  private cache: Feed = null;
+  private breakingCache: Feed = null;
 
   constructor(
-    private readonly marketData: MarketDataService,
+    private readonly refresher: NewsRefreshService,
     private readonly firebase: FirebaseAdminService,
   ) {}
+
+  private async latest(collection: string): Promise<Record<string, unknown>[]> {
+    const snap = await this.firebase.firestore
+      .collection(collection)
+      .orderBy("publishedAt", "desc")
+      .limit(NEWS_FEED_LIMIT)
+      .get();
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  }
 
   @Get("news")
   @Header(
@@ -53,14 +70,27 @@ export class NewsController {
     if (this.cache && Date.now() - this.cache.at < NEWS_FEED_CACHE_MS)
       return this.cache.data;
 
-    await this.marketData.ensureFresh("news", NEWS_STALE_MS);
-    const snap = await this.firebase.firestore
-      .collection("news")
-      .orderBy("publishedAt", "desc")
-      .limit(NEWS_FEED_LIMIT)
-      .get();
-    const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    await this.refresher.ensureFresh();
+    const data = await this.latest("news");
     this.cache = { data, at: Date.now() };
+    return data;
+  }
+
+  @Get("news/breaking")
+  @Header(
+    "Cache-Control",
+    "public, max-age=60, s-maxage=120, stale-while-revalidate=300",
+  )
+  async breaking(): Promise<Record<string, unknown>[]> {
+    if (
+      this.breakingCache &&
+      Date.now() - this.breakingCache.at < NEWS_FEED_CACHE_MS
+    )
+      return this.breakingCache.data;
+
+    await this.refresher.ensureFresh();
+    const data = await this.latest(NEWS_BREAKING_COLLECTION);
+    this.breakingCache = { data, at: Date.now() };
     return data;
   }
 }

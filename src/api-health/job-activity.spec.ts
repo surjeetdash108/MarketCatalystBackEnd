@@ -169,9 +169,9 @@ describe("premarketProgress", () => {
   it("flags the steps that also run on their own schedule, whose 'done' may belong to another run", () => {
     const p = premarketProgress(
       T0,
-      meta({ news: [T0 + 1000, "ok"], beta: [T0 + 2000, "ok"] }),
+      meta({ "market-movers": [T0 + 1000, "ok"], beta: [T0 + 2000, "ok"] }),
     );
-    expect(p.steps.find((s) => s.name === "news")?.ownSchedule).toBe(true);
+    expect(p.steps.find((s) => s.name === "market-movers")?.ownSchedule).toBe(true);
     expect(p.steps.find((s) => s.name === "beta")?.ownSchedule).toBe(false);
     expect(p.steps[0].ownSchedule).toBe(false);
   });

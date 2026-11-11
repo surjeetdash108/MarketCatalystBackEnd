@@ -88,6 +88,14 @@ export const PURGE_TARGETS: PurgeTarget[] = [
     jobs: ["news"],
   },
   {
+    collection: "news_breaking",
+    label: "Breaking news (market-moving subset of news)",
+    dateField: "publishedAt",
+    dateFormat: "datetime",
+    recursive: false,
+    jobs: ["news"],
+  },
+  {
     collection: "earnings_events",
     label: "Earnings calendar",
     dateField: "date",

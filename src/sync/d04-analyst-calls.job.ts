@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { NewsRefreshService } from "../live/news-refresh.service";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { BlogsAdminService } from "../blogs/blogs-admin.service";
@@ -209,6 +210,7 @@ export class D04AnalystCallsJob implements OnModuleInit {
     private readonly anthropic: AnthropicService,
     private readonly llm: LlmGatewayService,
     private readonly blogs: BlogsAdminService,
+    private readonly newsRefresh: NewsRefreshService,
   ) {}
 
   onModuleInit() {
@@ -336,6 +338,9 @@ export class D04AnalystCallsJob implements OnModuleInit {
 
   private async gatherAnalystData(today: string) {
     const db = this.firebase.firestore;
+    // The news cron is going away: make sure the news read below is fresh (waits
+    // for the refresh if this call wins it; never throws).
+    await this.newsRefresh.ensureFresh(true);
     const [actionsSnap, newsSnap] = await Promise.all([
       db.collection("analyst_actions").limit(150).get().catch(() => null),
       db.collection("news").orderBy("publishedAt", "desc").limit(80).get().catch(() => null),

@@ -60,6 +60,7 @@ function harness(
     { record: jest.fn() } as never,
     { register: jest.fn() } as never,
     { recordAnnouncement: jest.fn() } as never,
+    { ensureFresh: jest.fn() } as never,
   );
   return { job, sets, getAll };
 }

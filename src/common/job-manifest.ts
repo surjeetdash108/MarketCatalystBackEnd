@@ -91,7 +91,9 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "market-indices", trigger: "scheduler", schedules: ["*/15 9-16 * * 1-5", "5 18 * * 1-5"] },
   { name: "market-movers", trigger: "scheduler", schedules: ["*/15 9-16 * * 1-5", "0 18 * * 1-5"] },
   { name: "market-quotes", trigger: "scheduler", schedules: ["7 18 * * 1-5"], note: "the intraday */15 entry (sync-market-quotes-2m) is PAUSED — company-quotes covers that window" },
-  { name: "news", trigger: "scheduler", schedules: ["*/10 * * * *"], note: "every 10 minutes, all week — news does not keep market hours" },
+  // news: no longer scheduled. Fetched on demand (cache_status, 15 min) — see
+  // NOT_TRIGGERED below. Its Cloud Scheduler entry `sync-news` must be paused
+  // in Google Cloud once the on-demand code is deployed.
   { name: "options-chains", trigger: "scheduler", schedules: ["0 19 * * 1-5"] },
   { name: "recaps", trigger: "scheduler", schedules: ["45 18 * * 1-5"] },
   { name: "recap-blog", trigger: "scheduler", schedules: ["0 19 * * 1-5"], note: "reads the recaps snapshot, so it trails it by 15m; publishes a Draft blog post" },
@@ -181,7 +183,8 @@ const PREMARKET_PHASE = "0 8 * * 1-5";
 const VIA_PREMARKET: string[] = [
   "market-indices", "sectors", "market-movers", "market-breadth", "fear-greed",
   "macro-events", "macro-regime", "earnings", "ipos", "edgar-ipo-pipeline",
-  "news", "analyst-actions", "companies", "companies-financials-backfill",
+  // "news" removed: fetched on demand now, not as a premarket phase.
+  "analyst-actions", "companies", "companies-financials-backfill",
   "stock-history", "edgar-8k", "technical-indicators", "rs-rating", "tech-rating",
   "financials", "fundamentals-growth", "corporate-actions", "beta", "recaps",
   "institutional-ownership", "dividends", "sec-13f", "sec-form4",
@@ -200,6 +203,7 @@ const VIA_PREMARKET: string[] = [
  * have no scheduling mechanism at all.
  */
 const NOT_TRIGGERED: JobManifestEntry[] = [
+  { name: "news", trigger: "none", schedules: [], note: "fetched ON DEMAND: a request that finds stored news older than 15 min refreshes it in the background (cache_status). A manual run does the same check and does nothing while the news is fresh. Cloud Scheduler entry sync-news is retired — pause it in Google Cloud after deploying" },
   { name: "billing-reconcile", trigger: "none", schedules: [], note: "nightly billing mirror repair; needs its Cloud Scheduler entry (POST /sync/billing-reconcile/run, 03:30 America/New_York) — prepared, awaiting approval" },
   { name: "strategy-lab-intraday", trigger: "none", schedules: [], note: "deliberately untriggered: intraday Strategy Lab scans run in the browser on live FMP bars; enable only with its own decision (it would refresh lab_ibars every 5 minutes)" },
   { name: "auto-purge", trigger: "none", schedules: [], note: "@Cron 0 0 * * * cannot fire on a CPU-throttled, scale-to-zero worker" },

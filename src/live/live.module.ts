@@ -24,6 +24,7 @@ import { CachedCollectionsController } from "./cached-collections.controller";
 import { CachedCollectionsService } from "./cached-collections.service";
 import { OnDemandController } from "./ondemand.controller";
 import { OnDemandService } from "./ondemand.service";
+import { NewsRefreshService } from "./news-refresh.service";
 import { MonthlyBetaService } from "./monthly-beta.service";
 import { MarketScanService } from "./market-scan.service";
 import { MarketGlanceService } from "./market-glance.service";
@@ -88,6 +89,7 @@ import { MoneyFlowService } from "./money-flow/money-flow.service";
     LandingTapeService,
     CachedCollectionsService,
     OnDemandService,
+    NewsRefreshService,
     MonthlyBetaService,
     MarketScanService,
     MarketGlanceService,
@@ -118,6 +120,7 @@ import { MoneyFlowService } from "./money-flow/money-flow.service";
     TapeService,
     CachedCollectionsService,
     OnDemandService,
+    NewsRefreshService,
     MonthlyBetaService,
     MarketScanService,
     MarketGlanceService,

@@ -470,6 +470,12 @@ export const API_CATALOG = {
     store: ["news"],
     producers: ["news"],
   },
+  "GET /market-data/news/breaking": {
+    summary:
+      "Breaking news: the market-moving subset of the news feed (important by the importance rules, not syndicated filler), newest first.",
+    store: ["news_breaking"],
+    producers: ["news"],
+  },
   "GET /market-data/movers": {
     summary:
       "Top gainers and losers with price, volume, relative volume and sector.",

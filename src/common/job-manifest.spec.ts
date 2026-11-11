@@ -50,6 +50,10 @@ describe("JOB_MANIFEST", () => {
     expect(jobManifest("premarket-post")?.timeZone).toBe("America/Chicago");
     expect(jobManifest("news")?.timeZone).toBeUndefined();
   });
+
+  it("news is fetched on demand: no schedule and not a premarket phase", () => {
+    expect(jobManifest("news")).toMatchObject({ trigger: "none", schedules: [] });
+  });
 });
 
 describe("Strategy Lab jobs", () => {

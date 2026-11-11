@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { NewsRefreshService } from "../live/news-refresh.service";
 import { SyncMetaService } from "../common/sync-meta.service";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { etDate } from "../common/market-calendar.util";
@@ -57,6 +58,7 @@ export class EarningsActualsJob implements OnModuleInit {
     private readonly meta: SyncMetaService,
     private readonly registry: SyncRegistry,
     private readonly tickerAi: TickerAiAnalysisService,
+    private readonly newsRefresh: NewsRefreshService,
   ) {}
 
   onModuleInit() {
@@ -114,6 +116,9 @@ export class EarningsActualsJob implements OnModuleInit {
 
         // Recent stories give the model context for WHY, but the figures
         // above are the subject. Filler is excluded for the usual reason.
+        // The news cron is going away: make sure stored news is fresh first (a
+        // cheap status read when it already is; never throws).
+        await this.newsRefresh.ensureFresh(true);
         const newsSnap = await this.firebase.firestore
           .collection("news").where("ticker", "==", ticker).get();
         const news = newsSnap.docs
