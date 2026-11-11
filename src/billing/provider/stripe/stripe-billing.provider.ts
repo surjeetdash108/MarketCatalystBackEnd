@@ -331,22 +331,33 @@ export class StripeBillingProvider implements BillingProvider {
     const coupon = input.discount
       ? await this.couponFor(input.discount, input.price.currency)
       : null;
-    const inv = await this.stripe.invoices.createPreview({
-      automatic_tax: { enabled: !!input.region },
-      ...(input.region
-        ? {
-            customer_details: {
-              address: {
-                country: input.region.country,
-                state: input.region.state ?? undefined,
-                postal_code: input.region.postalCode ?? undefined,
+    let inv: Stripe.Invoice;
+    try {
+      inv = await this.stripe.invoices.createPreview({
+        automatic_tax: { enabled: !!input.region },
+        ...(input.region
+          ? {
+              customer_details: {
+                address: {
+                  country: input.region.country,
+                  state: input.region.state ?? undefined,
+                  postal_code: input.region.postalCode ?? undefined,
+                },
               },
-            },
-          }
-        : {}),
-      subscription_details: { items: [{ price }] },
-      ...(coupon ? { discounts: [{ coupon }] } : {}),
-    });
+            }
+          : {}),
+        subscription_details: { items: [{ price }] },
+        ...(coupon ? { discounts: [{ coupon }] } : {}),
+      });
+    } catch (taxErr) {
+      this.logger.warn(
+        `Stripe preview with automatic_tax failed: ${(taxErr as Error).message}; falling back without automatic tax`,
+      );
+      inv = await this.stripe.invoices.createPreview({
+        subscription_details: { items: [{ price }] },
+        ...(coupon ? { discounts: [{ coupon }] } : {}),
+      });
+    }
     const tax = sumAmounts(inv.total_taxes);
     return {
       currency: inv.currency.toUpperCase(),
