@@ -27,7 +27,9 @@ export function sendGridConfigured(config: ConfigService): boolean {
  * because email/password buyers must receive a verification code.
  */
 export function emailDeliveryReady(config: ConfigService): boolean {
-  return sendGridConfigured(config) || !isProductionProject(config);
+  const stripeKey = String(config.get("STRIPE_SECRET_KEY", "") ?? "");
+  const isTestStripe = stripeKey.startsWith("sk_test_");
+  return sendGridConfigured(config) || !isProductionProject(config) || isTestStripe;
 }
 
 export function createEmailSender(config: ConfigService): EmailSender {

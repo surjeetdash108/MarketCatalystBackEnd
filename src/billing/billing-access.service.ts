@@ -46,19 +46,19 @@ export class BillingAccessService {
     return this.provider !== null && (await this.flagEnabled());
   }
 
-  /** Live for everyone, or this request is a staff checkout preview. */
+  /** Live for everyone, or this request is a staff checkout preview / test mode. */
   async paymentsOpen(): Promise<boolean> {
-    return inCheckoutPreview() || (await this.subscriptionsLive());
+    return inCheckoutPreview() || (this.provider !== null && !this.provider.livemode) || (await this.subscriptionsLive());
   }
 
   /**
    * 503 "Paid plans launching soon" unless subscriptions are live — or this is
-   * a staff checkout preview (then 503 "Payment provider not connected" until
+   * a test mode run / staff checkout preview (then 503 "Payment provider not connected" until
    * Stripe keys are set).
    */
   async requireLive(): Promise<BillingProvider> {
     if (await this.subscriptionsLive()) return this.provider;
-    if (inCheckoutPreview()) {
+    if (inCheckoutPreview() || (this.provider && !this.provider.livemode)) {
       if (this.provider) return this.provider;
       throw new ServiceUnavailableException({
         statusCode: 503,
@@ -75,7 +75,7 @@ export class BillingAccessService {
 
   /** For quotes: the provider, or null in a staff preview with no provider yet. */
   async requireQuoteProvider(): Promise<BillingProvider | null> {
-    if (inCheckoutPreview() && !this.provider) return null;
+    if ((inCheckoutPreview() || (this.provider && !this.provider.livemode)) && !this.provider) return null;
     return this.requireLive();
   }
 

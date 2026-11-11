@@ -6,6 +6,7 @@ import {
   Headers,
   HttpCode,
   NotFoundException,
+  Optional,
   Param,
   Post,
   Req,
@@ -64,15 +65,17 @@ export class BillingController {
     private readonly firebase: FirebaseAdminService,
     private readonly staff: StaffAccessService,
     private readonly refunds: RefundService,
+    @Optional() private readonly access?: BillingAccessService,
   ) {}
 
   /**
    * Staff have full access and are never billed: no checkout, plan change or
-   * retention — except in the staff checkout preview (CHECKOUT_PREVIEW on),
-   * where staff run the real flow in Stripe test mode.
+   * retention — except in test mode or staff checkout preview, where staff
+   * run the real flow in Stripe test mode.
    */
   private async refuseStaff(token: AuthTokenInfo | undefined): Promise<void> {
-    if (inCheckoutPreview()) return;
+    const prov = this.access?.configuredProvider;
+    if (inCheckoutPreview() || (prov && !prov.livemode)) return;
     if (await this.staff.isStaff(token)) {
       throw new ConflictException({
         statusCode: 409,
