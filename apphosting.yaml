@@ -1,84 +1,30 @@
-# Firebase App Hosting config for the PUBLIC `live` API (APP_ROLE=live): the
-# routes the app calls (/live/**, /market-data/**, /api/**, /plans, /mcp) and the
-# on-demand cache refresh for news (see src/common/cache-status.service.ts).
-#
-# This mirrors the running Cloud Run service `market-catalyst-live` as read on
-# 2026-11-11 (`gcloud run services describe market-catalyst-live`), so moving
-# from Cloud Run to App Hosting changes WHERE it runs, not what it does.
-# Re-read the running service before the first rollout; env lists rot.
-#
-# What stays on Cloud Run (not in this file): the scheduled worker
-# (`market-catalyst-backend`, APP_ROLE=worker) and the `premarket-job` Cloud Run
-# Job. Nothing scheduled runs on App Hosting.
-#
-# This file is separate from `gcloud run deploy`: App Hosting does not read
-# deploy/env.*.yaml, does not use the root Dockerfile, and does not honour
-# --set-secrets. Everything the app needs at runtime must be declared here.
-#
-# Reserved by App Hosting and therefore NOT set here: PORT (injected as 8080),
-# K_SERVICE, K_REVISION, K_CONFIGURATION, and any X_FIREBASE_ / X_GOOGLE_ /
-# CLOUD_RUN_ prefixed name.
-#
-# Secrets below must already exist in Secret Manager and be readable by the
-# backend's service account:
-#   firebase apphosting:secrets:grantaccess <NAME> --backend <BACKEND_ID> --project market-catalyst-502415
-#
-# The backend's service account also needs roles/datastore.user so the app can
-# reach Firestore through Application Default Credentials.
-
 runConfig:
-  # Same shape as the Cloud Run service: 1 vCPU, 1 GiB, 200 requests each, up to
-  # 5 instances, scale to zero.
   cpu: 1
   memoryMiB: 1024
   concurrency: 200
   minInstances: 0
   maxInstances: 5
-  # DECISION PENDING. With the default (false) CPU is throttled outside a request,
-  # as it is on Cloud Run today. The news refresh deliberately does not hold the
-  # request open, so at low traffic it can run slowly or stall; the 15 minute
-  # `fetching` recovery in CacheStatusService then retries it. `true` removes the
-  # limit and costs more (CPU billed for the whole life of each instance).
-  # cpuAlwaysAllocated: true
 
-# Nest is not one of the frameworks App Hosting detects (Next.js, Angular), so say
-# how to build and start it. `npm run build` needs devDependencies (@nestjs/cli),
-# which is why NODE_ENV below is runtime-only.
 scripts:
   buildCommand: npm run build
   runCommand: node dist/main.js
 
 env:
-  # RUNTIME-only: if NODE_ENV=production leaks into the BUILD, `npm ci` prunes
-  # devDependencies and `nest build` fails with "nest: not found".
   - variable: NODE_ENV
     value: "production"
     availability: ["RUNTIME"]
 
-  # ─── Service role (src/app.module.ts) ────────────────────────────────────────
-  # `live` mounts ONLY the public read paths. Never `worker` here: the worker owns
-  # the sync jobs and must stay a separate, private service.
   - variable: APP_ROLE
     value: "live"
 
-  # Which Firestore this backend reads and writes. CRITICAL: without
-  # FIRESTORE_DATABASE_ID the client falls back to the "(default)" database, the
-  # pre-migration copy: reads would be stale and writes (including cache_status)
-  # would land where nothing serves from.
   - variable: FIREBASE_PROJECT_ID
     value: "market-catalyst-502415"
   - variable: FIRESTORE_DATABASE_ID
     value: "mc-regional"
 
-  # Origins allowed to call this API from a browser (src/main.ts, fail-closed).
   - variable: CORS_ORIGINS
     value: "https://marketcatalyst.web.app,https://app.marketcatalyst.ai"
 
-  # ─── Admin guard ─────────────────────────────────────────────────────────────
-  # REQUIRED false. This service is public (ingress: all, no IAM in front). The
-  # guard's default of `true` means "Cloud Run IAM already vetted the caller", so
-  # leaving it unset would serve /admin/* to anyone. `false` demands a verified
-  # Firebase admin ID token. Verify `GET /admin/revenue -> 401` after every deploy.
   - variable: ADMIN_GUARD_TRUST_IAM
     value: "false"
   - variable: ADMIN_REQUIRE_EMAIL_VERIFIED
@@ -86,9 +32,6 @@ env:
   - variable: ADMIN_REQUIRE_MFA
     value: "false"
 
-  # ─── Market data vendors (as on market-catalyst-live) ────────────────────────
-  # FMP is primary, Polygon/Massive the backup. News needs no setting: the main
-  # news adapter is always Polygon and FMP news defaults to on (NEWS_FMP_SOURCE).
   - variable: MARKET_DATA_PRIMARY
     value: "fmp"
   - variable: LIVE_QUOTE_SOURCE
@@ -103,26 +46,18 @@ env:
     value: "fmp"
   - variable: POLYGON_API_BASE_URL
     value: "https://api.massive.com"
-  # MUST be 0 on a paid plan: non-zero makes several calls exceed timeouts.
   - variable: POLYGON_PAGE_DELAY_MS
     value: "0"
   - variable: LAB_BARS_FROM_STORE
     value: "1"
-  # SEC requires a descriptive User-Agent with a real contact address.
   - variable: SEC_EDGAR_USER_AGENT
     value: "Market Catalyst Backend hello@inc108.com"
 
-  # ─── AI models ───────────────────────────────────────────────────────────────
-  # "openrouter/free" is an auto-router across free models, so it survives both
-  # retirements and per-model rate limits.
   - variable: OPENROUTER_MODEL
     value: "openrouter/free"
-  # Second-chance model, used only when the primary returns no parseable JSON.
   - variable: OPENROUTER_FALLBACK_MODEL
     value: "google/gemma-4-31b-it:free"
 
-  # ─── Secrets (Google Secret Manager) ─────────────────────────────────────────
-  # NEVER put an API key as `value:` in this file: it is checked in.
   - variable: POLYGON_API_KEY
     secret: POLYGON_API_KEY
   - variable: FMP_API_KEY
@@ -133,6 +68,5 @@ env:
     secret: OPENROUTER_API_KEY
   - variable: GROQ_API_KEY
     secret: GROQ_API_KEY
-  # Signs the short-lived tickets the SSE stream uses.
   - variable: STREAM_TICKET_SECRET
     secret: STREAM_TICKET_SECRET

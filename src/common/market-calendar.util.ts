@@ -49,19 +49,8 @@ export function etDate(d: Date = new Date()): string {
   }).format(d);
 }
 
-/**
- * The next 00:00 in New York after `ms` (epoch millis), as epoch millis.
- *
- * Used as a fixed daily expiry: whatever time of day something is fetched, it
- * stays valid until the next New York midnight, so a fetch at 17:00 does not
- * push the next one to 17:00 tomorrow. Daylight saving is handled: New York
- * midnight is 04:00 UTC in summer (EDT) and 05:00 UTC in winter (EST). Clocks
- * change at 02:00, so midnight always exists exactly once.
- */
 export function nextEtDayStart(ms: number): number {
   const [y, m, d] = etDate(new Date(ms)).split("-").map(Number);
-  // 04:00 UTC on the next calendar day is New York midnight in summer, or
-  // 23:00 the evening before in winter, when midnight is an hour later.
   const summer = Date.UTC(y, m - 1, d + 1, 4);
   const hour = new Intl.DateTimeFormat("en-US", {
     timeZone: ET,

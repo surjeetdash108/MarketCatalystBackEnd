@@ -91,9 +91,6 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "market-indices", trigger: "scheduler", schedules: ["*/15 9-16 * * 1-5", "5 18 * * 1-5"] },
   { name: "market-movers", trigger: "scheduler", schedules: ["*/15 9-16 * * 1-5", "0 18 * * 1-5"] },
   { name: "market-quotes", trigger: "scheduler", schedules: ["7 18 * * 1-5"], note: "the intraday */15 entry (sync-market-quotes-2m) is PAUSED — company-quotes covers that window" },
-  // news: no longer scheduled. Fetched on demand (cache_status, 15 min) — see
-  // NOT_TRIGGERED below. Its Cloud Scheduler entry `sync-news` must be paused
-  // in Google Cloud once the on-demand code is deployed.
   { name: "options-chains", trigger: "scheduler", schedules: ["0 19 * * 1-5"] },
   { name: "recaps", trigger: "scheduler", schedules: ["45 18 * * 1-5"] },
   { name: "recap-blog", trigger: "scheduler", schedules: ["0 19 * * 1-5"], note: "reads the recaps snapshot, so it trails it by 15m; publishes a Draft blog post" },
@@ -183,7 +180,6 @@ const PREMARKET_PHASE = "0 8 * * 1-5";
 const VIA_PREMARKET: string[] = [
   "market-indices", "sectors", "market-movers", "market-breadth", "fear-greed",
   "macro-events", "macro-regime", "earnings", "ipos", "edgar-ipo-pipeline",
-  // "news" removed: fetched on demand now, not as a premarket phase.
   "analyst-actions", "companies", "companies-financials-backfill",
   "stock-history", "edgar-8k", "technical-indicators", "rs-rating", "tech-rating",
   "financials", "fundamentals-growth", "corporate-actions", "beta", "recaps",

@@ -1,22 +1,10 @@
 import * as fs from "fs";
 import * as path from "path";
 
-/**
- * apphosting.yaml is read by Firebase when a backend rolls out, not by anything
- * that runs in CI, so a mistake in it only shows up as a failed or wrong
- * rollout. These checks cover the mistakes this file has actually had:
- *   - `cpuMiB` is not a runConfig field (the field is `cpu`)
- *   - `PORT` is reserved by App Hosting and is rejected
- *   - FIRESTORE_DATABASE_ID missing: the app silently uses the (default) database,
- *     the stale pre-migration copy
- *   - ADMIN_GUARD_TRUST_IAM unset on a public service: /admin/* open to anyone
- * Text checks, not a YAML parse, so the spec needs no extra dependency.
- */
 const text = fs.readFileSync(
   path.join(__dirname, "..", "apphosting.yaml"),
   "utf-8",
 );
-// Comment lines never count.
 const code = text
   .split(/\r?\n/)
   .filter((l) => !/^\s*#/.test(l))

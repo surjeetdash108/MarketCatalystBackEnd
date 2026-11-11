@@ -116,8 +116,6 @@ export class EarningsActualsJob implements OnModuleInit {
 
         // Recent stories give the model context for WHY, but the figures
         // above are the subject. Filler is excluded for the usual reason.
-        // The news cron is going away: make sure stored news is fresh first (a
-        // cheap status read when it already is; never throws).
         await this.newsRefresh.ensureFresh(true);
         const newsSnap = await this.firebase.firestore
           .collection("news").where("ticker", "==", ticker).get();

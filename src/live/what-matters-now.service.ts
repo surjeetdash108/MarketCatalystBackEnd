@@ -91,7 +91,6 @@ export class WhatMattersNowService {
   }
 
   private async generate(): Promise<WhatMattersNowDoc | null> {
-    // Ask for fresh news; do not wait for it (the digest uses what is stored).
     await this.newsRefresh.ensureFresh();
     const end = new Date();
     // A 3-hour lookback, not 1: an hour of overnight or weekend market time can

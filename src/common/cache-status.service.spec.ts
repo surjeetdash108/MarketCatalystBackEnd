@@ -8,12 +8,6 @@ import {
 } from "./cache-status.service";
 import type { FirebaseAdminService } from "./firebase-admin.provider";
 
-/**
- * In-memory stand-in for Firestore. Transactions run ONE AT A TIME, which is
- * the guarantee real Firestore gives a read-modify-write (it retries a
- * conflicting transaction). So these tests prove the claim logic is correct
- * given atomic transactions; they do not test Firestore itself.
- */
 class FakeSnap {
   constructor(private readonly d: any) {}
   get exists() {
@@ -31,7 +25,6 @@ class FakeRef {
     readonly path: string,
   ) {}
   async get() {
-    // Yield so parallel callers genuinely interleave.
     await new Promise((r) => setImmediate(r));
     if (this.fs.down) throw new Error("firestore unavailable");
     return new FakeSnap(this.fs.store.get(this.path));
@@ -105,7 +98,6 @@ function setup() {
     ttlMs: TTL,
     refresh,
   });
-  /** First fill, so later tests start from a stored (valid) copy. */
   const fill = async (watermark: string | null = null) => {
     await svc.ensureFresh(opts(async () => ({ watermark })));
   };
@@ -164,7 +156,6 @@ describe("CacheStatusService.ensureFresh", () => {
 
     const out = await svc.ensureFresh(opts(refresh));
 
-    // Returned while the refresh is still running = not awaited.
     expect(out).toEqual({ kind: "refresh-started" });
     expect(fs.doc(KEY).status).toBe("fetching");
     await flush();
@@ -187,7 +178,7 @@ describe("CacheStatusService.ensureFresh", () => {
     await fill();
     svc.t += TTL + 1;
     const gate = deferred();
-    await svc.ensureFresh(opts(() => gate.promise)); // takes the claim
+    await svc.ensureFresh(opts(() => gate.promise));
     const second = jest.fn(async () => undefined);
 
     svc.t += 60_000;
@@ -247,7 +238,7 @@ describe("CacheStatusService.ensureFresh", () => {
       const { svc, opts, fill } = setup();
       await fill();
       svc.t += TTL + 1;
-      const lost = deferred(); // never resolves in time = the lost refresh
+      const lost = deferred();
       await svc.ensureFresh(opts(() => lost.promise));
 
       svc.t += DEFAULT_RECOVERY_MS - 1;
@@ -394,7 +385,7 @@ describe("CacheStatusService.ensureFresh", () => {
           return o;
         });
       await flush();
-      expect(done).toBe(false); // still waiting on the refresh
+      expect(done).toBe(false);
       expect(fs.doc(KEY).status).toBe("fetching");
 
       gate.resolve();
@@ -478,7 +469,7 @@ describe("CacheStatusService.ensureFresh", () => {
       await flush();
       expect(probe).toHaveBeenCalledTimes(1);
 
-      svc.t += TTL + 1; // now filled: expired, but no need to ask again
+      svc.t += TTL + 1;
       await svc.ensureFresh({ ...opts(async () => undefined), hasData: probe });
       await flush();
       expect(probe).toHaveBeenCalledTimes(1);
@@ -513,7 +504,7 @@ describe("CacheStatusService.ensureFresh", () => {
       await fillKey(svc, keyOf("NVDA"));
       const fetchedAt = svc.t;
       svc.t += 60_000;
-      await fillKey(svc, keyOf("AAPL")); // fetched AFTER the story
+      await fillKey(svc, keyOf("AAPL"));
       const storyAt = fetchedAt + 30_000;
 
       const n = await svc.expireIfOlderThan([
@@ -584,12 +575,11 @@ describe("CacheStatusService.ensureFresh", () => {
   describe("fixed daily expiry (expiresAtFor)", () => {
     const DAY = 24 * 3600_000;
     const HOUR = 3600_000;
-    // Stand-in for "next New York midnight": the next multiple of DAY.
     const nextDayStart = (t: number) => (Math.floor(t / DAY) + 1) * DAY;
 
     it("a fetch at any time of day expires at the next day start, not 24 h later", async () => {
       const { fs, svc } = setup();
-      svc.t = 10 * DAY + 17 * HOUR; // 17:00
+      svc.t = 10 * DAY + 17 * HOUR;
       await svc.ensureFresh({
         key: "news:ticker:NVDA",
         location: "news",
@@ -597,7 +587,7 @@ describe("CacheStatusService.ensureFresh", () => {
         expiresAtFor: nextDayStart,
         refresh: async () => undefined,
       });
-      expect(fs.doc("news:ticker:NVDA").expiresAt).toBe(11 * DAY); // midnight, not 17:00 tomorrow
+      expect(fs.doc("news:ticker:NVDA").expiresAt).toBe(11 * DAY);
     });
   });
 
@@ -616,12 +606,12 @@ describe("CacheStatusService.ensureFresh", () => {
 
     it("the stock is refreshed as soon as the story is seen, and still expires at the start of the next day", async () => {
       const { fs, svc } = setup();
-      svc.t = 10 * DAY + 9 * HOUR; // fetched at 09:00
+      svc.t = 10 * DAY + 9 * HOUR;
       await svc.ensureFresh(opts(async () => undefined));
       const firstExpiry = fs.doc(key).expiresAt;
       expect(firstExpiry).toBe(11 * DAY);
 
-      svc.t = 10 * DAY + 17 * HOUR; // 17:00: a breaking story names NVDA
+      svc.t = 10 * DAY + 17 * HOUR;
       const storyAt = svc.t - 60_000;
       expect(
         await svc.expireIfOlderThan([{ key, dataNewerThan: storyAt }]),
@@ -642,7 +632,6 @@ describe("CacheStatusService.ensureFresh", () => {
         watermark: "AFTER-STORY",
       });
 
-      // Someone opens NVDA an hour later: nothing to fetch, nobody waits.
       svc.t += HOUR;
       const userRefresh = jest.fn(async () => undefined);
       expect(await svc.ensureFresh(opts(userRefresh))).toEqual({
@@ -650,7 +639,6 @@ describe("CacheStatusService.ensureFresh", () => {
       });
       expect(userRefresh).not.toHaveBeenCalled();
 
-      // After midnight the daily fetch happens again on the next view.
       svc.t = 11 * DAY + 8 * HOUR;
       expect(await svc.ensureFresh(opts(userRefresh))).toEqual({
         kind: "refresh-started",
@@ -663,7 +651,7 @@ describe("CacheStatusService.ensureFresh", () => {
     it("a story older than the last fetch changes nothing", async () => {
       const { fs, svc } = setup();
       const story = svc.t - 5_000;
-      await svc.ensureFresh(opts(async () => undefined)); // fetched AFTER the story
+      await svc.ensureFresh(opts(async () => undefined));
       const before = JSON.stringify(fs.doc(key));
 
       expect(
@@ -686,7 +674,7 @@ describe("CacheStatusService.ensureFresh", () => {
       await flush();
 
       const userRefresh = jest.fn(async () => undefined);
-      const user = await svc.ensureFresh(opts(userRefresh)); // the page view
+      const user = await svc.ensureFresh(opts(userRefresh));
 
       expect(user).toEqual({ kind: "already-fetching" });
       expect(userRefresh).not.toHaveBeenCalled();

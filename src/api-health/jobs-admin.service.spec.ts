@@ -479,8 +479,6 @@ describe("JobsAdminService.inventory", () => {
     const byName = Object.fromEntries(inv.jobs.map((j) => [j.name, j]));
 
     expect(inv.jobs.length).toBeGreaterThanOrEqual(50);
-    // News is fetched on demand now: no schedule, so no next run, and the tab
-    // shows it as run by hand rather than judging it against a schedule.
     expect(byName.news).toMatchObject({
       health: "manual",
       lastCount: 40,

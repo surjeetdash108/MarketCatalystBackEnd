@@ -413,8 +413,6 @@ export class D03PremarketMoversJob implements OnModuleInit {
    */
   private async gatherPremarketMoversData(today: string) {
     const db = this.firebase.firestore;
-    // The news cron is going away: make sure the news read below is fresh (waits
-    // for the refresh if this call wins it; never throws).
     await this.newsRefresh.ensureFresh(true);
     const [moversSnap, companiesSnap, newsSnap, macroSnap] = await Promise.all([
       db.collection("market_movers").limit(80).get().catch(() => null),

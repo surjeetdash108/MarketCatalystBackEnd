@@ -243,9 +243,6 @@ export class InstitutionalOwnershipJob implements OnModuleInit {
         return { count: 0, note: "fmp disabled" };
       }
 
-      // The per-ticker announcements below read stored news. The news cron is going
-      // away, so make sure it is fresh once, up front (waits if this call wins the
-      // refresh; never throws).
       await this.newsRefresh.ensureFresh(true);
 
       // Discover the most recent published (year, quarter) once, against a

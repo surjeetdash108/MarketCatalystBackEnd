@@ -21,8 +21,6 @@ export const MARKET_WIDE: string[] = [
   // weeks, so a weekday fetch bought nothing and sat ahead of market-hours
   // work. `ipos` stays here — a debut prices on a weekday and is wanted the
   // same morning.
-  // "news" — removed: news is fetched on demand (cache_status, 15 min). The
-  // morning jobs that read it (d03, d04) refresh it first if it has expired.
   "analyst-actions",
   // sec-form4, sec-13f and institutional-ownership are NOT here on purpose.
   // 13-F is a QUARTERLY filing and institutional-ownership is a rollup of it,

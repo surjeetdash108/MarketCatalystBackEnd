@@ -29,7 +29,6 @@ const article = (over: Record<string, unknown>) => ({
   ...over,
 });
 
-// Important + not filler  -> breaking
 const BREAKING = article({
   id: "a",
   url: "https://example.com/a",
@@ -37,14 +36,12 @@ const BREAKING = article({
   headline: "AAA beats earnings estimates",
   publishedAt: "2026-11-11T12:00:00Z",
 });
-// Not important -> only in `news`
 const QUIET = article({
   id: "b",
   url: "https://example.com/b",
   headline: "A quiet note about the company",
   publishedAt: "2026-11-11T09:00:00Z",
 });
-// Important (sentiment) but syndicated holdings filler -> NOT breaking
 const FILLER = article({
   id: "c",
   ticker: "BBB",
@@ -53,7 +50,6 @@ const FILLER = article({
   headline: "BBB Shares Acquired by Balefire LLC",
   publishedAt: "2026-11-11T11:00:00Z",
 });
-// Not a tracked ticker -> dropped
 const UNTRACKED = article({
   id: "d",
   ticker: "ZZZ",
@@ -69,7 +65,6 @@ function setup(polygon: any[], fmp: any[] | null = []) {
   };
   const cacheStatus = {
     ensureFresh: jest.fn(),
-    // By default every ticker asked about counts as out of date.
     expireIfOlderThan: jest.fn(async (items: Array<{ key: string }>) =>
       items.map((i) => i.key),
     ),
@@ -138,7 +133,7 @@ describe("NewsRefreshService.refresh", () => {
     const newsDocs = writesTo("news")[0][2]
       .map((d: any) => d.id)
       .sort();
-    expect(newsDocs).toEqual(["AAA_a", "AAA_b", "BBB_c"]); // ZZZ dropped
+    expect(newsDocs).toEqual(["AAA_a", "AAA_b", "BBB_c"]);
     const breakingDocs = writesTo("news_breaking")[0][2];
     expect(breakingDocs.map((d: any) => d.id)).toEqual(["AAA_a"]);
     expect(breakingDocs[0].data).toMatchObject({
@@ -209,7 +204,6 @@ describe("NewsRefreshService.refresh", () => {
           ticker: `T${String(i).padStart(2, "0")}`,
           url: `https://example.com/m${i}`,
           headline: `T${String(i).padStart(2, "0")} beats earnings estimates`,
-          // newest first: T00 is the newest
           publishedAt: new Date(
             Date.UTC(2026, 10, 11, 12, 0) - i * 60_000,
           ).toISOString(),
@@ -228,7 +222,7 @@ describe("NewsRefreshService.refresh", () => {
 
     it("leaves a ticker alone when its saved news is already newer than the story", async () => {
       const { svc, cacheStatus, ondemand } = setup([QUIET], [BREAKING]);
-      cacheStatus.expireIfOlderThan.mockResolvedValue([]); // nothing out of date
+      cacheStatus.expireIfOlderThan.mockResolvedValue([]);
 
       await svc.refresh();
 

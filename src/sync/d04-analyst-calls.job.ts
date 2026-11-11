@@ -338,8 +338,6 @@ export class D04AnalystCallsJob implements OnModuleInit {
 
   private async gatherAnalystData(today: string) {
     const db = this.firebase.firestore;
-    // The news cron is going away: make sure the news read below is fresh (waits
-    // for the refresh if this call wins it; never throws).
     await this.newsRefresh.ensureFresh(true);
     const [actionsSnap, newsSnap] = await Promise.all([
       db.collection("analyst_actions").limit(150).get().catch(() => null),

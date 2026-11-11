@@ -32,8 +32,6 @@ export class NewsJob implements OnModuleInit {
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
       collections: ["news", "news_breaking"],
-      // NOT a schedule (nothing reads it to trigger runs). It is the 15 minute
-      // cache lifetime, used only by the staleness display.
       cronExpression: "*/15 * * * *",
       timeZone: "America/New_York",
     });
@@ -43,7 +41,6 @@ export class NewsJob implements OnModuleInit {
     await this.registry.get(JOB_NAME)();
   }
 
-  /** Refresh only if the cache has expired; wait for it if this run does it. */
   async run() {
     return this.refresher.ensureFresh(true);
   }

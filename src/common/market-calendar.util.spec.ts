@@ -91,31 +91,25 @@ describe("etDate", () => {
 describe("nextEtDayStart", () => {
   const at = (iso: string) => nextEtDayStart(Date.parse(iso));
   it("summer (EDT): midnight New York is 04:00 UTC", () => {
-    // 17:00 EDT on 11 Aug -> 00:00 EDT on 12 Aug
     expect(new Date(at("2026-08-11T21:00:00Z")).toISOString()).toBe("2026-08-12T04:00:00.000Z");
   });
   it("winter (EST): midnight New York is 05:00 UTC", () => {
-    // 17:00 EST on 11 Nov -> 00:00 EST on 12 Nov
     expect(new Date(at("2026-11-11T22:00:00Z")).toISOString()).toBe("2026-11-12T05:00:00.000Z");
   });
   it("is the same for every fetch time on one New York day", () => {
-    const early = at("2026-11-11T05:30:00Z"); // 00:30 EST
-    const late = at("2026-11-12T04:59:00Z"); // 23:59 EST
+    const early = at("2026-11-11T05:30:00Z");
+    const late = at("2026-11-12T04:59:00Z");
     expect(early).toBe(late);
   });
   it("uses the New York day, not the UTC day", () => {
-    // 01:00 UTC on the 12th is still 20:00 on the 11th in New York.
     expect(new Date(at("2026-11-12T01:00:00Z")).toISOString()).toBe("2026-11-12T05:00:00.000Z");
   });
   it("crosses month and year ends", () => {
     expect(new Date(at("2026-12-31T20:00:00Z")).toISOString()).toBe("2027-01-01T05:00:00.000Z");
   });
   it("on the days the clocks change", () => {
-    // 2026-03-08 clocks go forward: the next midnight (9 Mar) is EDT.
     expect(new Date(at("2026-03-08T15:00:00Z")).toISOString()).toBe("2026-03-09T04:00:00.000Z");
-    // 2026-11-01 clocks go back: the next midnight (2 Nov) is EST.
     expect(new Date(at("2026-11-01T15:00:00Z")).toISOString()).toBe("2026-11-02T05:00:00.000Z");
-    // The evening before each change.
     expect(new Date(at("2026-03-07T20:00:00Z")).toISOString()).toBe("2026-03-08T05:00:00.000Z");
     expect(new Date(at("2026-10-31T20:00:00Z")).toISOString()).toBe("2026-11-01T04:00:00.000Z");
   });

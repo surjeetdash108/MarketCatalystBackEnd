@@ -1,12 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { OnDemandService } from "./ondemand.service";
 
-/**
- * Per-ticker news: answers from `news`, and refreshes from the vendors in the
- * background through cache_status (expires at the next New York midnight,
- * sooner when breaking news names the ticker). CacheStatusService itself is tested in cache-status.service.spec.
- */
-
 const art = (
   id: string,
   publishedAt: string,
@@ -105,7 +99,7 @@ describe("OnDemandService.getNews", () => {
         hasData: true, // articles the bulk refresh stored count: no waiting
       }),
     );
-    expect(polygon).not.toHaveBeenCalled(); // getNews itself never calls a vendor
+    expect(polygon).not.toHaveBeenCalled();
   });
 
   it("stored articles are returned without waiting for the refresh", async () => {
@@ -114,7 +108,6 @@ describe("OnDemandService.getNews", () => {
     });
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    // Like the real service: starts the refresh but does not await it.
     cacheStatus.ensureFresh.mockImplementation(async (o: any) => {
       void gate.then(() => o.refresh({}));
       return { kind: "refresh-started" };
@@ -123,7 +116,7 @@ describe("OnDemandService.getNews", () => {
     const out = await svc.getNews("NVDA");
 
     expect(out).toHaveLength(1);
-    expect(polygon).not.toHaveBeenCalled(); // vendor fetch still pending behind the gate
+    expect(polygon).not.toHaveBeenCalled();
     release();
   });
 
@@ -145,9 +138,9 @@ describe("OnDemandService.getNews", () => {
     expect(cacheStatus.ensureFresh).toHaveBeenCalledWith(
       expect.objectContaining({ hasData: false }),
     );
-    expect(batchSet).toHaveBeenCalledTimes(5); // NEWS_ARTICLE_CAP
+    expect(batchSet).toHaveBeenCalledTimes(5);
     expect(out).toHaveLength(5);
-    expect(out[0].publishedAt >= out[4].publishedAt).toBe(true); // newest first
+    expect(out[0].publishedAt >= out[4].publishedAt).toBe(true);
   });
 
   it("merges FMP first and drops the duplicate URL from Polygon", async () => {
@@ -258,7 +251,6 @@ describe("OnDemandService.getNews", () => {
       await svc.refreshTickerNews("NVDA");
       const { expiresAtFor } = cacheStatus.ensureFresh.mock.calls[0][0];
 
-      // 17:00 EST and 09:00 EST on 11 Nov both expire at 00:00 EST on 12 Nov.
       const midnight = Date.parse("2026-11-12T05:00:00Z");
       expect(expiresAtFor(Date.parse("2026-11-11T22:00:00Z"))).toBe(midnight);
       expect(expiresAtFor(Date.parse("2026-11-11T14:00:00Z"))).toBe(midnight);
@@ -281,7 +273,7 @@ describe("OnDemandService.getNews", () => {
         location: user.location,
         expiresAtFor: user.expiresAtFor,
       });
-      expect(user.awaitRefresh).toBe(false); // a user is never made to wait
+      expect(user.awaitRefresh).toBe(false);
       expect(proactive.awaitRefresh).toBe(true);
     });
 
@@ -310,7 +302,7 @@ describe("OnDemandService.getNews", () => {
 
     expect(await svc.getNews("NVDA")).toEqual([]);
     expect(await svc.getNews("NVDA")).toEqual([]);
-    expect(cacheStatus.ensureFresh).toHaveBeenCalledTimes(2); // not short-circuited by memory
+    expect(cacheStatus.ensureFresh).toHaveBeenCalledTimes(2);
   });
 
   it("a short memory copy stops repeat reads within 5 minutes", async () => {
