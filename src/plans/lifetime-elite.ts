@@ -4,7 +4,6 @@
  */
 export const LIFETIME_ELITE_EMAILS: readonly string[] = [
   "likhith105@gmail.com",
-  "likhith@conyxit.com",
   "hallesanjay2003@gmail.com",
   "sanjayhalle@inc108.com",
   "sandeep@conyxit.com",

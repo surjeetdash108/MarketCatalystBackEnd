@@ -13,6 +13,8 @@ describe("lifetime-elite allowlist", () => {
 
   it("rejects unknown or invalid emails", () => {
     expect(isLifetimeElite("random@example.com")).toBe(false);
+    // Removed from the list on 2026-11-13 (owner's request).
+    expect(isLifetimeElite("likhith@conyxit.com")).toBe(false);
     expect(isLifetimeElite("")).toBe(false);
     expect(isLifetimeElite(null)).toBe(false);
     expect(isLifetimeElite(undefined)).toBe(false);
