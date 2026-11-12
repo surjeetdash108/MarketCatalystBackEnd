@@ -104,7 +104,6 @@ export function checkoutBody(
     planId,
     interval,
     consent: { accepted: true, version: CONSENT_VERSION },
-    phone: "+15125550147",
     marketingOptIn: false,
     billing: {
       name: "Test Buyer",

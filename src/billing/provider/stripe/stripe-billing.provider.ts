@@ -390,7 +390,7 @@ export class StripeBillingProvider implements BillingProvider {
       const a = input.billing.address;
       await this.stripe.customers.update(input.customerId, {
         name: input.billing.name,
-        phone: input.billing.phone,
+        ...(input.billing.phone ? { phone: input.billing.phone } : {}),
         address: {
           line1: a.line1,
           line2: a.line2 ?? undefined,

@@ -61,9 +61,6 @@ export class CheckoutDto {
   @IsOptional() @IsString() @MaxLength(40) promoCode?: string;
   /** The renewal consent checkbox (required, unticked by default). */
   @ValidateNested() @Type(() => ConsentDto) consent: ConsentDto;
-  /** Mobile number, E.164 (validated server-side; not verified). */
-  /** Optional; when given, validated as E.164 by the service. */
-  @IsOptional() @IsString() @MaxLength(32) phone?: string;
   /** Optional "Text me product updates" (stored with a timestamp; nothing is sent). */
   @IsOptional() @IsBoolean() marketingOptIn?: boolean;
   @ValidateNested() @Type(() => BillingDetailsDto) billing: BillingDetailsDto;
@@ -131,6 +128,5 @@ export class PriceChangeNoticeDto extends PlanTargetDto {
 }
 
 export class ContactDto {
-  @IsOptional() @IsString() @MaxLength(32) phone?: string;
   @IsOptional() @IsBoolean() marketingOptIn?: boolean;
 }

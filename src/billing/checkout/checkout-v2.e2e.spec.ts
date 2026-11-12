@@ -154,14 +154,11 @@ describe("checkout (step 2 'Complete purchase')", () => {
     ).toBe(400);
   });
 
-  it("the mobile number is optional; when given it must be valid (E.164) — no placeholder is stored", async () => {
+  it("mobile number is not collected or stored at checkout", async () => {
     a = await billingApp();
     const u = a.user("c3");
-    for (const phone of ["5125550147", "+1 012 555 0147"]) {
-      expect((await u.post("/api/billing/checkout", checkoutBody("pro", "monthly", { phone }))).body.code).toBe("phone_invalid");
-    }
-    const none = await u.post("/api/billing/checkout", checkoutBody("pro", "monthly", { phone: undefined }));
-    expect(none.status).toBe(200);
+    const res = await u.post("/api/billing/checkout", checkoutBody("pro", "monthly"));
+    expect(res.status).toBe(200);
     expect(a.fs.read("customers", "c3")?.phone ?? null).toBeNull();
   });
 
@@ -180,7 +177,7 @@ describe("checkout (step 2 'Complete purchase')", () => {
     expect(r.body.code).toBe("address_invalid");
   });
 
-  it("stores consent with the subscription, the phone backend-only, and only country/state/ZIP of the address", async () => {
+  it("stores consent with the subscription and only country/state/ZIP of the address", async () => {
     a = await billingApp();
     const u = a.user("c5");
     a.clock.freeze(a.clock.now());
@@ -188,7 +185,6 @@ describe("checkout (step 2 'Complete purchase')", () => {
       "/api/billing/checkout",
       checkoutBody("pro", "annual", {
         billing: TX,
-        phone: "+1 (512) 555-0199",
         marketingOptIn: true,
       }),
     );
@@ -216,7 +212,6 @@ describe("checkout (step 2 'Complete purchase')", () => {
     expect("ip" in (mirror?.consent as object)).toBe(true);
     const cust = a.fs.read("customers", "c5");
     expect(cust).toMatchObject({
-      phone: "+15125550199",
       billingRegion: { country: "US", state: "TX", postalCode: "78701" },
       marketingOptIn: { optedIn: true },
     });

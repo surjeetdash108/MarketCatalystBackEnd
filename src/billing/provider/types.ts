@@ -273,7 +273,7 @@ export interface BillingRegion {
 /** Full billing details: passed to the provider, never stored by us (only the region is). */
 export interface BillingDetails {
   name: string;
-  phone: string;
+  phone?: string | null;
   address: {
     line1: string;
     line2: string | null;
