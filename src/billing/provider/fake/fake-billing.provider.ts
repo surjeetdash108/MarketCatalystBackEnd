@@ -444,6 +444,7 @@ export class FakeBillingProvider implements BillingProvider {
     cancelUrl: string;
     idempotencyKey: string;
     billing?: BillingDetails | null;
+    trialDays?: number;
   }): Promise<CheckoutSession> {
     // Idempotent: the same key returns the same open session.
     const existing = (
@@ -475,10 +476,12 @@ export class FakeBillingProvider implements BillingProvider {
       c.phone = input.billing.phone;
       await this.write(C.customers, c);
     }
+    const trialDays = Math.max(0, input.trialDays ?? 0);
     const session: CheckoutSession & {
       idempotencyKey: string;
       lookupKey: string;
       amount: number;
+      trialDays: number;
     } = {
       id,
       url: `${this.opts.appUrl}/billing/checkout?session=${id}`,
@@ -488,8 +491,8 @@ export class FakeBillingProvider implements BillingProvider {
       planId: input.price.planId,
       interval: input.price.interval,
       discount,
-      amountDueToday: taxed.total,
-      tax: taxed.tax,
+      amountDueToday: trialDays > 0 ? 0 : taxed.total,
+      tax: trialDays > 0 ? 0 : taxed.tax,
       currency: input.price.currency,
       expiresAt: iso(now + FAKE_CHECKOUT_TTL_MS),
       subscriptionId: null,
@@ -498,6 +501,7 @@ export class FakeBillingProvider implements BillingProvider {
       idempotencyKey: input.idempotencyKey,
       lookupKey: input.price.lookupKey,
       amount: input.price.amount,
+      trialDays,
     };
     await this.write(C.checkouts, session);
     return session;
@@ -546,12 +550,16 @@ export class FakeBillingProvider implements BillingProvider {
   }
 
   private async finaliseCheckout(
-    s: CheckoutSession & { lookupKey: string; amount: number },
+    s: CheckoutSession & { lookupKey: string; amount: number; trialDays?: number },
     c: FakeCustomer,
   ): Promise<string> {
     const now = this.clock.now();
-    const end = addInterval(now, s.interval);
-    const subtotal = s.amount;
+    // Trial: the card is validated (above), nothing is charged; the first
+    // charge is the renewal at the trial's end, then every interval after.
+    const trialDays = s.trialDays ?? 0;
+    const end =
+      trialDays > 0 ? now + trialDays * 86_400_000 : addInterval(now, s.interval);
+    const subtotal = trialDays > 0 ? 0 : s.amount;
     const discountAmount = discountAmountFor(s.discount, subtotal);
     const sub: ProviderSubscription = {
       id: this.id("sub"),
@@ -562,25 +570,34 @@ export class FakeBillingProvider implements BillingProvider {
       priceLookupKey: s.lookupKey,
       amount: s.amount,
       currency: s.currency,
-      status: "active",
+      status: trialDays > 0 ? "trialing" : "active",
       startedAt: iso(now),
       currentPeriodStart: iso(now),
       currentPeriodEnd: iso(end),
       cancelAtPeriodEnd: false,
       canceledAt: null,
       endedAt: null,
-      discount: consumeDiscount(s.discount),
+      // A promo applies to the first PAID invoice, so a trial keeps it intact.
+      discount: trialDays > 0 ? s.discount : consumeDiscount(s.discount),
       scheduledChange: null,
       pastDueSince: null,
       latestInvoiceId: null,
       updatedAt: now,
     };
     const lines: InvoiceLine[] = [
-      {
-        description: `${s.planId} (${s.interval})`,
-        amount: subtotal,
-        proration: false,
-      },
+      trialDays > 0
+        ? {
+            description: `Free trial (${trialDays} days)`,
+            amount: 0,
+            proration: false,
+            periodStart: iso(now),
+            periodEnd: iso(end),
+          }
+        : {
+            description: `${s.planId} (${s.interval})`,
+            amount: subtotal,
+            proration: false,
+          },
     ];
     const inv = this.newInvoice(sub, {
       billingReason: "subscription_create",
@@ -590,10 +607,10 @@ export class FakeBillingProvider implements BillingProvider {
       discountAmount,
       creditApplied: 0,
       lines,
-      discount: s.discount,
+      discount: trialDays > 0 ? null : s.discount,
     });
     this.markPaid(inv);
-    c.successfulCharges++;
+    if (subtotal > 0) c.successfulCharges++;
     sub.latestInvoiceId = inv.id;
     await this.write(C.customers, c);
     await this.write(C.invoices, inv);
@@ -699,6 +716,11 @@ export class FakeBillingProvider implements BillingProvider {
   private prorate(sub: ProviderSubscription, target: PriceRef, at: number) {
     const start = ms(sub.currentPeriodStart);
     const end = ms(sub.currentPeriodEnd);
+    if (sub.status === "trialing") {
+      // During the free trial nothing has been paid: the plan switches, the
+      // trial end stays, and the first charge (at the new price) is at its end.
+      return { net: 0, amountDue: 0, credit: 0, lines: [] as InvoiceLine[], periodStart: start, periodEnd: end };
+    }
     const remaining = Math.min(
       1,
       Math.max(0, (end - at) / Math.max(1, end - start)),

@@ -207,6 +207,21 @@ function signed(event: object) {
 }
 
 describe("StripeBillingProvider — embedded checkout", () => {
+  it("free trial: trial_period_days on any plan, cancels at trial end without a card, SetupIntent secret returned; none without trialDays", async () => {
+    const { p, m } = provider();
+    await p.createCheckout({ uid: "u1", customerId: "cus_1", price: PRO_M, discount: null, successUrl: "s", cancelUrl: "c", idempotencyKey: "k1", trialDays: 7 });
+    const [args] = m.calls["subscriptions.create"].at(-1) as [Record<string, unknown>];
+    expect(args).toMatchObject({
+      trial_period_days: 7,
+      trial_settings: { end_behavior: { missing_payment_method: "cancel" } },
+      expand: expect.arrayContaining(["pending_setup_intent"]),
+    });
+    await p.createCheckout({ uid: "u1", customerId: "cus_1", price: STARTER_M, discount: null, successUrl: "s", cancelUrl: "c", idempotencyKey: "k2" });
+    const [noTrial] = m.calls["subscriptions.create"].at(-1) as [Record<string, unknown>];
+    expect(noTrial.trial_period_days).toBeUndefined();
+    expect(noTrial.trial_settings).toBeUndefined();
+  });
+
   it("creates an incomplete subscription with automatic tax, the address/phone on the customer, and returns the confirmation secret", async () => {
     const { p, m } = provider();
     const s = await p.createCheckout({

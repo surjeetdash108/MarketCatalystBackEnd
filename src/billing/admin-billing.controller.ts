@@ -84,7 +84,10 @@ export class AdminBillingController {
 
   @Get("abandoned")
   async abandonedCheckouts() {
-    return { leads: await this.admin.abandonedCheckouts() };
+    return {
+      leads: await this.admin.abandonedCheckouts(),
+      ...(await this.admin.signupFunnel()),
+    };
   }
 
   @Get("promos")

@@ -716,7 +716,13 @@ export const API_CATALOG = {
   "GET /api/billing/history": {
     summary: "The user's plan-change history.",
     store: ["backend-only billing collections"],
+  },  "GET /api/billing/timeline": {
+    summary:
+      "Plain-language plan history: plan changes, trials, charges, credits and refunds, newest first, each with an exact timestamp.",
+    params: "none",
+    store: ["backend-only billing collections"],
   },
+
   "POST /api/billing/portal": {
     summary: "Opens the provider's customer portal for card updates.",
     store: ["backend-only billing collections"],

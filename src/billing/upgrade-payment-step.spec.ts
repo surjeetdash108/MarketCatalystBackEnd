@@ -35,6 +35,11 @@ describe("upgrade payment step (Stripe)", () => {
     await down.svc.changePlan("u1", { planId: "pro", interval: "monthly", expectedCredit: 100, prorationDate: 0, paymentMethodId: "pm_1" });
     expect(down.changePlan).toHaveBeenCalledWith(expect.objectContaining({ kind: "downgrade", paymentMethodId: null }));
   });
+  it("a $0 upgrade (e.g. during the free trial) needs no card", async () => {
+    const { svc, changePlan } = serviceWith("stripe", "upgrade");
+    await svc.changePlan("u1", { planId: "pro", interval: "monthly", expectedAmountDue: 0, prorationDate: 0 });
+    expect(changePlan).toHaveBeenCalled();
+  });
   it("the fake provider (tests/staging) needs no card", async () => {
     const { svc, changePlan } = serviceWith("fake", "upgrade");
     await svc.changePlan("u1", { planId: "pro", interval: "monthly", expectedAmountDue: 1333, prorationDate: 0 });

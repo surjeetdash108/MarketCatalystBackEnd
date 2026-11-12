@@ -140,6 +140,8 @@ export async function billingApp(opts: BillingAppOptions = {}) {
   const env = {
     APP_URL: "http://app.test",
     FIREBASE_PROJECT_ID: "demo-billing",
+    // Most specs exercise immediate charges; trial specs pass TRIAL_DAYS.
+    TRIAL_DAYS: "0",
     ...(opts.env ?? {}),
   };
   const config = configOf(env);

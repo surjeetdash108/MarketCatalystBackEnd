@@ -6,6 +6,8 @@ import {
   normaliseDiscount,
 } from "./provider/fake/fake-billing.provider";
 import { refundPolicy } from "./refund/refund-policy";
+import { emailHash } from "./retention/email-normalise";
+import { buildTimeline } from "./history-format";
 import { EmailVerificationService } from "../account/email-verification.service";
 import {
   BadRequestException,
@@ -27,6 +29,7 @@ import {
   planById,
   planRank,
   type BillingInterval,
+  TRIAL_DAYS,
 } from "../plans/plans.registry";
 import { SubscriptionsService } from "../plans/subscriptions.service";
 import { BillingAccessService } from "./billing-access.service";
@@ -264,6 +267,34 @@ export class BillingService {
     return (await provider.createCustomer({ uid, email })).customerId;
   }
 
+  /**
+   * Free-trial days for this buyer: TRIAL_DAYS, once per person ever — not if
+   * the normalised email already had a trial (trial_claims, written by the
+   * event handler when a trial starts) or the account has ever paid.
+   */
+  /** TRIAL_DAYS from the registry; env TRIAL_DAYS overrides it (0 turns trials off). */
+  private get trialDays(): number {
+    const raw = this.config.get<string | number | undefined>("TRIAL_DAYS");
+    const n = raw === undefined || raw === "" ? TRIAL_DAYS : Number(raw);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  }
+
+  async trialDaysFor(uid: string): Promise<number> {
+    const days = this.trialDays;
+    if (days <= 0) return 0;
+    const c = (await this.db.collection("customers").doc(uid).get()).data();
+    if (c?.firstPaidAt) return 0;
+    let email: string | null = null;
+    try {
+      email = (await this.firebase.auth.getUser(uid)).email ?? null;
+    } catch {
+      email = null;
+    }
+    if (!email) return 0;
+    const claim = await this.db.collection("trial_claims").doc(emailHash(email)).get();
+    return claim.exists ? 0 : days;
+  }
+
   // ── checkout ──────────────────────────────────────────────────────────
 
   /**
@@ -320,19 +351,30 @@ export class BillingService {
     const quote = provider
       ? await provider.previewCheckout({ price, discount, region })
       : localQuote(price, discount, this.clock.now());
+    const trialDays = await this.trialDaysFor(uid);
+    const now = this.clock.now();
+    const trialEndsAt = trialDays > 0 ? now + trialDays * 86_400_000 : null;
+    // The quote is the first charge; with a trial it happens when the trial ends.
+    const firstChargeAt = new Date(trialEndsAt ?? now).toISOString();
     const renewsAt = new Date(
-      addIntervalMs(this.clock.now(), input.interval),
+      trialEndsAt ?? addIntervalMs(now, input.interval),
     ).toISOString();
     return {
       planId: price.planId,
       interval: price.interval,
       ...quote,
       promo,
+      trial: trialEndsAt
+        ? { days: trialDays, endsAt: new Date(trialEndsAt).toISOString() }
+        : null,
+      /** What is charged today: $0 during a trial, else the quote's total. */
+      dueToday: trialEndsAt ? 0 : quote.total,
+      firstCharge: { amount: quote.total, at: firstChargeAt },
       renewsAt,
       renewalAmount: price.amount,
       consent: {
         version: CONSENT_VERSION,
-        text: consentText(price.planId, price.interval),
+        text: consentText(price.planId, price.interval, trialDays),
       },
       refundPolicy: refundPolicy(),
       providerConnected: provider !== null,
@@ -382,8 +424,10 @@ export class BillingService {
         message: "Please agree to the renewal terms to continue.",
       });
     }
-    const phone = normaliseE164(input.phone ?? "");
-    if (!phone)
+    // The mobile number is optional; when given it must be a valid E.164 number.
+    const rawPhone = (input.phone ?? "").trim();
+    const phone = rawPhone ? normaliseE164(rawPhone) : null;
+    if (rawPhone && !phone)
       throw new BadRequestException({
         statusCode: 400,
         code: "phone_invalid",
@@ -464,6 +508,7 @@ export class BillingService {
     const idempotencyKey = createHash("sha256")
       .update([uid, price.lookupKey, promoId ?? "", day].join("|"))
       .digest("hex");
+    const trialDays = await this.trialDaysFor(uid);
     const session = await provider.createCheckout({
       uid,
       customerId,
@@ -473,6 +518,7 @@ export class BillingService {
       cancelUrl: `${this.appUrl}/manage-plan?checkout=cancelled&plan=${price.planId}&interval=${price.interval}`,
       idempotencyKey,
       billing,
+      trialDays,
     });
     const now = this.clock.nowIso();
     // Ours: phone (backend-only) + region (country/state/ZIP). The full address stays with the provider.
@@ -506,11 +552,12 @@ export class BillingService {
           promoCode,
           amountDueToday: session.amountDueToday,
           tax: session.tax ?? 0,
+          trialDays,
           region,
           consent: {
             acceptedAt: now,
             version: CONSENT_VERSION,
-            text: consentText(price.planId, price.interval),
+            text: consentText(price.planId, price.interval, trialDays),
             planId: price.planId,
             interval: price.interval,
             price: price.amount,
@@ -611,8 +658,10 @@ export class BillingService {
       ...preview,
       fromPlanId: m.planId,
       fromInterval: m.interval,
+      /** In the free trial nothing has been paid: no proration breakdown; the first charge is at trialEndsAt. */
+      trialEndsAt: m.status === "TRIALING" ? m.currentPeriodEnd : null,
       breakdown:
-        kind === "scheduled"
+        kind === "scheduled" || m.status === "TRIALING"
           ? null
           : changeBreakdown(
               preview,
@@ -673,7 +722,13 @@ export class BillingService {
     }
     // An upgrade is paid like a first purchase: with the card the customer
     // enters in the payment step, never by silently charging a card on file.
-    if (kind === "upgrade" && provider.name === "stripe" && !input.paymentMethodId) {
+    // ($0 upgrades — e.g. during the free trial — charge nothing, so need no card.)
+    if (
+      kind === "upgrade" &&
+      provider.name === "stripe" &&
+      (input.expectedAmountDue ?? 0) > 0 &&
+      !input.paymentMethodId
+    ) {
       throw new BadRequestException({
         statusCode: 400,
         code: "payment_method_required",
@@ -917,6 +972,18 @@ export class BillingService {
         return true;
       })
       .sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  }
+
+  /** The plan history page: plan changes, trials, charges, credits and refunds, newest first, with exact timestamps. */
+  async timeline(uid: string) {
+    const [events, payments] = await Promise.all([
+      this.history(uid),
+      this.db.collection("payments").where("userId", "==", uid).get(),
+    ]);
+    return buildTimeline(
+      events as Array<Record<string, unknown>>,
+      payments.docs.map((d) => d.data()),
+    );
   }
 
   async portal(uid: string) {
