@@ -2,7 +2,6 @@ import {
   CheckoutPreviewInterceptor,
   CheckoutPreviewService,
 } from "./checkout-preview";
-import { RefundService } from "./refund/refund.service";
 import { Module } from "@nestjs/common";
 import { PlansModule } from "../plans/plans.module";
 import { BillingEventsService } from "./billing-events.service";
@@ -19,6 +18,7 @@ import { RetentionService } from "./retention/retention.service";
 import { AdminBillingController } from "./admin-billing.controller";
 import { AdminBillingService } from "./admin-billing.service";
 import { BillingReconcileJob } from "./reconcile.job";
+import { ReferralService } from "./referral/referral.service";
 
 @Module({
   imports: [PlansModule],
@@ -37,7 +37,7 @@ import { BillingReconcileJob } from "./reconcile.job";
     RetentionService,
     AdminBillingService,
     BillingReconcileJob,
-    RefundService,
+    ReferralService,
     CheckoutPreviewService,
     CheckoutPreviewInterceptor,
   ],

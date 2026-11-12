@@ -96,6 +96,18 @@ export interface BillingProvider {
     billing?: BillingDetails | null;
   }): Promise<CheckoutSession>;
   getCheckout(sessionId: string): Promise<CheckoutSession | null>;
+  /**
+   * Ids of the customer's subscriptions that bill or can bill (active,
+   * trialing, past due, unpaid), read from the provider itself — so a second
+   * purchase is refused even before the first one's webhook has arrived.
+   */
+  liveSubscriptionIds?(customerId: string): Promise<string[]>;
+  /**
+   * Closes the customer's other unfinished checkouts (an unpaid first invoice,
+   * a trial card form not yet confirmed) so a second tab can't complete a
+   * second subscription. `keep` is the checkout just created.
+   */
+  closeOtherCheckouts?(customerId: string, keep: string): Promise<void>;
 
   // ── subscriptions ──────────────────────────────────────────────────────
   getSubscription(subscriptionId: string): Promise<ProviderSubscription | null>;
@@ -118,11 +130,21 @@ export interface BillingProvider {
     prorationDate: number;
     expectedAmountDue: number | null;
     expectedCredit?: number | null;
-    /** Upgrades: the payment method entered for this change (Stripe); charged instead of any card on file. */
+    /** The card entered in the payment step for this change (Stripe): it becomes the subscription's card and pays anything due now. */
     paymentMethodId?: string | null;
+    /** Name and billing address entered in the payment step. */
+    billing?: BillingDetails | null;
   }): Promise<ChangeResult>;
   /** The customer's account credit (minor units, ≥ 0) used on future invoices. */
   getCreditBalance(customerId: string): Promise<number>;
+  /** Adds account credit (used automatically on the next invoices, never paid out). Idempotent by key. */
+  addCustomerCredit?(input: {
+    customerId: string;
+    amount: number;
+    currency: string;
+    description: string;
+    idempotencyKey: string;
+  }): Promise<void>;
   cancelScheduledChange(subscriptionId: string): Promise<void>;
   cancelAtPeriodEnd(subscriptionId: string): Promise<void>;
   resume(subscriptionId: string): Promise<void>;
@@ -135,14 +157,6 @@ export interface BillingProvider {
   getInvoice(invoiceId: string): Promise<ProviderInvoice | null>;
   listInvoices(customerId: string): Promise<ProviderInvoice[]>;
   getInvoiceDocument(invoiceId: string): Promise<InvoiceDocument>;
-
-  // ── refunds ────────────────────────────────────────────────────────────
-  /**
-   * Refunds `amount` of payment `paymentId` (an invoice id) and ends the
-   * subscription immediately. Billing state changes arrive as events
-   * (charge.refunded, subscription.deleted) for the handler to write.
-   */
-  refund(paymentId: string, amount: number): Promise<void>;
 
   // ── customer portal (card updates only) ────────────────────────────────
   createPortalSession(input: {

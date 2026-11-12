@@ -825,28 +825,11 @@ export const API_CATALOG = {
     store: ["customers", "admin_audit"],
     check: { skip: "admin write (audited)" },
   },
-  "GET /api/billing/refund": {
+  "GET /api/billing/referral": {
     summary:
-      "Refund eligibility under REFUND_WINDOW_DAYS (404 when refunds are off).",
-    store: ["payments", "refund_claims"],
-    check: { skip: "needs the billing provider" },
-  },
-  "POST /api/billing/refund": {
-    summary:
-      "Refunds the latest eligible payment and ends the plan now (404 when refunds are off).",
-    store: ["refund_claims"],
-    check: { skip: "user write" },
-  },
-  "GET /api/admin/billing/subscribers/:uid/refund": {
-    summary:
-      "Refund eligibility for a subscriber (admin; 404 when refunds are off).",
-    store: ["payments", "refund_claims"],
-  },
-  "POST /api/admin/billing/subscribers/:uid/refund": {
-    summary:
-      "Admin refund action — same policy as the user's button (audited; 404 when refunds are off).",
-    store: ["refund_claims", "admin_audit"],
-    check: { skip: "admin write (audited)" },
+      "Refer a friend: the member's random referral code — only with an active plan (else eligible:false).",
+    store: ["referral_codes"],
+    check: { skip: "user-specific" },
   },
   "GET /api/billing/fake/clock": {
     summary: "Fake provider: the simulated clock.",

@@ -453,36 +453,8 @@ export class BillingService {
         message: "Please agree to the renewal terms to continue.",
       });
     }
-    const addr = input.billing?.address;
-    const country = String(addr?.country ?? "").toUpperCase();
-    const usOk =
-      country !== "US" ||
-      (!!addr?.state &&
-        /^\d{5}(-\d{4})?$/.test(String(addr?.postalCode ?? "")));
-    if (
-      !input.billing?.name?.trim() ||
-      !addr?.line1?.trim() ||
-      !addr?.city?.trim() ||
-      !/^[A-Z]{2}$/.test(country) ||
-      !usOk
-    ) {
-      throw new BadRequestException({
-        statusCode: 400,
-        code: "address_invalid",
-        message: "Enter your full billing address.",
-      });
-    }
-    const billing = {
-      name: input.billing.name.trim(),
-      address: {
-        line1: addr.line1.trim(),
-        line2: addr.line2?.trim() || null,
-        city: addr.city.trim(),
-        state: addr.state ? addr.state.toUpperCase() : null,
-        postalCode: addr.postalCode ?? null,
-        country,
-      },
-    };
+    const billing = normaliseBilling(input.billing);
+    const country = billing.address.country;
     const region = {
       country,
       state: billing.address.state,
@@ -523,6 +495,18 @@ export class BillingService {
       promoCode = v.promo.code;
     }
     const customerId = await this.customerId(uid, email, provider);
+    // Ask the provider too: our mirror only updates when its webhook arrives,
+    // so a second tab could otherwise start a second subscription.
+    if (
+      provider.liveSubscriptionIds &&
+      (await provider.liveSubscriptionIds(customerId)).length > 0
+    ) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: "already_subscribed",
+        message: "You already have a subscription. Change your plan instead.",
+      });
+    }
     const day = new Date(this.clock.now()).toISOString().slice(0, 10);
     const idempotencyKey = createHash("sha256")
       .update([uid, price.lookupKey, promoId ?? "", day].join("|"))
@@ -539,6 +523,8 @@ export class BillingService {
       billing,
       trialDays,
     });
+    // One checkout at a time: an older unpaid one (another tab, another plan) is closed.
+    await provider.closeOtherCheckouts?.(customerId, session.id);
     const now = this.clock.nowIso();
     // Region (country/state/ZIP). The full address stays with the provider.
     await this.db
@@ -673,6 +659,15 @@ export class BillingService {
     const balanceAfter = credit + preview.creditToBalance;
     return {
       ...preview,
+      /** When the new plan starts: now, or at the end of the current period for a scheduled change. */
+      startsAt:
+        kind === "scheduled"
+          ? preview.effectiveAt
+          : new Date(preview.prorationDate).toISOString(),
+      consent: {
+        version: CONSENT_VERSION,
+        text: consentText(target.planId, target.interval, 0),
+      },
       fromPlanId: m.planId,
       fromInterval: m.interval,
       /** In the free trial nothing has been paid: no proration breakdown; the first charge is at trialEndsAt. */
@@ -709,6 +704,8 @@ export class BillingService {
       expectedCredit?: number | null;
       prorationDate?: number | null;
       paymentMethodId?: string | null;
+      billing?: BillingInput | null;
+      consent?: { accepted: boolean; version: string } | null;
     },
   ) {
     const { provider, m, target, kind } = await this.assertChangeable(
@@ -737,31 +734,58 @@ export class BillingService {
         message: "Preview the change before confirming it.",
       });
     }
-    // An upgrade is paid like a first purchase: with the card the customer
-    // enters in the payment step, never by silently charging a card on file.
-    // ($0 upgrades — e.g. during the free trial — charge nothing, so need no card.)
-    if (
-      kind === "upgrade" &&
-      provider.name === "stripe" &&
-      (input.expectedAmountDue ?? 0) > 0 &&
-      !input.paymentMethodId
-    ) {
-      throw new BadRequestException({
-        statusCode: 400,
-        code: "payment_method_required",
-        message: "Enter your card details to pay for the upgrade.",
-      });
+    // Every plan change is paid like a first purchase: the card and billing
+    // address entered in the payment step, never a card on file. That card
+    // pays anything due now and the new plan from its start date.
+    let billing: ReturnType<typeof normaliseBilling> | null = null;
+    if (provider.name === "stripe") {
+      if (!input.paymentMethodId) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: "payment_method_required",
+          message: "Enter your card details to change your plan.",
+        });
+      }
+      billing = normaliseBilling(input.billing);
+      if (
+        input.consent?.accepted !== true ||
+        input.consent.version !== CONSENT_VERSION
+      ) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: "consent_required",
+          message: "Please agree to the renewal terms to continue.",
+        });
+      }
+    } else if (input.billing) {
+      billing = normaliseBilling(input.billing);
     }
     try {
       const result = await provider.changePlan({
         subscriptionId: m.subscriptionId,
         target,
         kind,
-        paymentMethodId: kind === "upgrade" ? (input.paymentMethodId ?? null) : null,
+        paymentMethodId: input.paymentMethodId ?? null,
+        billing,
         prorationDate: input.prorationDate ?? this.clock.now(),
         expectedAmountDue: kind === "upgrade" ? input.expectedAmountDue : null,
         expectedCredit: kind === "downgrade" ? input.expectedCredit : null,
       });
+      if (input.consent?.accepted === true) {
+        await this.db.collection("plan_change_consents").doc().set({
+          uid,
+          from: { planId: m.planId, interval: m.interval },
+          to: { planId: target.planId, interval: target.interval },
+          kind,
+          result: result.status,
+          version: CONSENT_VERSION,
+          text: consentText(target.planId, target.interval, 0),
+          price: target.amount,
+          currency: target.currency,
+          acceptedAt: this.clock.nowIso(),
+          livemode: provider.livemode,
+        });
+      }
       if (result.status === "payment_failed") {
         throw new HttpException(
           {
@@ -1078,5 +1102,50 @@ export function localQuote(
     total: price.amount - off,
     taxLabel: null,
     taxPending: true,
+  };
+}
+
+export interface BillingInput {
+  name: string;
+  address: {
+    line1: string;
+    line2?: string | null;
+    city: string;
+    state?: string | null;
+    postalCode?: string | null;
+    country: string;
+  };
+}
+
+/** The billing name and address from the payment step, validated (400 address_invalid otherwise). */
+export function normaliseBilling(input: BillingInput | null | undefined) {
+  const addr = input?.address;
+  const country = String(addr?.country ?? "").toUpperCase();
+  const usOk =
+    country !== "US" ||
+    (!!addr?.state && /^\d{5}(-\d{4})?$/.test(String(addr?.postalCode ?? "")));
+  if (
+    !input?.name?.trim() ||
+    !addr?.line1?.trim() ||
+    !addr?.city?.trim() ||
+    !/^[A-Z]{2}$/.test(country) ||
+    !usOk
+  ) {
+    throw new BadRequestException({
+      statusCode: 400,
+      code: "address_invalid",
+      message: "Enter your full billing address.",
+    });
+  }
+  return {
+    name: input.name.trim(),
+    address: {
+      line1: addr.line1.trim(),
+      line2: addr.line2?.trim() || null,
+      city: addr.city.trim(),
+      state: addr.state ? addr.state.toUpperCase() : null,
+      postalCode: addr.postalCode ?? null,
+      country,
+    },
   };
 }

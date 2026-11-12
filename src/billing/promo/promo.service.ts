@@ -7,7 +7,13 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
+import {
+  REFERRAL_CURRENCY,
+  REFERRAL_FRIEND_DISCOUNT,
+  ReferralService,
+} from "../referral/referral.service";
 import { AppClock } from "../../common/app-clock";
 import { FirebaseAdminService } from "../../common/firebase-admin.provider";
 import {
@@ -37,7 +43,7 @@ import type {
 export interface PromoCode extends PromoMirror {
   timesRedeemed: number;
   active: boolean;
-  kind: "standard" | "launch";
+  kind: "standard" | "launch" | "referral";
   createdAt: string;
   createdBy: string | null;
   deactivatedAt: string | null;
@@ -90,7 +96,47 @@ export class PromoService {
     private readonly firebase: FirebaseAdminService,
     @Inject(BILLING_PROVIDER) private readonly provider: BillingProvider | null,
     private readonly clock: AppClock,
+    @Optional() private readonly referrals?: ReferralService,
   ) {}
+
+  /**
+   * A friend's referral code: REFERRAL_FRIEND_DISCOUNT off the first payment,
+   * once, first-time customers only, never the member's own code, and only
+   * while the member who shared it has an active plan.
+   */
+  private async referralPromo(
+    code: string,
+    uid: string,
+  ): Promise<PromoValidation | null> {
+    const ref = await this.referrals?.lookup(code);
+    if (!ref) return null;
+    if (!uid || ref.uid === uid) return { ok: false, reason: "not_found" };
+    if (!(await this.referrals!.referrerActive(ref.uid)))
+      return { ok: false, reason: "inactive" };
+    if (await this.isReturningCustomer(uid))
+      return { ok: false, reason: "not_first_time" };
+    const promo: PromoCode = {
+      id: `referral_${ref.code}`,
+      code: ref.code,
+      percentOff: null,
+      amountOff: REFERRAL_FRIEND_DISCOUNT,
+      currency: REFERRAL_CURRENCY,
+      duration: "once",
+      durationInMonths: null,
+      appliesToPlans: [],
+      appliesToIntervals: [],
+      expiresAt: null,
+      maxRedemptions: null,
+      timesRedeemed: 0,
+      firstTimeOnly: true,
+      active: true,
+      kind: "referral",
+      createdAt: this.clock.nowIso(),
+      createdBy: "referral_program",
+      deactivatedAt: null,
+    };
+    return { ok: true, promo, discount: this.discountFor(promo) };
+  }
 
   private get col() {
     return this.firebase.firestore.collection("promo_codes");
@@ -238,30 +284,6 @@ export class PromoService {
       .get();
     if (!snap.empty) return snap.docs[0].data() as PromoCode;
 
-    // Automatic referral reward promo code: Give $25 off first payment
-    if (normalised.startsWith("MC-") && (normalised.endsWith("25") || normalised.includes("25"))) {
-      return {
-        id: `promo_ref_${normalised.toLowerCase().replace(/[^a-z0-9]/g, "_")}`,
-        code: normalised,
-        percentOff: null,
-        amountOff: 2500, // $25.00 discount
-        currency: "USD",
-        duration: "once",
-        durationInMonths: null,
-        appliesToPlans: ["starter", "pro", "elite"],
-        appliesToIntervals: ["monthly", "annual"],
-        expiresAt: null,
-        maxRedemptions: null,
-        timesRedeemed: 0,
-        firstTimeOnly: false,
-        active: true,
-        kind: "standard",
-        createdAt: this.clock.nowIso(),
-        createdBy: "referral_program",
-        deactivatedAt: null,
-      };
-    }
-
     return null;
   }
 
@@ -287,6 +309,8 @@ export class PromoService {
   }): Promise<PromoValidation> {
     if (!isPaidPlanId(input.planId))
       return { ok: false, reason: "not_paid_plan" };
+    const referral = await this.referralPromo(input.code, input.uid);
+    if (referral) return referral;
     const promo = await this.findByCode(input.code);
     if (!promo) return { ok: false, reason: "not_found" };
     if (!promo.active) return { ok: false, reason: "inactive" };
