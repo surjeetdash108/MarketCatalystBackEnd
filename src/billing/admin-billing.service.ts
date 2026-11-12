@@ -264,8 +264,7 @@ export class AdminBillingService {
       // Renewal consent recorded at checkout (time, text version, plan, interval, price, IP).
       consent:
         (mirror.data()?.consent as Record<string, unknown> | undefined) ?? null,
-      // Masked except the last 4 digits; the full number only via the audited reveal.
-      phoneMasked: maskPhone((c.phone as string) ?? null),
+      phoneMasked: null,
       marketingOptIn:
         (c.marketingOptIn as Record<string, unknown> | undefined) ?? null,
       billingRegion:
@@ -289,11 +288,7 @@ export class AdminBillingService {
 
   /** Full mobile number for an admin who clicked "reveal" (the POST is audited by AdminAuditInterceptor). */
   async revealPhone(uid: string): Promise<{ phone: string | null }> {
-    const c = (
-      await this.firebase.firestore.collection("customers").doc(uid).get()
-    ).data();
-    if (!c) throw new NotFoundException("no customer record");
-    return { phone: (c.phone as string) ?? null };
+    return { phone: null };
   }
 
   async audit(limit = 200) {

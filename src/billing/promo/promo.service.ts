@@ -72,7 +72,7 @@ export type PromoValidation =
   | { ok: false; reason: PromoRejection };
 
 /** The one message shown for every rejection, so codes cannot be probed. */
-export const GENERIC_PROMO_ERROR = "This code can't be applied.";
+export const GENERIC_PROMO_ERROR = "This coupon is invalid";
 export const PROMO_ATTEMPTS_PER_HOUR = 10;
 const CODE_RE = /^[A-Z0-9][A-Z0-9_-]{2,39}$/;
 

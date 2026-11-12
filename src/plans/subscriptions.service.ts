@@ -86,16 +86,17 @@ export class SubscriptionsService {
       this.firebase.firestore.collection("users").doc(userId).get(),
     ]);
     const uData = (userSnap.data() ?? {}) as Record<string, unknown>;
-    if (!uData.email || (!uData.createdAt && !mirrorSnap.exists)) {
-      try {
-        const authUser = await this.firebase.auth.getUser(userId);
-        if (authUser.email && !uData.email) uData.email = authUser.email;
-        // Account age drives the new-account intro (Firebase Auth's own record).
-        if (authUser.metadata?.creationTime)
-          uData.accountCreatedAt = new Date(authUser.metadata.creationTime).toISOString();
-      } catch {
-        /* ignore */
+    try {
+      const authUser = await this.firebase.auth.getUser(userId);
+      if (authUser.email && !uData.email) uData.email = authUser.email;
+      if (typeof authUser.emailVerified === "boolean") {
+        uData.emailVerified = authUser.emailVerified;
       }
+      if (authUser.metadata?.creationTime && !uData.createdAt && !uData.accountCreatedAt) {
+        uData.accountCreatedAt = new Date(authUser.metadata.creationTime).toISOString();
+      }
+    } catch {
+      /* ignore */
     }
     return this.resolve(
       userId,
@@ -175,9 +176,25 @@ export class SubscriptionsService {
     // New account, never subscribed: INTRO_DAYS of the intro feature groups
     // (Market Catalyst), no card — then "Choose a plan".
     if (!mirror && !entitled) {
-      const created = Date.parse(String(u.createdAt ?? u.accountCreatedAt ?? ""));
-      const introEnd = created + INTRO_DAYS * DAY;
-      if (Number.isFinite(created) && now < introEnd) {
+      let createdMs: number = NaN;
+      if (u.createdAt) {
+        if (typeof (u.createdAt as { toMillis?: () => number }).toMillis === "function") {
+          createdMs = (u.createdAt as { toMillis: () => number }).toMillis();
+        } else if (typeof (u.createdAt as { toDate?: () => Date }).toDate === "function") {
+          createdMs = (u.createdAt as { toDate: () => Date }).toDate().getTime();
+        } else if (typeof u.createdAt === "number") {
+          createdMs = u.createdAt;
+        } else if (typeof u.createdAt === "string") {
+          createdMs = Date.parse(u.createdAt);
+        }
+      }
+      if (Number.isNaN(createdMs) && u.accountCreatedAt) {
+        createdMs = Date.parse(String(u.accountCreatedAt));
+      }
+      const introEnd = createdMs + INTRO_DAYS * DAY;
+      // User must verify email (or Google sign-in) to receive 7-day free trial intro access
+      const isVerified = u.emailVerified !== false;
+      if (Number.isFinite(createdMs) && now < introEnd && isVerified) {
         const intro = new Set(keysForGroups(INTRO_GROUPS));
         return {
           userId,
@@ -186,7 +203,7 @@ export class SubscriptionsService {
           status: "INTRO",
           storedStatus: null,
           interval: null,
-          startDate: new Date(created).toISOString(),
+          startDate: new Date(createdMs).toISOString(),
           expiryDate: new Date(introEnd).toISOString(),
           cancelAtPeriodEnd: false,
           expiredSinceLastWrite: false,

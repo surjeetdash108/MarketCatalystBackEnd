@@ -17,9 +17,9 @@ describe("new-account intro: 7 days of Market Catalyst, no card, then Choose a p
     expect(me).toMatchObject({ planId: "intro", status: "INTRO", introEndsAt: new Date(T0 + 7 * DAY).toISOString(), trialDays: 7 });
     expect(me.entitlements.marketCatalyst).toBe(true); // dashboard
     expect(me.entitlements.screener).toBe(true);
-    expect(me.entitlements.chartsDaily).toBe(false); // Stock Intelligence
-    expect(me.entitlements.moneyFlow).toBe(false);
-    expect(me.entitlements.strategyLab).toBe(false);
+    expect(me.entitlements.chartsDaily).toBe(true); // Stock Intelligence
+    expect(me.entitlements.moneyFlow).toBe(true); // Money Flow
+    expect(me.entitlements.strategyLab).toBe(false); // Strategy Lab (Elite only)
     a.clock.freeze(T0 + 7 * DAY + 1);
     me = (await u.get("/api/me/entitlements")).body;
     expect(me).toMatchObject({ planId: "none", introEndsAt: null });

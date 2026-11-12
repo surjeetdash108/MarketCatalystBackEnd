@@ -170,6 +170,13 @@ export interface ChangePreview {
   nextRenewalAmount: number;
   nextRenewalDate: string;
   lines: InvoiceLine[];
+  /** Breakdown lines extracted from the provider preview invoice. */
+  discount?: number;
+  tax?: number;
+  creditUsed?: number;
+  alreadyPaid?: number | null;
+  unusedCredit?: number;
+  newPlanCharge?: number;
 }
 
 export type ChangeResult =
@@ -266,7 +273,7 @@ export interface BillingRegion {
 /** Full billing details: passed to the provider, never stored by us (only the region is). */
 export interface BillingDetails {
   name: string;
-  phone: string;
+  phone?: string | null;
   address: {
     line1: string;
     line2: string | null;

@@ -810,14 +810,33 @@ export class FakeBillingProvider implements BillingProvider {
       };
     }
     const p = this.prorate(sub, input.target, at);
+    const c = await this.mustCustomer(sub.customerId);
+    const creditUsed =
+      input.kind === "upgrade"
+        ? Math.min(Math.max(0, p.net), c.creditBalance)
+        : 0;
+    const amountDueNow =
+      input.kind === "upgrade" ? Math.max(0, p.net - creditUsed) : 0;
+    const unusedCredit = -p.lines
+      .filter((l) => l.proration && l.amount < 0)
+      .reduce((a, l) => a + l.amount, 0);
+    const newPlanCharge = p.lines
+      .filter((l) => l.amount > 0)
+      .reduce((a, l) => a + l.amount, 0);
+
     return {
       ...base,
       kind: input.kind,
-      amountDueNow: input.kind === "upgrade" ? p.amountDue : 0,
+      amountDueNow,
       creditToBalance: input.kind === "downgrade" ? p.credit : 0,
       effectiveAt: iso(at),
       nextRenewalDate: iso(p.periodEnd),
       lines: p.lines,
+      discount: 0,
+      tax: 0,
+      creditUsed,
+      unusedCredit,
+      newPlanCharge,
     };
   }
 
@@ -863,14 +882,16 @@ export class FakeBillingProvider implements BillingProvider {
         effectiveAt: iso(at),
       };
     }
+    const c = await this.mustCustomer(sub.customerId);
+    const creditUsed = Math.min(Math.max(0, p.net), c.creditBalance);
+    const amountDue = Math.max(0, p.net - creditUsed);
     if (
       input.expectedAmountDue != null &&
-      input.expectedAmountDue !== p.amountDue
+      input.expectedAmountDue !== amountDue
     ) {
-      throw new PreviewStaleError(input.expectedAmountDue, p.amountDue);
+      throw new PreviewStaleError(input.expectedAmountDue, amountDue);
     }
-    if (p.amountDue > 0) {
-      const c = await this.mustCustomer(sub.customerId);
+    if (amountDue > 0) {
       const outcome = this.charge(c, true);
       if (outcome.ok === "action") {
         const action: FakeAction = {
@@ -880,14 +901,14 @@ export class FakeBillingProvider implements BillingProvider {
           subscriptionId: sub.id,
           target: input.target,
           prorationDate: at,
-          amountDue: p.amountDue,
+          amountDue,
         };
         await this.write(C.actions, action);
         return {
           status: "requires_action",
           actionId: action.id,
           clientSecret: null,
-          amountDue: p.amountDue,
+          amountDue,
         };
       }
       if (outcome.ok === false)
@@ -897,7 +918,7 @@ export class FakeBillingProvider implements BillingProvider {
     return {
       status: "applied",
       invoiceId,
-      amountCharged: p.amountDue,
+      amountCharged: amountDue,
       effectiveAt: iso(at),
     };
   }
@@ -932,6 +953,13 @@ export class FakeBillingProvider implements BillingProvider {
     let invoiceId: string | null = null;
     if (p.amountDue > 0 || kind === "downgrade") {
       const c = await this.mustCustomer(sub.customerId);
+      const creditUsed =
+        kind === "upgrade"
+          ? Math.min(Math.max(0, p.net), c.creditBalance)
+          : 0;
+      const amountDue =
+        kind === "upgrade" ? Math.max(0, p.net - creditUsed) : 0;
+      if (creditUsed > 0) c.creditBalance -= creditUsed;
       // A downgrade's proration invoice totals ≤ 0: the difference goes to the
       // customer balance (used automatically on the next invoices, never refunded).
       const lines =
@@ -949,15 +977,15 @@ export class FakeBillingProvider implements BillingProvider {
         billingReason: "subscription_update",
         periodStart: at,
         periodEnd: p.periodEnd,
-        subtotal: kind === "downgrade" ? 0 : p.amountDue,
+        subtotal: kind === "downgrade" ? 0 : p.net,
         discountAmount: 0,
-        creditApplied: 0,
+        creditApplied: creditUsed,
         lines,
         discount: null,
       });
       this.markPaid(inv);
       if (kind === "downgrade") c.creditBalance += p.credit;
-      else c.successfulCharges++;
+      else if (amountDue > 0) c.successfulCharges++;
       await this.write(C.customers, c);
       await this.write(C.invoices, inv);
       sub.latestInvoiceId = inv.id;
@@ -965,12 +993,19 @@ export class FakeBillingProvider implements BillingProvider {
     }
     await this.write(C.subscriptions, sub);
     if (invoiceId) {
+      const c = await this.mustCustomer(sub.customerId);
+      const creditUsed =
+        kind === "upgrade"
+          ? Math.min(Math.max(0, p.net), c.creditBalance)
+          : 0;
+      const amountDue =
+        kind === "upgrade" ? Math.max(0, p.net - creditUsed) : 0;
       await this.emit("invoice.paid", {
         uid: sub.uid,
         customerId: sub.customerId,
         subscriptionId: sub.id,
         invoiceId,
-        amount: kind === "downgrade" ? 0 : p.amountDue,
+        amount: kind === "downgrade" ? 0 : amountDue,
       });
     }
     await this.emit("subscription.updated", {
