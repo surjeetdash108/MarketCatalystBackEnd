@@ -424,8 +424,10 @@ export class BillingService {
         message: "Please agree to the renewal terms to continue.",
       });
     }
-    const phone = normaliseE164(input.phone ?? "");
-    if (!phone)
+    // The mobile number is optional; when given it must be a valid E.164 number.
+    const rawPhone = (input.phone ?? "").trim();
+    const phone = rawPhone ? normaliseE164(rawPhone) : null;
+    if (rawPhone && !phone)
       throw new BadRequestException({
         statusCode: 400,
         code: "phone_invalid",
@@ -718,7 +720,13 @@ export class BillingService {
     }
     // An upgrade is paid like a first purchase: with the card the customer
     // enters in the payment step, never by silently charging a card on file.
-    if (kind === "upgrade" && provider.name === "stripe" && !input.paymentMethodId) {
+    // ($0 upgrades — e.g. during the free trial — charge nothing, so need no card.)
+    if (
+      kind === "upgrade" &&
+      provider.name === "stripe" &&
+      (input.expectedAmountDue ?? 0) > 0 &&
+      !input.paymentMethodId
+    ) {
       throw new BadRequestException({
         statusCode: 400,
         code: "payment_method_required",
