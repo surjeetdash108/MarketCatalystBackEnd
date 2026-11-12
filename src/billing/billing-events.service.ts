@@ -547,6 +547,20 @@ export class BillingEventsService implements OnModuleInit {
           currency: next.currency ?? "USD",
           renewsAt: next.currentPeriodEnd,
         });
+      } else if (!up && !prev.scheduledChange) {
+        // An immediate downgrade (a scheduled one emailed when it was scheduled).
+        const credit =
+          this.provider && next.customerId
+            ? await this.provider.getCreditBalance(next.customerId).catch(() => null)
+            : null;
+        await this.emails.downgraded(email, {
+          fromPlanId: prev.planId,
+          planId: next.planId,
+          interval: next.interval ?? "monthly",
+          creditBalance: credit,
+          currency: next.currency ?? "USD",
+          renewsAt: next.currentPeriodEnd,
+        });
       }
     }
     if (!prev.scheduledChange && next.scheduledChange) {
@@ -575,6 +589,11 @@ export class BillingEventsService implements OnModuleInit {
         null,
         ctx,
       );
+      await this.emails.scheduledChangeCancelled(email, {
+        planId: next.planId,
+        interval: next.interval ?? "monthly",
+        renewsAt: next.currentPeriodEnd,
+      });
     }
     if (!prev.cancelAtPeriodEnd && next.cancelAtPeriodEnd) {
       await this.addHistory(
