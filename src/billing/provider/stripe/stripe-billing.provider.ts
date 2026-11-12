@@ -696,6 +696,7 @@ export class StripeBillingProvider implements BillingProvider {
     prorationDate: number;
     expectedAmountDue: number | null;
     expectedCredit?: number | null;
+    paymentMethodId?: string | null;
   }): Promise<ChangeResult> {
     const sub = await this.retrieveSub(input.subscriptionId);
     const priceId = await this.priceId(input.target.lookupKey);
@@ -758,8 +759,19 @@ export class StripeBillingProvider implements BillingProvider {
       priceId,
       input.prorationDate,
     );
+    // Upgrade: charge the card entered in the payment step for this change.
+    // Attaching it to the customer is what lets Stripe charge it (and renew
+    // the subscription); our servers only ever see the pm_ id.
+    let paymentMethod: string | undefined;
+    if (input.kind === "upgrade" && input.paymentMethodId) {
+      await this.stripe.paymentMethods.attach(input.paymentMethodId, {
+        customer: idOf(sub.customer)!,
+      });
+      paymentMethod = input.paymentMethodId;
+    }
     const updated = await this.stripe.subscriptions.update(sub.id, {
       ...p,
+      ...(paymentMethod ? { default_payment_method: paymentMethod } : {}),
       // An upgrade resumes a cancelling plan; a downgrade keeps the cancel date.
       ...(input.kind === "upgrade" ? { cancel_at_period_end: false } : {}),
       payment_behavior: "pending_if_incomplete",

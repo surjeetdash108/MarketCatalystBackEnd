@@ -78,6 +78,12 @@ export class ChangePlanDto extends PlanTargetDto {
   /** Downgrades: the credit the preview showed (must match exactly). */
   @IsOptional() @IsInt() @Min(0) expectedCredit?: number;
   @IsOptional() @IsNumber() prorationDate?: number;
+  /**
+   * Upgrades (Stripe): the payment method the customer just entered in the
+   * Payment Element for this change. Only this card is charged — never a card
+   * on file. A Stripe id (pm_…), never card data.
+   */
+  @IsOptional() @IsString() @Matches(/^pm_[A-Za-z0-9]+$/) paymentMethodId?: string;
 }
 
 export class PromoPreviewDto extends PlanTargetDto {

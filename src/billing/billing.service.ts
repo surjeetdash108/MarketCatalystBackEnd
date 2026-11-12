@@ -642,6 +642,7 @@ export class BillingService {
       expectedAmountDue?: number | null;
       expectedCredit?: number | null;
       prorationDate?: number | null;
+      paymentMethodId?: string | null;
     },
   ) {
     const { provider, m, target, kind } = await this.assertChangeable(
@@ -670,11 +671,21 @@ export class BillingService {
         message: "Preview the change before confirming it.",
       });
     }
+    // An upgrade is paid like a first purchase: with the card the customer
+    // enters in the payment step, never by silently charging a card on file.
+    if (kind === "upgrade" && provider.name === "stripe" && !input.paymentMethodId) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: "payment_method_required",
+        message: "Enter your card details to pay for the upgrade.",
+      });
+    }
     try {
       const result = await provider.changePlan({
         subscriptionId: m.subscriptionId,
         target,
         kind,
+        paymentMethodId: kind === "upgrade" ? (input.paymentMethodId ?? null) : null,
         prorationDate: input.prorationDate ?? this.clock.now(),
         expectedAmountDue: kind === "upgrade" ? input.expectedAmountDue : null,
         expectedCredit: kind === "downgrade" ? input.expectedCredit : null,
