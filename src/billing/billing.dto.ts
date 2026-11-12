@@ -77,11 +77,15 @@ export class ChangePlanDto extends PlanTargetDto {
   @IsOptional() @IsInt() @Min(0) expectedCredit?: number;
   @IsOptional() @IsNumber() prorationDate?: number;
   /**
-   * Upgrades (Stripe): the payment method the customer just entered in the
-   * Payment Element for this change. Only this card is charged — never a card
-   * on file. A Stripe id (pm_…), never card data.
+   * Every change (Stripe): the payment method the customer just entered in
+   * the Payment Element for this change. It pays anything due now and the new
+   * plan from its start — never a card on file. A Stripe id (pm_…), never card data.
    */
   @IsOptional() @IsString() @Matches(/^pm_[A-Za-z0-9]+$/) paymentMethodId?: string;
+  /** Name and billing address from the payment step (required with Stripe). */
+  @IsOptional() @ValidateNested() @Type(() => BillingDetailsDto) billing?: BillingDetailsDto;
+  /** The renewal consent for the new plan (required with Stripe). */
+  @IsOptional() @ValidateNested() @Type(() => ConsentDto) consent?: ConsentDto;
 }
 
 export class PromoPreviewDto extends PlanTargetDto {
