@@ -16,6 +16,7 @@ export const LIFETIME_ELITE_EMAILS: readonly string[] = [
   "kumar.sivasankaran12@gmail.com",
   "vinay@conyxit.com",
   "sravya@conyxit.com",
+  "andy.microinfo@gmail.com",
 ];
 
 const LIFETIME_ELITE_SET = new Set(
