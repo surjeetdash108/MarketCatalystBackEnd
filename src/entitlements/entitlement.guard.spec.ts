@@ -139,7 +139,7 @@ describe("access matrix (SUBSCRIPTIONS_ENABLED on, provider configured)", () => 
     for (const r of open) expect([key(r), await verdict(g.guard, r, "nobody")]).toEqual([key(r), 200]);
   });
 
-  it("Market Desk and Stock Intelligence on Starter; Money Flow from Pro; Strategy Lab only on Elite", async () => {
+  it("Market Catalyst and Stock Intelligence on Starter; Money Flow from Pro; Strategy Lab only on Elite", async () => {
     const at = (k: string) => ROUTES.find((r) => key(r) === k)!;
     const row = async (k: string) => Promise.all(PLANS.map((p) => verdict(g.guard, at(k), uidFor(p))));
     expect(await row("GET /market-data/recaps")).toEqual([403, 200, 200, 200]);
