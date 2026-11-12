@@ -280,7 +280,7 @@ describe("plan choice at signup and checkout", () => {
     });
     expect(second.body).toMatchObject({
       code: "promo_invalid",
-      message: "This code can't be applied.",
+      message: "This coupon is invalid",
     });
     expect(
       (

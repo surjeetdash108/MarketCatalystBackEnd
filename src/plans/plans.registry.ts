@@ -567,7 +567,11 @@ export const TRIAL_DAYS = 7;
  * groups (no card), then "Choose a plan". Counted from account creation.
  */
 export const INTRO_DAYS = 7;
-export const INTRO_GROUPS: FeatureGroupId[] = ["marketDesk"];
+export const INTRO_GROUPS: FeatureGroupId[] = [
+  "marketDesk",
+  "stockIntelligence",
+  "moneyFlow",
+];
 export const INTRO_PLAN_ID = "intro";
 /** @deprecated There is no default plan any more; kept as an alias of NO_PLAN_ID. */
 export const DEFAULT_PLAN_ID = NO_PLAN_ID;
