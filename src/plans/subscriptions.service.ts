@@ -2,7 +2,6 @@ import { Injectable, Optional } from "@nestjs/common";
 import { AppClock } from "../common/app-clock";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { PlansService } from "./plans.service";
-import { isLifetimeElite } from "./lifetime-elite";
 import {
   DEFAULT_PLAN_ID,
   ENTITLEMENT_KEYS,
@@ -116,29 +115,6 @@ export class SubscriptionsService {
     u: Record<string, unknown>,
     mirror: SubscriptionMirror | null = null,
   ): Promise<EffectiveSubscription> {
-    if (isLifetimeElite((u.email as string) ?? null)) {
-      const plan = await this.plans.get("elite");
-      return {
-        userId,
-        planId: "elite",
-        planName: plan?.name ?? "Elite",
-        status: "ACTIVE",
-        storedStatus: "ACTIVE",
-        interval: mirror?.interval ?? "annual",
-        startDate: mirror?.startedAt ?? mirror?.currentPeriodStart ?? null,
-        expiryDate: null,
-        cancelAtPeriodEnd: false,
-        expiredSinceLastWrite: false,
-        daysRemaining: null,
-        inGrace: false,
-        graceEndsAt: null,
-        entitled: true,
-        entitlements: Object.fromEntries(
-          ENTITLEMENT_KEYS.map((k) => [k, true]),
-        ) as Record<EntitlementKey, boolean>,
-      };
-    }
-
     const now = this.clock.now();
     const storedStatus: SubscriptionStatus | null = mirror?.status ?? null;
     const end = mirror?.currentPeriodEnd

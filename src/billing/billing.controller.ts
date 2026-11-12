@@ -40,7 +40,6 @@ import { ReferralService } from "./referral/referral.service";
 import { PromoService } from "./promo/promo.service";
 import { AuthToken, type AuthTokenInfo } from "../common/auth-token";
 import { StaffAccessService } from "../account/staff-access.service";
-import { isLifetimeElite } from "../plans/lifetime-elite";
 import {
   CheckoutPreviewInterceptor,
   inCheckoutPreview,
@@ -84,13 +83,6 @@ export class BillingController {
         statusCode: 409,
         code: "staff_access",
         message: "Staff accounts have full access and are never billed.",
-      });
-    }
-    if (isLifetimeElite(token?.email)) {
-      throw new ConflictException({
-        statusCode: 409,
-        code: "lifetime_elite",
-        message: "Your account has complimentary lifetime Elite access and is never billed.",
       });
     }
   }
@@ -243,31 +235,6 @@ export class BillingController {
 
   @Get("summary")
   summary(@CurrentUser() uid: string, @AuthToken() token?: AuthTokenInfo) {
-    if (isLifetimeElite(token?.email)) {
-      return {
-        subscriptionsLive: true,
-        paidPlansAvailable: true,
-        checkoutPreview: false,
-        provider: "none",
-        planId: "elite",
-        planName: "Elite",
-        status: "ACTIVE",
-        interval: "annual",
-        source: "lifetime",
-        creditBalance: 0,
-        currentPeriodStart: null,
-        currentPeriodEnd: null,
-        cancelAtPeriodEnd: false,
-        renewsAt: null,
-        endsAt: null,
-        inGrace: false,
-        graceEndsAt: null,
-        scheduledChange: null,
-        discount: null,
-        nextCharge: null,
-        hasBillingAccount: false,
-      };
-    }
     return this.billing.summary(uid);
   }
 
@@ -370,7 +337,6 @@ export class MeEntitlementsController {
     @AuthToken() token?: AuthTokenInfo,
   ) {
     const live = await this.access.subscriptionsLive();
-    if (isLifetimeElite(token?.email)) return this.lifetimeEliteEntitlements(live);
     const effective = await this.subscriptions.forUser(uid);
     if (await this.staff.isStaff(token)) {
       const base = this.staffEntitlements(live);
@@ -419,32 +385,6 @@ export class MeEntitlementsController {
       limits: live
         ? (plan?.limits ?? { watchlistTickers: null })
         : { watchlistTickers: null },
-    };
-  }
-
-  /** Lifetime Elite: every built feature (Elite and above), no limits, never billed. */
-  private lifetimeEliteEntitlements(live: boolean) {
-    const built = ENTITLEMENTS.filter((e) => !e.unbuilt && !e.staffOnly);
-    return {
-      subscriptionsEnabled: live,
-      paidPlansAvailable: live,
-      checkoutPreview: false,
-      providerConnected: this.access.providerName !== "none",
-      provider: this.access.providerName,
-      planId: "elite",
-      planName: "Elite",
-      status: "ACTIVE",
-      interval: "annual",
-      cancelAtPeriodEnd: false,
-      currentPeriodEnd: null,
-      inGrace: false,
-      graceEndsAt: null,
-      entitlements: Object.fromEntries(built.map((e) => [e.key, true])),
-      requiredPlan: Object.fromEntries(
-        built.map((e) => [e.key, lowestPlanFor(e.key)?.id ?? null]),
-      ),
-      hidden: ENTITLEMENTS.filter((e) => e.unbuilt).map((e) => e.key),
-      limits: { watchlistTickers: null },
     };
   }
 
