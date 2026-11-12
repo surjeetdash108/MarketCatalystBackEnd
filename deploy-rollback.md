@@ -24,3 +24,10 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - UI hosting version: `c4bf923508805367` (logout fix)
 - Website build: `build-2026-11-12-001` (b0a3af7)
 - Firestore rules: `d87ae866-8526-484f-be61-71a0cb1873b2` (unchanged by this deploy)
+
+## 2026-11-13 — Lifetime Elite → staff deploy (rollback values captured before)
+- backend worker: `market-catalyst-backend-00305-kc6`
+- live API: `market-catalyst-live-00253-ldx`
+- jobs image: `us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:f5caa19be18bcde0321a5ba332124b69de4829e5b87a17af6baf259377435c0d`
+- UI hosting version: `c986e35056103a26`
+- Staff list now 15 emails (the 13 former Lifetime Elite + sanjay.halle@inc108.com); to undo, roll back code first, the staff entries are harmless.
