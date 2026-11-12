@@ -1,5 +1,4 @@
 import { StaffAccessService } from "../account/staff-access.service";
-import { isLifetimeElite } from "../plans/lifetime-elite";
 import type { AuthTokenInfo } from "../common/auth-token";
 import {
   CanActivate,
@@ -109,7 +108,6 @@ export class EntitlementGuard implements CanActivate {
     if (!(await this.access.subscriptionsLive())) return true; // flag off or no provider: today's behaviour
     if (!req.uid) await this.auth.canActivate(ctx); // authenticate first (global guards run before controller guards)
     if (await this.staff.isStaff(req.authToken)) return true; // staff: every route
-    if (isLifetimeElite(req.authToken?.email)) return true; // lifetime elite: every route
     const effective = await this.effective(req.uid!);
     if (keys.some((k) => effective.entitlements[k] === true)) return true;
     const plan = lowestPlanFor(keys[0]);

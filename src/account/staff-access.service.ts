@@ -1,7 +1,6 @@
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import type { AuthTokenInfo } from "../common/auth-token";
-import { isLifetimeElite } from "../plans/lifetime-elite";
 
 /**
  * Staff full access. WHO is staff lives only in Firestore config/staff_access
@@ -88,31 +87,19 @@ export class StaffAccessService {
       email: u.email ?? null,
       emailVerified: u.emailVerified === true,
     });
-    const lifetime = isLifetimeElite(u.email);
     const claims = {
       ...((u.customClaims as Record<string, unknown> | undefined) ?? {}),
     };
     let changed = false;
-    if (lifetime) {
-      if (claims.plan !== "elite") {
-        claims.plan = "elite";
-        changed = true;
-      }
-      if (claims.staff !== true) {
-        claims.staff = true;
-        changed = true;
-      }
-    } else {
-      if ((claims.staff === true) !== staff) {
-        if (staff) claims.staff = true;
-        else delete claims.staff;
-        changed = true;
-      }
+    if ((claims.staff === true) !== staff) {
+      if (staff) claims.staff = true;
+      else delete claims.staff;
+      changed = true;
     }
     if (changed) {
       await this.firebase.auth.setCustomUserClaims(uid, claims);
     }
-    return { staff: staff || lifetime, changed };
+    return { staff, changed };
   }
 
   async add(email: string): Promise<string[]> {
