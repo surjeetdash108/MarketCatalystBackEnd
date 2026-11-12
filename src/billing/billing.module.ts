@@ -19,6 +19,7 @@ import { RetentionService } from "./retention/retention.service";
 import { AdminBillingController } from "./admin-billing.controller";
 import { AdminBillingService } from "./admin-billing.service";
 import { BillingReconcileJob } from "./reconcile.job";
+import { ReferralService } from "./referral/referral.service";
 
 @Module({
   imports: [PlansModule],
@@ -37,6 +38,7 @@ import { BillingReconcileJob } from "./reconcile.job";
     RetentionService,
     AdminBillingService,
     BillingReconcileJob,
+    ReferralService,
     RefundService,
     CheckoutPreviewService,
     CheckoutPreviewInterceptor,

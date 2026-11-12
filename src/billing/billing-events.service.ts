@@ -5,8 +5,10 @@ import {
   Injectable,
   Logger,
   OnModuleInit,
+  Optional,
   ServiceUnavailableException,
 } from "@nestjs/common";
+import { ReferralService } from "./referral/referral.service";
 import { AppClock } from "../common/app-clock";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import {
@@ -133,6 +135,7 @@ export class BillingEventsService implements OnModuleInit {
     private readonly subscriptions: SubscriptionsService,
     private readonly emails: EmailService,
     private readonly clock: AppClock,
+    @Optional() private readonly referrals?: ReferralService,
   ) {}
 
   onModuleInit(): void {
@@ -532,28 +535,6 @@ export class BillingEventsService implements OnModuleInit {
         ctx,
       );
 
-      // Reward referrer with $25 credit on customer balance
-      if (next.promoCode?.startsWith("MC-")) {
-        try {
-          const prefix = next.promoCode.replace(/^MC-/, "").replace(/25$/, "").toLowerCase();
-          const userSnap = await this.db.collection("users").get();
-          const referrerDoc = userSnap.docs.find((d) => d.id.toLowerCase().startsWith(prefix));
-          if (referrerDoc) {
-            const refSub = await this.db.collection("subscriptions").doc(referrerDoc.id).get();
-            const customerId = refSub.data()?.customerId;
-            if (customerId && (this.provider as any)?.stripe) {
-              await (this.provider as any).stripe.customers.createBalanceTransaction(customerId, {
-                amount: -2500, // -$25.00 credit towards next invoice
-                currency: "usd",
-                description: `Referral credit: friend subscribed with code ${next.promoCode}`,
-              });
-            }
-          }
-        } catch {
-          // non-blocking
-        }
-      }
-
       return; // welcome email is sent from checkout.completed
     }
     if (prev.planId !== next.planId || prev.interval !== next.interval) {
@@ -845,11 +826,26 @@ export class BillingEventsService implements OnModuleInit {
         .collection(BILLING_COLLECTIONS.customers)
         .doc(inv.uid);
       const c = (await cref.get()).data();
-      if (!c?.firstPaidAt)
+      // The first real payment ($0 trial invoices don't count): it makes the
+      // account a returning customer, and pays out a referral reward.
+      if (!c?.firstPaidAt && inv.amountPaid > 0) {
         await cref.set(
           { firstPaidAt: inv.paidAt ?? this.clock.nowIso() },
           { merge: true },
         );
+        if (this.referrals && inv.subscriptionId) {
+          const promoCode =
+            ((await this.checkoutRecordFor(inv.subscriptionId))?.promoCode as
+              string | null | undefined) ??
+            ((
+              await this.db
+                .collection(BILLING_COLLECTIONS.subscriptions)
+                .doc(inv.uid)
+                .get()
+            ).data()?.promoCode as string | null | undefined);
+          await this.referrals.rewardForFirstPayment(inv.uid, promoCode);
+        }
+      }
       // Every receipt goes through our EmailSender (SendGrid); turn off Stripe's
       // own customer receipt emails so customers don't get two (docs/GO-LIVE.md).
       await this.emails.receipt(email, {

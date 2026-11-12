@@ -825,6 +825,24 @@ export class StripeBillingProvider implements BillingProvider {
     return bal < 0 ? -bal : 0;
   }
 
+  async addCustomerCredit(input: {
+    customerId: string;
+    amount: number;
+    currency: string;
+    description: string;
+    idempotencyKey: string;
+  }): Promise<void> {
+    await this.stripe.customers.createBalanceTransaction(
+      input.customerId,
+      {
+        amount: -Math.abs(input.amount),
+        currency: input.currency.toLowerCase(),
+        description: input.description,
+      },
+      { idempotencyKey: input.idempotencyKey },
+    );
+  }
+
   async previewChange(input: {
     subscriptionId: string;
     target: PriceRef;

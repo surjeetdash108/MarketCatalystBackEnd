@@ -778,6 +778,22 @@ export class FakeBillingProvider implements BillingProvider {
     };
   }
 
+  private readonly creditKeys = new Set<string>();
+
+  async addCustomerCredit(input: {
+    customerId: string;
+    amount: number;
+    currency: string;
+    description: string;
+    idempotencyKey: string;
+  }): Promise<void> {
+    if (this.creditKeys.has(input.idempotencyKey)) return;
+    this.creditKeys.add(input.idempotencyKey);
+    const c = await this.mustCustomer(input.customerId);
+    c.creditBalance += Math.abs(input.amount);
+    await this.write(C.customers, c);
+  }
+
   async getCreditBalance(customerId: string): Promise<number> {
     return (await this.mustCustomer(customerId)).creditBalance;
   }

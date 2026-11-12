@@ -825,6 +825,12 @@ export const API_CATALOG = {
     store: ["customers", "admin_audit"],
     check: { skip: "admin write (audited)" },
   },
+  "GET /api/billing/referral": {
+    summary:
+      "Refer a friend: the member's random referral code — only with an active plan (else eligible:false).",
+    store: ["referral_codes"],
+    check: { skip: "user-specific" },
+  },
   "GET /api/billing/refund": {
     summary:
       "Refund eligibility under REFUND_WINDOW_DAYS (404 when refunds are off).",

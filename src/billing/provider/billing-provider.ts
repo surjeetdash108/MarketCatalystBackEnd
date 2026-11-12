@@ -137,6 +137,14 @@ export interface BillingProvider {
   }): Promise<ChangeResult>;
   /** The customer's account credit (minor units, ≥ 0) used on future invoices. */
   getCreditBalance(customerId: string): Promise<number>;
+  /** Adds account credit (used automatically on the next invoices, never paid out). Idempotent by key. */
+  addCustomerCredit?(input: {
+    customerId: string;
+    amount: number;
+    currency: string;
+    description: string;
+    idempotencyKey: string;
+  }): Promise<void>;
   cancelScheduledChange(subscriptionId: string): Promise<void>;
   cancelAtPeriodEnd(subscriptionId: string): Promise<void>;
   resume(subscriptionId: string): Promise<void>;

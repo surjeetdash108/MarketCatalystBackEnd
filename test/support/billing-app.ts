@@ -42,6 +42,7 @@ import {
 import { EmailService } from "../../src/billing/email/email.service";
 import { FakeBillingController } from "../../src/billing/fake-billing.controller";
 import { PromoService } from "../../src/billing/promo/promo.service";
+import { ReferralService } from "../../src/billing/referral/referral.service";
 import { BILLING_PROVIDER } from "../../src/billing/provider/billing-provider";
 import { FakeBillingProvider } from "../../src/billing/provider/fake/fake-billing.provider";
 import { BillingReconcileJob } from "../../src/billing/reconcile.job";
@@ -183,6 +184,7 @@ export async function billingApp(opts: BillingAppOptions = {}) {
       BillingEventsService,
       BillingService,
       PromoService,
+      ReferralService,
       RetentionService,
       AdminBillingService,
       BillingReconcileJob,
