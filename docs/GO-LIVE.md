@@ -33,7 +33,7 @@ Guard rails (enforced in code, tested):
    - **Secret key:** click **Reveal test key** and copy the `sk_test_…` value. Don't paste it anywhere except the `read -rs` prompt below.
 3. **Developers → Webhooks → Add endpoint:**
    - Endpoint URL: `https://app.marketcatalyst.ai/api/billing/webhook`.
-   - Events (`STRIPE_EVENT_MAP` lists these, and the seed prints the same list): `checkout.session.completed`, `checkout.session.expired`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`, `invoice.upcoming`, `charge.refunded`, `charge.dispute.created`.
+   - Events (`STRIPE_EVENT_MAP` lists these, and the seed prints the same list): `checkout.session.completed`, `checkout.session.expired`, `setup_intent.succeeded`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`, `invoice.upcoming`, `charge.refunded`, `charge.dispute.created`.
    - Save, then **Signing secret → Reveal** and copy the `whsec_…` value.
 4. Do the test-mode dashboard settings in section 2 (Stripe Tax with a Texas registration, payment methods Card + Link, customer emails off).
 
@@ -193,7 +193,7 @@ Toggle **Test mode** on (top right) for everything below. Repeat it in live mode
 6. **Customer Portal:** created by the seed script (card update and invoice history only; cancelling and plan changes stay in our app so the retention offer runs).
 7. **Webhook:** Developers → Webhooks → **Add endpoint**.
    - URL: `https://app.marketcatalyst.ai/api/billing/webhook`
-   - Events (the seed script prints the same list): `checkout.session.completed`, `checkout.session.expired`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`, `invoice.upcoming`, `charge.refunded`, `charge.dispute.created`.
+   - Events (the seed script prints the same list): `checkout.session.completed`, `checkout.session.expired`, `setup_intent.succeeded`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`, `invoice.upcoming`, `charge.refunded`, `charge.dispute.created`.
    - Copy the signing secret → `put_secret STRIPE_WEBHOOK_SECRET`.
 8. **Apple Pay / Google Pay domain:** the seed script registers `app.marketcatalyst.ai` (Settings → Payment method domains shows it).
 

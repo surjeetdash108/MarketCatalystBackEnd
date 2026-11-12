@@ -228,6 +228,12 @@ export class BillingEventsService implements OnModuleInit {
         // Stripe: the first invoice.paid IS the checkout completion — record that payment too.
         if (d.invoiceId) await this.syncInvoice(d.invoiceId, event);
         return;
+      case "checkout.card_saved":
+        // Free trial: the card is saved — start the trialing subscription
+        // (idempotent); its own events then write the mirror.
+        if (d.checkoutSessionId && this.provider)
+          await this.provider.getCheckout(d.checkoutSessionId);
+        return;
       case "checkout.expired":
         if (d.checkoutSessionId) {
           await this.db

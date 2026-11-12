@@ -95,3 +95,12 @@ describe("7-day free trial on every plan (once per email, card required)", () =>
     void checkoutBody;
   });
 });
+
+describe("card-first trial (Stripe SetupIntent)", () => {
+  it("the 'card saved' event asks the provider to start the trial subscription (idempotent there)", async () => {
+    a = await trialApp();
+    const spy = jest.spyOn(a.provider, "getCheckout").mockResolvedValue(null);
+    await a.events.handle({ id: "evt_card", type: "checkout.card_saved", created: T0, provider: "stripe", data: { uid: "u1", customerId: "cus_1", subscriptionId: null, invoiceId: null, checkoutSessionId: "seti_1", amount: 0 } } as never);
+    expect(spy).toHaveBeenCalledWith("seti_1");
+  });
+});

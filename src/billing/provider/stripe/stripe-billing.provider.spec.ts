@@ -58,6 +58,12 @@ function subObj(over: Record<string, unknown> = {}) {
   };
 }
 
+const SETI: Record<string, unknown> & { metadata: Record<string, string> } = {
+  id: "seti_1", object: "setup_intent", status: "succeeded", customer: "cus_1", client_secret: "seti_1_secret_x",
+  payment_method: "pm_card_1", created: 0,
+  metadata: { uid: "u1", planId: "pro", interval: "monthly", lookupKey: "pro_monthly", trialDays: "7", coupon: "", currency: "USD" },
+};
+
 function mockClient() {
   const calls: Record<string, unknown[]> = {};
   const rec = (name: string, ret: unknown) =>
@@ -86,6 +92,17 @@ function mockClient() {
     },
     paymentMethods: {
       attach: rec("paymentMethods.attach", (id: string) => ({ id })),
+    },
+    setupIntents: {
+      create: rec("setupIntents.create", (p: { customer: string; metadata: Record<string, string> }) => ({
+        id: "seti_1", object: "setup_intent", status: "requires_payment_method", customer: p.customer,
+        client_secret: "seti_1_secret_x", metadata: p.metadata, created: T, payment_method: null,
+      })),
+      retrieve: rec("setupIntents.retrieve", () => ({ ...SETI })),
+      update: rec("setupIntents.update", (id: string, p: { metadata: Record<string, string> }) => {
+        SETI.metadata = p.metadata;
+        return { ...SETI, id };
+      }),
     },
     coupons: {
       retrieve: jest.fn(() =>
@@ -207,19 +224,43 @@ function signed(event: object) {
 }
 
 describe("StripeBillingProvider — embedded checkout", () => {
-  it("free trial: trial_period_days on any plan, cancels at trial end without a card, SetupIntent secret returned; none without trialDays", async () => {
+  it("free trial is card-first: checkout saves the card with a SetupIntent (no subscription, nothing charged yet)", async () => {
     const { p, m } = provider();
-    await p.createCheckout({ uid: "u1", customerId: "cus_1", price: PRO_M, discount: null, successUrl: "s", cancelUrl: "c", idempotencyKey: "k1", trialDays: 7 });
-    const [args] = m.calls["subscriptions.create"].at(-1) as [Record<string, unknown>];
-    expect(args).toMatchObject({
-      trial_period_days: 7,
-      trial_settings: { end_behavior: { missing_payment_method: "cancel" } },
-      expand: expect.arrayContaining(["pending_setup_intent"]),
-    });
+    const s1 = await p.createCheckout({ uid: "u1", customerId: "cus_1", price: PRO_M, discount: null, successUrl: "s/{CHECKOUT_SESSION_ID}", cancelUrl: "c", idempotencyKey: "k1", trialDays: 7 });
+    expect(m.calls["setupIntents.create"][0][0]).toMatchObject({ customer: "cus_1", usage: "off_session", metadata: { uid: "u1", planId: "pro", lookupKey: "pro_monthly", trialDays: "7" } });
+    expect(m.calls["subscriptions.create"] ?? []).toEqual([]);
+    expect(s1).toMatchObject({ id: "seti_1", status: "open", amountDueToday: 0, clientSecret: "seti_1_secret_x", subscriptionId: null, successUrl: "s/seti_1" });
     await p.createCheckout({ uid: "u1", customerId: "cus_1", price: STARTER_M, discount: null, successUrl: "s", cancelUrl: "c", idempotencyKey: "k2" });
     const [noTrial] = m.calls["subscriptions.create"].at(-1) as [Record<string, unknown>];
     expect(noTrial.trial_period_days).toBeUndefined();
-    expect(noTrial.trial_settings).toBeUndefined();
+  });
+
+  it("once the card is saved, the trial subscription starts with that card (idempotent; cancels at trial end if the card is removed)", async () => {
+    SETI.metadata = { uid: "u1", planId: "pro", interval: "monthly", lookupKey: "pro_monthly", trialDays: "7", coupon: "", currency: "USD" };
+    const { p, m } = provider();
+    const s1 = await p.getCheckout("seti_1");
+    const [args, opts] = m.calls["subscriptions.create"].at(-1) as [Record<string, unknown>, Record<string, unknown>];
+    expect(args).toMatchObject({
+      customer: "cus_1",
+      default_payment_method: "pm_card_1",
+      trial_period_days: 7,
+      trial_settings: { end_behavior: { missing_payment_method: "cancel" } },
+      metadata: { uid: "u1", planId: "pro", setupIntentId: "seti_1" },
+    });
+    expect(opts).toEqual({ idempotencyKey: "trial-seti_1" });
+    expect(s1).toMatchObject({ status: "complete", subscriptionId: expect.any(String) });
+    const before = m.calls["subscriptions.create"].length;
+    await p.getCheckout("seti_1"); // already started: no second subscription
+    expect(m.calls["subscriptions.create"].length).toBe(before);
+  });
+
+  it("webhook: setup_intent.succeeded for a trial is 'card saved'; other setup intents are ignored", async () => {
+    const { p } = provider();
+    const ev = (object: object) => ({ id: "evt_si", object: "event", type: "setup_intent.succeeded", created: T, livemode: false, data: { object } });
+    const ours = signed(ev({ ...SETI, metadata: { planId: "pro", uid: "u1" } }));
+    expect(await p.parseEvent(ours.payload, ours.header)).toMatchObject({ type: "checkout.card_saved", data: { checkoutSessionId: "seti_1", uid: "u1" } });
+    const other = signed(ev({ ...SETI, metadata: {} }));
+    expect(await p.parseEvent(other.payload, other.header)).toBeNull();
   });
 
   it("creates an incomplete subscription with automatic tax, the address/phone on the customer, and returns the confirmation secret", async () => {

@@ -224,6 +224,8 @@ export interface PromoMirror {
 
 export type ProviderEventType =
   | "checkout.completed"
+  /** The card for a free trial was saved (Stripe SetupIntent): start the trial subscription. */
+  | "checkout.card_saved"
   | "checkout.expired"
   | "subscription.created"
   | "subscription.updated"
