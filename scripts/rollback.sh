@@ -8,7 +8,7 @@ RUN=echo; [[ "${1:-}" == "--execute" ]] && RUN=""
 # A real token only when executing; the dry run never fetches or prints one.
 tok() { if [[ -z "$RUN" ]]; then gcloud auth print-access-token; else echo "<token>"; fi; }
 $RUN gcloud run services update-traffic market-catalyst-backend --to-revisions=market-catalyst-backend-00303-s7c=100 --region $R --project $P
-$RUN gcloud run services update-traffic market-catalyst-live --to-revisions=market-catalyst-live-00250-fds=100 --region $R --project $P
+$RUN gcloud run services update-traffic market-catalyst-live --to-revisions=market-catalyst-live-00251-rg5=100 --region $R --project $P
 $RUN gcloud run jobs update premarket-job --image us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:4242d372816343f5e4536733ee7138f7996cb8c345ae2e1667964a117e424361 --region $R --project $P
 $RUN gcloud run jobs update history-backfill-job --image us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:4242d372816343f5e4536733ee7138f7996cb8c345ae2e1667964a117e424361 --region $R --project $P
 # Firestore rules: point each release back at its previous ruleset.
