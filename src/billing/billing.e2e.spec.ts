@@ -621,7 +621,7 @@ describe("retention offer", () => {
         percentOff: 50,
         months: 2,
         headline:
-          "Before you go: 50% off for the next 2 months. Still want to cancel?",
+          "Keep your plan for 50% off for the next 2 months",
       },
     });
     await u.post("/api/billing/cancel");
@@ -673,6 +673,15 @@ describe("retention offer", () => {
     expect(
       (await u.get("/api/billing/invoices")).body.invoices[0],
     ).toMatchObject({ amount: 51920, creditApplied: 4720 });
+  });
+
+  it("annual with a lower plan scheduled: the credit is 50% of two months of the plan that renews (Starter), not the current one (Elite)", async () => {
+    a = await billingApp();
+    const { u } = await a.subscribe("u1", "elite", "annual");
+    expect((await u.post("/api/billing/change", { planId: "starter", interval: "annual" })).body.status).toBe("scheduled");
+    const offer = (await u.get("/api/billing/retention")).body.offer;
+    expect(offer).toMatchObject({ mode: "balance_credit", creditAmount: 3120, headline: "Keep your plan for 50% off for the next 2 months" });
+    expect(offer.description).toBe("A credit of $31.20 will be applied at your next renewal");
   });
 
   it("once per email ever: a new account with the same email (or a gmail variant) gets no offer", async () => {
