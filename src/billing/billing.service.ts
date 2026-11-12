@@ -7,6 +7,7 @@ import {
 } from "./provider/fake/fake-billing.provider";
 import { refundPolicy } from "./refund/refund-policy";
 import { emailHash } from "./retention/email-normalise";
+import { buildTimeline } from "./history-format";
 import { EmailVerificationService } from "../account/email-verification.service";
 import {
   BadRequestException,
@@ -961,6 +962,18 @@ export class BillingService {
         return true;
       })
       .sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  }
+
+  /** The plan history page: plan changes, trials, charges, credits and refunds, newest first, with exact timestamps. */
+  async timeline(uid: string) {
+    const [events, payments] = await Promise.all([
+      this.history(uid),
+      this.db.collection("payments").where("userId", "==", uid).get(),
+    ]);
+    return buildTimeline(
+      events as Array<Record<string, unknown>>,
+      payments.docs.map((d) => d.data()),
+    );
   }
 
   async portal(uid: string) {

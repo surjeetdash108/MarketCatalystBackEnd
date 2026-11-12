@@ -295,6 +295,11 @@ export class BillingController {
   async history(@CurrentUser() uid: string) {
     return { history: await this.billing.history(uid) };
   }
+  @Get("timeline")
+  timeline(@CurrentUser() uid: string) {
+    return this.billing.timeline(uid).then((entries) => ({ entries }));
+  }
+
 
   @Post("portal")
   @HttpCode(200)

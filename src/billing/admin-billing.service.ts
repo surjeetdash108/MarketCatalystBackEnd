@@ -21,6 +21,7 @@ import {
 } from "../plans/subscriptions.service";
 import { EmailService } from "./email/email.service";
 import { isTestRecord } from "./livemode";
+import { buildTimeline } from "./history-format";
 
 /**
  * Admin read-models over the billing collections. Revenue and MRR come only
@@ -273,6 +274,11 @@ export class AdminBillingService {
         .sort((a, b) =>
           String(b.paymentDate).localeCompare(String(a.paymentDate)),
         ),
+      /** Same plain-language timeline the customer sees (plan changes + payments, exact timestamps). */
+      timeline: buildTimeline(
+        history.docs.map((d) => d.data()),
+        payments.docs.map((d) => d.data()),
+      ),
       history: history.docs
         .map((d) => d.data())
         .sort((a, b) => String(b.at).localeCompare(String(a.at))),
