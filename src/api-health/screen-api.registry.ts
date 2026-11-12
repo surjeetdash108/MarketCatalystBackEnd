@@ -891,6 +891,10 @@ export const API_CATALOG = {
     summary: "Who redeemed a promo code.",
     store: ["backend-only billing collections"],
   },
+  "GET /api/admin/billing/abandoned": {
+    summary: "Lists users who initiated checkout or signup but did not complete payment.",
+    store: ["backend-only billing collections"],
+  },
   "GET /api/admin/billing/audit": {
     summary: "The admin audit log (every admin write).",
     params: "query: limit",

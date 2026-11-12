@@ -116,6 +116,8 @@ export interface BillingProvider {
     prorationDate: number;
     expectedAmountDue: number | null;
     expectedCredit?: number | null;
+    /** Upgrades: the payment method entered for this change (Stripe); charged instead of any card on file. */
+    paymentMethodId?: string | null;
   }): Promise<ChangeResult>;
   /** The customer's account credit (minor units, ≥ 0) used on future invoices. */
   getCreditBalance(customerId: string): Promise<number>;

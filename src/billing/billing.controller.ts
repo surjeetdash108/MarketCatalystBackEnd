@@ -123,6 +123,22 @@ export class BillingController {
     @Req() req: Request,
   ) {
     await this.refuseStaff(token);
+    try {
+      const email = await this.email(uid);
+      await this.firebase.firestore.collection("abandoned_checkouts").doc(uid).set(
+        {
+          uid,
+          email,
+          planId: body.planId,
+          interval: body.interval,
+          step: "Step 2: Checkout",
+          at: new Date().toISOString(),
+        },
+        { merge: true },
+      );
+    } catch {
+      /* non-blocking */
+    }
     return this.billing.checkoutPreview(uid, clientIp(req), body);
   }
 
@@ -348,8 +364,17 @@ export class MeEntitlementsController {
   ) {
     const live = await this.access.subscriptionsLive();
     if (isLifetimeElite(token?.email)) return this.lifetimeEliteEntitlements(live);
-    if (await this.staff.isStaff(token)) return this.staffEntitlements(live);
     const effective = await this.subscriptions.forUser(uid);
+    if (await this.staff.isStaff(token)) {
+      const base = this.staffEntitlements(live);
+      return {
+        ...base,
+        subscriptionPlanId:
+          effective.status === "ACTIVE" || effective.status === "TRIALING"
+            ? effective.planId
+            : null,
+      };
+    }
     const built = ENTITLEMENTS.filter((e) => !e.unbuilt && !e.staffOnly);
     // Flag off (or no provider): everyone keeps today's access to every built feature.
     const entitlements = Object.fromEntries(
@@ -363,6 +388,10 @@ export class MeEntitlementsController {
       subscriptionsEnabled: live,
       paidPlansAvailable: live,
       provider: this.access.providerName,
+      subscriptionPlanId:
+        effective.status === "ACTIVE" || effective.status === "TRIALING"
+          ? effective.planId
+          : null,
       planId: effective.planId,
       planName: effective.planName,
       status: effective.status,

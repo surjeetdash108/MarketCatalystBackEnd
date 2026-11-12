@@ -463,6 +463,7 @@ export class BillingEventsService implements OnModuleInit {
     await this.writeProjection(uid, next);
     await this.setPlanClaim(uid);
     await this.recordChanges(uid, prev, next, event);
+    await this.db.collection("abandoned_checkouts").doc(uid).delete().catch(() => {});
     return "processed";
   }
 
@@ -475,8 +476,10 @@ export class BillingEventsService implements OnModuleInit {
     const ctx = { eventId: event?.id, subscriptionId: next.subscriptionId };
     const email = await this.emailFor(uid);
     const samesub = prev?.subscriptionId === next.subscriptionId;
+    const nowLive = LIVE.includes(next.status);
+    const wasLive = prev ? LIVE.includes(prev.status) : false;
 
-    if (!prev || !samesub) {
+    if ((!prev || !samesub || (!wasLive && nowLive)) && nowLive) {
       await this.addHistory(
         uid,
         "subscribed",
@@ -486,6 +489,29 @@ export class BillingEventsService implements OnModuleInit {
         { planId: next.planId, interval: next.interval, status: next.status },
         ctx,
       );
+
+      // Reward referrer with $25 credit on customer balance
+      if (next.promoCode?.startsWith("MC-")) {
+        try {
+          const prefix = next.promoCode.replace(/^MC-/, "").replace(/25$/, "").toLowerCase();
+          const userSnap = await this.db.collection("users").get();
+          const referrerDoc = userSnap.docs.find((d) => d.id.toLowerCase().startsWith(prefix));
+          if (referrerDoc) {
+            const refSub = await this.db.collection("subscriptions").doc(referrerDoc.id).get();
+            const customerId = refSub.data()?.customerId;
+            if (customerId && (this.provider as any)?.stripe) {
+              await (this.provider as any).stripe.customers.createBalanceTransaction(customerId, {
+                amount: -2500, // -$25.00 credit towards next invoice
+                currency: "usd",
+                description: `Referral credit: friend subscribed with code ${next.promoCode}`,
+              });
+            }
+          }
+        } catch {
+          // non-blocking
+        }
+      }
+
       return; // welcome email is sent from checkout.completed
     }
     if (prev.planId !== next.planId || prev.interval !== next.interval) {

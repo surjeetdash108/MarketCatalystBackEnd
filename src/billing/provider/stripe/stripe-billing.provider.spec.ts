@@ -84,6 +84,9 @@ function mockClient() {
       update: rec("customers.update", {}),
       createBalanceTransaction: rec("customers.createBalanceTransaction", {}),
     },
+    paymentMethods: {
+      attach: rec("paymentMethods.attach", (id: string) => ({ id })),
+    },
     coupons: {
       retrieve: jest.fn(() =>
         Promise.reject(
@@ -460,6 +463,21 @@ describe("StripeBillingProvider — subscriptions and plan changes", () => {
       metadata: { planId: "elite" },
     });
     expect(upd.billing_cycle_anchor).toBeUndefined();
+  });
+
+  it("upgrade with the card entered in the payment step: that card is attached and charged (default_payment_method), not a card on file", async () => {
+    const { p, m } = provider();
+    await p.changePlan({
+      subscriptionId: "sub_1",
+      target: ELITE_M,
+      kind: "upgrade",
+      prorationDate: T * 1000,
+      expectedAmountDue: null,
+      paymentMethodId: "pm_new123",
+    });
+    expect(m.calls["paymentMethods.attach"][0]).toEqual(["pm_new123", { customer: "cus_1" }]);
+    const [, upd] = m.calls["subscriptions.update"].at(-1) as [string, Record<string, unknown>];
+    expect(upd).toMatchObject({ default_payment_method: "pm_new123", payment_behavior: "pending_if_incomplete" });
   });
 
   it("upgrade needing 3-D Secure returns the client secret; monthly→annual restarts the period", async () => {

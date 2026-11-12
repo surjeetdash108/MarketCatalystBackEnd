@@ -642,6 +642,7 @@ export class BillingService {
       expectedAmountDue?: number | null;
       expectedCredit?: number | null;
       prorationDate?: number | null;
+      paymentMethodId?: string | null;
     },
   ) {
     const { provider, m, target, kind } = await this.assertChangeable(
@@ -670,11 +671,21 @@ export class BillingService {
         message: "Preview the change before confirming it.",
       });
     }
+    // An upgrade is paid like a first purchase: with the card the customer
+    // enters in the payment step, never by silently charging a card on file.
+    if (kind === "upgrade" && provider.name === "stripe" && !input.paymentMethodId) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: "payment_method_required",
+        message: "Enter your card details to pay for the upgrade.",
+      });
+    }
     try {
       const result = await provider.changePlan({
         subscriptionId: m.subscriptionId,
         target,
         kind,
+        paymentMethodId: kind === "upgrade" ? (input.paymentMethodId ?? null) : null,
         prorationDate: input.prorationDate ?? this.clock.now(),
         expectedAmountDue: kind === "upgrade" ? input.expectedAmountDue : null,
         expectedCredit: kind === "downgrade" ? input.expectedCredit : null,
@@ -806,7 +817,7 @@ export class BillingService {
       planId: effective.planId,
       planName: effective.planName,
       status: effective.status,
-      interval: m?.interval ?? null,
+      interval: effective.planId === "none" || !LIVE.includes(m?.status) ? null : (m?.interval ?? null),
       source: m?.source ?? null,
       /** Account credit (downgrades, annual retention) used automatically on the next invoices. */
       creditBalance:
@@ -891,8 +902,20 @@ export class BillingService {
       .collection("subscription_events")
       .where("uid", "==", uid)
       .get();
+    const m = await this.mirror(uid);
+    const hasLiveSub = m && m.subscriptionId && LIVE.includes(m.status);
+
     return snap.docs
       .map((d) => d.data())
+      .filter((e) => {
+        // Filter out phantom "subscribed" events where subscription was incomplete / NONE or not live
+        if (e.type === "subscribed") {
+          const to = e.to as Record<string, unknown> | undefined;
+          if (to?.status === "NONE" || to?.status === "incomplete") return false;
+          if (!hasLiveSub && (!to?.status || to.status === "NONE")) return false;
+        }
+        return true;
+      })
       .sort((a, b) => String(b.at).localeCompare(String(a.at)));
   }
 
