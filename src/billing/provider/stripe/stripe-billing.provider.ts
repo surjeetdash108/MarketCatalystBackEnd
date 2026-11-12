@@ -327,7 +327,6 @@ export class StripeBillingProvider implements BillingProvider {
     discount: AppliedDiscount | null;
     region: BillingRegion | null;
   }): Promise<CheckoutQuote> {
-    const isStarter = input.price.planId === "starter";
     const price = await this.priceId(input.price.lookupKey);
     const coupon = input.discount
       ? await this.couponFor(input.discount, input.price.currency)
@@ -347,10 +346,7 @@ export class StripeBillingProvider implements BillingProvider {
               },
             }
           : {}),
-        subscription_details: {
-          items: [{ price }],
-          ...(isStarter ? { trial_period_days: 7 } : {}),
-        },
+        subscription_details: { items: [{ price }] },
         ...(coupon ? { discounts: [{ coupon }] } : {}),
       });
     } catch (taxErr) {
@@ -358,21 +354,19 @@ export class StripeBillingProvider implements BillingProvider {
         `Stripe preview with automatic_tax failed: ${(taxErr as Error).message}; falling back without automatic tax`,
       );
       inv = await this.stripe.invoices.createPreview({
-        subscription_details: {
-          items: [{ price }],
-          ...(isStarter ? { trial_period_days: 7 } : {}),
-        },
+        subscription_details: { items: [{ price }] },
         ...(coupon ? { discounts: [{ coupon }] } : {}),
       });
     }
     const tax = sumAmounts(inv.total_taxes);
     return {
       currency: inv.currency.toUpperCase(),
-      subtotal: isStarter ? 0 : inv.subtotal,
+      // The first charge (after any trial — the service works out "due today").
+      subtotal: inv.subtotal,
       discount: sumAmounts(inv.total_discount_amounts),
-      tax: isStarter ? 0 : tax,
-      total: isStarter ? 0 : inv.total,
-      taxLabel: tax > 0 && !isStarter ? "Sales tax" : null,
+      tax,
+      total: inv.total,
+      taxLabel: tax > 0 ? "Sales tax" : null,
       taxPending: !input.region,
     };
   }
@@ -386,6 +380,7 @@ export class StripeBillingProvider implements BillingProvider {
     cancelUrl: string;
     idempotencyKey: string;
     billing?: BillingDetails | null;
+    trialDays?: number;
   }): Promise<CheckoutSession> {
     if (input.billing) {
       // The full address stays at Stripe (it is also what Stripe Tax uses).
@@ -407,7 +402,7 @@ export class StripeBillingProvider implements BillingProvider {
     const coupon = input.discount
       ? await this.couponFor(input.discount, input.price.currency)
       : null;
-    const isStarter = input.price.planId === "starter";
+    const trial = (input.trialDays ?? 0) > 0;
     const sub = await this.stripe.subscriptions.create(
       {
         customer: input.customerId,
@@ -418,14 +413,23 @@ export class StripeBillingProvider implements BillingProvider {
           payment_method_types: this.paymentMethodTypes,
         },
         automatic_tax: { enabled: true },
-        ...(isStarter ? { trial_period_days: 7 } : {}),
+        // Trial: no charge today; the card is collected with the pending
+        // SetupIntent, and without a card the trial simply ends (no charge).
+        ...(trial
+          ? {
+              trial_period_days: input.trialDays,
+              trial_settings: {
+                end_behavior: { missing_payment_method: "cancel" as const },
+              },
+            }
+          : {}),
         ...(coupon ? { discounts: [{ coupon }] } : {}),
         metadata: {
           uid: input.uid,
           planId: input.price.planId,
           interval: input.price.interval,
         },
-        expand: isStarter
+        expand: trial
           ? [
               "latest_invoice.confirmation_secret",
               "pending_setup_intent",
@@ -452,7 +456,7 @@ export class StripeBillingProvider implements BillingProvider {
         : sub.status === "incomplete_expired"
           ? "expired"
           : "open";
-    const isStarter = (sub.metadata?.planId || cat?.planId) === "starter";
+    const trialing = sub.status === "trialing";
     const setupSecret =
       typeof sub.pending_setup_intent === "object"
         ? sub.pending_setup_intent?.client_secret
@@ -470,21 +474,23 @@ export class StripeBillingProvider implements BillingProvider {
         "monthly",
       discount: this.discountOf(sub),
       amountDueToday:
-        sub.status === "trialing" || isStarter
+        trialing
           ? 0
           : inv
             ? status === "complete"
               ? inv.amount_paid
               : inv.amount_due
             : 0,
-      tax: isStarter ? 0 : inv ? sumAmounts(inv.total_taxes) : 0,
+      tax: trialing ? 0 : inv ? sumAmounts(inv.total_taxes) : 0,
       currency: (inv?.currency ?? item?.price?.currency ?? "usd").toUpperCase(),
       expiresAt: iso(sub.created + 23 * 3600) ?? new Date().toISOString(),
       subscriptionId: sub.id,
       successUrl: successUrl.replace("{CHECKOUT_SESSION_ID}", sub.id),
       cancelUrl,
-      clientSecret:
-        inv?.confirmation_secret?.client_secret ?? setupSecret ?? null,
+      // Trial: the card is confirmed with the SetupIntent; otherwise the first invoice's payment.
+      clientSecret: trialing
+        ? (setupSecret ?? null)
+        : (inv?.confirmation_secret?.client_secret ?? setupSecret ?? null),
     };
   }
 

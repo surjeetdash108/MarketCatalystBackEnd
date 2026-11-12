@@ -20,7 +20,7 @@ export class EarningsAnnouncementsController {
     private readonly cached: CachedCollectionsService,
   ) {}
 
-  // Market Desk (plans.registry ROUTE_FEATURES): Earnings Hub and the dashboard.
+  // Market Catalyst (plans.registry ROUTE_FEATURES): Earnings Hub and the dashboard.
   @Get("earnings-announcements")
   @Header(
     "Cache-Control",

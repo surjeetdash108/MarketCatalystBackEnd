@@ -29,7 +29,7 @@ import {
 /** Short per-instance cache; plan changes are visible within this window. */
 export const ENTITLEMENT_CACHE_MS = 5_000;
 
-/** Unmapped signed-in routes default to Market Desk (route-groups.spec.ts keeps this list empty). */
+/** Unmapped signed-in routes default to Market Catalyst (route-groups.spec.ts keeps this list empty). */
 const DEFAULT_REQUIREMENT = ["marketCatalyst"];
 
 export function joinRoute(prefix: unknown, sub: unknown): string {

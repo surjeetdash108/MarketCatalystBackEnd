@@ -154,27 +154,15 @@ describe("checkout (step 2 'Complete purchase')", () => {
     ).toBe(400);
   });
 
-  it("the mobile number is required and validated (E.164)", async () => {
+  it("the mobile number is optional; when given it must be valid (E.164) — no placeholder is stored", async () => {
     a = await billingApp();
     const u = a.user("c3");
-    for (const phone of ["", "5125550147", "+1 012 555 0147"]) {
-      expect(
-        (
-          await u.post(
-            "/api/billing/checkout",
-            checkoutBody("pro", "monthly", { phone }),
-          )
-        ).body.code,
-      ).toBe("phone_invalid");
+    for (const phone of ["5125550147", "+1 012 555 0147"]) {
+      expect((await u.post("/api/billing/checkout", checkoutBody("pro", "monthly", { phone }))).body.code).toBe("phone_invalid");
     }
-    expect(
-      (
-        await u.post(
-          "/api/billing/checkout",
-          checkoutBody("pro", "monthly", { phone: undefined }),
-        )
-      ).status,
-    ).toBe(400);
+    const none = await u.post("/api/billing/checkout", checkoutBody("pro", "monthly", { phone: undefined }));
+    expect(none.status).toBe(200);
+    expect(a.fs.read("customers", "c3")?.phone ?? null).toBeNull();
   });
 
   it("a US billing address needs state and ZIP", async () => {

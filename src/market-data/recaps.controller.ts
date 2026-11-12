@@ -20,7 +20,7 @@ export class RecapsController {
     private readonly cached: CachedCollectionsService,
   ) {}
 
-  // Market Desk (plans.registry ROUTE_FEATURES): the dashboard and Recaps screen.
+  // Market Catalyst (plans.registry ROUTE_FEATURES): the dashboard and Recaps screen.
   @Get("recaps")
   @Header(
     "Cache-Control",

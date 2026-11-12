@@ -1,3 +1,4 @@
+import { emailHash } from "./retention/email-normalise";
 import {
   BadRequestException,
   Inject,
@@ -257,6 +258,15 @@ export class BillingEventsService implements OnModuleInit {
 
   // ── helpers ───────────────────────────────────────────────────────────
 
+  /** trial_claims/{emailHash}: one free trial per person, ever. Idempotent. */
+  private async claimTrial(uid: string, planId: string): Promise<void> {
+    const email = await this.emailFor(uid);
+    if (!email) return;
+    const ref = this.db.collection("trial_claims").doc(emailHash(email));
+    if ((await ref.get()).exists) return;
+    await ref.set({ uid, planId, claimedAt: this.clock.nowIso(), ...this.mode() });
+  }
+
   /** { livemode } of the active provider; nothing when there is none (trials). */
   private mode(): { livemode?: boolean } {
     return this.provider ? { livemode: this.provider.livemode } : {};
@@ -460,6 +470,9 @@ export class BillingEventsService implements OnModuleInit {
       updatedAt: this.clock.nowIso(),
     };
     await ref.set(clean(next));
+    // A provider trial uses up this person's one free trial (normalised email).
+    if (status === "TRIALING" && !(prev?.status === "TRIALING" && prev?.source === "provider"))
+      await this.claimTrial(uid, next.planId);
     await this.writeProjection(uid, next);
     await this.setPlanClaim(uid);
     await this.recordChanges(uid, prev, next, event);
@@ -534,6 +547,20 @@ export class BillingEventsService implements OnModuleInit {
           currency: next.currency ?? "USD",
           renewsAt: next.currentPeriodEnd,
         });
+      } else if (!up && !prev.scheduledChange) {
+        // An immediate downgrade (a scheduled one emailed when it was scheduled).
+        const credit =
+          this.provider && next.customerId
+            ? await this.provider.getCreditBalance(next.customerId).catch(() => null)
+            : null;
+        await this.emails.downgraded(email, {
+          fromPlanId: prev.planId,
+          planId: next.planId,
+          interval: next.interval ?? "monthly",
+          creditBalance: credit,
+          currency: next.currency ?? "USD",
+          renewsAt: next.currentPeriodEnd,
+        });
       }
     }
     if (!prev.scheduledChange && next.scheduledChange) {
@@ -562,6 +589,11 @@ export class BillingEventsService implements OnModuleInit {
         null,
         ctx,
       );
+      await this.emails.scheduledChangeCancelled(email, {
+        planId: next.planId,
+        interval: next.interval ?? "monthly",
+        renewsAt: next.currentPeriodEnd,
+      });
     }
     if (!prev.cancelAtPeriodEnd && next.cancelAtPeriodEnd) {
       await this.addHistory(
@@ -666,6 +698,9 @@ export class BillingEventsService implements OnModuleInit {
         amount: session.amountDueToday,
         currency: session.currency,
         renewsAt: sub?.currentPeriodEnd ?? this.clock.nowIso(),
+        trialEndsAt:
+          sub?.status === "trialing" ? sub.currentPeriodEnd : null,
+        renewalAmount: sub?.amount ?? null,
       });
     }
   }

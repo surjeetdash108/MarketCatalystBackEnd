@@ -5,6 +5,8 @@ export type EmailTag =
   | "welcome"
   | "upgrade"
   | "downgrade_scheduled"
+  | "downgraded"
+  | "change_cancelled"
   | "cancellation"
   | "resumed"
   | "retention_accepted"

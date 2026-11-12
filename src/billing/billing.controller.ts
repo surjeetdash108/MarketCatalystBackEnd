@@ -123,16 +123,23 @@ export class BillingController {
     @Req() req: Request,
   ) {
     await this.refuseStaff(token);
+    // Funnel record for admin ("started checkout, didn't finish"); removed by
+    // the event handler when the purchase completes.
     try {
       const email = await this.email(uid);
-      await this.firebase.firestore.collection("abandoned_checkouts").doc(uid).set(
+      const ref = this.firebase.firestore.collection("abandoned_checkouts").doc(uid);
+      const prev = (await ref.get()).data() ?? {};
+      const now = new Date().toISOString();
+      await ref.set(
         {
           uid,
           email,
           planId: body.planId,
           interval: body.interval,
-          step: "Step 2: Checkout",
-          at: new Date().toISOString(),
+          step: "Payment page",
+          at: now,
+          firstAt: (prev.firstAt as string | undefined) ?? (prev.at as string | undefined) ?? now,
+          attempts: Number(prev.attempts ?? 0) + 1,
         },
         { merge: true },
       );
@@ -295,6 +302,11 @@ export class BillingController {
   async history(@CurrentUser() uid: string) {
     return { history: await this.billing.history(uid) };
   }
+  @Get("timeline")
+  timeline(@CurrentUser() uid: string) {
+    return this.billing.timeline(uid).then((entries) => ({ entries }));
+  }
+
 
   @Post("portal")
   @HttpCode(200)
@@ -355,6 +367,7 @@ export class MeEntitlementsController {
     private readonly access: BillingAccessService,
     private readonly subscriptions: SubscriptionsService,
     private readonly staff: StaffAccessService,
+    private readonly billing: BillingService,
   ) {}
 
   @Get("entitlements")
@@ -400,6 +413,10 @@ export class MeEntitlementsController {
       currentPeriodEnd: effective.expiryDate,
       inGrace: effective.inGrace,
       graceEndsAt: effective.graceEndsAt,
+      /** New-account intro: when it ends (status "INTRO"); null otherwise. */
+      introEndsAt: effective.status === "INTRO" ? effective.expiryDate : null,
+      /** Free-trial days this person would get on a new plan (0 = none left): drives "Start your N day free trial". */
+      trialDays: await this.billing.trialDaysFor(uid).catch(() => 0),
       entitlements,
       requiredPlan: Object.fromEntries(
         built.map((e) => [e.key, lowestPlanFor(e.key)?.id ?? null]),

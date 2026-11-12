@@ -93,8 +93,25 @@ export class EmailService {
       amount: number;
       currency: string;
       renewsAt: string;
+      /** Set when the plan starts with a free trial. */
+      trialEndsAt?: string | null;
+      renewalAmount?: number | null;
     },
   ) {
+    if (p.trialEndsAt) {
+      return this.send(
+        "welcome",
+        to,
+        `Your ${planName(p.planId)} free trial has started`,
+        [
+          `Your ${planName(p.planId)} plan (${p.interval}) is active with a free trial until ${longDate(p.trialEndsAt)}. Nothing was charged today.`,
+          p.renewalAmount != null
+            ? `On ${longDate(p.trialEndsAt)} your card is charged ${money(p.renewalAmount, p.currency)} plus any applicable tax, and the plan renews ${p.interval === "annual" ? "every year" : "every month"} until you cancel.`
+            : `Your first charge is on ${longDate(p.trialEndsAt)}.`,
+          "Cancel any time before then in Manage Plan and you pay nothing.",
+        ],
+      );
+    }
     return this.send(
       "welcome",
       to,
@@ -123,6 +140,36 @@ export class EmailService {
       p.charged != null
         ? `Prorated charge today: ${money(p.charged, p.currency)}.`
         : "",
+      `Next renewal: ${longDate(p.renewsAt)}.`,
+    ]);
+  }
+
+  /** Immediate move to a lower plan: features change now; the difference is account credit. */
+  downgraded(
+    to: string,
+    p: {
+      fromPlanId: string;
+      planId: string;
+      interval: string;
+      creditBalance: number | null;
+      currency: string;
+      renewsAt: string;
+    },
+  ) {
+    return this.send("downgraded", to, `You're now on ${planName(p.planId)}`, [
+      `Your plan changed from ${planName(p.fromPlanId)} to ${planName(p.planId)} (${p.interval}) today.`,
+      `The unused part of ${planName(p.fromPlanId)} was credited to your account and is used automatically on your next invoice(s); it is not refunded to your card.`,
+      p.creditBalance != null && p.creditBalance > 0
+        ? `Your account credit is now ${money(p.creditBalance, p.currency)}.`
+        : "",
+      `Next renewal: ${longDate(p.renewsAt)}.`,
+    ]);
+  }
+
+  /** "Keep my current plan": a scheduled change was cancelled. */
+  scheduledChangeCancelled(to: string, p: { planId: string; interval: string; renewsAt: string }) {
+    return this.send("change_cancelled", to, `You're staying on ${planName(p.planId)}`, [
+      `Your scheduled plan change was cancelled. You stay on ${planName(p.planId)} (${p.interval}).`,
       `Next renewal: ${longDate(p.renewsAt)}.`,
     ]);
   }
