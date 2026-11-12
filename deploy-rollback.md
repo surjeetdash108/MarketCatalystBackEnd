@@ -1,21 +1,18 @@
 # Deploy rollback values
 
-Captured **before** the staff-checkout-preview deploy on 2026-11-10 (11:30 ET). Restore with
-`scripts/rollback.sh` (prints the commands; `--execute` runs them).
+Captured **before** the 2026-11-12 16:10 ET deploy (backend + jobs + UI from prod
+59239d9 / UI prod 8d42262). Restore with `scripts/rollback.sh` (prints the
+commands; `--execute` runs them; tokens are never printed).
 
 | What | Value before this deploy |
 |---|---|
-| market-catalyst-backend (worker) revision | `market-catalyst-backend-00296-987` |
-| market-catalyst-live revision | `market-catalyst-live-00239-g84` |
-| Service image (both services) | `us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:1bbb904ce118405cef6172abe41615fb61bc2badc2af715f7ad835e498dd240a` |
-| premarket-job image | `us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:f8b5f1222196ce036bd53f1d8aa3f89518c9b9f68545b4463febb33530cd75e3` |
-| history-backfill-job image | `us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:f8b5f1222196ce036bd53f1d8aa3f89518c9b9f68545b4463febb33530cd75e3` |
-| Firestore rules, (default) database | ruleset `612d55fe-dae3-4242-bc70-e160397016c0` (release `cloud.firestore`) |
-| Firestore rules, mc-regional | ruleset `bb613c7d-8a3d-4e96-a487-ae79227efc75` (release `cloud.firestore/mc-regional`) |
-| UI Hosting (site `marketcatalyst`) | version `1678375610c23695` (UI commit 4a37aab) |
-| Website (App Hosting `marketcatalystwebsite`) | build `build-2026-11-10-002` (Website commit d781451) |
+| market-catalyst-backend (worker) revision | `market-catalyst-backend-00303-s7c` (image `…/market-catalyst-live@sha256:c8a5d3b457b92553a0cb6ddf6a1a68204c6cf124af3a3f7f473000b051a60ac2`) |
+| market-catalyst-live revision | `market-catalyst-live-00250-fds` (image `…/market-catalyst-live@sha256:a0066b754f5ef33e6d6245e610ad610404804fd7661fe66e78b9e88293b17f05`) |
+| premarket-job image | `us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:4242d372816343f5e4536733ee7138f7996cb8c345ae2e1667964a117e424361` |
+| history-backfill-job image | same as premarket-job |
+| Firestore rules, (default) and mc-regional | ruleset `d87ae866-8526-484f-be61-71a0cb1873b2` (both releases) |
+| UI Hosting (site `marketcatalyst`) | version `bfd997ceb44f1f28` |
 
-Service env is unchanged by this deploy (code-only roll; ADMIN_REQUIRE_* overrides kept;
-BILLING_PROVIDER, SUBSCRIPTIONS_ENABLED and STRIPE_LIVE_APPROVED stay unset; CHECKOUT_PREVIEW
-stays off). Firestore rules are not redeployed (unchanged); their current rulesets are listed
-for completeness.
+Service env is not changed by this deploy (code only). Production env at capture
+time: live API has BILLING_PROVIDER=stripe, SUBSCRIPTIONS_ENABLED=true, Stripe
+secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
