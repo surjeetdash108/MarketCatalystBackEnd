@@ -230,7 +230,7 @@ class ProbeUnmapped {
 describe("403 body (global guard over a Nest app)", () => {
   let app: INestApplication;
   afterAll(() => app?.close());
-  it("is { code: plan_required, requiredPlan, entitlement, message }; unmapped routes default to Market Desk", async () => {
+  it("is { code: plan_required, requiredPlan, entitlement, message }; unmapped routes default to Market Catalyst", async () => {
     const { h } = await guardWith({ SUBSCRIPTIONS_ENABLED: "true" });
     const flags = new FeatureFlagsService(h.firebase, configOf({ SUBSCRIPTIONS_ENABLED: "true" }));
     const mod = await Test.createTestingModule({

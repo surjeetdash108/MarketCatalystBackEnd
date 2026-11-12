@@ -10,6 +10,8 @@ import {
   FEATURE_GROUPS,
   PLAN_DEFINITIONS,
   PLAN_GROUPS,
+  PLAN_CARD_BULLETS,
+  EVERY_PLAN_INCLUDES,
   RETIRED_PLAN_IDS,
   catalogPrice,
   lowestPlanFor,
@@ -46,13 +48,13 @@ describe("plan catalog", () => {
     expect(CATALOG_VERSION).toBe(3);
   });
 
-  it("plans are built from feature groups: Starter = Market Desk + Stock Intelligence, Pro + Money Flow, Elite + Strategy Lab", () => {
+  it("plans are built from feature groups: Starter = Market Catalyst + Stock Intelligence, Pro + Money Flow, Elite + Strategy Lab", () => {
     expect(PLAN_GROUPS).toEqual({
       starter: ["marketDesk", "stockIntelligence"],
       pro: ["marketDesk", "stockIntelligence", "moneyFlow"],
       elite: ["marketDesk", "stockIntelligence", "moneyFlow", "strategyLab"],
     });
-    expect(FEATURE_GROUPS.map((g) => g.name)).toEqual(["Market Desk", "Stock Intelligence", "Money Flow", "Strategy Lab"]);
+    expect(FEATURE_GROUPS.map((g) => g.name)).toEqual(["Market Catalyst", "Stock Intelligence", "Money Flow", "Strategy Lab"]);
     for (const p of PLAN_DEFINITIONS)
       for (const e of ENTITLEMENTS)
         expect([p.id, e.key, p.featureFlags[e.key]]).toEqual([
@@ -109,6 +111,13 @@ describe("plan catalog", () => {
         }
       }
     }
+  });
+
+  it("user-facing group name is Market Catalyst (never Market Desk, never abbreviations)", () => {
+    expect(FEATURE_GROUPS[0].name).toBe("Market Catalyst");
+    const copy = JSON.stringify([FEATURE_GROUPS, PLAN_CARD_BULLETS, EVERY_PLAN_INCLUDES, ENTITLEMENTS.map((e) => [e.label, e.group, e.description])]);
+    expect(copy).not.toMatch(/Market Desk/);
+    expect(copy).not.toMatch(/\b(MC|SI|MF|SL)\b/);
   });
 
   it("puts features on the plans the feature groups say", () => {

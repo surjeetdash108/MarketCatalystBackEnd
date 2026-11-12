@@ -53,11 +53,11 @@ export interface EntitlementDef {
  * could plausibly be given or denied on its own.
  */
 export const ENTITLEMENTS: EntitlementDef[] = [
-  // ── Market Desk (Starter and up) ──────────────────────────────────────────
+  // ── Market Catalyst (Starter and up) ──────────────────────────────────────────
   {
     key: "marketCatalyst",
     label: "Market Dashboard",
-    group: "Market Desk",
+    group: "Market Catalyst",
     featureGroup: "marketDesk",
     description:
       "See the main dashboard with market pulse, movers and heatmap.",
@@ -65,42 +65,42 @@ export const ENTITLEMENTS: EntitlementDef[] = [
   {
     key: "news",
     label: "News & Commentary",
-    group: "Market Desk",
+    group: "Market Catalyst",
     featureGroup: "marketDesk",
     description: "Read the live news feed and commentary screen.",
   },
   {
     key: "scanner",
     label: "Market Movers",
-    group: "Market Desk",
+    group: "Market Catalyst",
     featureGroup: "marketDesk",
     description: "See daily gainers, losers and unusual-volume lists.",
   },
   {
     key: "heatmap",
     label: "Sector Heatmap",
-    group: "Market Desk",
+    group: "Market Catalyst",
     featureGroup: "marketDesk",
     description: "View the sector and stock heatmap with day/week performance.",
   },
   {
     key: "macro",
     label: "Macro & Calendars",
-    group: "Market Desk",
+    group: "Market Catalyst",
     featureGroup: "marketDesk",
     description: "Access the economic calendar, VIX and dividend calendars.",
   },
   {
     key: "ipos",
     label: "IPO Corner",
-    group: "Market Desk",
+    group: "Market Catalyst",
     featureGroup: "marketDesk",
     description: "Browse upcoming and recent IPOs with offer prices.",
   },
   {
     key: "earningsHub",
     label: "Earnings Hub",
-    group: "Market Desk",
+    group: "Market Catalyst",
     featureGroup: "marketDesk",
     description:
       "See the earnings calendar and the latest earnings announcements.",
@@ -108,7 +108,7 @@ export const ENTITLEMENTS: EntitlementDef[] = [
   {
     key: "recaps",
     label: "Market Recaps",
-    group: "Market Desk",
+    group: "Market Catalyst",
     featureGroup: "marketDesk",
     description: "Read the daily and weekly market recaps.",
   },
@@ -131,7 +131,7 @@ export const ENTITLEMENTS: EntitlementDef[] = [
   {
     key: "watchlist",
     label: "Watchlist",
-    group: "Market Desk",
+    group: "Market Catalyst",
     featureGroup: "marketDesk",
     description: "Build and track a personal watchlist of stocks.",
   },
@@ -140,10 +140,10 @@ export const ENTITLEMENTS: EntitlementDef[] = [
   {
     key: "workspaces",
     label: "All workspaces",
-    group: "Market Desk",
+    group: "Market Catalyst",
     featureGroup: "marketDesk",
     description:
-      "Open every Market Desk workspace, including Analyst Actions, Recaps, ETF Corner and AI Companies.",
+      "Open every Market Catalyst workspace, including Analyst Actions, Recaps, ETF Corner and AI Companies.",
   },
   {
     key: "chartsIntraday",
@@ -177,7 +177,7 @@ export const ENTITLEMENTS: EntitlementDef[] = [
   {
     key: "screener",
     label: "Stock Screener",
-    group: "Market Desk",
+    group: "Market Catalyst",
     featureGroup: "marketDesk",
     description:
       "Filter the universe by growth, technical and liquidity criteria.",
@@ -185,7 +185,7 @@ export const ENTITLEMENTS: EntitlementDef[] = [
   {
     key: "ownership",
     label: "13F & Insider",
-    group: "Market Desk",
+    group: "Market Catalyst",
     featureGroup: "marketDesk",
     description: "See insider trades and institutional fund holdings.",
   },
@@ -247,7 +247,7 @@ export const ENTITLEMENTS: EntitlementDef[] = [
   {
     key: "portfolio",
     label: "Portfolio Tracking",
-    group: "Market Desk",
+    group: "Market Catalyst",
     featureGroup: "marketDesk",
     description: "Track holdings with live prices and profit/loss.",
   },
@@ -431,7 +431,7 @@ export interface FeatureGroup {
 export const FEATURE_GROUPS: FeatureGroup[] = [
   {
     id: "marketDesk",
-    name: "Market Desk",
+    name: "Market Catalyst",
     summary:
       "Every workspace: dashboard, live feed, movers, heatmap, calendar, IPOs, screener, recaps, earnings, analyst actions, 13F & insider, ETFs, AI companies, portfolio and watchlist.",
   },
@@ -609,7 +609,7 @@ export function catalogPrice(
 export type RouteRequirement = EntitlementKey[] | "bars";
 
 export const ROUTE_FEATURES: Record<string, RouteRequirement> = {
-  // Market Desk
+  // Market Catalyst
   "GET /api/feature-requests": ["marketCatalyst"],
   "POST /api/feature-requests": ["marketCatalyst"],
   "GET /api/notifications": ["marketCatalyst"],
@@ -845,7 +845,7 @@ export const CLIENT_DENIED_COLLECTIONS = [
 
 export const PLAN_CARD_BULLETS: Record<string, string[]> = {
   starter: [
-    "Market Desk: all workspaces",
+    "Market Catalyst: all workspaces",
     "Stock Intelligence and AI research",
     "Trade Builder and Trade Tracker",
   ],
@@ -864,7 +864,7 @@ export const PLAN_CARD_BULLETS: Record<string, string[]> = {
 
 /** What all three plans share — the "Every plan includes" list. */
 export const EVERY_PLAN_INCLUDES = [
-  "Market Desk — every workspace: dashboard, live feed, movers, heatmap, calendar, IPOs, screener, recaps, Earnings Hub, analyst actions, 13F & insider, ETF Corner and AI Companies",
+  "Market Catalyst — every workspace: dashboard, live feed, movers, heatmap, calendar, IPOs, screener, recaps, Earnings Hub, analyst actions, 13F & insider, ETF Corner and AI Companies",
   "Stock Intelligence — any stock's financials, ratings, peers, dividends, earnings detail and transcripts, AI research, and intraday and five-year charts with indicators",
   "Portfolio — track holdings with live prices and profit/loss",
   "Watchlist — unlimited tickers",
