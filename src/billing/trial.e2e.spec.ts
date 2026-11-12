@@ -55,7 +55,7 @@ describe("7-day free trial on every plan (once per email, card required)", () =>
     expect(p.dueToday).toBe(p.total);
     const { checkout } = await a.subscribe("second", "starter", "monthly");
     expect(checkout.body.amountDueToday).toBeGreaterThan(0);
-    expect(a.fs.read("checkout_sessions", checkout.body.sessionId)?.consent.text).toBe(consentText("starter", "monthly", 0));
+    expect((a.fs.read("checkout_sessions", checkout.body.sessionId)?.consent as { text: string }).text).toBe(consentText("starter", "monthly", 0));
   });
 
   it("cancel during the trial: never charged, access ends when the trial ends", async () => {

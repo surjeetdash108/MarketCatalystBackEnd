@@ -10,6 +10,10 @@ import {
   type BillingInterval,
   type EntitlementKey,
   type SubscriptionStatus,
+  INTRO_DAYS,
+  INTRO_GROUPS,
+  INTRO_PLAN_ID,
+  keysForGroups,
 } from "./plans.registry";
 
 /**
@@ -82,10 +86,13 @@ export class SubscriptionsService {
       this.firebase.firestore.collection("users").doc(userId).get(),
     ]);
     const uData = (userSnap.data() ?? {}) as Record<string, unknown>;
-    if (!uData.email) {
+    if (!uData.email || (!uData.createdAt && !mirrorSnap.exists)) {
       try {
         const authUser = await this.firebase.auth.getUser(userId);
-        if (authUser.email) uData.email = authUser.email;
+        if (authUser.email && !uData.email) uData.email = authUser.email;
+        // Account age drives the new-account intro (Firebase Auth's own record).
+        if (authUser.metadata?.creationTime)
+          uData.accountCreatedAt = new Date(authUser.metadata.creationTime).toISOString();
       } catch {
         /* ignore */
       }
@@ -165,6 +172,34 @@ export class SubscriptionsService {
     const effectiveStatus: SubscriptionStatus = lapsed
       ? "EXPIRED"
       : (storedStatus ?? "NONE");
+    // New account, never subscribed: INTRO_DAYS of the intro feature groups
+    // (Market Catalyst), no card — then "Choose a plan".
+    if (!mirror && !entitled) {
+      const created = Date.parse(String(u.createdAt ?? u.accountCreatedAt ?? ""));
+      const introEnd = created + INTRO_DAYS * DAY;
+      if (Number.isFinite(created) && now < introEnd) {
+        const intro = new Set(keysForGroups(INTRO_GROUPS));
+        return {
+          userId,
+          planId: INTRO_PLAN_ID,
+          planName: "Market Catalyst intro",
+          status: "INTRO",
+          storedStatus: null,
+          interval: null,
+          startDate: new Date(created).toISOString(),
+          expiryDate: new Date(introEnd).toISOString(),
+          cancelAtPeriodEnd: false,
+          expiredSinceLastWrite: false,
+          daysRemaining: Math.ceil((introEnd - now) / DAY),
+          inGrace: false,
+          graceEndsAt: null,
+          entitled: false,
+          entitlements: Object.fromEntries(
+            ENTITLEMENT_KEYS.map((k) => [k, intro.has(k)]),
+          ) as Record<EntitlementKey, boolean>,
+        };
+      }
+    }
     const planId = entitled && mirror?.planId ? mirror.planId : DEFAULT_PLAN_ID;
     const planEntitlements = await this.plans.entitlementsFor(planId);
     const plan = await this.plans.get(planId);

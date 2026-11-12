@@ -573,7 +573,14 @@ export const INTRO_PLAN_ID = "intro";
 export const DEFAULT_PLAN_ID = NO_PLAN_ID;
 
 export type SubscriptionStatus =
-  "ACTIVE" | "EXPIRED" | "CANCELLED" | "PAST_DUE" | "TRIALING" | "NONE";
+  | "ACTIVE"
+  | "EXPIRED"
+  | "CANCELLED"
+  | "PAST_DUE"
+  | "TRIALING"
+  | "NONE"
+  /** New-account intro (INTRO_DAYS of INTRO_GROUPS, no card). Never stored in a mirror. */
+  | "INTRO";
 
 /** Days a PAST_DUE subscription keeps paid access while payment is retried. */
 export const PAST_DUE_GRACE_DAYS = 7;

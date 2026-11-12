@@ -355,6 +355,7 @@ export class MeEntitlementsController {
     private readonly access: BillingAccessService,
     private readonly subscriptions: SubscriptionsService,
     private readonly staff: StaffAccessService,
+    private readonly billing: BillingService,
   ) {}
 
   @Get("entitlements")
@@ -400,6 +401,10 @@ export class MeEntitlementsController {
       currentPeriodEnd: effective.expiryDate,
       inGrace: effective.inGrace,
       graceEndsAt: effective.graceEndsAt,
+      /** New-account intro: when it ends (status "INTRO"); null otherwise. */
+      introEndsAt: effective.status === "INTRO" ? effective.expiryDate : null,
+      /** Free-trial days this person would get on a new plan (0 = none left): drives "Start your N day free trial". */
+      trialDays: await this.billing.trialDaysFor(uid).catch(() => 0),
       entitlements,
       requiredPlan: Object.fromEntries(
         built.map((e) => [e.key, lowestPlanFor(e.key)?.id ?? null]),
