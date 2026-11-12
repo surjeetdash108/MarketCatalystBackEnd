@@ -22,4 +22,5 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - live API: `market-catalyst-live-00252-zc5`
 - jobs image: `us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:1da195e8bf5249fbba0fb16ceda3b891d77c8677654a5285047af59787807436`
 - UI hosting version: `c4bf923508805367` (logout fix)
+- Website build: `build-2026-11-12-001` (b0a3af7)
 - Firestore rules: `d87ae866-8526-484f-be61-71a0cb1873b2` (unchanged by this deploy)
