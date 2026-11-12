@@ -66,6 +66,7 @@ export const STRIPE_API_VERSION = "2025-08-27.basil" as const;
 export const STRIPE_EVENT_MAP: Record<string, ProviderEventType> = {
   "checkout.session.completed": "checkout.completed",
   "checkout.session.expired": "checkout.expired",
+  "setup_intent.succeeded": "checkout.card_saved",
   "customer.subscription.created": "subscription.created",
   "customer.subscription.updated": "subscription.updated",
   "customer.subscription.deleted": "subscription.deleted",
@@ -403,6 +404,29 @@ export class StripeBillingProvider implements BillingProvider {
       ? await this.couponFor(input.discount, input.price.currency)
       : null;
     const trial = (input.trialDays ?? 0) > 0;
+    if (trial) {
+      // Card first: the trial starts only once the card is saved (SetupIntent
+      // confirmed in the Payment Element). $0 today; Stripe keeps the card and
+      // charges it when the trial ends unless the customer cancels.
+      const si = await this.stripe.setupIntents.create(
+        {
+          customer: input.customerId,
+          usage: "off_session",
+          payment_method_types: this.paymentMethodTypes,
+          metadata: {
+            uid: input.uid,
+            planId: input.price.planId,
+            interval: input.price.interval,
+            lookupKey: input.price.lookupKey,
+            trialDays: String(input.trialDays),
+            coupon: coupon ?? "",
+            currency: input.price.currency,
+          },
+        },
+        { idempotencyKey: `trial-setup-${input.idempotencyKey}` },
+      );
+      return this.trialSessionOf(si, input.successUrl, input.cancelUrl);
+    }
     const sub = await this.stripe.subscriptions.create(
       {
         customer: input.customerId,
@@ -494,7 +518,77 @@ export class StripeBillingProvider implements BillingProvider {
     };
   }
 
+  /** A free-trial checkout: its id is the SetupIntent's; complete once the trial subscription exists. */
+  private trialSessionOf(
+    si: Stripe.SetupIntent,
+    successUrl = "",
+    cancelUrl = "",
+  ): CheckoutSession {
+    const md = si.metadata ?? {};
+    const subscriptionId = md.subscriptionId || null;
+    return {
+      id: si.id,
+      url: "",
+      status:
+        subscriptionId
+          ? "complete"
+          : si.status === "canceled"
+            ? "expired"
+            : "open",
+      uid: md.uid ?? "",
+      customerId: idOf(si.customer) ?? "",
+      planId: md.planId ?? "",
+      interval: (md.interval as BillingInterval) || "monthly",
+      discount: null,
+      amountDueToday: 0,
+      tax: 0,
+      currency: (md.currency || "usd").toUpperCase(),
+      expiresAt: iso(si.created + 23 * 3600) ?? new Date().toISOString(),
+      subscriptionId,
+      successUrl: successUrl.replace("{CHECKOUT_SESSION_ID}", si.id),
+      cancelUrl,
+      clientSecret: si.client_secret ?? null,
+    };
+  }
+
+  /**
+   * After the trial's card is saved: create the trialing subscription with that
+   * card as its default payment method. Idempotent (keyed by the SetupIntent),
+   * so the webhook and a status check can both call it.
+   */
+  private async startTrialFromSetup(si: Stripe.SetupIntent): Promise<Stripe.SetupIntent> {
+    const md = si.metadata ?? {};
+    if (si.status !== "succeeded" || md.subscriptionId) return si;
+    const price = await this.priceId(md.lookupKey);
+    const sub = await this.stripe.subscriptions.create(
+      {
+        customer: idOf(si.customer)!,
+        items: [{ price }],
+        default_payment_method: idOf(si.payment_method as string | Stripe.PaymentMethod | null)!,
+        trial_period_days: Number(md.trialDays),
+        trial_settings: { end_behavior: { missing_payment_method: "cancel" } },
+        automatic_tax: { enabled: true },
+        ...(md.coupon ? { discounts: [{ coupon: md.coupon }] } : {}),
+        metadata: { uid: md.uid, planId: md.planId, interval: md.interval, setupIntentId: si.id },
+      },
+      { idempotencyKey: `trial-${si.id}` },
+    );
+    return this.stripe.setupIntents.update(si.id, {
+      metadata: { ...md, subscriptionId: sub.id },
+    });
+  }
+
   async getCheckout(sessionId: string): Promise<CheckoutSession | null> {
+    if (sessionId.startsWith("seti_")) {
+      try {
+        const si = await this.startTrialFromSetup(
+          await this.stripe.setupIntents.retrieve(sessionId),
+        );
+        return this.trialSessionOf(si);
+      } catch {
+        return null;
+      }
+    }
     try {
       return this.sessionOf(
         await this.stripe.subscriptions.retrieve(sessionId, {
@@ -1139,6 +1233,23 @@ export class StripeBillingProvider implements BillingProvider {
         },
       };
     }
+    if (obj.object === "setup_intent") {
+      const si = obj as unknown as Stripe.SetupIntent;
+      // Only our free-trial card setups (they carry the plan in metadata).
+      if (!si.metadata?.planId) return null;
+      return {
+        ...base,
+        type,
+        data: {
+          uid: si.metadata.uid ?? null,
+          customerId: idOf(si.customer),
+          subscriptionId: null,
+          invoiceId: null,
+          checkoutSessionId: si.id,
+          amount: 0,
+        },
+      };
+    }
     if (obj.object === "invoice") {
       const inv = obj as unknown as Stripe.Invoice;
       const sd = inv.parent?.subscription_details;
@@ -1162,7 +1273,9 @@ export class StripeBillingProvider implements BillingProvider {
           customerId: idOf(inv.customer),
           subscriptionId,
           invoiceId: inv.id ?? null,
-          checkoutSessionId: first ? subscriptionId : null,
+          checkoutSessionId: first
+            ? (sd?.metadata?.setupIntentId ?? subscriptionId)
+            : null,
           amount:
             type === "invoice.upcoming" ? inv.amount_due : inv.amount_paid,
         },
