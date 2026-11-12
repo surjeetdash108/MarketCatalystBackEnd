@@ -14,6 +14,7 @@ import {
   catalogPrice,
   planById,
   type BillingInterval,
+  INTRO_DAYS,
 } from "../plans/plans.registry";
 import {
   SubscriptionsService,
@@ -343,5 +344,63 @@ export class AdminBillingService {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * People who tried but didn't become subscribers, newest first:
+   *  - checkoutAbandoned: reached the payment page, never completed;
+   *  - signedUpNoPlan: created an account, never subscribed (intro or no plan).
+   * Staff and current subscribers are excluded.
+   */
+  async signupFunnel() {
+    const [users, mirrors, abandoned] = await Promise.all([
+      this.all("users"),
+      this.all("subscriptions"),
+      this.all("abandoned_checkouts", 2000),
+    ]);
+    const mirrorBy = new Map(mirrors.map((m) => [m.id, m.data]));
+    const userBy = new Map(users.map((u) => [u.id, u.data]));
+    const live = (uid: string) =>
+      ["ACTIVE", "TRIALING", "PAST_DUE"].includes(String(mirrorBy.get(uid)?.status ?? ""));
+    const isStaff = async (email: unknown) =>
+      this.staff.isListed(typeof email === "string" ? email : null);
+    const checkoutAbandoned = [];
+    for (const a of abandoned) {
+      if (live(a.id) || (await isStaff(a.data.email))) continue;
+      const u = userBy.get(a.id) ?? {};
+      checkoutAbandoned.push({
+        uid: a.id,
+        email: (a.data.email as string) ?? (u.email as string) ?? null,
+        name: (u.name as string) ?? null,
+        planId: (a.data.planId as string) ?? null,
+        interval: (a.data.interval as string) ?? null,
+        step: (a.data.step as string) ?? "Payment page",
+        firstAttemptAt: (a.data.firstAt as string) ?? (a.data.at as string) ?? null,
+        lastAttemptAt: (a.data.at as string) ?? null,
+        attempts: Number(a.data.attempts ?? 1),
+        signedUpAt: (u.createdAt as string) ?? null,
+      });
+    }
+    const abandonedIds = new Set(abandoned.map((a) => a.id));
+    const signedUpNoPlan = [];
+    for (const u of users) {
+      if (mirrorBy.has(u.id) || abandonedIds.has(u.id) || (await isStaff(u.data.email))) continue;
+      const created = typeof u.data.createdAt === "string" ? u.data.createdAt : null;
+      signedUpNoPlan.push({
+        uid: u.id,
+        email: (u.data.email as string) ?? null,
+        name: (u.data.name as string) ?? null,
+        signedUpAt: created,
+        introEndsAt: created
+          ? new Date(Date.parse(created) + INTRO_DAYS * DAY).toISOString()
+          : null,
+      });
+    }
+    const byNewest = <T extends Record<string, unknown>>(k: keyof T) => (a: T, b: T) =>
+      String(b[k] ?? "").localeCompare(String(a[k] ?? ""));
+    return {
+      checkoutAbandoned: checkoutAbandoned.sort(byNewest("lastAttemptAt")),
+      signedUpNoPlan: signedUpNoPlan.sort(byNewest("signedUpAt")),
+    };
   }
 }

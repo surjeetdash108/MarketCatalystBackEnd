@@ -123,16 +123,23 @@ export class BillingController {
     @Req() req: Request,
   ) {
     await this.refuseStaff(token);
+    // Funnel record for admin ("started checkout, didn't finish"); removed by
+    // the event handler when the purchase completes.
     try {
       const email = await this.email(uid);
-      await this.firebase.firestore.collection("abandoned_checkouts").doc(uid).set(
+      const ref = this.firebase.firestore.collection("abandoned_checkouts").doc(uid);
+      const prev = (await ref.get()).data() ?? {};
+      const now = new Date().toISOString();
+      await ref.set(
         {
           uid,
           email,
           planId: body.planId,
           interval: body.interval,
-          step: "Step 2: Checkout",
-          at: new Date().toISOString(),
+          step: "Payment page",
+          at: now,
+          firstAt: (prev.firstAt as string | undefined) ?? (prev.at as string | undefined) ?? now,
+          attempts: Number(prev.attempts ?? 0) + 1,
         },
         { merge: true },
       );
