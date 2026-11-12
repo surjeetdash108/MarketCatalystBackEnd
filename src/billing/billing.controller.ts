@@ -36,7 +36,6 @@ import {
   PromoPreviewDto,
 } from "./billing.dto";
 import { RetentionService } from "./retention/retention.service";
-import { RefundService } from "./refund/refund.service";
 import { ReferralService } from "./referral/referral.service";
 import { PromoService } from "./promo/promo.service";
 import { AuthToken, type AuthTokenInfo } from "../common/auth-token";
@@ -64,7 +63,6 @@ export class BillingController {
     private readonly retention: RetentionService,
     private readonly firebase: FirebaseAdminService,
     private readonly staff: StaffAccessService,
-    private readonly refunds: RefundService,
     private readonly referrals: ReferralService,
   ) {}
 
@@ -230,18 +228,6 @@ export class BillingController {
   ) {
     await this.refuseStaff(token);
     return this.retention.accept(uid);
-  }
-
-  /** Refund policy check for the Manage Plan button (404 when refunds are off). */
-  @Get("refund")
-  refundEligibility(@CurrentUser() uid: string) {
-    return this.refunds.eligibility(uid);
-  }
-
-  @Post("refund")
-  @HttpCode(200)
-  refund(@CurrentUser() uid: string) {
-    return this.refunds.refund(uid, "user");
   }
 
   @Get("contact")

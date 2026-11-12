@@ -50,10 +50,6 @@ import { RetentionService } from "../../src/billing/retention/retention.service"
 import { FakeAuth, T0, configOf } from "./billing-harness";
 import type { AuthTokenInfo } from "../../src/common/auth-token";
 import { CONSENT_VERSION } from "../../src/billing/checkout/consent";
-import {
-  REFUND_WINDOW,
-  RefundService,
-} from "../../src/billing/refund/refund.service";
 import { EmailVerificationService } from "../../src/account/email-verification.service";
 import { StaffAccessService } from "../../src/account/staff-access.service";
 import { AdminStaffController } from "../../src/account/admin-staff.controller";
@@ -125,8 +121,6 @@ export interface BillingAppOptions {
   env?: Record<string, string | undefined>;
   /** false = no provider configured. */
   provider?: boolean;
-  /** Test-only override of REFUND_WINDOW_DAYS (0 = refunds off). */
-  refundWindowDays?: number;
   /** true = the provider runs in test mode (records carry livemode:false). */
   testMode?: boolean;
 }
@@ -190,11 +184,7 @@ export async function billingApp(opts: BillingAppOptions = {}) {
       BillingReconcileJob,
       EmailVerificationService,
       StaffAccessService,
-      RefundService,
       CheckoutPreviewService,
-      ...(opts.refundWindowDays !== undefined
-        ? [{ provide: REFUND_WINDOW, useValue: opts.refundWindowDays }]
-        : []),
     ],
   })
     .overrideGuard(FirebaseAuthGuard)

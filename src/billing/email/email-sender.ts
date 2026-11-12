@@ -17,8 +17,7 @@ export type EmailTag =
   | "plan_ended"
   | "receipt"
   | "launch_offer"
-  | "verification_code"
-  | "refund";
+  | "verification_code";
 
 export interface EmailMessage {
   tag: EmailTag;

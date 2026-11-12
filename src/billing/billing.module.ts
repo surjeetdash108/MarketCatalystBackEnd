@@ -2,7 +2,6 @@ import {
   CheckoutPreviewInterceptor,
   CheckoutPreviewService,
 } from "./checkout-preview";
-import { RefundService } from "./refund/refund.service";
 import { Module } from "@nestjs/common";
 import { PlansModule } from "../plans/plans.module";
 import { BillingEventsService } from "./billing-events.service";
@@ -39,7 +38,6 @@ import { ReferralService } from "./referral/referral.service";
     AdminBillingService,
     BillingReconcileJob,
     ReferralService,
-    RefundService,
     CheckoutPreviewService,
     CheckoutPreviewInterceptor,
   ],

@@ -709,25 +709,7 @@ describe("StripeBillingProvider — subscriptions and plan changes", () => {
   });
 });
 
-describe("StripeBillingProvider — refunds, portal, contact", () => {
-  it("refund: the invoice's payment intent, idempotent, then the subscription ends now", async () => {
-    const { p, m } = provider();
-    await p.refund("in_1", 5900);
-    expect(m.calls["refunds.create"][0]).toEqual([
-      {
-        payment_intent: "pi_1",
-        amount: 5900,
-        reason: "requested_by_customer",
-        metadata: { invoice: "in_1", reason: "refund_policy" },
-      },
-      { idempotencyKey: "refund-in_1" },
-    ]);
-    expect(m.calls["subscriptions.cancel"][0]).toEqual([
-      "sub_1",
-      { prorate: false, invoice_now: false },
-    ]);
-  });
-
+describe("StripeBillingProvider — portal, contact", () => {
   it("portal uses the configured portal; phone goes to the customer", async () => {
     const { p, m } = provider({ STRIPE_PORTAL_CONFIGURATION: "bpc_123" });
     expect(

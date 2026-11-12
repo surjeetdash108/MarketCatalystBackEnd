@@ -1,37 +1,17 @@
-import { insideWindow, refundPolicy } from "./refund-policy";
-import { REFUND_WINDOW_DAYS } from "./refund-policy.config";
+import { refundPolicy } from "./refund-policy";
 
-describe("refund policy (one switch)", () => {
-  it("defaults to a 14-day window", () => {
-    expect(REFUND_WINDOW_DAYS).toBe(14);
-    expect(refundPolicy()).toMatchObject({ enabled: true, windowDays: 14 });
-  });
-
-  it("every piece of copy follows the window", () => {
-    const p = refundPolicy(14);
-    for (const s of [p.checkoutLine, p.termsParagraph, p.managePlanLine])
-      expect(s).toContain("14 days");
-    expect(p.termsParagraph).toMatch(/once per person/);
-    expect(p.termsParagraph).toMatch(
-      /Monthly renewal charges are not refundable/,
-    );
-    expect(refundPolicy(7).checkoutLine).toContain("7 days");
-    expect(refundPolicy(1).checkoutLine).toContain("1 day ");
-  });
-
-  it("0 turns refunds off everywhere with the 'no partial periods' line", () => {
-    const p = refundPolicy(0);
-    expect(p.enabled).toBe(false);
-    for (const s of [p.checkoutLine, p.termsParagraph, p.managePlanLine]) {
-      expect(s).toMatch(/^No refunds for partial billing periods/);
-      expect(s).not.toMatch(/\d+ day/);
+describe("billing policy: no refunds; cancel anytime and keep the plan to the end of the paid period", () => {
+  it("refunds are off everywhere the copy appears", () => {
+    const p = refundPolicy();
+    expect(p).toMatchObject({ enabled: false, windowDays: 0 });
+    for (const line of [p.checkoutLine, p.managePlanLine]) {
+      expect(line).toMatch(/^No refunds\./);
+      expect(line).toMatch(/until the end of the period you've paid for/);
     }
-  });
-
-  it("window boundary", () => {
-    const paid = Date.parse("2026-11-01T00:00:00Z");
-    expect(insideWindow(paid, paid + 14 * 86_400_000, 14)).toBe(true);
-    expect(insideWindow(paid, paid + 14 * 86_400_000 + 1, 14)).toBe(false);
-    expect(insideWindow(paid, paid, 0)).toBe(false);
+    expect(p.termsParagraph).toMatch(/^Payments are non-refundable/);
+    expect(p.termsParagraph).toMatch(/is not renewed after that/);
+    // Lower plans happen at period end — no account credit is promised any more.
+    expect(p.termsParagraph).toMatch(/takes effect at the end of your current billing period/);
+    expect(p.termsParagraph).not.toMatch(/credited to your account|full refund/i);
   });
 });

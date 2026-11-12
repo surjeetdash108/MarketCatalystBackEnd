@@ -1343,29 +1343,6 @@ export class FakeBillingProvider implements BillingProvider {
     });
   }
 
-  /** Full/partial refund of an invoice, then the subscription ends immediately. */
-  async refund(paymentId: string, amount: number): Promise<void> {
-    const inv = await this.getInvoice(paymentId);
-    if (!inv) throw new Error(`no such invoice ${paymentId}`);
-    await this.refundInvoice(paymentId, amount);
-    if (!inv.subscriptionId) return;
-    const sub = await this.read<ProviderSubscription>(
-      C.subscriptions,
-      inv.subscriptionId,
-    );
-    if (!sub || sub.endedAt) return;
-    sub.status = "canceled";
-    sub.canceledAt = this.clock.nowIso();
-    sub.endedAt = this.clock.nowIso();
-    sub.cancelAtPeriodEnd = false;
-    sub.updatedAt = this.clock.now();
-    await this.write(C.subscriptions, sub);
-    await this.emit("subscription.deleted", {
-      uid: sub.uid,
-      customerId: sub.customerId,
-      subscriptionId: sub.id,
-    });
-  }
 
   async disputeInvoice(invoiceId: string): Promise<void> {
     const inv = await this.getInvoice(invoiceId);

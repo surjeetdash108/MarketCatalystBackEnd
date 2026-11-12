@@ -55,7 +55,7 @@ describe("checkout preview (step 2 summary)", () => {
     expect(none).toMatchObject({ tax: 0, taxPending: true });
   });
 
-  it("returns the renewal date/price, consent text+version and the refund policy", async () => {
+  it("returns the renewal date/price, consent text+version and the no-refunds policy", async () => {
     a = await billingApp();
     const p = (
       await a.user("p2").post("/api/billing/checkout/preview", {
@@ -72,7 +72,7 @@ describe("checkout preview (step 2 summary)", () => {
     expect(p.consent.text).toBe(
       "I agree that my Elite plan renews annually at the price shown until I cancel. I agree to the Terms of Use and have read the Privacy Policy.",
     );
-    expect(p.refundPolicy).toMatchObject({ enabled: true, windowDays: 14 });
+    expect(p.refundPolicy).toMatchObject({ enabled: false, windowDays: 0, checkoutLine: expect.stringMatching(/^No refunds\./) });
   });
 
   it("promo: a valid code discounts before tax; an invalid one is a generic 400 that counts as an attempt", async () => {

@@ -339,14 +339,4 @@ export class EmailService {
     });
   }
 
-  async refundIssued(
-    to: string | null,
-    p: { amount: number; currency: string; planId: string; windowDays: number },
-  ) {
-    return this.send("refund", to, "Your refund is on its way", [
-      `We've refunded ${money(p.amount, p.currency)} for your ${planName(p.planId)} plan, as our ${p.windowDays}-day refund policy allows.`,
-      "Your subscription has ended. Choose a plan any time to keep using MarketCatalyst.",
-      "The refund usually reaches your card within 5–10 business days.",
-    ]);
-  }
 }

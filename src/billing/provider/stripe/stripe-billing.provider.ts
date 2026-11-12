@@ -1234,61 +1234,6 @@ export class StripeBillingProvider implements BillingProvider {
     return { kind: "redirect", url };
   }
 
-  // ── refunds ───────────────────────────────────────────────────────────
-
-  /** Refunds the invoice's payment, then ends the subscription now (→ no plan via subscription.deleted). */
-  async refund(paymentId: string, amount: number): Promise<void> {
-    const pays = await this.stripe.invoicePayments.list({
-      invoice: paymentId,
-      status: "paid",
-      limit: 10,
-    });
-    const pi =
-      pays.data
-        .map((p) =>
-          idOf(
-            p.payment?.payment_intent as
-              string | Stripe.PaymentIntent | undefined,
-          ),
-        )
-        .find(Boolean) ?? null;
-    const charge =
-      pays.data
-        .map((p) =>
-          idOf(p.payment?.charge as string | Stripe.Charge | undefined),
-        )
-        .find(Boolean) ?? null;
-    if (!pi && !charge)
-      throw new Error(`invoice ${paymentId} has no captured payment to refund`);
-    await this.stripe.refunds.create(
-      {
-        ...(pi ? { payment_intent: pi } : { charge: charge! }),
-        amount,
-        reason: "requested_by_customer",
-        metadata: { invoice: paymentId, reason: "refund_policy" },
-      },
-      { idempotencyKey: `refund-${paymentId}` },
-    );
-    // Record the refunded amount on the invoice so getInvoice reports it.
-    await this.stripe.invoices.update(paymentId, {
-      metadata: { amount_refunded: String(amount) },
-    });
-    const inv = await this.stripe.invoices.retrieve(paymentId);
-    const subId = idOf(
-      inv.parent?.subscription_details?.subscription as
-        string | Stripe.Subscription | undefined,
-    );
-    if (!subId) return;
-    const sub = await this.stripe.subscriptions.retrieve(subId);
-    const s = idOf(sub.schedule as string | Stripe.SubscriptionSchedule | null);
-    if (s) await this.stripe.subscriptionSchedules.release(s);
-    if (!sub.ended_at)
-      await this.stripe.subscriptions.cancel(subId, {
-        prorate: false,
-        invoice_now: false,
-      });
-  }
-
   // ── customer portal (card updates) ────────────────────────────────────
 
   async createPortalSession(input: {
