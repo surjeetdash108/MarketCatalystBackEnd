@@ -293,7 +293,7 @@ describe("StripeBillingProvider — embedded checkout", () => {
     expect(await p.parseEvent(other.payload, other.header)).toBeNull();
   });
 
-  it("creates an incomplete subscription with automatic tax, the address/phone on the customer, and returns the confirmation secret", async () => {
+  it("creates an incomplete subscription with automatic tax, the address on the customer, and returns the confirmation secret", async () => {
     const { p, m } = provider();
     const s = await p.createCheckout({
       uid: "u1",
@@ -311,7 +311,6 @@ describe("StripeBillingProvider — embedded checkout", () => {
       idempotencyKey: "k1",
       billing: {
         name: "Tex",
-        phone: "+15125550147",
         address: {
           line1: "500 Congress Ave",
           line2: null,
@@ -326,7 +325,6 @@ describe("StripeBillingProvider — embedded checkout", () => {
       "cus_1",
       {
         name: "Tex",
-        phone: "+15125550147",
         address: {
           line1: "500 Congress Ave",
           line2: undefined,
@@ -347,7 +345,7 @@ describe("StripeBillingProvider — embedded checkout", () => {
       payment_behavior: "default_incomplete",
       payment_settings: {
         save_default_payment_method: "on_subscription",
-        payment_method_types: ["card", "link"],
+        payment_method_types: ["card"],
       },
       automatic_tax: { enabled: true },
       metadata: { uid: "u1", planId: "pro", interval: "monthly" },
@@ -371,7 +369,7 @@ describe("StripeBillingProvider — embedded checkout", () => {
     );
   });
 
-  it("payment method types come from config; crypto/UPI are never allowed", async () => {
+  it("payment method types come from config (default card); Link, crypto and UPI are never allowed", async () => {
     const { p, m } = provider({
       STRIPE_PAYMENT_METHOD_TYPES: "card,link,paypal,crypto,upi",
     });
@@ -390,7 +388,7 @@ describe("StripeBillingProvider — embedded checkout", () => {
           { payment_settings: { payment_method_types: string[] } },
         ]
       )[0].payment_settings.payment_method_types,
-    ).toEqual(["card", "link", "paypal"]);
+    ).toEqual(["card", "paypal"]); // never Link (asks for a phone)
   });
 
   it("tax preview: Stripe Tax for the billing region; subtotal/discount/tax/total from the preview invoice", async () => {
@@ -736,7 +734,7 @@ describe("StripeBillingProvider — subscriptions and plan changes", () => {
 });
 
 describe("StripeBillingProvider — portal, contact", () => {
-  it("portal uses the configured portal; phone goes to the customer", async () => {
+  it("portal uses the configured portal; no phone goes to the customer", async () => {
     const { p, m } = provider({ STRIPE_PORTAL_CONFIGURATION: "bpc_123" });
     expect(
       await p.createPortalSession({
@@ -749,11 +747,8 @@ describe("StripeBillingProvider — portal, contact", () => {
       return_url: "https://app.example.com/manage-plan",
       configuration: "bpc_123",
     });
-    await p.updateCustomerContact("cus_1", { phone: "+447911123456" });
-    expect(m.calls["customers.update"][0]).toEqual([
-      "cus_1",
-      { phone: "+447911123456" },
-    ]);
+    // No phone is ever sent to Stripe.
+    expect(JSON.stringify(m.calls["customers.update"] ?? [])).not.toMatch(/phone/);
   });
 });
 

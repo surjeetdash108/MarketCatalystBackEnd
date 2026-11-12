@@ -1,5 +1,4 @@
 import { StaffAccessService } from "../account/staff-access.service";
-import { maskPhone } from "./checkout/phone";
 import {
   BadRequestException,
   Inject,
@@ -264,7 +263,6 @@ export class AdminBillingService {
       // Renewal consent recorded at checkout (time, text version, plan, interval, price, IP).
       consent:
         (mirror.data()?.consent as Record<string, unknown> | undefined) ?? null,
-      phoneMasked: null,
       marketingOptIn:
         (c.marketingOptIn as Record<string, unknown> | undefined) ?? null,
       billingRegion:
@@ -286,10 +284,6 @@ export class AdminBillingService {
     };
   }
 
-  /** Full mobile number for an admin who clicked "reveal" (the POST is audited by AdminAuditInterceptor). */
-  async revealPhone(uid: string): Promise<{ phone: string | null }> {
-    return { phone: null };
-  }
 
   async audit(limit = 200) {
     const snap = await this.firebase.firestore

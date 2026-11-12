@@ -11,17 +11,14 @@ describe("contact after checkout", () => {
   it("the user can view and edit marketing preferences; phone is not collected", async () => {
     a = await billingApp();
     const { u } = await a.subscribe("m1", "pro", "monthly");
-    expect((await u.get("/api/billing/contact")).body).toMatchObject({
-      phone: null,
-      marketingOptIn: { optedIn: false },
-    });
+    const c = (await u.get("/api/billing/contact")).body;
+    expect(c).toMatchObject({ marketingOptIn: { optedIn: false } });
+    expect("phone" in c).toBe(false);
     const r = await u.post("/api/billing/contact", {
       marketingOptIn: true,
     });
-    expect(r.body).toMatchObject({
-      phone: null,
-      marketingOptIn: { optedIn: true },
-    });
+    expect(r.body).toMatchObject({ marketingOptIn: { optedIn: true } });
+    expect("phone" in r.body).toBe(false);
     expect(typeof r.body.marketingOptIn.at).toBe("string");
   });
 
@@ -30,15 +27,13 @@ describe("contact after checkout", () => {
     a.fs.seed("users", "m2", { name: "M", email: "m2@example.com" });
     await a.subscribe("m2", "elite", "annual");
     const d = (await a.admin.get("/api/admin/billing/subscribers/m2")).body;
-    expect(d.phoneMasked).toBeNull();
+    expect("phoneMasked" in d).toBe(false);
     expect(d.consent).toMatchObject({
       planId: "elite",
       interval: "annual",
       price: 179100,
     });
-    const reveal = await a.admin.post(
-      "/api/admin/billing/subscribers/m2/phone/reveal",
-    );
-    expect(reveal.body).toEqual({ phone: null });
+    // The admin "reveal phone" action no longer exists.
+    expect((await a.admin.post("/api/admin/billing/subscribers/m2/phone/reveal")).status).toBe(404);
   });
 });

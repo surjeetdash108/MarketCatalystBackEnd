@@ -56,7 +56,7 @@ import type {
  *   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET                    (secrets)
  *   STRIPE_PORTAL_CONFIGURATION   bpc_… (optional; Stripe's default portal otherwise)
  *   STRIPE_RETENTION_COUPON_ID    optional override of the generated retention coupon
- *   STRIPE_PAYMENT_METHOD_TYPES   default "card,link" (Apple Pay / Google Pay ride on card);
+ *   STRIPE_PAYMENT_METHOD_TYPES   default "card" (Apple Pay / Google Pay ride on card); never "link";
  *                                 add ",paypal" only if the account supports it — never crypto/UPI.
  *                                 Must match NEXT_PUBLIC_STRIPE_PAYMENT_METHOD_TYPES in the UI.
  */
@@ -80,9 +80,10 @@ export const STRIPE_EVENT_MAP: Record<string, ProviderEventType> = {
 /** Register exactly these on the webhook endpoint. */
 export const STRIPE_WEBHOOK_EVENTS = Object.keys(STRIPE_EVENT_MAP);
 
+// Never Link: its "Save my information for faster checkout" box asks for a
+// mobile number. Card only by default.
 const ALLOWED_PAYMENT_METHODS = new Set([
   "card",
-  "link",
   "paypal",
   "us_bank_account",
   "cashapp",
@@ -178,8 +179,7 @@ export class StripeBillingProvider implements BillingProvider {
 
   private get paymentMethodTypes(): Stripe.SubscriptionCreateParams.PaymentSettings.PaymentMethodType[] {
     const raw = String(
-      this.config.get("STRIPE_PAYMENT_METHOD_TYPES", "card,link") ??
-        "card,link",
+      this.config.get("STRIPE_PAYMENT_METHOD_TYPES", "card") ?? "card",
     );
     const types = raw
       .split(",")
@@ -316,12 +316,6 @@ export class StripeBillingProvider implements BillingProvider {
     await this.stripe.customers.update(customerId, { metadata });
   }
 
-  async updateCustomerContact(
-    customerId: string,
-    contact: { phone: string },
-  ): Promise<void> {
-    await this.stripe.customers.update(customerId, { phone: contact.phone });
-  }
 
   // ── checkout ──────────────────────────────────────────────────────────
 
@@ -333,7 +327,6 @@ export class StripeBillingProvider implements BillingProvider {
     const a = billing.address;
     await this.stripe.customers.update(customerId, {
       name: billing.name,
-      ...(billing.phone ? { phone: billing.phone } : {}),
       address: {
         line1: a.line1,
         line2: a.line2 ?? undefined,

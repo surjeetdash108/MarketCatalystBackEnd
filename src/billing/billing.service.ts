@@ -1061,7 +1061,6 @@ export class BillingService {
     const c =
       (await this.db.collection("customers").doc(uid).get()).data() ?? {};
     return {
-      phone: null,
       marketingOptIn: (c.marketingOptIn as
         { optedIn: boolean; at: string } | undefined) ?? {
         optedIn: false,
