@@ -69,11 +69,6 @@ export interface BillingProvider {
     customerId: string,
     metadata: Record<string, string>,
   ): Promise<void>;
-  /** The customer's phone on the provider's record (no verification). */
-  updateCustomerContact(
-    customerId: string,
-    contact: { phone: string },
-  ): Promise<void>;
 
   // ── checkout ───────────────────────────────────────────────────────────
   /** Price of a new subscription incl. tax for the billing region (Stripe: automatic tax). */
@@ -92,7 +87,7 @@ export interface BillingProvider {
     idempotencyKey: string;
     /** Free-trial days (0 = none): $0 today, the card is set up, the first charge at the end. */
     trialDays?: number;
-    /** Name/address/phone for the provider's customer record and tax. */
+    /** Name/address for the provider's customer record and tax. */
     billing?: BillingDetails | null;
   }): Promise<CheckoutSession>;
   getCheckout(sessionId: string): Promise<CheckoutSession | null>;

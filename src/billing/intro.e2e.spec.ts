@@ -26,6 +26,29 @@ describe("new-account intro: 7 days of Market Catalyst, no card, then Choose a p
     expect(me.entitlements.marketCatalyst).toBe(false);
   });
 
+  it("deleting the account and signing up again with the same email doesn't restart the 7 free days", async () => {
+    a = await billingApp({ env: { SUBSCRIPTIONS_ENABLED: "true" } });
+    const first = a.user("del1", "Pat.Doe+x@gmail.com");
+    a.fs.seed("users", "del1", { email: "Pat.Doe+x@gmail.com", createdAt: new Date(T0).toISOString() });
+    expect((await first.get("/api/me/entitlements")).body.status).toBe("INTRO");
+    // Account deleted; three days later a new account with the same address (a gmail variant).
+    await a.fs.collection("users").doc("del1").delete();
+    a.auth.users.delete("del1");
+    a.clock.freeze(T0 + 3 * DAY);
+    const again = a.user("del2", "patdoe@gmail.com");
+    a.fs.seed("users", "del2", { email: "patdoe@gmail.com", createdAt: new Date(T0 + 3 * DAY).toISOString() });
+    let me = (await again.get("/api/me/entitlements")).body;
+    // Still the first account's week: ends on day 7, not day 10.
+    expect(me).toMatchObject({ status: "INTRO", introEndsAt: new Date(T0 + 7 * DAY).toISOString() });
+    a.clock.freeze(T0 + 7 * DAY + 1);
+    me = (await again.get("/api/me/entitlements")).body;
+    expect(me).toMatchObject({ planId: "none" });
+    // A different person still gets their own week.
+    const other = a.user("new3", "someone.else@example.com");
+    a.fs.seed("users", "new3", { email: "someone.else@example.com", createdAt: new Date(T0 + 7 * DAY).toISOString() });
+    expect((await other.get("/api/me/entitlements")).body.status).toBe("INTRO");
+  });
+
   it("an account older than 7 days, or one that ever subscribed, gets no intro", async () => {
     a = await billingApp({ env: { SUBSCRIPTIONS_ENABLED: "true" } });
     a.user("old");

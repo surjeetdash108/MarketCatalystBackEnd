@@ -49,17 +49,22 @@ export interface RetentionOffer {
   description: string;
 }
 
+/**
+ * The annual offer's credit: RETENTION_PERCENT of RETENTION_MONTHS of the plan
+ * that will actually renew — the scheduled plan when a change is pending (an
+ * Elite annual customer switching to Starter annual gets 50% of two months of
+ * Starter, not of Elite). A month of an annual price is that price ÷ 12; a
+ * monthly price is one month.
+ */
 export function retentionCredit(
   planId: string,
   currency = "USD",
+  interval: BillingInterval = "annual",
 ): { amount: number; currency: string } {
-  const annual = catalogPrice(planId, "annual");
+  const price = catalogPrice(planId, interval);
+  const month = interval === "annual" ? (price?.amount ?? 0) / 12 : (price?.amount ?? 0);
   return {
-    amount: Math.round(
-      ((annual?.amount ?? 0) / 12) *
-        RETENTION_MONTHS *
-        (RETENTION_PERCENT / 100),
-    ),
+    amount: Math.round(month * RETENTION_MONTHS * (RETENTION_PERCENT / 100)),
     currency,
   };
 }
@@ -133,8 +138,13 @@ export class RetentionService {
     }
     const interval = m.interval ?? "monthly";
     const appliesFrom = m.currentPeriodEnd;
+    // The plan that renews: the scheduled one when a change is pending.
+    const renews = m.scheduledChange
+      ? { planId: String(m.scheduledChange.planId), interval: m.scheduledChange.interval as BillingInterval }
+      : { planId: m.planId, interval };
+    const headline = `Keep your plan for ${RETENTION_PERCENT}% off for the next ${RETENTION_MONTHS} months`;
     if (interval === "annual") {
-      const credit = retentionCredit(m.planId, m.currency ?? "USD");
+      const credit = retentionCredit(renews.planId, m.currency ?? "USD", renews.interval);
       return {
         eligible: true,
         offer: {
@@ -145,8 +155,8 @@ export class RetentionService {
           creditAmount: credit.amount,
           currency: credit.currency,
           appliesFrom,
-          headline: `Before you go: ${RETENTION_PERCENT}% off for the next ${RETENTION_MONTHS} months. Still want to cancel?`,
-          description: `A credit of ${money(credit.amount, credit.currency)} (${RETENTION_PERCENT}% of two months) comes off your next renewal on ${longDate(appliesFrom)}`,
+          headline,
+          description: `A credit of ${money(credit.amount, credit.currency)} will be applied at your next renewal`,
         },
       };
     }
@@ -160,7 +170,7 @@ export class RetentionService {
         creditAmount: null,
         currency: m.currency ?? "USD",
         appliesFrom,
-        headline: `Before you go: ${RETENTION_PERCENT}% off for the next ${RETENTION_MONTHS} months. Still want to cancel?`,
+        headline,
         description: `${RETENTION_PERCENT}% off your next ${RETENTION_MONTHS} monthly invoices`,
       },
     };

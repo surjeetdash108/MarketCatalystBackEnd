@@ -819,12 +819,6 @@ export const API_CATALOG = {
     store: ["customers"],
     check: { skip: "user write" },
   },
-  "POST /api/admin/billing/subscribers/:uid/phone/reveal": {
-    summary:
-      "Reveals a subscriber's full mobile number (admin; every reveal is audited).",
-    store: ["customers", "admin_audit"],
-    check: { skip: "admin write (audited)" },
-  },
   "GET /api/billing/referral": {
     summary:
       "Refer a friend: the member's random referral code — only with an active plan (else eligible:false).",

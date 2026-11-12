@@ -61,12 +61,6 @@ export class AdminBillingController {
     return this.admin.subscriber(uid);
   }
 
-  /** Click-to-reveal of the masked mobile number. POST so the audit log records every reveal. */
-  @Post("subscribers/:uid/phone/reveal")
-  @HttpCode(200)
-  revealPhone(@Param("uid") uid: string) {
-    return this.admin.revealPhone(uid);
-  }
 
   @Get("abandoned")
   async abandonedCheckouts() {
