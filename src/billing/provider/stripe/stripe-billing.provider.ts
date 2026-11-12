@@ -94,11 +94,13 @@ const lineOf = (l: Stripe.InvoiceLineItem): InvoiceLine => ({
   periodStart: l.period?.start ? new Date(l.period.start * 1000).toISOString() : null,
   periodEnd: l.period?.end ? new Date(l.period.end * 1000).toISOString() : null,
   proration:
+    (l as unknown as { proration?: boolean }).proration ??
     (
       l as unknown as {
         parent?: { subscription_item_details?: { proration?: boolean } };
       }
-    ).parent?.subscription_item_details?.proration ?? false,
+    ).parent?.subscription_item_details?.proration ??
+    false,
 });
 const iso = (sec: number | null | undefined) =>
   sec ? new Date(sec * 1000).toISOString() : null;
@@ -773,6 +775,35 @@ export class StripeBillingProvider implements BillingProvider {
       .at(-1);
     // A downgrade's proration invoice totals < 0: Stripe credits the customer balance.
     const net = inv.total;
+    const discount = sumAmounts(inv.total_discount_amounts);
+    const tax = sumAmounts(inv.total_taxes);
+    const creditUsed =
+      inv.total > 0 ? Math.max(0, inv.total - inv.amount_due) : 0;
+    const unusedCredit = -lines
+      .filter((l) => l.proration && l.amount < 0)
+      .reduce((a, l) => a + l.amount, 0);
+    const newPlanCharge = lines
+      .filter((l) => l.amount > 0)
+      .reduce((a, l) => a + l.amount, 0);
+
+    let alreadyPaid: number | null = null;
+    try {
+      const invList = await this.stripe.invoices.list({
+        subscription: sub.id,
+        status: "paid",
+        limit: 1,
+      });
+      const lastPaid = invList?.data?.[0];
+      if (lastPaid) {
+        const lastPaidTax = sumAmounts(lastPaid.total_taxes);
+        alreadyPaid = Math.max(0, lastPaid.total - lastPaidTax);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Failed to retrieve last paid invoice for ${sub.id}: ${(err as Error).message}`,
+      );
+    }
+
     return {
       kind: input.kind,
       planId: input.target.planId,
@@ -786,6 +817,12 @@ export class StripeBillingProvider implements BillingProvider {
       nextRenewalAmount: input.target.amount,
       nextRenewalDate: iso(nextEnd) ?? current.currentPeriodEnd,
       lines,
+      discount,
+      tax,
+      creditUsed,
+      alreadyPaid,
+      unusedCredit,
+      newPlanCharge,
     };
   }
 

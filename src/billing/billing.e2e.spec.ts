@@ -391,6 +391,9 @@ describe("upgrade and downgrade", () => {
       usedOnCurrent: 1300, // Starter: start to today
       newPlanCharge: 3933, // Pro: today to period end
       alreadyPaid: 3900,
+      discount: 0,
+      tax: 0,
+      creditUsed: 0,
       net: 1333,
       chargedNow: 1333,
       creditToBalance: 0,

@@ -84,17 +84,20 @@ export function classifyChange(
 export function paidForPeriod(m: {
   amount?: number | null;
   discount?: unknown;
+  status?: string | null;
 }): number | null {
   if (typeof m.amount !== "number") return null;
+  if (m.status === "TRIALING") return 0;
   const d = (m.discount ?? null) as {
     percentOff?: number | null;
+    amountOff?: number | null;
     remainingInvoices?: number | null;
   } | null;
-  const pct =
-    d?.percentOff != null &&
-    (d.remainingInvoices == null || d.remainingInvoices > 0)
-      ? d.percentOff
-      : 0;
+  const hasRemaining = d?.remainingInvoices == null || d.remainingInvoices > 0;
+  if (d?.amountOff != null && hasRemaining) {
+    return Math.max(0, m.amount - d.amountOff);
+  }
+  const pct = d?.percentOff != null && hasRemaining ? d.percentOff : 0;
   return Math.round(m.amount * (1 - pct / 100));
 }
 
@@ -110,7 +113,13 @@ export interface ChangeBreakdown {
   newPlanCharge: number;
   /** Already paid for <Plan 1> this period. */
   alreadyPaid: number;
-  /** usedOnCurrent + newPlanCharge − alreadyPaid. > 0 charged now; < 0 credit. */
+  /** Discount applied on the invoice (if any). */
+  discount: number;
+  /** Tax on the invoice (if any). */
+  tax: number;
+  /** Account credit applied to reduce amount_due. */
+  creditUsed: number;
+  /** usedOnCurrent + newPlanCharge − alreadyPaid − discount + tax − creditUsed. */
   net: number;
   chargedNow: number;
   creditToBalance: number;
@@ -130,17 +139,33 @@ export function changeBreakdown(
     prorationDate: number;
     amountDueNow: number;
     creditToBalance: number;
+    discount?: number;
+    tax?: number;
+    creditUsed?: number;
+    alreadyPaid?: number | null;
+    unusedCredit?: number;
+    newPlanCharge?: number;
   },
   names: { from: string; to: string },
   /** What was paid for the current period, when known (price after an active percent discount). */
   paidForPeriod?: number | null,
 ): ChangeBreakdown {
-  const unused = -preview.lines
-    .filter((l) => l.proration && l.amount < 0)
-    .reduce((a, l) => a + l.amount, 0);
-  const newPlanCharge = preview.lines
-    .filter((l) => l.amount > 0)
-    .reduce((a, l) => a + l.amount, 0);
+  const unused =
+    preview.unusedCredit != null
+      ? preview.unusedCredit
+      : -preview.lines
+          .filter((l) => l.proration && l.amount < 0)
+          .reduce((a, l) => a + l.amount, 0);
+  const newPlanCharge =
+    preview.newPlanCharge != null
+      ? preview.newPlanCharge
+      : preview.lines
+          .filter((l) => l.amount > 0)
+          .reduce((a, l) => a + l.amount, 0);
+  const discount = preview.discount ?? 0;
+  const tax = preview.tax ?? 0;
+  const creditUsed = preview.creditUsed ?? 0;
+
   const start = Date.parse(preview.currentPeriodStart);
   const end = Date.parse(preview.currentPeriodEnd);
   const remaining = Math.max(
@@ -148,11 +173,14 @@ export function changeBreakdown(
     (end - preview.prorationDate) / Math.max(1, end - start),
   );
   const alreadyPaid =
-    paidForPeriod != null && paidForPeriod >= unused
-      ? paidForPeriod
-      : Math.round(unused / remaining);
+    preview.alreadyPaid != null && preview.alreadyPaid >= unused
+      ? preview.alreadyPaid
+      : paidForPeriod != null && paidForPeriod >= unused
+        ? paidForPeriod
+        : Math.round(unused / remaining);
   const usedOnCurrent = alreadyPaid - unused;
-  const net = usedOnCurrent + newPlanCharge - alreadyPaid;
+  const net =
+    usedOnCurrent + newPlanCharge - alreadyPaid - discount + tax - creditUsed;
   return {
     fromPlanName: names.from,
     toPlanName: names.to,
@@ -162,6 +190,9 @@ export function changeBreakdown(
     usedOnCurrent,
     newPlanCharge,
     alreadyPaid,
+    discount,
+    tax,
+    creditUsed,
     net,
     chargedNow: preview.amountDueNow,
     creditToBalance: preview.creditToBalance,
@@ -669,7 +700,7 @@ export class BillingService {
                 from: planById(m.planId)?.name ?? m.planId,
                 to: planById(target.planId)?.name ?? target.planId,
               },
-              paidForPeriod(m),
+              preview.alreadyPaid ?? paidForPeriod(m),
             ),
       creditBalanceAfter: balanceAfter,
       /** The next invoice after the account credit is used. */

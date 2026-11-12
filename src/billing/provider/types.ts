@@ -170,6 +170,13 @@ export interface ChangePreview {
   nextRenewalAmount: number;
   nextRenewalDate: string;
   lines: InvoiceLine[];
+  /** Breakdown lines extracted from the provider preview invoice. */
+  discount?: number;
+  tax?: number;
+  creditUsed?: number;
+  alreadyPaid?: number | null;
+  unusedCredit?: number;
+  newPlanCharge?: number;
 }
 
 export type ChangeResult =
