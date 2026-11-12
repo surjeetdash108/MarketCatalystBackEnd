@@ -889,7 +889,9 @@ export class BillingService {
         .catch(() => null);
       if (up)
         nextCharge = {
-          amount: up.total,
+          // What the card is actually charged: after account credit (Stripe's
+          // invoice total excludes the customer balance; amountDue includes it).
+          amount: up.amountDue,
           currency: up.currency,
           date: up.periodStart,
           discountAmount: up.discountAmount,
