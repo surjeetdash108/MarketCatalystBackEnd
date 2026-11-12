@@ -430,6 +430,29 @@ export class BillingEventsService implements OnModuleInit {
     }
     if (
       prev &&
+      prev.subscriptionId &&
+      prev.subscriptionId !== sub.id &&
+      LIVE.includes(prev.status) &&
+      LIVE.includes(status)
+    ) {
+      // Should never happen (checkout refuses a second subscription); if it
+      // does, the customer may be billed twice — flag it for an admin.
+      this.logger.error(
+        `DUPLICATE SUBSCRIPTION for ${uid}: ${prev.subscriptionId} and ${sub.id} are both live`,
+      );
+      await this.db
+        .collection("billing_alerts")
+        .doc(`duplicate_${uid}_${sub.id}`)
+        .set({
+          kind: "duplicate_subscription",
+          uid,
+          subscriptionIds: [prev.subscriptionId, sub.id],
+          at: this.clock.nowIso(),
+          ...this.mode(),
+        });
+    }
+    if (
+      prev &&
       prev.subscriptionId === sub.id &&
       prev.providerUpdatedAt != null &&
       sub.updatedAt < prev.providerUpdatedAt

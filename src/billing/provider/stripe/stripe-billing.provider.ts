@@ -539,7 +539,7 @@ export class StripeBillingProvider implements BillingProvider {
       status:
         subscriptionId
           ? "complete"
-          : si.status === "canceled"
+          : si.status === "canceled" || md.blocked
             ? "expired"
             : "open",
       uid: md.uid ?? "",
@@ -558,14 +558,56 @@ export class StripeBillingProvider implements BillingProvider {
     };
   }
 
+  async liveSubscriptionIds(customerId: string): Promise<string[]> {
+    const out: string[] = [];
+    for await (const s of this.stripe.subscriptions.list({
+      customer: customerId,
+      status: "all",
+      limit: 100,
+    })) {
+      if (["active", "trialing", "past_due", "unpaid"].includes(s.status))
+        out.push(s.id);
+    }
+    return out;
+  }
+
+  async closeOtherCheckouts(customerId: string, keep: string): Promise<void> {
+    for await (const s of this.stripe.subscriptions.list({
+      customer: customerId,
+      status: "incomplete",
+      limit: 100,
+    })) {
+      if (s.id !== keep) await this.stripe.subscriptions.cancel(s.id);
+    }
+    for await (const si of this.stripe.setupIntents.list({
+      customer: customerId,
+      limit: 100,
+    })) {
+      if (
+        si.id !== keep &&
+        si.metadata?.planId &&
+        ["requires_payment_method", "requires_confirmation", "requires_action"].includes(si.status)
+      )
+        await this.stripe.setupIntents.cancel(si.id);
+    }
+  }
+
   /**
    * After the trial's card is saved: create the trialing subscription with that
    * card as its default payment method. Idempotent (keyed by the SetupIntent),
-   * so the webhook and a status check can both call it.
+   * so the webhook and a status check can both call it. Never a second
+   * subscription: if the customer already has one, the trial isn't started.
    */
   private async startTrialFromSetup(si: Stripe.SetupIntent): Promise<Stripe.SetupIntent> {
     const md = si.metadata ?? {};
-    if (si.status !== "succeeded" || md.subscriptionId) return si;
+    if (si.status !== "succeeded" || md.subscriptionId || md.blocked) return si;
+    const customerId = idOf(si.customer)!;
+    if ((await this.liveSubscriptionIds(customerId)).length > 0) {
+      this.logger.warn(`trial ${si.id} not started: customer ${customerId} already has a subscription`);
+      return this.stripe.setupIntents.update(si.id, {
+        metadata: { ...md, blocked: "already_subscribed" },
+      });
+    }
     const price = await this.priceId(md.lookupKey);
     const sub = await this.stripe.subscriptions.create(
       {

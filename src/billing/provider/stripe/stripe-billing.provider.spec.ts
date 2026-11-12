@@ -64,7 +64,7 @@ const SETI: Record<string, unknown> & { metadata: Record<string, string> } = {
   metadata: { uid: "u1", planId: "pro", interval: "monthly", lookupKey: "pro_monthly", trialDays: "7", coupon: "", currency: "USD" },
 };
 
-function mockClient() {
+function mockClient(customerSubs: Array<Record<string, unknown>> = [], customerSetups: Array<Record<string, unknown>> = []) {
   const calls: Record<string, unknown[]> = {};
   const rec = (name: string, ret: unknown) =>
     jest.fn((...args: unknown[]) => {
@@ -103,6 +103,8 @@ function mockClient() {
         SETI.metadata = p.metadata;
         return { ...SETI, id };
       }),
+      cancel: rec("setupIntents.cancel", {}),
+      list: jest.fn(() => (async function* () { for (const x of customerSetups) yield x; })()),
     },
     coupons: {
       retrieve: jest.fn(() =>
@@ -129,8 +131,13 @@ function mockClient() {
       retrieve: rec("subscriptions.retrieve", () => subObj()),
       update: rec("subscriptions.update", () => subObj()),
       cancel: rec("subscriptions.cancel", {}),
-      list: jest.fn(() =>
+      list: jest.fn((params?: { customer?: string; status?: string }) =>
         (async function* () {
+          if (params?.customer) {
+            // A customer's own subscriptions (duplicate checks); none unless a test adds some.
+            for (const s of customerSubs) if (!params.status || params.status === "all" || s.status === params.status) yield s;
+            return;
+          }
           yield subObj();
           yield subObj({ id: "sub_dead", status: "canceled" });
         })(),
@@ -252,6 +259,29 @@ describe("StripeBillingProvider — embedded checkout", () => {
     const before = m.calls["subscriptions.create"].length;
     await p.getCheckout("seti_1"); // already started: no second subscription
     expect(m.calls["subscriptions.create"].length).toBe(before);
+  });
+
+  it("never a second subscription: a saved trial card doesn't start a trial when the customer already has one", async () => {
+    SETI.metadata = { uid: "u1", planId: "pro", interval: "monthly", lookupKey: "pro_monthly", trialDays: "7", coupon: "", currency: "USD" };
+    const { p, m } = provider({}, mockClient([subObj({ id: "sub_other", status: "active" })]));
+    const s = await p.getCheckout("seti_1");
+    expect(m.calls["subscriptions.create"] ?? []).toEqual([]);
+    expect(s).toMatchObject({ status: "expired", subscriptionId: null });
+    expect(m.calls["setupIntents.update"].at(-1)).toEqual(["seti_1", { metadata: expect.objectContaining({ blocked: "already_subscribed" }) }]);
+  });
+
+  it("live subscriptions come from Stripe; other unfinished checkouts are closed, the new one kept", async () => {
+    const subs = [subObj({ id: "sub_live", status: "trialing" }), subObj({ id: "sub_inc_old", status: "incomplete" }), subObj({ id: "sub_inc_new", status: "incomplete" }), subObj({ id: "sub_gone", status: "canceled" })];
+    const setups = [
+      { id: "seti_old", status: "requires_payment_method", metadata: { planId: "pro" } },
+      { id: "seti_done", status: "succeeded", metadata: { planId: "pro" } },
+      { id: "seti_other", status: "requires_payment_method", metadata: {} },
+    ];
+    const { p, m } = provider({}, mockClient(subs, setups));
+    expect(await p.liveSubscriptionIds("cus_1")).toEqual(["sub_live"]);
+    await p.closeOtherCheckouts("cus_1", "sub_inc_new");
+    expect(m.calls["subscriptions.cancel"]).toEqual([["sub_inc_old"]]);
+    expect(m.calls["setupIntents.cancel"]).toEqual([["seti_old"]]);
   });
 
   it("webhook: setup_intent.succeeded for a trial is 'card saved'; other setup intents are ignored", async () => {

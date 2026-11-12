@@ -96,6 +96,18 @@ export interface BillingProvider {
     billing?: BillingDetails | null;
   }): Promise<CheckoutSession>;
   getCheckout(sessionId: string): Promise<CheckoutSession | null>;
+  /**
+   * Ids of the customer's subscriptions that bill or can bill (active,
+   * trialing, past due, unpaid), read from the provider itself — so a second
+   * purchase is refused even before the first one's webhook has arrived.
+   */
+  liveSubscriptionIds?(customerId: string): Promise<string[]>;
+  /**
+   * Closes the customer's other unfinished checkouts (an unpaid first invoice,
+   * a trial card form not yet confirmed) so a second tab can't complete a
+   * second subscription. `keep` is the checkout just created.
+   */
+  closeOtherCheckouts?(customerId: string, keep: string): Promise<void>;
 
   // ── subscriptions ──────────────────────────────────────────────────────
   getSubscription(subscriptionId: string): Promise<ProviderSubscription | null>;

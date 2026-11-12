@@ -155,6 +155,18 @@ describe("billing event handler: the only writer of billing state", () => {
     });
   });
 
+  it("a second live subscription for the same person raises a billing alert (possible double billing)", async () => {
+    const h = billingHarness();
+    const { subscriptionId } = await h.buy("u1", "pro", "monthly");
+    const sub = (await h.provider.getSubscription(subscriptionId))!;
+    await h.events.applySubscription({ ...sub, id: "sub_dup", updatedAt: sub.updatedAt + 1 }, null);
+    expect(h.fs.read("billing_alerts", "duplicate_u1_sub_dup")).toMatchObject({
+      kind: "duplicate_subscription",
+      uid: "u1",
+      subscriptionIds: [subscriptionId, "sub_dup"],
+    });
+  });
+
   it("cancel at period end: paid access to the exact end, then no plan with claim and email", async () => {
     const h = billingHarness();
     const { subscriptionId } = await h.buy("u1", "pro", "monthly");

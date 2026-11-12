@@ -495,6 +495,18 @@ export class BillingService {
       promoCode = v.promo.code;
     }
     const customerId = await this.customerId(uid, email, provider);
+    // Ask the provider too: our mirror only updates when its webhook arrives,
+    // so a second tab could otherwise start a second subscription.
+    if (
+      provider.liveSubscriptionIds &&
+      (await provider.liveSubscriptionIds(customerId)).length > 0
+    ) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: "already_subscribed",
+        message: "You already have a subscription. Change your plan instead.",
+      });
+    }
     const day = new Date(this.clock.now()).toISOString().slice(0, 10);
     const idempotencyKey = createHash("sha256")
       .update([uid, price.lookupKey, promoId ?? "", day].join("|"))
@@ -511,6 +523,8 @@ export class BillingService {
       billing,
       trialDays,
     });
+    // One checkout at a time: an older unpaid one (another tab, another plan) is closed.
+    await provider.closeOtherCheckouts?.(customerId, session.id);
     const now = this.clock.nowIso();
     // Region (country/state/ZIP). The full address stays with the provider.
     await this.db
