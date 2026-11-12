@@ -73,7 +73,7 @@ describe("7-day free trial on every plan (once per email, card required)", () =>
     const { u } = await a.subscribe("t4", "starter", "monthly");
     a.clock.freeze(T0 + 2 * DAY);
     const p = (await u.post("/api/billing/change/preview", { planId: "pro", interval: "monthly" })).body;
-    expect(p).toMatchObject({ kind: "upgrade", amountDueNow: 0 });
+    expect(p).toMatchObject({ kind: "upgrade", amountDueNow: 0, breakdown: null, trialEndsAt: new Date(T0 + 7 * DAY).toISOString() });
     await u.post("/api/billing/change", { planId: "pro", interval: "monthly", expectedAmountDue: 0, prorationDate: p.prorationDate });
     expect((await u.get("/api/me/entitlements")).body).toMatchObject({ planId: "pro", status: "TRIALING" });
     await a.advanceDays(6);

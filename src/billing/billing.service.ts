@@ -658,8 +658,10 @@ export class BillingService {
       ...preview,
       fromPlanId: m.planId,
       fromInterval: m.interval,
+      /** In the free trial nothing has been paid: no proration breakdown; the first charge is at trialEndsAt. */
+      trialEndsAt: m.status === "TRIALING" ? m.currentPeriodEnd : null,
       breakdown:
-        kind === "scheduled"
+        kind === "scheduled" || m.status === "TRIALING"
           ? null
           : changeBreakdown(
               preview,
