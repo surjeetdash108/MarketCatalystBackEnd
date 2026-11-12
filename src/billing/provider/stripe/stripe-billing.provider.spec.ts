@@ -659,6 +659,32 @@ describe("StripeBillingProvider — subscriptions and plan changes", () => {
     ).toMatchObject({ billing_cycle_anchor: "now" });
   });
 
+  it("a scheduled change keeps the customer's discount (retention/promo) on both schedule phases", async () => {
+    const m = mockClient();
+    m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ discounts: [{ id: "di_ret", coupon: { id: "mc_retention_x", percent_off: 50, duration: "repeating" } }] })));
+    const { p } = provider({}, m);
+    await p.changePlan({ subscriptionId: "sub_1", target: STARTER_M, kind: "scheduled", prorationDate: Date.now(), expectedAmountDue: null });
+    const [, upd] = m.calls["subscriptionSchedules.update"][0] as [string, { phases: Array<Record<string, unknown>> }];
+    expect(upd.phases[0].discounts).toEqual([{ discount: "di_ret" }]);
+    expect(upd.phases[1].discounts).toEqual([{ discount: "di_ret" }]);
+  });
+
+  it("retention on a subscription with a pending scheduled change also rewrites the schedule's phases with the discount", async () => {
+    const m = mockClient();
+    const end = T + 30 * 86400;
+    m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ schedule: "sub_sched_1", discounts: [{ id: "di_ret", coupon: { id: "mc_retention_x" } }] })));
+    m.raw.subscriptionSchedules.retrieve = jest.fn(() => Promise.resolve({ id: "sub_sched_1", status: "active", phases: [
+      { items: [{ price: "price_pro_monthly" }], start_date: T, end_date: end, metadata: { planId: "pro" } },
+      { items: [{ price: { id: "price_starter_monthly" } }], start_date: end, end_date: end + 30 * 86400, metadata: { planId: "starter" }, proration_behavior: "none" },
+    ] }));
+    const { p } = provider({}, m);
+    await p.applyRetentionDiscount({ subscriptionId: "sub_1", customerId: "cus_1", mode: "percent_next_invoices", percentOff: 50, invoices: 2 });
+    const [id, upd] = m.calls["subscriptionSchedules.update"].at(-1) as [string, { phases: Array<Record<string, unknown>> }];
+    expect(id).toBe("sub_sched_1");
+    expect(upd.phases.map((ph) => ph.discounts)).toEqual([[{ discount: "di_ret" }], [{ discount: "di_ret" }]]);
+    expect(upd.phases[1]).toMatchObject({ items: [{ price: "price_starter_monthly" }], proration_behavior: "none" });
+  });
+
   it("a stale preview is refused", async () => {
     const { p } = provider();
     await expect(

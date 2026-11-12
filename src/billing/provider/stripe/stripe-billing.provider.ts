@@ -993,6 +993,9 @@ export class StripeBillingProvider implements BillingProvider {
           })
         ).id;
       const trialEnd = sub.status === "trialing" ? sub.trial_end : null;
+      // A discount the customer has (retention offer, promo) carries into the
+      // new plan — schedule phases without it drop it at the switch.
+      const discounts = this.discountRefs(sub);
       await this.stripe.subscriptionSchedules.update(schedId, {
         end_behavior: "release",
         phases: [
@@ -1001,10 +1004,12 @@ export class StripeBillingProvider implements BillingProvider {
             start_date: item.current_period_start,
             end_date: item.current_period_end,
             ...(trialEnd ? { trial_end: trialEnd } : {}),
+            ...(discounts.length ? { discounts } : {}),
             metadata: { ...sub.metadata },
           },
           {
             items: [{ price: priceId }],
+            ...(discounts.length ? { discounts } : {}),
             metadata,
             proration_behavior: "none",
           },
@@ -1083,6 +1088,43 @@ export class StripeBillingProvider implements BillingProvider {
     });
   }
 
+  /** The subscription's current discounts as references a schedule phase can carry. */
+  private discountRefs(sub: Stripe.Subscription): Array<{ discount: string }> {
+    return (sub.discounts ?? [])
+      .map((d) => (typeof d === "string" ? d : d.id))
+      .filter(Boolean)
+      .map((id) => ({ discount: id }));
+  }
+
+  /** Rewrites an active schedule's current and future phases with the subscription's discounts. */
+  private async carryDiscountsIntoSchedule(subscriptionId: string): Promise<void> {
+    const sub = await this.retrieveSub(subscriptionId);
+    const sched =
+      typeof sub.schedule === "string"
+        ? await this.stripe.subscriptionSchedules.retrieve(sub.schedule)
+        : (sub.schedule ?? null);
+    if (!sched || sched.status !== "active") return;
+    const discounts = this.discountRefs(sub);
+    const now = Math.floor(Date.now() / 1000);
+    const phases = sched.phases
+      .filter((ph) => !ph.end_date || ph.end_date > now)
+      .map((ph) => ({
+        items: ph.items.map((i) => ({
+          price: typeof i.price === "string" ? i.price : i.price.id,
+        })),
+        start_date: ph.start_date,
+        ...(ph.end_date ? { end_date: ph.end_date } : {}),
+        ...(ph.trial_end ? { trial_end: ph.trial_end } : {}),
+        metadata: { ...(ph.metadata ?? {}) },
+        ...(ph.proration_behavior ? { proration_behavior: ph.proration_behavior } : {}),
+        ...(discounts.length ? { discounts } : {}),
+      }));
+    await this.stripe.subscriptionSchedules.update(sched.id, {
+      end_behavior: "release",
+      phases,
+    } as Stripe.SubscriptionScheduleUpdateParams);
+  }
+
   async applyRetentionDiscount(
     input: RetentionDiscountInput,
   ): Promise<{ description: string; appliesTo: string }> {
@@ -1099,6 +1141,9 @@ export class StripeBillingProvider implements BillingProvider {
       await this.stripe.subscriptions.update(input.subscriptionId, {
         discounts: [{ coupon }],
       });
+      // With a scheduled change pending, the schedule's phases must carry the
+      // discount too, or it is dropped when the new plan starts.
+      await this.carryDiscountsIntoSchedule(input.subscriptionId);
       return {
         description: `${input.percentOff}% off your next ${input.invoices} invoices`,
         appliesTo: "next_invoices",
