@@ -118,8 +118,10 @@ export interface BillingProvider {
     prorationDate: number;
     expectedAmountDue: number | null;
     expectedCredit?: number | null;
-    /** Upgrades: the payment method entered for this change (Stripe); charged instead of any card on file. */
+    /** The card entered in the payment step for this change (Stripe): it becomes the subscription's card and pays anything due now. */
     paymentMethodId?: string | null;
+    /** Name and billing address entered in the payment step. */
+    billing?: BillingDetails | null;
   }): Promise<ChangeResult>;
   /** The customer's account credit (minor units, ≥ 0) used on future invoices. */
   getCreditBalance(customerId: string): Promise<number>;

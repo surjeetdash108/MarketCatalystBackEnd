@@ -848,6 +848,7 @@ export class FakeBillingProvider implements BillingProvider {
     expectedAmountDue: number | null;
     expectedCredit?: number | null;
     paymentMethodId?: string | null;
+    billing?: BillingDetails | null;
   }): Promise<ChangeResult> {
     const sub = await this.mustSubscription(input.subscriptionId);
     if (input.kind === "scheduled") {

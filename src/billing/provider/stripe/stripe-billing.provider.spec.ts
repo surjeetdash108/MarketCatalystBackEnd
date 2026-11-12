@@ -455,7 +455,7 @@ describe("StripeBillingProvider — subscriptions and plan changes", () => {
       prorationDate: T * 1000,
       expectedAmountDue: null,
     });
-    const [id, args] = m.calls["subscriptions.update"].at(-1) as [string, Record<string, unknown>];
+    const [id, args] = m.calls["subscriptions.update"][0] as [string, Record<string, unknown>];
     expect(id).toBe("sub_1");
     expect(args).toMatchObject({ proration_behavior: "always_invoice", items: [{ price: "price_starter_monthly" }] });
     expect("cancel_at_period_end" in args).toBe(false);
@@ -492,7 +492,11 @@ describe("StripeBillingProvider — subscriptions and plan changes", () => {
     });
   });
 
-  it("upgrade: prorated invoice charged now; nothing changes until it's paid (pending_if_incomplete)", async () => {
+  // Stripe rejects anything but these with payment_behavior=pending_if_incomplete
+  // (verified against Stripe test mode 2026-11-13: default_payment_method → 400).
+  const PENDING_OK = new Set(["items", "proration_behavior", "proration_date", "billing_cycle_anchor", "payment_behavior", "expand", "trial_end"]);
+
+  it("upgrade: prorated invoice charged now; the pending update carries only fields Stripe supports, metadata/resume only once applied", async () => {
     const { p, m } = provider();
     const r = await p.changePlan({
       subscriptionId: "sub_1",
@@ -506,22 +510,19 @@ describe("StripeBillingProvider — subscriptions and plan changes", () => {
       invoiceId: "in_1",
       amountCharged: 5900,
     });
-    const [, upd] = m.calls["subscriptions.update"][0] as [
-      string,
-      Record<string, unknown>,
-    ];
-    expect(upd).toMatchObject({
+    const [[, change], [, after]] = m.calls["subscriptions.update"] as Array<[string, Record<string, unknown>]>;
+    expect(change).toMatchObject({
       items: [{ id: "si_1", price: "price_elite_monthly" }],
       proration_behavior: "always_invoice",
       proration_date: T,
       payment_behavior: "pending_if_incomplete",
-      cancel_at_period_end: false,
-      metadata: { planId: "elite" },
     });
-    expect(upd.billing_cycle_anchor).toBeUndefined();
+    expect(Object.keys(change).filter((k) => !PENDING_OK.has(k))).toEqual([]);
+    expect(change.billing_cycle_anchor).toBeUndefined();
+    expect(after).toEqual({ metadata: { uid: "u1", planId: "elite", interval: "monthly" }, cancel_at_period_end: false });
   });
 
-  it("upgrade with the card entered in the payment step: that card is attached and charged (default_payment_method), not a card on file", async () => {
+  it("the card and billing address from the payment step become the subscription's (separate update), then the change is charged", async () => {
     const { p, m } = provider();
     await p.changePlan({
       subscriptionId: "sub_1",
@@ -530,10 +531,63 @@ describe("StripeBillingProvider — subscriptions and plan changes", () => {
       prorationDate: T * 1000,
       expectedAmountDue: null,
       paymentMethodId: "pm_new123",
+      billing: { name: "Pat Doe", address: { line1: "1 Main St", line2: null, city: "Austin", state: "TX", postalCode: "78701", country: "US" } },
     });
+    expect(m.calls["customers.update"][0]).toEqual(["cus_1", expect.objectContaining({ name: "Pat Doe", address: expect.objectContaining({ line1: "1 Main St", postal_code: "78701", country: "US" }) })]);
     expect(m.calls["paymentMethods.attach"][0]).toEqual(["pm_new123", { customer: "cus_1" }]);
-    const [, upd] = m.calls["subscriptions.update"].at(-1) as [string, Record<string, unknown>];
-    expect(upd).toMatchObject({ default_payment_method: "pm_new123", payment_behavior: "pending_if_incomplete" });
+    const ups = m.calls["subscriptions.update"] as Array<[string, Record<string, unknown>]>;
+    expect(ups[0]).toEqual(["sub_1", { default_payment_method: "pm_new123" }]);
+    expect(ups[1][1]).toMatchObject({ payment_behavior: "pending_if_incomplete" });
+    expect(Object.keys(ups[1][1]).filter((k) => !PENDING_OK.has(k))).toEqual([]);
+  });
+
+  it("free trial: monthly → annual keeps the trial (no billing_cycle_anchor — Stripe refuses one before the trial end)", async () => {
+    const m = mockClient();
+    m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ status: "trialing", trial_end: T + 7 * 86400 })));
+    const { p } = provider({}, m);
+    const target = { ...PRO_M, interval: "annual" as const, lookupKey: "pro_annual", amount: 56640 };
+    await p.previewChange({ subscriptionId: "sub_1", target, kind: "upgrade" });
+    const [prev] = m.calls["invoices.createPreview"].at(-1) as [{ subscription_details: Record<string, unknown> }];
+    expect(prev.subscription_details.billing_cycle_anchor).toBeUndefined();
+    await p.changePlan({ subscriptionId: "sub_1", target, kind: "upgrade", prorationDate: T * 1000, expectedAmountDue: null });
+    const [, change] = m.calls["subscriptions.update"][0] as [string, Record<string, unknown>];
+    expect(change.billing_cycle_anchor).toBeUndefined();
+  });
+
+  it("free trial: a scheduled change keeps the trial end on the current phase (without it Stripe ends the trial at once)", async () => {
+    const m = mockClient();
+    m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ status: "trialing", trial_end: T + 7 * 86400 })));
+    const { p } = provider({}, m);
+    await p.changePlan({ subscriptionId: "sub_1", target: STARTER_M, kind: "scheduled", prorationDate: Date.now(), expectedAmountDue: null, paymentMethodId: "pm_9" });
+    const [, upd] = m.calls["subscriptionSchedules.update"][0] as [string, { phases: Array<Record<string, unknown>> }];
+    expect(upd.phases[0]).toMatchObject({ trial_end: T + 7 * 86400 });
+    // The card entered now is the one charged when the new plan starts.
+    expect(m.calls["subscriptions.update"][0]).toEqual(["sub_1", { default_payment_method: "pm_9" }]);
+  });
+
+  it("'already paid' is what was paid this period for the current plan: its paid invoice lines, net of discounts, before tax", async () => {
+    const m = mockClient();
+    const end = T + 30 * 86400;
+    (m.raw.invoices as Record<string, unknown>).list = jest.fn(() => Promise.resolve({ data: [
+      { lines: { data: [
+        { amount: 5900, period: { start: T, end }, pricing: { price_details: { price: "price_pro_monthly" } }, discount_amounts: [{ amount: 2950 }] },
+      ] } },
+      { lines: { data: [
+        { amount: 5900, period: { start: T - 30 * 86400, end: T }, pricing: { price_details: { price: "price_pro_monthly" } } },
+      ] } },
+    ] }));
+    m.raw.invoices.createPreview = jest.fn(() => Promise.resolve({
+      currency: "usd", subtotal: 0, total: 9000, amount_due: 9000, total_taxes: [], total_discount_amounts: [],
+      lines: { data: [
+        { amount: -2655, description: "Unused time on Pro", period: { start: T + 3 * 86400, end }, proration: true },
+        { amount: 11655, description: "Remaining time on Elite", period: { start: T + 3 * 86400, end }, proration: true },
+      ] },
+    }));
+    const { p } = provider({}, m);
+    const prev = await p.previewChange({ subscriptionId: "sub_1", target: ELITE_M, kind: "upgrade" });
+    expect(prev.alreadyPaid).toBe(2950);
+    expect(prev.unusedCredit).toBe(2655);
+    expect(prev.newPlanCharge).toBe(11655);
   });
 
   it("upgrade needing 3-D Secure returns the client secret; monthly→annual restarts the period", async () => {

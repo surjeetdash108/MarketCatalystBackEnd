@@ -235,6 +235,8 @@ describe("Change breakdown Stripe reconciliation", () => {
                     currency: "usd",
                     unit_amount: 3900,
                   },
+                  current_period_start: 1762819200,
+                  current_period_end: 1765454400,
                 },
               ],
             },
@@ -276,6 +278,16 @@ describe("Change breakdown Stripe reconciliation", () => {
                 total: 3900,
                 amount_paid: 3900,
                 total_taxes: [],
+                // The renewal line for the current price and period: what was paid for Starter.
+                lines: {
+                  data: [
+                    {
+                      amount: 3900,
+                      period: { start: 1762819200, end: 1765454400 },
+                      pricing: { price_details: { price: "price_starter" } },
+                    },
+                  ],
+                },
               },
             ],
           }),

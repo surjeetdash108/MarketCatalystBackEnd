@@ -325,6 +325,26 @@ export class StripeBillingProvider implements BillingProvider {
 
   // ── checkout ──────────────────────────────────────────────────────────
 
+  /** Name and billing address on the customer. The full address stays at Stripe (Stripe Tax uses it). */
+  private async applyBilling(
+    customerId: string,
+    billing: BillingDetails,
+  ): Promise<void> {
+    const a = billing.address;
+    await this.stripe.customers.update(customerId, {
+      name: billing.name,
+      ...(billing.phone ? { phone: billing.phone } : {}),
+      address: {
+        line1: a.line1,
+        line2: a.line2 ?? undefined,
+        city: a.city,
+        state: a.state ?? undefined,
+        postal_code: a.postalCode ?? undefined,
+        country: a.country,
+      },
+    });
+  }
+
   async previewCheckout(input: {
     price: PriceRef;
     discount: AppliedDiscount | null;
@@ -385,22 +405,7 @@ export class StripeBillingProvider implements BillingProvider {
     billing?: BillingDetails | null;
     trialDays?: number;
   }): Promise<CheckoutSession> {
-    if (input.billing) {
-      // The full address stays at Stripe (it is also what Stripe Tax uses).
-      const a = input.billing.address;
-      await this.stripe.customers.update(input.customerId, {
-        name: input.billing.name,
-        ...(input.billing.phone ? { phone: input.billing.phone } : {}),
-        address: {
-          line1: a.line1,
-          line2: a.line2 ?? undefined,
-          city: a.city,
-          state: a.state ?? undefined,
-          postal_code: a.postalCode ?? undefined,
-          country: a.country,
-        },
-      });
-    }
+    if (input.billing) await this.applyBilling(input.customerId, input.billing);
     const price = await this.priceId(input.price.lookupKey);
     const coupon = input.discount
       ? await this.couponFor(input.discount, input.price.currency)
@@ -700,7 +705,11 @@ export class StripeBillingProvider implements BillingProvider {
     return out;
   }
 
-  /** Upgrades charge now; a change of interval restarts the billing period (anchor now). */
+  /**
+   * Upgrades charge now; a change of interval restarts the billing period
+   * (anchor now) — except in the free trial: Stripe refuses an anchor before
+   * the trial end, and the trial must keep running (first charge at its end).
+   */
   private changeParams(
     sub: Stripe.Subscription,
     target: PriceRef,
@@ -710,12 +719,61 @@ export class StripeBillingProvider implements BillingProvider {
     const item = sub.items.data[0];
     const intervalChange =
       CATALOG.get(item.price.lookup_key ?? "")?.interval !== target.interval;
+    const trialing = sub.status === "trialing";
     return {
       items: [{ id: item.id, price: priceId }],
       proration_behavior: "always_invoice" as const,
       proration_date: Math.floor(prorationDate / 1000),
-      ...(intervalChange ? { billing_cycle_anchor: "now" as const } : {}),
+      ...(intervalChange && !trialing
+        ? { billing_cycle_anchor: "now" as const }
+        : {}),
     };
+  }
+
+  /**
+   * What the customer actually paid for the current plan in the current
+   * period: the paid invoice lines for the subscription's current price that
+   * end at the current period end, net of their discounts, before tax. Covers
+   * a renewal (one full-period line) and an earlier mid-period change (a
+   * "remaining time" proration line). null when it can't be read.
+   */
+  private async paidForCurrentPeriod(
+    sub: Stripe.Subscription,
+  ): Promise<number | null> {
+    const item = sub.items.data[0];
+    if (!item) return null;
+    const priceId = item.price.id;
+    const periodEnd = item.current_period_end;
+    try {
+      const list = await this.stripe.invoices.list({
+        subscription: sub.id,
+        status: "paid",
+        limit: 10,
+      });
+      let paid = 0;
+      let found = false;
+      for (const inv of list?.data ?? []) {
+        for (const l of inv.lines?.data ?? []) {
+          const raw = l as unknown as {
+            pricing?: { price_details?: { price?: string | { id?: string } } };
+            price?: string | { id?: string };
+            discount_amounts?: Array<{ amount: number }>;
+          };
+          const lp = raw.pricing?.price_details?.price ?? raw.price ?? null;
+          const linePrice = typeof lp === "string" ? lp : (lp?.id ?? null);
+          if (linePrice !== priceId || l.period?.end !== periodEnd || l.amount <= 0)
+            continue;
+          paid += l.amount - sumAmounts(raw.discount_amounts);
+          found = true;
+        }
+      }
+      return found ? paid : null;
+    } catch (err) {
+      this.logger.warn(
+        `paid-for-period lookup failed for ${sub.id}: ${(err as Error).message}`,
+      );
+      return null;
+    }
   }
 
   async getCreditBalance(customerId: string): Promise<number> {
@@ -786,23 +844,8 @@ export class StripeBillingProvider implements BillingProvider {
       .filter((l) => l.amount > 0)
       .reduce((a, l) => a + l.amount, 0);
 
-    let alreadyPaid: number | null = null;
-    try {
-      const invList = await this.stripe.invoices.list({
-        subscription: sub.id,
-        status: "paid",
-        limit: 1,
-      });
-      const lastPaid = invList?.data?.[0];
-      if (lastPaid) {
-        const lastPaidTax = sumAmounts(lastPaid.total_taxes);
-        alreadyPaid = Math.max(0, lastPaid.total - lastPaidTax);
-      }
-    } catch (err) {
-      this.logger.warn(
-        `Failed to retrieve last paid invoice for ${sub.id}: ${(err as Error).message}`,
-      );
-    }
+    const alreadyPaid =
+      sub.status === "trialing" ? 0 : await this.paidForCurrentPeriod(sub);
 
     return {
       kind: input.kind,
@@ -834,14 +877,53 @@ export class StripeBillingProvider implements BillingProvider {
     expectedAmountDue: number | null;
     expectedCredit?: number | null;
     paymentMethodId?: string | null;
+    billing?: BillingDetails | null;
   }): Promise<ChangeResult> {
     const sub = await this.retrieveSub(input.subscriptionId);
     const priceId = await this.priceId(input.target.lookupKey);
     const scheduleId = idOf(
       sub.schedule as string | Stripe.SubscriptionSchedule | null,
     );
+    const customer = idOf(sub.customer)!;
+    const metadata = {
+      ...sub.metadata,
+      planId: input.target.planId,
+      interval: input.target.interval,
+    };
+    // The charge (or credit) must equal the preview exactly, or nothing changes.
+    if (input.kind !== "scheduled") {
+      const expected =
+        input.kind === "upgrade"
+          ? input.expectedAmountDue
+          : (input.expectedCredit ?? null);
+      if (expected != null) {
+        const fresh = await this.previewChange({
+          subscriptionId: sub.id,
+          target: input.target,
+          kind: input.kind,
+        });
+        const actual =
+          input.kind === "upgrade" ? fresh.amountDueNow : fresh.creditToBalance;
+        if (actual !== expected) throw new PreviewStaleError(expected, actual);
+      }
+    }
+    // Every change is paid like a first purchase: the card and billing address
+    // entered in the payment step become the subscription's — that card pays
+    // anything due now and every later renewal. A separate update, because
+    // Stripe accepts only proration fields together with pending_if_incomplete.
+    if (input.billing) await this.applyBilling(customer, input.billing);
+    if (input.paymentMethodId) {
+      await this.stripe.paymentMethods.attach(input.paymentMethodId, {
+        customer,
+      });
+      await this.stripe.subscriptions.update(sub.id, {
+        default_payment_method: input.paymentMethodId,
+      });
+    }
     if (input.kind === "scheduled") {
-      // Annual → monthly: keep the annual plan to period end, then the new price via a schedule.
+      // Lower plan or annual → monthly: keep the current plan to period end,
+      // then the new price via a schedule. In the free trial the first phase
+      // keeps the trial end — without it Stripe ends the trial at once.
       const item = sub.items.data[0];
       const schedId =
         scheduleId ??
@@ -850,6 +932,7 @@ export class StripeBillingProvider implements BillingProvider {
             from_subscription: sub.id,
           })
         ).id;
+      const trialEnd = sub.status === "trialing" ? sub.trial_end : null;
       await this.stripe.subscriptionSchedules.update(schedId, {
         end_behavior: "release",
         phases: [
@@ -857,15 +940,12 @@ export class StripeBillingProvider implements BillingProvider {
             items: [{ price: item.price.id }],
             start_date: item.current_period_start,
             end_date: item.current_period_end,
+            ...(trialEnd ? { trial_end: trialEnd } : {}),
             metadata: { ...sub.metadata },
           },
           {
             items: [{ price: priceId }],
-            metadata: {
-              ...sub.metadata,
-              planId: input.target.planId,
-              interval: input.target.interval,
-            },
+            metadata,
             proration_behavior: "none",
           },
         ],
@@ -875,19 +955,6 @@ export class StripeBillingProvider implements BillingProvider {
         effectiveAt: iso(item.current_period_end)!,
       };
     }
-    // The charge (or credit) must equal the preview exactly, or nothing changes.
-    const expected =
-      input.kind === "upgrade" ? input.expectedAmountDue : (input.expectedCredit ?? null);
-    if (expected != null) {
-      const fresh = await this.previewChange({
-        subscriptionId: sub.id,
-        target: input.target,
-        kind: input.kind,
-      });
-      const actual =
-        input.kind === "upgrade" ? fresh.amountDueNow : fresh.creditToBalance;
-      if (actual !== expected) throw new PreviewStaleError(expected, actual);
-    }
     // A change drops a pending (scheduled) change.
     if (scheduleId) await this.stripe.subscriptionSchedules.release(scheduleId);
     const p = this.changeParams(
@@ -896,27 +963,11 @@ export class StripeBillingProvider implements BillingProvider {
       priceId,
       input.prorationDate,
     );
-    // Upgrade: charge the card entered in the payment step for this change.
-    // Attaching it to the customer is what lets Stripe charge it (and renew
-    // the subscription); our servers only ever see the pm_ id.
-    let paymentMethod: string | undefined;
-    if (input.kind === "upgrade" && input.paymentMethodId) {
-      await this.stripe.paymentMethods.attach(input.paymentMethodId, {
-        customer: idOf(sub.customer)!,
-      });
-      paymentMethod = input.paymentMethodId;
-    }
+    // Only fields Stripe supports with pending_if_incomplete: nothing changes
+    // unless the prorated invoice is paid.
     const updated = await this.stripe.subscriptions.update(sub.id, {
       ...p,
-      ...(paymentMethod ? { default_payment_method: paymentMethod } : {}),
-      // An upgrade resumes a cancelling plan; a downgrade keeps the cancel date.
-      ...(input.kind === "upgrade" ? { cancel_at_period_end: false } : {}),
       payment_behavior: "pending_if_incomplete",
-      metadata: {
-        ...sub.metadata,
-        planId: input.target.planId,
-        interval: input.target.interval,
-      },
       expand: ["latest_invoice.confirmation_secret"],
     });
     const inv =
@@ -924,6 +975,12 @@ export class StripeBillingProvider implements BillingProvider {
         ? updated.latest_invoice
         : null;
     if (!updated.pending_update) {
+      // Applied: record the plan on the subscription; an upgrade resumes a
+      // cancelling plan, a downgrade keeps its cancel date.
+      await this.stripe.subscriptions.update(sub.id, {
+        metadata,
+        ...(input.kind === "upgrade" ? { cancel_at_period_end: false } : {}),
+      });
       return {
         status: "applied",
         invoiceId: inv?.id ?? null,
