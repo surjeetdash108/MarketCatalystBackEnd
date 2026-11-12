@@ -2,6 +2,7 @@ import { Injectable, Optional } from "@nestjs/common";
 import { AppClock } from "../common/app-clock";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { PlansService } from "./plans.service";
+import { emailHash } from "../billing/retention/email-normalise";
 import {
   DEFAULT_PLAN_ID,
   ENTITLEMENT_KEYS,
@@ -97,6 +98,11 @@ export class SubscriptionsService {
     } catch {
       /* ignore */
     }
+    // Every email that ever created an account is remembered (hashed), so the
+    // 7-day intro counts from the FIRST account with that email — deleting the
+    // account and signing up again doesn't give another free week.
+    const firstMs = await this.firstAccountMs(userId, uData);
+    if (firstMs != null) uData.introStartedAt = firstMs;
     return this.resolve(
       userId,
       uData,
@@ -104,6 +110,45 @@ export class SubscriptionsService {
         ? mirrorSnap.data()
         : null) as SubscriptionMirror | null,
     );
+  }
+
+  private readonly firstAccountCache = new Map<string, number>();
+
+  /**
+   * signup_claims/{sha256(normalised email)}: when the first account with this
+   * email was created. Written once (create-if-absent); never deleted with an
+   * account. Returns that time in ms, or null without an email/creation time.
+   */
+  private async firstAccountMs(
+    uid: string,
+    u: Record<string, unknown>,
+  ): Promise<number | null> {
+    const hit = this.firstAccountCache.get(uid);
+    if (hit !== undefined) return hit;
+    const email = typeof u.email === "string" ? u.email : null;
+    const created = createdMsOf(u);
+    if (!email || !Number.isFinite(created)) return null;
+    const ref = this.firebase.firestore
+      .collection("signup_claims")
+      .doc(emailHash(email));
+    let first = created;
+    try {
+      first = await this.firebase.firestore.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const prior = snap.exists ? Date.parse(String(snap.data()?.firstCreatedAt)) : NaN;
+        if (Number.isFinite(prior) && prior <= created) return prior;
+        tx.set(ref, {
+          firstCreatedAt: new Date(created).toISOString(),
+          firstUid: uid,
+          claimedAt: new Date(this.clock.now()).toISOString(),
+        });
+        return created;
+      });
+    } catch {
+      return null; // never block entitlements on this record
+    }
+    this.firstAccountCache.set(uid, first);
+    return first;
   }
 
   /**
@@ -152,21 +197,11 @@ export class SubscriptionsService {
     // New account, never subscribed: INTRO_DAYS of the intro feature groups
     // (Market Catalyst), no card — then "Choose a plan".
     if (!mirror && !entitled) {
-      let createdMs: number = NaN;
-      if (u.createdAt) {
-        if (typeof (u.createdAt as { toMillis?: () => number }).toMillis === "function") {
-          createdMs = (u.createdAt as { toMillis: () => number }).toMillis();
-        } else if (typeof (u.createdAt as { toDate?: () => Date }).toDate === "function") {
-          createdMs = (u.createdAt as { toDate: () => Date }).toDate().getTime();
-        } else if (typeof u.createdAt === "number") {
-          createdMs = u.createdAt;
-        } else if (typeof u.createdAt === "string") {
-          createdMs = Date.parse(u.createdAt);
-        }
-      }
-      if (Number.isNaN(createdMs) && u.accountCreatedAt) {
-        createdMs = Date.parse(String(u.accountCreatedAt));
-      }
+      let createdMs = createdMsOf(u);
+      // The first account ever made with this email (signup_claims): a
+      // deleted-and-recreated account doesn't restart the intro.
+      const first = Number(u.introStartedAt);
+      if (Number.isFinite(first) && (!Number.isFinite(createdMs) || first < createdMs)) createdMs = first;
       const introEnd = createdMs + INTRO_DAYS * DAY;
       // User must verify email (or Google sign-in) to receive 7-day free trial intro access
       const isVerified = u.emailVerified !== false;
@@ -225,4 +260,25 @@ export class SubscriptionsService {
       entitlements,
     };
   }
+}
+
+/** An account's creation time (ms) from the user document or the Auth record; NaN when unknown. */
+export function createdMsOf(u: Record<string, unknown>): number {
+  let createdMs = NaN;
+  const c = u.createdAt as unknown;
+  if (c) {
+    if (typeof (c as { toMillis?: () => number }).toMillis === "function") {
+      createdMs = (c as { toMillis: () => number }).toMillis();
+    } else if (typeof (c as { toDate?: () => Date }).toDate === "function") {
+      createdMs = (c as { toDate: () => Date }).toDate().getTime();
+    } else if (typeof c === "number") {
+      createdMs = c;
+    } else if (typeof c === "string") {
+      createdMs = Date.parse(c);
+    }
+  }
+  if (Number.isNaN(createdMs) && u.accountCreatedAt) {
+    createdMs = Date.parse(String(u.accountCreatedAt));
+  }
+  return createdMs;
 }
