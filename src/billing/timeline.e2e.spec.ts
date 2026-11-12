@@ -22,15 +22,12 @@ describe("plan history timeline", () => {
     expect(titles).toEqual(expect.arrayContaining([
       "Started a free trial of Elite (Monthly)",
       "Renewal of Elite (Monthly)",
-      "Changed plan: Elite (Monthly) → Pro (Monthly)",
-      "Credit to your account (change to Pro (Monthly))",
+      "Scheduled a change to Pro (Monthly)",
       "Cancelled the subscription",
     ]));
     for (const e of entries) expect(Number.isFinite(Date.parse(e.at))).toBe(true);
     const ats = entries.map((e: { at: string }) => e.at);
     expect([...ats].sort().reverse()).toEqual(ats);
-    const credit = entries.find((e: { kind: string }) => e.kind === "credit");
-    expect(credit).toMatchObject({ amount: -p.creditToBalance, detail: "Used automatically on your next invoice(s); not refunded to your card." });
     const charge = entries.find((e: { title: string }) => e.title === "Renewal of Elite (Monthly)");
     expect(charge).toMatchObject({ amount: 19900, kind: "payment" });
     const admin = (await a.admin.get("/api/admin/billing/subscribers/h1")).body;

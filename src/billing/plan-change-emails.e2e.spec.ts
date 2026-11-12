@@ -19,11 +19,10 @@ describe("every plan change sends a confirmation email", () => {
     expect(a.sender.outbox.some((m) => m.tag === "upgrade" && m.subject === "You're now on Elite")).toBe(true);
 
     p = (await u.post("/api/billing/change/preview", { planId: "pro", interval: "monthly" })).body;
-    await u.post("/api/billing/change", { planId: "pro", interval: "monthly", expectedCredit: p.creditToBalance, prorationDate: p.prorationDate });
-    const down = a.sender.outbox.find((m) => m.tag === "downgraded")!;
-    expect(down.subject).toBe("You're now on Pro");
-    expect(down.text).toMatch(/credited to your account .* not refunded to your card/);
-    expect(down.text).toMatch(/Your account credit is now \$\d/);
+    await u.post("/api/billing/change", { planId: "pro", interval: "monthly", prorationDate: p.prorationDate });
+    const down = a.sender.outbox.find((m) => m.tag === "downgrade_scheduled")!;
+    expect(down.subject).toBe("Your change to Pro is scheduled");
+    expect(down.text).toMatch(/You keep .* until/);
 
     await u.post("/api/billing/cancel");
     expect(last(a).tag).toBe("cancellation");

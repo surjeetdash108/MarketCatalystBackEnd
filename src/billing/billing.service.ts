@@ -76,7 +76,7 @@ export function classifyChange(
     return "upgrade";
   return planRank(target.planId) > planRank(current.planId)
     ? "upgrade"
-    : "downgrade";
+    : "scheduled";
 }
 
 /** The current period's price after an active percent discount (what was paid). */
