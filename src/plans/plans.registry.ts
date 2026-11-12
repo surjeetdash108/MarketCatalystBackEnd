@@ -554,6 +554,21 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
 
 /** The effective plan of an account with no active paid plan. Not a plan anyone can buy. */
 export const NO_PLAN_ID = "none";
+
+/**
+ * Free trial on every plan: card required, $0 today, the first charge when the
+ * trial ends. Once per person ever (normalised email, trial_claims/{hash}).
+ * 0 turns trials off.
+ */
+export const TRIAL_DAYS = 7;
+
+/**
+ * A new account that hasn't chosen a plan gets INTRO_DAYS of these feature
+ * groups (no card), then "Choose a plan". Counted from account creation.
+ */
+export const INTRO_DAYS = 7;
+export const INTRO_GROUPS: FeatureGroupId[] = ["marketDesk"];
+export const INTRO_PLAN_ID = "intro";
 /** @deprecated There is no default plan any more; kept as an alias of NO_PLAN_ID. */
 export const DEFAULT_PLAN_ID = NO_PLAN_ID;
 

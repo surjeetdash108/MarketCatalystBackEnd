@@ -90,6 +90,8 @@ export interface BillingProvider {
     successUrl: string;
     cancelUrl: string;
     idempotencyKey: string;
+    /** Free-trial days (0 = none): $0 today, the card is set up, the first charge at the end. */
+    trialDays?: number;
     /** Name/address/phone for the provider's customer record and tax. */
     billing?: BillingDetails | null;
   }): Promise<CheckoutSession>;

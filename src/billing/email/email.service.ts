@@ -93,8 +93,25 @@ export class EmailService {
       amount: number;
       currency: string;
       renewsAt: string;
+      /** Set when the plan starts with a free trial. */
+      trialEndsAt?: string | null;
+      renewalAmount?: number | null;
     },
   ) {
+    if (p.trialEndsAt) {
+      return this.send(
+        "welcome",
+        to,
+        `Your ${planName(p.planId)} free trial has started`,
+        [
+          `Your ${planName(p.planId)} plan (${p.interval}) is active with a free trial until ${longDate(p.trialEndsAt)}. Nothing was charged today.`,
+          p.renewalAmount != null
+            ? `On ${longDate(p.trialEndsAt)} your card is charged ${money(p.renewalAmount, p.currency)} plus any applicable tax, and the plan renews ${p.interval === "annual" ? "every year" : "every month"} until you cancel.`
+            : `Your first charge is on ${longDate(p.trialEndsAt)}.`,
+          "Cancel any time before then in Manage Plan and you pay nothing.",
+        ],
+      );
+    }
     return this.send(
       "welcome",
       to,
