@@ -31,3 +31,9 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - jobs image: `us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:f5caa19be18bcde0321a5ba332124b69de4829e5b87a17af6baf259377435c0d`
 - UI hosting version: `c986e35056103a26`
 - Staff list now 15 emails (the 13 former Lifetime Elite + sanjay.halle@inc108.com); to undo, roll back code first, the staff entries are harmless.
+
+## 2026-11-13 — owner list deploy (rollback values captured before)
+- backend worker: `market-catalyst-backend-00306-p28`
+- live API: `market-catalyst-live-00254-2l5`
+- jobs image: `us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:87e1ce0dea1dde4ca8994994a6fbc5df449c3d3c35d7892a80390bfc42032ae9`
+- UI hosting version: `01a34dac7cb0219f`
