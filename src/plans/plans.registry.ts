@@ -504,7 +504,7 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
     amount: 3900,
     currency: "USD",
     billingCycle: "monthly",
-    description: "Market Desk and Stock Intelligence.",
+    description: "Market Catalyst and Stock Intelligence.",
     featureFlags: grants(PLAN_GROUPS.starter),
     active: true,
     sortOrder: 1,
