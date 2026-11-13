@@ -885,6 +885,12 @@ export class BlogsAdminService {
   // ── reads ────────────────────────────────────────────────────────────────
 
   /** ALL blogs (any status), newest first, mapped to the console editor shape. */
+  /** One post in full (the same view list() returns), or null. */
+  async get(id: string): Promise<BlogAdminView | null> {
+    const [snap, theme] = await Promise.all([this.col.doc(id).get(), this.loadTheme()]);
+    return snap.exists ? this.toView(snap.id, snap.data() ?? {}, theme) : null;
+  }
+
   async list(): Promise<BlogAdminView[]> {
     // One read for the whole list — the design is a single shared document, so
     // resolving it per row would be N identical reads for one value.

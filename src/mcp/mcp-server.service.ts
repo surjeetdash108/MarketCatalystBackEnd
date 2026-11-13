@@ -6,6 +6,7 @@ import {
   composeDocument,
 } from "../blogs/blogs-admin.service";
 import type { BlogAdminBody } from "../blogs/blogs-admin.service";
+import { summarizePosts } from "./blog-list";
 import { MediaAdminService } from "../blogs/media-admin.service";
 import { SIMPLE_THEME, composeSimpleBody } from "./blog-templates/simple";
 import { RICHER_THEME, composeRicherBody } from "./blog-templates/richer";
@@ -79,12 +80,33 @@ export class McpServerService {
       "list_blog_posts",
       {
         description:
-          "List every blog post (any status — Draft and Published), newest first. Use this to find a post's id before update/delete/publish.",
-        inputSchema: {},
+          "List blog posts (Draft and Published), newest first, as summaries (id, title, status, dates — no body). Paged: 25 by default, up to 100; filter by status or a title search. Use it to find a post's id, then get_blog_post for its content, or update/delete/publish by id.",
+        inputSchema: {
+          limit: z.number().int().min(1).max(100).optional(),
+          offset: z.number().int().min(0).optional(),
+          status: z.enum(["Published", "Draft"]).optional(),
+          query: z.string().max(200).optional().describe("Case-insensitive text to find in the title."),
+        },
       },
-      async () => {
+      async ({ limit, offset, status, query }) => {
         try {
-          return text(await this.blogs.list());
+          return text(summarizePosts(await this.blogs.list(), { limit, offset, status, query }));
+        } catch (err) {
+          return errorText(err);
+        }
+      },
+    );
+
+    server.registerTool(
+      "get_blog_post",
+      {
+        description: "Returns one blog post in full (body HTML, design, metadata) by id.",
+        inputSchema: { id: z.string().min(1) },
+      },
+      async ({ id }) => {
+        try {
+          const post = await this.blogs.get(id);
+          return post ? text(post) : errorText(new Error(`No blog post with id ${id}`));
         } catch (err) {
           return errorText(err);
         }
