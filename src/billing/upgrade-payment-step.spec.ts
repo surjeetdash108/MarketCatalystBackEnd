@@ -2,9 +2,8 @@ import { BillingService } from "./billing.service";
 import { CONSENT_VERSION } from "./checkout/consent";
 
 /**
- * Every plan change is paid like a first purchase — with the card and billing
- * address the customer enters in the payment step, and the renewal consent —
- * never by silently charging a card on file.
+ * A plan change is confirmed in a pop-up and paid with the card on file; a new
+ * card and billing address are optional. The renewal consent is required.
  */
 function serviceWith(providerName: "stripe" | "fake", kind: "upgrade" | "downgrade" | "scheduled") {
   const changePlan = jest.fn().mockResolvedValue({ status: "applied", invoiceId: "in_1", amountCharged: 1333, effectiveAt: "x" });
@@ -26,20 +25,11 @@ function serviceWith(providerName: "stripe" | "fake", kind: "upgrade" | "downgra
 const BILLING = { name: "Pat Doe", address: { line1: "1 Main St", city: "Austin", state: "TX", postalCode: "78701", country: "US" } };
 const CONSENT = { accepted: true, version: CONSENT_VERSION };
 
-describe("every plan change is paid like a first purchase (Stripe)", () => {
-  it.each(["upgrade", "scheduled"] as const)("refuses a Stripe %s without the card entered for it", async (kind) => {
+describe("plan change (Stripe): card on file unless a new one is entered; consent required", () => {
+  it.each(["upgrade", "scheduled"] as const)("a Stripe %s without a new card uses the card on file", async (kind) => {
     const { svc, changePlan } = serviceWith("stripe", kind);
-    await expect(svc.changePlan("u1", { planId: "pro", interval: "monthly", expectedAmountDue: 1333, prorationDate: 0, billing: BILLING, consent: CONSENT })).rejects.toMatchObject({
-      response: { code: "payment_method_required" },
-    });
-    expect(changePlan).not.toHaveBeenCalled();
-  });
-  it("a $0 upgrade (free trial) still needs the card: it pays the new plan when the trial ends", async () => {
-    const { svc, changePlan } = serviceWith("stripe", "upgrade");
-    await expect(svc.changePlan("u1", { planId: "pro", interval: "monthly", expectedAmountDue: 0, prorationDate: 0, billing: BILLING, consent: CONSENT })).rejects.toMatchObject({
-      response: { code: "payment_method_required" },
-    });
-    expect(changePlan).not.toHaveBeenCalled();
+    await svc.changePlan("u1", { planId: "pro", interval: "monthly", expectedAmountDue: 1333, prorationDate: 0, consent: CONSENT });
+    expect(changePlan).toHaveBeenCalledWith(expect.objectContaining({ kind, paymentMethodId: null, billing: null }));
   });
   it("refuses a change without the full billing address, or without the renewal consent", async () => {
     const a = serviceWith("stripe", "upgrade");

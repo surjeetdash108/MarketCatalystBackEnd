@@ -986,8 +986,8 @@ export class StripeBillingProvider implements BillingProvider {
         if (actual !== expected) throw new PreviewStaleError(expected, actual);
       }
     }
-    // Every change is paid like a first purchase: the card and billing address
-    // entered in the payment step become the subscription's — that card pays
+    // Without a new card the subscription's card on file pays. A new card and
+    // billing address, when given, become the subscription's — that card pays
     // anything due now and every later renewal. A separate update, because
     // Stripe accepts only proration fields together with pending_if_incomplete.
     if (input.billing) await this.applyBilling(customer, input.billing);

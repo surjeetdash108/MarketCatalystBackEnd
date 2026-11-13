@@ -770,31 +770,21 @@ export class BillingService {
         message: "Preview the change before confirming it.",
       });
     }
-    // Every plan change is paid like a first purchase: the card and billing
-    // address entered in the payment step, never a card on file. That card
-    // pays anything due now and the new plan from its start date.
+    // A plan change is confirmed in a pop-up ("Are you sure?") and paid with
+    // the card on file. A new card and billing address are optional (sent
+    // only if the customer entered them); the renewal consent is required.
     let billing: ReturnType<typeof normaliseBilling> | null = null;
-    if (provider.name === "stripe") {
-      if (!input.paymentMethodId) {
-        throw new BadRequestException({
-          statusCode: 400,
-          code: "payment_method_required",
-          message: "Enter your card details to change your plan.",
-        });
-      }
-      billing = normaliseBilling(input.billing);
-      if (
-        input.consent?.accepted !== true ||
-        input.consent.version !== CONSENT_VERSION
-      ) {
-        throw new BadRequestException({
-          statusCode: 400,
-          code: "consent_required",
-          message: "Please agree to the renewal terms to continue.",
-        });
-      }
-    } else if (input.billing) {
-      billing = normaliseBilling(input.billing);
+    if (input.billing) billing = normaliseBilling(input.billing);
+    if (
+      provider.name === "stripe" &&
+      (input.consent?.accepted !== true ||
+        input.consent.version !== CONSENT_VERSION)
+    ) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: "consent_required",
+        message: "Please agree to the renewal terms to continue.",
+      });
     }
     try {
       const result = await provider.changePlan({
