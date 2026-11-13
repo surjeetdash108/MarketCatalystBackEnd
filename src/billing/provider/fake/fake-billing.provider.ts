@@ -1058,6 +1058,27 @@ export class FakeBillingProvider implements BillingProvider {
     });
   }
 
+  async cancelAllNow(customerId: string): Promise<number> {
+    const live = (await this.listAllSubscriptions()).filter(
+      (x) => x.customerId === customerId && !x.endedAt,
+    );
+    const now = this.clock.now();
+    for (const sub of live) {
+      sub.status = "canceled";
+      sub.canceledAt = iso(now);
+      sub.endedAt = iso(now);
+      sub.cancelAtPeriodEnd = false;
+      sub.updatedAt = now;
+      await this.write(C.subscriptions, sub);
+      await this.emit("subscription.deleted", {
+        uid: sub.uid,
+        customerId: sub.customerId,
+        subscriptionId: sub.id,
+      });
+    }
+    return live.length;
+  }
+
   async resume(subscriptionId: string): Promise<void> {
     const sub = await this.mustSubscription(subscriptionId);
     if (sub.endedAt) throw new Error("subscription has ended");

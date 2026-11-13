@@ -825,6 +825,18 @@ export const API_CATALOG = {
     store: ["referral_codes"],
     check: { skip: "user-specific" },
   },
+  "DELETE /api/account": {
+    summary:
+      "Delete my account (body confirm: \"DELETE\"): cancels any live subscription now (no refund), removes the profile with watchlists/portfolio/notifications, notes, feature requests, referral code, billing mirrors and the sign-in. Payment history is kept.",
+    store: ["users", "subscriptions", "customers", "stock_comments", "feature_requests", "referral_codes", "deleted_accounts"],
+    check: { skip: "destructive user write" },
+  },
+  "DELETE /api/admin/users/:uid": {
+    summary:
+      "Admin: delete a user everywhere — same as the user's own Delete account (sign-in, data, live subscription cancelled now).",
+    store: ["users", "subscriptions", "customers", "stock_comments", "feature_requests", "referral_codes", "deleted_accounts"],
+    check: { skip: "destructive admin write" },
+  },
   "POST /api/billing/referral/claim": {
     summary:
       "A new user who signed up from a referral link is attributed to the referrer (first code wins; new customers only). Both get $25 credit after the new user's first payment.",

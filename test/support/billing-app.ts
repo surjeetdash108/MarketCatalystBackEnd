@@ -52,7 +52,8 @@ import type { AuthTokenInfo } from "../../src/common/auth-token";
 import { CONSENT_VERSION } from "../../src/billing/checkout/consent";
 import { EmailVerificationService } from "../../src/account/email-verification.service";
 import { StaffAccessService } from "../../src/account/staff-access.service";
-import { AdminStaffController } from "../../src/account/admin-staff.controller";
+import { AdminStaffController, AdminUsersController } from "../../src/account/admin-staff.controller";
+import { AccountDeletionService } from "../../src/account/account-deletion.service";
 import { AccountController } from "../../src/account/account.controller";
 import { FakeFirestore } from "./fake-firestore";
 
@@ -159,11 +160,13 @@ export async function billingApp(opts: BillingAppOptions = {}) {
       AdminBillingController,
       AccountController,
       AdminStaffController,
+      AdminUsersController,
     ],
     providers: [
       { provide: FirebaseAdminService, useValue: firebase },
       { provide: ConfigService, useValue: config },
       { provide: AppClock, useValue: clock },
+      AccountDeletionService,
       { provide: BILLING_PROVIDER, useValue: provider },
       { provide: EMAIL_SENDER, useValue: sender },
       { provide: FirebaseAuthGuard, useClass: HeaderAuthGuard },
@@ -205,6 +208,7 @@ export async function billingApp(opts: BillingAppOptions = {}) {
         .post(url)
         .set("x-test-uid", uid)
         .send(body ?? {}),
+    delete: (url: string) => request(server).delete(url).set("x-test-uid", uid),
   });
   const admin = {
     get: (url: string) =>

@@ -1,6 +1,8 @@
 import {
+  BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Post,
@@ -12,6 +14,7 @@ import { IsString, Matches } from "class-validator";
 import { clientIp } from "../common/client-ip";
 import { CurrentUser } from "../common/current-user.decorator";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
+import { AccountDeletionService } from "./account-deletion.service";
 import { EmailVerificationService } from "./email-verification.service";
 import { StaffAccessService } from "./staff-access.service";
 
@@ -21,13 +24,36 @@ export class VerifyCodeDto {
   code!: string;
 }
 
+export class DeleteAccountDto {
+  @IsString()
+  confirm!: string;
+}
+
 @Controller("api/account")
 @UseGuards(FirebaseAuthGuard)
 export class AccountController {
   constructor(
     private readonly verification: EmailVerificationService,
     private readonly staff: StaffAccessService,
+    private readonly deletion: AccountDeletionService,
   ) {}
+
+  /**
+   * Delete my account: cancels any subscription now (no refund) and removes
+   * all my data and my sign-in. The body must say confirm: "DELETE".
+   */
+  @Delete()
+  @HttpCode(200)
+  async deleteMe(@CurrentUser() uid: string, @Body() body: DeleteAccountDto) {
+    if (body?.confirm !== "DELETE")
+      throw new BadRequestException({
+        statusCode: 400,
+        code: "confirm_required",
+        message: 'Type DELETE to confirm.',
+      });
+    const r = await this.deletion.deleteAccount(uid, "self");
+    return { deleted: true, subscriptionsCancelled: r.subscriptionsCancelled };
+  }
 
   /**
    * Called by the app after sign-in and on token refresh: sets/clears the

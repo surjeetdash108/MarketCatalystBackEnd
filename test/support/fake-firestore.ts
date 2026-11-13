@@ -71,6 +71,14 @@ export class FakeFirestore {
     return new FakeBatch(this);
   }
 
+  /** The doc and every subcollection under it (buckets are flat paths). */
+  async recursiveDelete(ref: FakeDocRef): Promise<void> {
+    this.bucket(ref.collectionName).delete(ref.id);
+    const prefix = `${ref.collectionName}/${ref.id}/`;
+    for (const name of [...this.collections.keys()])
+      if (name.startsWith(prefix)) this.collections.delete(name);
+  }
+
   /** Transactions run one at a time, which is what serializability amounts to. */
   private txTail: Promise<unknown> = Promise.resolve();
 

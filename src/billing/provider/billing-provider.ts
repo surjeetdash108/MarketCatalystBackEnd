@@ -99,6 +99,8 @@ export interface BillingProvider {
    * purchase is refused even before the first one's webhook has arrived.
    */
   liveSubscriptionIds?(customerId: string): Promise<string[]>;
+  /** Account deletion: end every live subscription now (no proration, no refund). Returns how many. */
+  cancelAllNow?(customerId: string): Promise<number>;
   /**
    * Closes the customer's other unfinished checkouts (an unpaid first invoice,
    * a trial card form not yet confirmed) so a second tab can't complete a

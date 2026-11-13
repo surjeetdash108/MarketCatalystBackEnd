@@ -62,6 +62,10 @@ export class FakeAuth {
       ? Promise.resolve(u)
       : Promise.reject(new Error("auth/user-not-found"));
   }
+  deleteUser(uid: string) {
+    if (!this.users.delete(uid)) return Promise.reject(Object.assign(new Error("auth/user-not-found"), { code: "auth/user-not-found" }));
+    return Promise.resolve();
+  }
   setCustomUserClaims(uid: string, claims: Record<string, unknown>) {
     const u = this.users.get(uid);
     if (!u) return Promise.reject(new Error("auth/user-not-found"));

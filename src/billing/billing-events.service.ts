@@ -399,6 +399,11 @@ export class BillingEventsService implements OnModuleInit {
   // ── subscriptions ─────────────────────────────────────────────────────
 
   /** Re-fetches the subscription from the provider and writes all derived state. */
+  /** deleted_accounts/{uid}: written when an account is deleted. */
+  private async accountDeleted(uid: string): Promise<boolean> {
+    return (await this.db.collection("deleted_accounts").doc(uid).get()).exists;
+  }
+
   async syncSubscription(
     subscriptionId: string,
     event: ProviderEvent | null,
@@ -406,6 +411,9 @@ export class BillingEventsService implements OnModuleInit {
     if (!this.provider) return "ignored";
     const sub = await this.provider.getSubscription(subscriptionId);
     if (!sub || !sub.uid) return "ignored";
+    // A deleted account: its subscription was cancelled on deletion; don't
+    // write its records back when the provider's late events arrive.
+    if (await this.accountDeleted(sub.uid)) return "ignored";
     return this.applySubscription(sub, event);
   }
 
@@ -778,6 +786,7 @@ export class BillingEventsService implements OnModuleInit {
     if (!this.provider) return;
     const inv = await this.provider.getInvoice(invoiceId);
     if (!inv || !inv.uid) return;
+    if (await this.accountDeleted(inv.uid)) return;
     await this.ensureCustomer(inv.uid, inv.customerId);
     const status = this.paymentStatus(inv, event);
     await this.db

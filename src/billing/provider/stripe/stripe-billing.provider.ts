@@ -583,6 +583,13 @@ export class StripeBillingProvider implements BillingProvider {
     return out;
   }
 
+  async cancelAllNow(customerId: string): Promise<number> {
+    const ids = await this.liveSubscriptionIds(customerId);
+    for (const id of ids)
+      await this.stripe.subscriptions.cancel(id, { prorate: false, invoice_now: false });
+    return ids.length;
+  }
+
   async closeOtherCheckouts(customerId: string, keep: string): Promise<void> {
     for await (const s of this.stripe.subscriptions.list({
       customer: customerId,
