@@ -141,3 +141,19 @@ describe("OnDemandService.getBarsByInterval", () => {
     expect(svc.isValidInterval("")).toBe(false);
   });
 });
+
+describe("stock_bars incremental refresh stays bounded", () => {
+  it("a stale 1-minute doc holding 30 days is trimmed back to its 5-day window on refresh", async () => {
+    const now = Date.now();
+    const old = Array.from({ length: 30 * 24 }, (_, i) => ({ t: now - (30 * DAY) + i * 3_600_000, o: 1, h: 1, l: 1, c: 1, v: 1, vw: 1 }));
+    const tail = old[old.length - 1].t;
+    const { svc, store } = harness([{ t: tail, o: 2, h: 2, l: 2, c: 2, v: 2, vw: 2 } as PolygonAggBar]);
+    store.set("NVDA_1min", { ticker: "NVDA", resolution: "1min", bars: old, rangeDays: 5, barCount: old.length, createdAt: new Date(now - 2 * DAY).toISOString(), updatedAt: "", source: "polygon-ondemand" });
+    await svc.getBars("NVDA", "1H");
+    const saved = store.get("NVDA_1min") as { bars: Array<{ t: number }>; barCount: number };
+    expect(Math.min(...saved.bars.map((b) => b.t))).toBeGreaterThanOrEqual(now - 6 * DAY - 60_000);
+    expect(saved.barCount).toBe(saved.bars.length);
+    expect(saved.bars.length).toBeLessThan(old.length / 4);
+  });
+});
+
