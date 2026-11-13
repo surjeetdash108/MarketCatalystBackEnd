@@ -137,13 +137,13 @@ describe("email provider selection and readiness", () => {
     expect(createEmailSender(configOf({}))).toBeInstanceOf(ConsoleEmailSender);
   });
 
-  it("production without SendGrid logs a startup warning and is not ready", () => {
+  it("production without SendGrid logs a startup warning and reports email not ready", () => {
     const warn = jest
       .spyOn(Logger.prototype, "warn")
       .mockImplementation(() => undefined);
     createEmailSender(configOf(PROD));
     expect(warn.mock.calls.map((c) => String(c[0])).join()).toMatch(
-      /EMAIL_PROVIDER is not set to sendgrid.*paid checkout stays unavailable/,
+      /EMAIL_PROVIDER is not set to sendgrid.*Stripe sends billing emails/,
     );
     expect(emailDeliveryReady(configOf(PROD))).toBe(false);
     expect(
@@ -160,7 +160,7 @@ describe("email provider selection and readiness", () => {
     ).toBe(true);
   });
 
-  it("production: paid checkout stays unavailable without real email, even with the flag on and a provider", async () => {
+  it("production: paid checkout opens without SendGrid (Firebase verifies email, Stripe sends billing emails)", async () => {
     const env = { ...PROD, SUBSCRIPTIONS_ENABLED: "true" };
     const fb = {
       firestore: {
@@ -168,22 +168,12 @@ describe("email provider selection and readiness", () => {
       },
     } as never;
     const provider = { name: "stripe" } as never;
-    const off = new BillingAccessService(
+    const access = new BillingAccessService(
       new FeatureFlagsService(fb, configOf(env)),
       provider,
       configOf(env),
     );
-    expect(await off.subscriptionsLive()).toBe(false);
-    const on = new BillingAccessService(
-      new FeatureFlagsService(fb, configOf(env)),
-      provider,
-      configOf({
-        ...env,
-        EMAIL_PROVIDER: "sendgrid",
-        EMAIL_PROVIDER_API_KEY: KEY,
-      }),
-    );
-    expect(await on.subscriptionsLive()).toBe(true);
+    expect(await access.subscriptionsLive()).toBe(true);
   });
 
   it("a failed notification never throws into billing; a failed verification code reaches the user", async () => {

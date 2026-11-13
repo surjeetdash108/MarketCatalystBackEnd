@@ -820,6 +820,9 @@ export class BillingEventsService implements OnModuleInit {
         },
         { merge: true },
       );
+    // A plan change confirmed by the bank (3-D Secure): finish it now it is paid.
+    if (status === "SUCCESS" && this.provider.completePendingChange)
+      await this.provider.completePendingChange(inv.id);
     const email = await this.emailFor(inv.uid);
     if (status === "SUCCESS") {
       const cref = this.db

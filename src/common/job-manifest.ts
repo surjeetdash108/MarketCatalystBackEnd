@@ -107,6 +107,7 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "sectors", trigger: "scheduler", schedules: ["0 18 * * 1-5"] },
   { name: "ticker-universe", trigger: "scheduler", schedules: ["0 8 * * 1-5"] },
   { name: "sec-form4", trigger: "scheduler", schedules: ["0 8 * * 6"], note: "moved off the weekday premarket path — insider filings tolerate a weekend cadence" },
+  { name: "billing-reconcile", trigger: "scheduler", schedules: ["30 3 * * *"], note: "nightly billing mirror repair from Stripe. Cloud Scheduler entry sync-billing-reconcile (deploy/create-billing-reconcile-scheduler.sh) — a code deploy does not create it" },
   { name: "sec-13f", trigger: "scheduler", schedules: ["0 9 * * 6"], note: "13-F is a QUARTERLY filing; a weekday fetch re-read unchanged data ahead of the market-hours jobs" },
   { name: "institutional-ownership", trigger: "scheduler", schedules: ["0 10 * * *"], note: "fires daily but only WORKS inside the 13-F filing window (quarter end to deadline+15) or on Saturdays — filings arrive daily across that window and essentially never outside it. A skipped day makes no vendor call" },
   { name: "edgar-ipo-pipeline", trigger: "scheduler", schedules: ["0 11 * * 6"], note: "S-1/424B registrations move over weeks — a weekday fetch bought nothing" },
@@ -200,7 +201,6 @@ const VIA_PREMARKET: string[] = [
  * have no scheduling mechanism at all.
  */
 const NOT_TRIGGERED: JobManifestEntry[] = [
-  { name: "billing-reconcile", trigger: "none", schedules: [], note: "nightly billing mirror repair; needs its Cloud Scheduler entry (POST /sync/billing-reconcile/run, 03:30 America/New_York) — prepared, awaiting approval" },
   { name: "strategy-lab-intraday", trigger: "none", schedules: [], note: "deliberately untriggered: intraday Strategy Lab scans run in the browser on live FMP bars; enable only with its own decision (it would refresh lab_ibars every 5 minutes)" },
   { name: "auto-purge", trigger: "none", schedules: [], note: "@Cron 0 0 * * * cannot fire on a CPU-throttled, scale-to-zero worker" },
   { name: "monthly-news-cleanup", trigger: "none", schedules: [], note: "registered only — no scheduler entry and no cron decorator" },

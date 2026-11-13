@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import { Logger } from "@nestjs/common";
+import { Logger, ServiceUnavailableException } from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
 import Stripe from "stripe";
 import {
@@ -366,12 +366,14 @@ export class StripeBillingProvider implements BillingProvider {
         ...(coupon ? { discounts: [{ coupon }] } : {}),
       });
     } catch (taxErr) {
+      // Fail closed: never show a total without the tax that will be charged.
       this.logger.warn(
-        `Stripe preview with automatic_tax failed: ${(taxErr as Error).message}; falling back without automatic tax`,
+        `Stripe tax preview failed: ${(taxErr as Error).message}`,
       );
-      inv = await this.stripe.invoices.createPreview({
-        subscription_details: { items: [{ price }] },
-        ...(coupon ? { discounts: [{ coupon }] } : {}),
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        code: "tax_unavailable",
+        message: "Couldn't calculate tax. Please try again.",
       });
     }
     const tax = sumAmounts(inv.total_taxes);
@@ -1050,14 +1052,55 @@ export class StripeBillingProvider implements BillingProvider {
       };
     }
     const secret = inv?.confirmation_secret?.client_secret ?? null;
-    if (inv && secret)
+    if (inv && secret) {
+      // The bank must confirm (3-D Secure). Tag the invoice with the change so
+      // the rest of it (plan metadata, and an upgrade resuming a cancelling
+      // plan) is finished when it is paid — see completePendingChange().
+      if (inv.id)
+        await this.stripe.invoices.update(inv.id, {
+          metadata: {
+            ...(inv.metadata ?? {}),
+            mc_change: input.kind,
+            mc_plan: input.target.planId,
+            mc_interval: input.target.interval,
+          },
+        });
       return {
         status: "requires_action",
         actionId: inv.id ?? "",
         clientSecret: secret,
         amountDue: inv.amount_due,
       };
+    }
     return { status: "payment_failed", reason: "card_declined" };
+  }
+
+  /**
+   * Finishes a plan change whose payment needed bank confirmation: once the
+   * tagged invoice is paid and Stripe has applied the pending update, record
+   * the new plan on the subscription and — for an upgrade — clear a pending
+   * cancellation. Idempotent; does nothing for any other invoice.
+   */
+  async completePendingChange(invoiceId: string): Promise<boolean> {
+    const inv = await this.stripe.invoices.retrieve(invoiceId);
+    const md = (inv.metadata ?? {}) as Record<string, string>;
+    if (!md.mc_change || !md.mc_plan || inv.status !== "paid") return false;
+    const subId = idOf(
+      (inv.parent?.subscription_details?.subscription ?? null) as
+        | string
+        | Stripe.Subscription
+        | null,
+    );
+    if (!subId) return false;
+    const sub = await this.stripe.subscriptions.retrieve(subId);
+    if (sub.pending_update) return false;
+    const resume = md.mc_change === "upgrade" && sub.cancel_at_period_end;
+    if (sub.metadata?.planId === md.mc_plan && sub.metadata?.interval === md.mc_interval && !resume) return false;
+    await this.stripe.subscriptions.update(sub.id, {
+      metadata: { ...sub.metadata, planId: md.mc_plan, interval: md.mc_interval },
+      ...(resume ? { cancel_at_period_end: false } : {}),
+    });
+    return true;
   }
 
   async cancelScheduledChange(subscriptionId: string): Promise<void> {

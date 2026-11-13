@@ -1,5 +1,4 @@
 import { ConfigService } from "@nestjs/config";
-import { emailDeliveryReady } from "./email/email-provider";
 import { inCheckoutPreview } from "./checkout-preview";
 import {
   Inject,
@@ -41,8 +40,8 @@ export class BillingAccessService {
 
   /** True when plan gating must be enforced and paid plans can be bought. */
   async subscriptionsLive(): Promise<boolean> {
-    // Production also needs real email: buyers must receive a verification code.
-    if (this.config && !emailDeliveryReady(this.config)) return false;
+    // Email verification is Firebase's own link and Stripe sends the billing
+    // emails, so paid checkout no longer waits on our own email provider.
     return this.provider !== null && (await this.flagEnabled());
   }
 

@@ -434,6 +434,27 @@ export interface NextReportEstimate {
 }
 
 /** A listing date that is a real date — not a vendor placeholder like 1900-01-01. */
+/**
+ * Hard cap on bars in one stock_bars doc. A bar is ~80 bytes in Firestore, so
+ * this keeps a doc well under the 1 MB document limit.
+ */
+export const MAX_BARS_PER_DOC = 8000;
+
+/**
+ * What an incrementally-refreshed doc keeps: only its window (rangeDays, plus
+ * a day of slack), never more than MAX_BARS_PER_DOC — newest bars win. Without
+ * this, append-only refreshes grew {TICKER}_1min / _5min past 1 MB (NVDA).
+ */
+export function trimBarsToRange<T extends { t: number }>(
+  bars: T[],
+  rangeDays: number,
+  nowMs: number,
+): T[] {
+  const cutoff = nowMs - (rangeDays + 1) * 86_400_000;
+  const kept = bars.filter((b) => b.t >= cutoff);
+  return kept.length > MAX_BARS_PER_DOC ? kept.slice(-MAX_BARS_PER_DOC) : kept;
+}
+
 export function realListingDate(v: string | null | undefined): string | null {
   const d = String(v ?? "").slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(d) && d > "1900-12-31" ? d : null;
@@ -827,10 +848,16 @@ export class OnDemandService implements OnModuleDestroy {
           v: b.v,
           vw: b.vw ?? null,
         }));
+      // Daily docs are the long-history store (5Y), so only the cap applies there.
+      const bars = trimBarsToRange(
+        [...kept, ...appended],
+        resolution === "daily" ? Infinity : (doc.rangeDays ?? 0),
+        Date.now(),
+      );
       const next: BarsDoc = {
         ...doc,
-        bars: [...kept, ...appended],
-        barCount: kept.length + appended.length,
+        bars,
+        barCount: bars.length,
         createdAt: now, // the cache clock — this doc is fresh as of now
         updatedAt: now,
       };
@@ -871,10 +898,8 @@ export class OnDemandService implements OnModuleDestroy {
         50_000,
       );
       const now = new Date().toISOString();
-      const doc: BarsDoc = {
-        ticker,
-        resolution,
-        bars: raw.map((b) => ({
+      const bars = trimBarsToRange(
+        raw.map((b) => ({
           t: b.t,
           o: b.o,
           h: b.h,
@@ -883,8 +908,15 @@ export class OnDemandService implements OnModuleDestroy {
           v: b.v,
           vw: b.vw ?? null,
         })),
+        Infinity, // fetched for exactly rangeDays; only the size cap applies
+        Date.now(),
+      );
+      const doc: BarsDoc = {
+        ticker,
+        resolution,
+        bars,
         rangeDays,
-        barCount: raw.length,
+        barCount: bars.length,
         createdAt: now,
         updatedAt: now,
         source: "polygon-ondemand",
