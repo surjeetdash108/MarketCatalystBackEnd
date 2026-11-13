@@ -162,7 +162,7 @@ describe("CHECKOUT_PREVIEW (staff-only checkout while SUBSCRIPTIONS_ENABLED is o
       providerConnected: false,
     });
     expect(q.body.total).toBe(q.body.subtotal);
-    expect(q.body.consent.text).toMatch(/Pro plan renews annually/);
+    expect(q.body.consent.text).toMatch(/Pro plan renews at \$[0-9.]+\/year until I cancel/);
     const co = await staff.post(
       "/api/billing/checkout",
       checkoutBody("pro", "annual"),

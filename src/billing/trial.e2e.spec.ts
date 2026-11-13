@@ -24,7 +24,7 @@ describe("7-day free trial on every plan (once per email, card required)", () =>
       renewsAt: new Date(T0 + 7 * DAY).toISOString(),
       consent: { version: CONSENT_VERSION, text: consentText(planId, "monthly", 7) },
     });
-    expect(p.consent.text).toMatch(/after my 7-day free trial .* If I cancel before the trial ends I pay nothing\./);
+    expect(p.consent.text).toMatch(/^I understand my \w+ plan renews at \$\d+\/month after the trial until I cancel\. I agree to the Terms of Use and Privacy Policy\.$/);
   });
 
   it("checkout: nothing charged today, Pro unlocks now, the trial-started email, then the full price at day 7", async () => {

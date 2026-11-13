@@ -70,7 +70,7 @@ describe("checkout preview (step 2 summary)", () => {
       text: consentText("elite", "annual"),
     });
     expect(p.consent.text).toBe(
-      "I agree that my Elite plan renews annually at the price shown until I cancel. I agree to the Terms of Use and have read the Privacy Policy.",
+      "I understand my Elite plan renews at $1791/year until I cancel. I agree to the Terms of Use and Privacy Policy.",
     );
     expect(p.refundPolicy).toMatchObject({ enabled: false, windowDays: 0, checkoutLine: expect.stringMatching(/^No refunds\./) });
   });
