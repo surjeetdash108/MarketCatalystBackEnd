@@ -22,9 +22,9 @@ export function sendGridConfigured(config: ConfigService): boolean {
 }
 
 /**
- * Real email can be delivered. Outside production the console sender is fine
- * (dev/staging walkthroughs); in production paid checkout needs real email,
- * because email/password buyers must receive a verification code.
+ * Our own (SendGrid) email can be delivered. Informational only: verification
+ * uses Firebase's link and Stripe sends receipts/payment emails, so this no
+ * longer gates paid checkout.
  */
 export function emailDeliveryReady(config: ConfigService): boolean {
   const stripeKey = String(config.get("STRIPE_SECRET_KEY", "") ?? "");
@@ -39,7 +39,7 @@ export function createEmailSender(config: ConfigService): EmailSender {
     );
   if (isProductionProject(config)) {
     new Logger("Email").warn(
-      "EMAIL_PROVIDER is not set to sendgrid (or EMAIL_PROVIDER_API_KEY is missing) in production: emails are only logged and paid checkout stays unavailable.",
+      "EMAIL_PROVIDER is not set to sendgrid (or EMAIL_PROVIDER_API_KEY is missing) in production: our own notification emails are only logged (Stripe sends billing emails; Firebase sends verification links).",
     );
   }
   return new ConsoleEmailSender();
