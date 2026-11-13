@@ -31,6 +31,7 @@ export const RETENTION_MONTHS = 2;
 export type RetentionIneligibility =
   | "subscriptions_unavailable"
   | "no_paid_subscription"
+  | "in_trial"
   | "no_email"
   | "already_used"
   | "discount_already_50";
@@ -116,6 +117,8 @@ export class RetentionService {
     ) {
       return { eligible: false, reason: "no_paid_subscription" };
     }
+    // Nothing has been charged during a trial, so a discount means nothing yet.
+    if (m.status === "TRIALING") return { eligible: false, reason: "in_trial" };
     const email = await this.email(uid);
     if (!email) return { eligible: false, reason: "no_email" };
     const used = await this.firebase.firestore
