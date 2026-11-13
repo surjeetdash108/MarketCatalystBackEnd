@@ -29,6 +29,7 @@ import {
   planRank,
   type BillingInterval,
   TRIAL_DAYS,
+  TRIAL_WINDOW_FLOOR,
 } from "../plans/plans.registry";
 import { SubscriptionsService } from "../plans/subscriptions.service";
 import { BillingAccessService } from "./billing-access.service";
@@ -198,6 +199,9 @@ export function changeBreakdown(
   };
 }
 
+/** Shortest trial worth starting. */
+const MIN_TRIAL_MS = 3_600_000;
+
 @Injectable()
 export class BillingService {
   constructor(
@@ -309,20 +313,49 @@ export class BillingService {
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
   }
 
-  async trialDaysFor(uid: string): Promise<number> {
+  /**
+   * Existing accounts (made before this rule) get their 7 days from this
+   * moment, not from sign-up. Env TRIAL_WINDOW_FLOOR (ISO) overrides it.
+   */
+  private get trialFloorMs(): number {
+    const raw = String(this.config.get("TRIAL_WINDOW_FLOOR", "") ?? "").trim();
+    const ms = Date.parse(raw || TRIAL_WINDOW_FLOOR);
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  /**
+   * The free trial is 7 days in total, counted from when the person's first
+   * account was made (or TRIAL_WINDOW_FLOOR for older accounts), not from
+   * when they subscribe. Signed up on the 13th and subscribing on the 17th ⇒
+   * first charge on the 20th; subscribing on/after the 20th ⇒ charged now.
+   * Still once per email and never after a real payment. Null = no trial.
+   */
+  async trialWindowFor(uid: string): Promise<{ endsAt: number; days: number } | null> {
     const days = this.trialDays;
-    if (days <= 0) return 0;
+    if (days <= 0) return null;
     const c = (await this.db.collection("customers").doc(uid).get()).data();
-    if (c?.firstPaidAt) return 0;
+    if (c?.firstPaidAt) return null;
     let email: string | null = null;
     try {
       email = (await this.firebase.auth.getUser(uid)).email ?? null;
     } catch {
       email = null;
     }
-    if (!email) return 0;
+    if (!email) return null;
     const claim = await this.db.collection("trial_claims").doc(emailHash(email)).get();
-    return claim.exists ? 0 : days;
+    if (claim.exists) return null;
+    const now = this.clock.now();
+    const start = await this.subscriptions.accountStartMs(uid).catch(() => null);
+    const anchor = start == null ? now : Math.max(start, this.trialFloorMs);
+    const endsAt = anchor + days * 86_400_000;
+    // Less than an hour left isn't worth a trial (and the card step needs time).
+    if (endsAt - now < MIN_TRIAL_MS) return null;
+    return { endsAt, days: Math.ceil((endsAt - now) / 86_400_000) };
+  }
+
+  /** Whole days of free trial left for this buyer (0 = none). */
+  async trialDaysFor(uid: string): Promise<number> {
+    return (await this.trialWindowFor(uid))?.days ?? 0;
   }
 
   // ── checkout ──────────────────────────────────────────────────────────
@@ -381,9 +414,10 @@ export class BillingService {
     const quote = provider
       ? await provider.previewCheckout({ price, discount, region })
       : localQuote(price, discount, this.clock.now());
-    const trialDays = await this.trialDaysFor(uid);
+    const trialWindow = await this.trialWindowFor(uid);
+    const trialDays = trialWindow?.days ?? 0;
     const now = this.clock.now();
-    const trialEndsAt = trialDays > 0 ? now + trialDays * 86_400_000 : null;
+    const trialEndsAt = trialWindow ? trialWindow.endsAt : null;
     // The quote is the first charge; with a trial it happens when the trial ends.
     const firstChargeAt = new Date(trialEndsAt ?? now).toISOString();
     const renewsAt = new Date(
@@ -511,7 +545,8 @@ export class BillingService {
     const idempotencyKey = createHash("sha256")
       .update([uid, price.lookupKey, promoId ?? "", day].join("|"))
       .digest("hex");
-    const trialDays = await this.trialDaysFor(uid);
+    const trialWindow = await this.trialWindowFor(uid);
+    const trialDays = trialWindow?.days ?? 0;
     const session = await provider.createCheckout({
       uid,
       customerId,
@@ -522,6 +557,7 @@ export class BillingService {
       idempotencyKey,
       billing,
       trialDays,
+      trialEndsAt: trialWindow ? new Date(trialWindow.endsAt).toISOString() : null,
     });
     // One checkout at a time: an older unpaid one (another tab, another plan) is closed.
     await provider.closeOtherCheckouts?.(customerId, session.id);

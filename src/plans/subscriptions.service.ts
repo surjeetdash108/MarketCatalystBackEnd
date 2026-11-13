@@ -112,6 +112,28 @@ export class SubscriptionsService {
     );
   }
 
+  /**
+   * When this person's free window starts: the first account ever made with
+   * their email (signup_claims), else this account's creation time. Null when
+   * neither is known. The 7-day intro and the checkout trial share this start.
+   */
+  async accountStartMs(userId: string): Promise<number | null> {
+    const uData = ((await this.firebase.firestore.collection("users").doc(userId).get()).data() ?? {}) as Record<string, unknown>;
+    try {
+      const authUser = await this.firebase.auth.getUser(userId);
+      if (authUser.email && !uData.email) uData.email = authUser.email;
+      if (authUser.metadata?.creationTime && !uData.createdAt && !uData.accountCreatedAt) {
+        uData.accountCreatedAt = new Date(authUser.metadata.creationTime).toISOString();
+      }
+    } catch {
+      /* ignore */
+    }
+    const created = createdMsOf(uData);
+    const first = await this.firstAccountMs(userId, uData);
+    const known = [created, first ?? NaN].filter((n) => Number.isFinite(n));
+    return known.length ? Math.min(...known) : null;
+  }
+
   private readonly firstAccountCache = new Map<string, number>();
 
   /**

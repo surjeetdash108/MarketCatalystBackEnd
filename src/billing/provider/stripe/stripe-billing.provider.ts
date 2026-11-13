@@ -82,6 +82,21 @@ export const STRIPE_WEBHOOK_EVENTS = Object.keys(STRIPE_EVENT_MAP);
 
 // Never Link: its "Save my information for faster checkout" box asks for a
 // mobile number. Card only by default.
+/**
+ * Stripe trial params. An exact trial end (the 7 days counted from account
+ * creation) wins; it must still be at least a minute ahead, otherwise there's
+ * no trial and the first charge is now. Else trial_period_days; {} = no trial.
+ */
+export function trialTerms(
+  days: number | undefined,
+  endSec: number | null,
+  nowSec: number,
+): { trial_end?: number; trial_period_days?: number } {
+  if (endSec != null && Number.isFinite(endSec) && endSec > 0)
+    return endSec > nowSec + 60 ? { trial_end: endSec } : {};
+  return (days ?? 0) > 0 ? { trial_period_days: days } : {};
+}
+
 const ALLOWED_PAYMENT_METHODS = new Set([
   "card",
   "paypal",
@@ -399,6 +414,7 @@ export class StripeBillingProvider implements BillingProvider {
     idempotencyKey: string;
     billing?: BillingDetails | null;
     trialDays?: number;
+    trialEndsAt?: string | null;
   }): Promise<CheckoutSession> {
     if (input.billing) await this.applyBilling(input.customerId, input.billing);
     const price = await this.priceId(input.price.lookupKey);
@@ -421,6 +437,7 @@ export class StripeBillingProvider implements BillingProvider {
             interval: input.price.interval,
             lookupKey: input.price.lookupKey,
             trialDays: String(input.trialDays),
+            trialEnd: input.trialEndsAt ? String(Math.floor(Date.parse(input.trialEndsAt) / 1000)) : "",
             coupon: coupon ?? "",
             currency: input.price.currency,
           },
@@ -443,7 +460,7 @@ export class StripeBillingProvider implements BillingProvider {
         // SetupIntent, and without a card the trial simply ends (no charge).
         ...(trial
           ? {
-              trial_period_days: input.trialDays,
+              ...trialTerms(input.trialDays, input.trialEndsAt ? Math.floor(Date.parse(input.trialEndsAt) / 1000) : null, Math.floor(Date.now() / 1000)),
               trial_settings: {
                 end_behavior: { missing_payment_method: "cancel" as const },
               },
@@ -609,7 +626,7 @@ export class StripeBillingProvider implements BillingProvider {
         customer: idOf(si.customer)!,
         items: [{ price }],
         default_payment_method: idOf(si.payment_method as string | Stripe.PaymentMethod | null)!,
-        trial_period_days: Number(md.trialDays),
+        ...trialTerms(Number(md.trialDays), md.trialEnd ? Number(md.trialEnd) : null, Math.floor(Date.now() / 1000)),
         trial_settings: { end_behavior: { missing_payment_method: "cancel" } },
         automatic_tax: { enabled: true },
         ...(md.coupon ? { discounts: [{ coupon: md.coupon }] } : {}),

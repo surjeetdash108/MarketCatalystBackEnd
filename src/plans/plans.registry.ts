@@ -561,6 +561,11 @@ export const NO_PLAN_ID = "none";
  * 0 turns trials off.
  */
 export const TRIAL_DAYS = 7;
+/**
+ * The trial is TRIAL_DAYS from account creation. Accounts made before this
+ * rule shipped count from here instead (end of 14 Nov 2026, US Eastern).
+ */
+export const TRIAL_WINDOW_FLOOR = "2026-11-15T05:00:00.000Z";
 
 /**
  * A new account that hasn't chosen a plan gets INTRO_DAYS of these feature

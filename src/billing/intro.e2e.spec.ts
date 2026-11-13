@@ -10,7 +10,8 @@ afterEach(async () => {
 
 describe("new-account intro: 7 days of Market Catalyst, no card, then Choose a plan", () => {
   it("a new account without a plan gets Market Catalyst only, for 7 days, then no plan", async () => {
-    a = await billingApp({ env: { SUBSCRIPTIONS_ENABLED: "true", TRIAL_DAYS: "7" } });
+    // The trial shares the intro's window (account creation + 7 days).
+    a = await billingApp({ env: { SUBSCRIPTIONS_ENABLED: "true", TRIAL_DAYS: "7", TRIAL_WINDOW_FLOOR: "2000-01-01T00:00:00Z" } });
     const u = a.user("n1");
     a.fs.seed("users", "n1", { email: "n1@example.com", createdAt: new Date(T0).toISOString() });
     let me = (await u.get("/api/me/entitlements")).body;

@@ -34,6 +34,7 @@ export class FakeAuth {
       customClaims: Record<string, unknown>;
       emailVerified?: boolean;
       provider?: string;
+      metadata?: { creationTime?: string };
     }
   >();
   add(

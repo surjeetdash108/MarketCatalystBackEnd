@@ -87,6 +87,8 @@ export interface BillingProvider {
     idempotencyKey: string;
     /** Free-trial days (0 = none): $0 today, the card is set up, the first charge at the end. */
     trialDays?: number;
+    /** Exact trial end (ISO); wins over trialDays when set. */
+    trialEndsAt?: string | null;
     /** Name/address for the provider's customer record and tax. */
     billing?: BillingDetails | null;
   }): Promise<CheckoutSession>;

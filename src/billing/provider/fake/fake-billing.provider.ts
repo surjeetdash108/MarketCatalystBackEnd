@@ -435,6 +435,7 @@ export class FakeBillingProvider implements BillingProvider {
     idempotencyKey: string;
     billing?: BillingDetails | null;
     trialDays?: number;
+    trialEndsAt?: string | null;
   }): Promise<CheckoutSession> {
     // Idempotent: the same key returns the same open session.
     const existing = (
@@ -471,6 +472,7 @@ export class FakeBillingProvider implements BillingProvider {
       lookupKey: string;
       amount: number;
       trialDays: number;
+      trialEndsAt: string | null;
     } = {
       id,
       url: `${this.opts.appUrl}/billing/checkout?session=${id}`,
@@ -491,6 +493,7 @@ export class FakeBillingProvider implements BillingProvider {
       lookupKey: input.price.lookupKey,
       amount: input.price.amount,
       trialDays,
+      trialEndsAt: trialDays > 0 ? (input.trialEndsAt ?? null) : null,
     };
     await this.write(C.checkouts, session);
     return session;
@@ -539,15 +542,18 @@ export class FakeBillingProvider implements BillingProvider {
   }
 
   private async finaliseCheckout(
-    s: CheckoutSession & { lookupKey: string; amount: number; trialDays?: number },
+    s: CheckoutSession & { lookupKey: string; amount: number; trialDays?: number; trialEndsAt?: string | null },
     c: FakeCustomer,
   ): Promise<string> {
     const now = this.clock.now();
     // Trial: the card is validated (above), nothing is charged; the first
     // charge is the renewal at the trial's end, then every interval after.
     const trialDays = s.trialDays ?? 0;
+    const exactEnd = s.trialEndsAt ? Date.parse(s.trialEndsAt) : NaN;
     const end =
-      trialDays > 0 ? now + trialDays * 86_400_000 : addInterval(now, s.interval);
+      trialDays > 0
+        ? Number.isFinite(exactEnd) ? exactEnd : now + trialDays * 86_400_000
+        : addInterval(now, s.interval);
     const subtotal = trialDays > 0 ? 0 : s.amount;
     const discountAmount = discountAmountFor(s.discount, subtotal);
     const sub: ProviderSubscription = {
