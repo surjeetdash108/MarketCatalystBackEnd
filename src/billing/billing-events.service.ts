@@ -282,6 +282,7 @@ export class BillingEventsService implements OnModuleInit {
   }
 
   private async emailFor(uid: string): Promise<string | null> {
+    if (!uid) return null;
     const c = (
       await this.db.collection(BILLING_COLLECTIONS.customers).doc(uid).get()
     ).data();
@@ -294,6 +295,7 @@ export class BillingEventsService implements OnModuleInit {
   }
 
   private async ensureCustomer(uid: string, customerId: string): Promise<void> {
+    if (!uid) return;
     const ref = this.db.collection(BILLING_COLLECTIONS.customers).doc(uid);
     const snap = await ref.get();
     if (snap.exists && snap.data()?.customerId === customerId) return;
@@ -664,7 +666,8 @@ export class BillingEventsService implements OnModuleInit {
     const sessionId = event.data.checkoutSessionId;
     if (!sessionId || !this.provider) return;
     const session = await this.provider.getCheckout(sessionId);
-    if (!session) return;
+    // No app user on it (made outside the app, e.g. in the Stripe Dashboard): nothing to record.
+    if (!session || !session.uid) return;
     await this.ensureCustomer(session.uid, session.customerId);
     const ref = this.db
       .collection(BILLING_COLLECTIONS.checkouts)
@@ -882,7 +885,7 @@ export class BillingEventsService implements OnModuleInit {
     const upcoming = await this.provider.getUpcomingInvoice(
       event.data.subscriptionId,
     );
-    if (!upcoming) return;
+    if (!upcoming || !upcoming.uid) return;
     await this.emails.renewalReminder(await this.emailFor(upcoming.uid), {
       planId: upcoming.planId,
       interval: upcoming.interval,

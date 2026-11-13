@@ -79,6 +79,16 @@ describe("billing event handler: the only writer of billing state", () => {
     );
   });
 
+  it("events for Stripe objects with no app user are skipped, not a 500 that Stripe retries for days", async () => {
+    const h = billingHarness();
+    const p = (h as unknown as { provider: Record<string, unknown> }).provider;
+    p.getCheckout = async () => ({ id: "cs_x", uid: "", customerId: "cus_x", subscriptionId: "sub_x", status: "complete", discount: null });
+    p.getUpcomingInvoice = async () => ({ uid: "", planId: "pro", interval: "monthly", total: 5900, currency: "USD", periodStart: new Date(T0).toISOString() });
+    await expect(h.events.handle({ id: "evt_nouid_1", type: "checkout.completed", created: h.clock.now(), provider: "fake", data: { checkoutSessionId: "cs_x" } } as never)).resolves.toBe("processed");
+    await expect(h.events.handle({ id: "evt_nouid_2", type: "invoice.upcoming", created: h.clock.now(), provider: "fake", data: { subscriptionId: "sub_x" } } as never)).resolves.toBe("processed");
+    expect(h.fs.ids("customers")).toEqual([]);
+  });
+
   it("rejects an unsigned or tampered event with 400 and writes nothing", async () => {
     const h = billingHarness();
     const raw = JSON.stringify({
