@@ -416,6 +416,17 @@ describe("StripeBillingProvider — embedded checkout", () => {
     });
   });
 
+  it("tax preview fails closed: no total without tax when Stripe Tax errors", async () => {
+    const m = mockClient();
+    const preview = jest.fn(() => Promise.reject(new Error("tax calculation failed")));
+    m.raw.invoices.createPreview = preview;
+    const { p } = provider({}, m);
+    await expect(
+      p.previewCheckout({ price: PRO_M, discount: null, region: { country: "US", state: "TX", postalCode: "78701" } }),
+    ).rejects.toMatchObject({ response: { code: "tax_unavailable" } });
+    expect(preview).toHaveBeenCalledTimes(1);
+  });
+
   it("getCheckout reports complete once the subscription is active", async () => {
     const { p } = provider();
     expect(await p.getCheckout("sub_1")).toMatchObject({

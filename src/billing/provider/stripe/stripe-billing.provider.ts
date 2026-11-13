@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import { Logger } from "@nestjs/common";
+import { Logger, ServiceUnavailableException } from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
 import Stripe from "stripe";
 import {
@@ -366,12 +366,14 @@ export class StripeBillingProvider implements BillingProvider {
         ...(coupon ? { discounts: [{ coupon }] } : {}),
       });
     } catch (taxErr) {
+      // Fail closed: never show a total without the tax that will be charged.
       this.logger.warn(
-        `Stripe preview with automatic_tax failed: ${(taxErr as Error).message}; falling back without automatic tax`,
+        `Stripe tax preview failed: ${(taxErr as Error).message}`,
       );
-      inv = await this.stripe.invoices.createPreview({
-        subscription_details: { items: [{ price }] },
-        ...(coupon ? { discounts: [{ coupon }] } : {}),
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        code: "tax_unavailable",
+        message: "Couldn't calculate tax. Please try again.",
       });
     }
     const tax = sumAmounts(inv.total_taxes);
