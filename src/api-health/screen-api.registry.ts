@@ -825,6 +825,12 @@ export const API_CATALOG = {
     store: ["referral_codes"],
     check: { skip: "user-specific" },
   },
+  "POST /api/billing/referral/claim": {
+    summary:
+      "A new user who signed up from a referral link is attributed to the referrer (first code wins; new customers only). Both get $25 credit after the new user's first payment.",
+    store: ["referral_attributions"],
+    check: { skip: "user write" },
+  },
   "GET /api/billing/fake/clock": {
     summary: "Fake provider: the simulated clock.",
     store: ["backend-only billing collections"],

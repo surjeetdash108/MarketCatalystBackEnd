@@ -11,7 +11,7 @@ import {
 } from "@nestjs/common";
 import {
   REFERRAL_CURRENCY,
-  REFERRAL_FRIEND_DISCOUNT,
+  REFERRAL_FRIEND_CREDIT,
   ReferralService,
 } from "../referral/referral.service";
 import { AppClock } from "../../common/app-clock";
@@ -74,7 +74,7 @@ export type PromoRejection =
   | "not_paid_plan";
 
 export type PromoValidation =
-  | { ok: true; promo: PromoCode; discount: AppliedDiscount }
+  | { ok: true; promo: PromoCode; discount: AppliedDiscount | null }
   | { ok: false; reason: PromoRejection };
 
 /** The one message shown for every rejection, so codes cannot be probed. */
@@ -100,9 +100,9 @@ export class PromoService {
   ) {}
 
   /**
-   * A friend's referral code: REFERRAL_FRIEND_DISCOUNT off the first payment,
-   * once, first-time customers only, never the member's own code, and only
-   * while the member who shared it has an active plan.
+   * A friend's referral code typed at checkout: no discount (the friend pays
+   * full price); it attributes them to the referrer so both get credit after
+   * the first payment. First-time customers only, never the member's own code.
    */
   private async referralPromo(
     code: string,
@@ -111,15 +111,19 @@ export class PromoService {
     const ref = await this.referrals?.lookup(code);
     if (!ref) return null;
     if (!uid || ref.uid === uid) return { ok: false, reason: "not_found" };
-    if (!(await this.referrals!.referrerActive(ref.uid)))
-      return { ok: false, reason: "inactive" };
     if (await this.isReturningCustomer(uid))
       return { ok: false, reason: "not_first_time" };
+    const claim = await this.referrals!.claim(uid, ref.code);
+    if (claim !== "claimed" && claim !== "already_claimed")
+      return {
+        ok: false,
+        reason: claim === "not_first_time" ? "not_first_time" : "not_found",
+      };
     const promo: PromoCode = {
       id: `referral_${ref.code}`,
       code: ref.code,
       percentOff: null,
-      amountOff: REFERRAL_FRIEND_DISCOUNT,
+      amountOff: 0,
       currency: REFERRAL_CURRENCY,
       duration: "once",
       durationInMonths: null,
@@ -135,7 +139,7 @@ export class PromoService {
       createdBy: "referral_program",
       deactivatedAt: null,
     };
-    return { ok: true, promo, discount: this.discountFor(promo) };
+    return { ok: true, promo, discount: null };
   }
 
   private get col() {
@@ -433,8 +437,10 @@ export function describePromo(
   p: Pick<
     PromoCode,
     "percentOff" | "amountOff" | "duration" | "durationInMonths"
-  >,
+  > & { kind?: PromoCode["kind"] },
 ): string {
+  if (p.kind === "referral")
+    return `Referral: you and your friend each get $${(REFERRAL_FRIEND_CREDIT / 100).toFixed(0)} credit after your first payment`;
   const what =
     p.percentOff != null
       ? `${p.percentOff}% off`

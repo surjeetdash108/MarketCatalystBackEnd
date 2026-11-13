@@ -14,16 +14,21 @@ import {
  *   - Only a member with an active plan (paid or trialing; Lifetime Elite)
  *     gets a referral code/link. The code is random (referral_codes/{CODE}),
  *     never derived from the uid.
- *   - The friend gets REFERRAL_FRIEND_DISCOUNT off their first payment, once,
- *     only as a first-time customer, never with their own code.
- *   - The referrer gets REFERRAL_REWARD as account credit (Stripe customer
- *     balance, used on their next invoices) only when the friend actually
- *     pays — the first successful charge above $0, not a free trial — and only
- *     while the referrer still has an active plan. Once per friend
- *     (referral_rewards/{friendUid}); the credit call is idempotent.
+ *   - A friend who signs up from the link is attributed to the referrer
+ *     (referral_attributions/{friendUid}, first code wins) — only as a
+ *     first-time customer, never with their own code. Typing the code at
+ *     checkout attributes the same way. There is no discount: the friend
+ *     pays the full price the first time.
+ *   - When the friend's first real charge succeeds (above $0, not a free
+ *     trial), BOTH get account credit (Stripe customer balance, used on their
+ *     next invoices): the friend REFERRAL_FRIEND_CREDIT, the referrer
+ *     REFERRAL_REWARD while they still have an active plan. Once per friend
+ *     (referral_rewards/{friendUid}); the credit calls are idempotent.
  */
 export const REFERRAL_REWARD = 2500;
-export const REFERRAL_FRIEND_DISCOUNT = 2500;
+export const REFERRAL_FRIEND_CREDIT = 2500;
+/** @deprecated The friend now gets credit after paying, not a discount. */
+export const REFERRAL_FRIEND_DISCOUNT = REFERRAL_FRIEND_CREDIT;
 export const REFERRAL_CURRENCY = "USD";
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -32,7 +37,9 @@ export type ReferralCodeResult =
       eligible: true;
       code: string;
       reward: number;
+      /** Always 0: the friend pays full price, then gets friendCredit. */
       friendDiscount: number;
+      friendCredit: number;
       currency: string;
     }
   | { eligible: false; reason: "no_active_plan" };
@@ -44,6 +51,13 @@ export type RewardOutcome =
   | "self_referral"
   | "referrer_inactive"
   | "referrer_no_billing_account";
+
+export type ClaimOutcome =
+  | "claimed"
+  | "already_claimed"
+  | "invalid"
+  | "self_referral"
+  | "not_first_time";
 
 export const normaliseReferralCode = (code: string) =>
   String(code ?? "").trim().toUpperCase();
@@ -98,7 +112,8 @@ export class ReferralService {
       eligible: true,
       code,
       reward: REFERRAL_REWARD,
-      friendDiscount: REFERRAL_FRIEND_DISCOUNT,
+      friendDiscount: 0,
+      friendCredit: REFERRAL_FRIEND_CREDIT,
       currency: REFERRAL_CURRENCY,
     };
   }
@@ -113,15 +128,76 @@ export class ReferralService {
   }
 
   /**
+   * Attribute a new user to whoever referred them (signup from the link, or
+   * the code typed at checkout). First code wins; the same code again is fine.
+   */
+  async claim(friendUid: string, code: string): Promise<ClaimOutcome> {
+    const ref = await this.lookup(code);
+    if (!ref) return "invalid";
+    if (!friendUid || ref.uid === friendUid) return "self_referral";
+    const attrRef = this.db.collection("referral_attributions").doc(friendUid);
+    const prior = (await attrRef.get()).data();
+    if (prior) return prior.code === ref.code ? "already_claimed" : "invalid";
+    const [cust, sub] = await Promise.all([
+      this.db.collection("customers").doc(friendUid).get(),
+      this.db.collection("subscriptions").doc(friendUid).get(),
+    ]);
+    // New customers only: never paid and never had a subscription.
+    if (cust.data()?.firstPaidAt || sub.exists) return "not_first_time";
+    const created = await this.db.runTransaction(async (tx) => {
+      if ((await tx.get(attrRef)).exists) return false;
+      tx.set(attrRef, {
+        friendUid,
+        referrerUid: ref.uid,
+        code: ref.code,
+        at: this.clock.nowIso(),
+      });
+      return true;
+    });
+    return created ? "claimed" : "already_claimed";
+  }
+
+  /** The code this user was referred with, if any. */
+  async attributedCode(friendUid: string): Promise<string | null> {
+    const d = (await this.db.collection("referral_attributions").doc(friendUid).get()).data();
+    return d?.code ? String(d.code) : null;
+  }
+
+  /** Credit a member's billing account; false when they have none (in this mode). */
+  private async credit(
+    uid: string,
+    amount: number,
+    description: string,
+    idempotencyKey: string,
+  ): Promise<boolean> {
+    const c = (await this.db.collection("customers").doc(uid).get()).data();
+    const sameMode =
+      c?.livemode === undefined || c.livemode === this.provider?.livemode;
+    if (!c?.customerId || !sameMode || !this.provider?.addCustomerCredit)
+      return false;
+    await this.provider.addCustomerCredit({
+      customerId: String(c.customerId),
+      amount,
+      currency: REFERRAL_CURRENCY,
+      description,
+      idempotencyKey,
+    });
+    return true;
+  }
+
+  /**
    * Called by the event handler on the friend's first successful charge above
-   * $0. Credits the referrer once; safe to call again (retried webhook).
+   * $0. Credits the friend and the referrer once each; safe to call again
+   * (retried webhook). The referral comes from the attribution made at
+   * signup, else from a code used at checkout.
    */
   async rewardForFirstPayment(
     friendUid: string,
     promoCode: string | null | undefined,
   ): Promise<RewardOutcome> {
-    if (!promoCode) return "no_referral";
-    const ref = await this.lookup(promoCode);
+    const code = (await this.attributedCode(friendUid)) ?? promoCode;
+    if (!code) return "no_referral";
+    const ref = await this.lookup(code);
     if (!ref) return "no_referral";
     if (ref.uid === friendUid) return "self_referral";
     const rewardRef = this.db.collection("referral_rewards").doc(friendUid);
@@ -132,36 +208,40 @@ export class ReferralService {
       referrerUid: ref.uid,
       code: ref.code,
       amount: REFERRAL_REWARD,
+      friendAmount: REFERRAL_FRIEND_CREDIT,
       currency: REFERRAL_CURRENCY,
       at: this.clock.nowIso(),
       ...(this.provider ? { livemode: this.provider.livemode } : {}),
     };
-    if (!(await this.referrerActive(ref.uid))) {
-      await rewardRef.set({ ...base, status: "referrer_inactive" });
-      return "referrer_inactive";
-    }
-    const c = (await this.db.collection("customers").doc(ref.uid).get()).data();
-    const sameMode =
-      c?.livemode === undefined || c.livemode === this.provider?.livemode;
-    if (!c?.customerId || !sameMode || !this.provider?.addCustomerCredit) {
-      await rewardRef.set({ ...base, status: "referrer_no_billing_account" });
-      return "referrer_no_billing_account";
-    }
     // Claim first: a concurrent delivery of the same event sees "pending" and
-    // repeats the same idempotent credit call, never a second credit.
+    // repeats the same idempotent credit calls, never a second credit.
     await rewardRef.set({ ...base, status: "pending" });
-    await this.provider.addCustomerCredit({
-      customerId: String(c.customerId),
-      amount: REFERRAL_REWARD,
-      currency: REFERRAL_CURRENCY,
-      description: `Referral credit: a friend subscribed with your code ${ref.code}`,
-      idempotencyKey: `referral-${friendUid}`,
-    });
-    await rewardRef.set(
-      { status: "credited", creditedAt: this.clock.nowIso() },
-      { merge: true },
+    const friendCredited = await this.credit(
+      friendUid,
+      REFERRAL_FRIEND_CREDIT,
+      `Referral credit: thanks for joining with code ${ref.code}`,
+      `referral-friend-${friendUid}`,
     );
-    this.logger.log(`referral credit for ${ref.uid} (friend ${friendUid})`);
-    return "credited";
+    let status: RewardOutcome;
+    if (!(await this.referrerActive(ref.uid))) status = "referrer_inactive";
+    else
+      status = (await this.credit(
+        ref.uid,
+        REFERRAL_REWARD,
+        `Referral credit: a friend subscribed with your code ${ref.code}`,
+        `referral-${friendUid}`,
+      ))
+        ? "credited"
+        : "referrer_no_billing_account";
+    await rewardRef.set({
+      ...base,
+      status,
+      friendStatus: friendCredited ? "credited" : "no_billing_account",
+      creditedAt: this.clock.nowIso(),
+    });
+    this.logger.log(
+      `referral for friend ${friendUid}: referrer ${status}, friend ${friendCredited ? "credited" : "not credited"}`,
+    );
+    return status;
   }
 }

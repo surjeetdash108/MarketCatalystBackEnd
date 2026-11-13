@@ -92,6 +92,10 @@ export class PromoPreviewDto extends PlanTargetDto {
   @IsString() @MaxLength(40) code: string;
 }
 
+export class ReferralClaimDto {
+  @IsString() @MaxLength(40) code: string;
+}
+
 export class FakeCardDto {
   @IsIn(CARDS) card: (typeof CARDS)[number];
 }

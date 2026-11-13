@@ -27,7 +27,7 @@ import { SubscriptionsService } from "../plans/subscriptions.service";
 import { BillingAccessService } from "./billing-access.service";
 import { BillingEventsService } from "./billing-events.service";
 import { BillingService } from "./billing.service";
-import {
+import { ReferralClaimDto,
   ChangePlanDto,
   CheckoutDto,
   CheckoutPreviewDto,
@@ -69,6 +69,17 @@ export class BillingController {
   @Get("referral")
   referral(@CurrentUser() uid: string) {
     return this.referrals.codeFor(uid);
+  }
+
+  /**
+   * A new user who signed up from a referral link: attribute them to the
+   * referrer. Both get credit after the new user's first payment.
+   */
+  @Post("referral/claim")
+  @HttpCode(200)
+  async claimReferral(@CurrentUser() uid: string, @Body() body: ReferralClaimDto) {
+    const outcome = await this.referrals.claim(uid, body.code);
+    return { ok: outcome === "claimed" || outcome === "already_claimed", outcome };
   }
 
   /**
