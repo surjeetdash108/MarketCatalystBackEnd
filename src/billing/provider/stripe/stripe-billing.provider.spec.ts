@@ -657,6 +657,34 @@ describe("StripeBillingProvider — subscriptions and plan changes", () => {
     ).toMatchObject({ billing_cycle_anchor: "now" });
   });
 
+  it("3-D Secure upgrade: tags the invoice, then finishes the change (plan + resume) once it is paid", async () => {
+    const m = mockClient();
+    m.raw.subscriptions.update = jest.fn(() =>
+      Promise.resolve(subObj({ pending_update: { expires_at: T }, latest_invoice: { id: "in_2", amount_due: 1000, status: "open", confirmation_secret: { client_secret: "pi_secret_2" } } })),
+    );
+    const { p } = provider({}, m);
+    await p.changePlan({ subscriptionId: "sub_1", target: ELITE_M, kind: "upgrade", prorationDate: T * 1000, expectedAmountDue: null });
+    const tag = m.calls["invoices.update"]?.[0] as [string, { metadata: Record<string, string> }];
+    expect(tag[0]).toBe("in_2");
+    expect(tag[1].metadata).toMatchObject({ mc_change: "upgrade", mc_plan: ELITE_M.planId, mc_interval: ELITE_M.interval });
+
+    // Paid: Stripe has applied the pending update; the subscription was set to cancel.
+    m.raw.invoices.retrieve = jest.fn(() => Promise.resolve({ id: "in_2", status: "paid", metadata: tag[1].metadata, parent: { subscription_details: { subscription: "sub_1" } } }));
+    m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ cancel_at_period_end: true, metadata: { uid: "u1", planId: "pro", interval: "monthly" } })));
+    const upd = jest.fn(() => Promise.resolve(subObj()));
+    m.raw.subscriptions.update = upd;
+    expect(await p.completePendingChange("in_2")).toBe(true);
+    expect(upd).toHaveBeenCalledWith("sub_1", { metadata: { uid: "u1", planId: ELITE_M.planId, interval: ELITE_M.interval }, cancel_at_period_end: false });
+
+    // Still waiting on the bank, or an unrelated invoice: nothing happens.
+    upd.mockClear();
+    m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ pending_update: { expires_at: T } })));
+    expect(await p.completePendingChange("in_2")).toBe(false);
+    m.raw.invoices.retrieve = jest.fn(() => Promise.resolve({ id: "in_9", status: "paid", metadata: {}, parent: { subscription_details: { subscription: "sub_1" } } }));
+    expect(await p.completePendingChange("in_9")).toBe(false);
+    expect(upd).not.toHaveBeenCalled();
+  });
+
   it("a scheduled change keeps the customer's discount (retention/promo) on both schedule phases", async () => {
     const m = mockClient();
     m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ discounts: [{ id: "di_ret", coupon: { id: "mc_retention_x", percent_off: 50, duration: "repeating" } }] })));

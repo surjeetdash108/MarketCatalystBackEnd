@@ -130,6 +130,11 @@ export interface BillingProvider {
     /** Name and billing address entered in the payment step. */
     billing?: BillingDetails | null;
   }): Promise<ChangeResult>;
+  /**
+   * Finishes a plan change whose payment needed bank confirmation (3-D Secure)
+   * once its invoice is paid. Idempotent; returns true when it changed anything.
+   */
+  completePendingChange?(invoiceId: string): Promise<boolean>;
   /** The customer's account credit (minor units, ≥ 0) used on future invoices. */
   getCreditBalance(customerId: string): Promise<number>;
   /** Adds account credit (used automatically on the next invoices, never paid out). Idempotent by key. */
