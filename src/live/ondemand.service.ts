@@ -479,7 +479,7 @@ export class OnDemandService implements OnModuleDestroy {
   /** Close 30 calendar days back per `ticker|ET date` (peers' monthly change). */
   private readonly memMonthBase = new Map<string, { close: number | null; at: number }>();
   /** Last close of the PRIOR calendar year per `ticker|ET date` (peers' YTD base). */
-  private readonly memYtdBase = new Map<string, { close: number | null; at: number }>();
+  private readonly memYtdBase = new Map<string, { close: number | null; since: string | null; at: number }>();
   private readonly memCompanySummary = new Map<
     string,
     { data: Record<string, unknown>; at: number }
@@ -1801,6 +1801,8 @@ export class OnDemandService implements OnModuleDestroy {
       monthlyChange: number | null;
       /** Last close of the prior calendar year — YTD = price / this − 1, measured by the reader against the price it shows. */
       ytdBaseClose?: number | null;
+      /** Set only when the stock has no prior-year close (listed this year): the day `ytdBaseClose` is from, its first close. */
+      ytdSince?: string | null;
     }>
   > {
     const syms = [
@@ -1819,6 +1821,7 @@ export class OnDemandService implements OnModuleDestroy {
       weeklyChange: number | null;
       monthlyChange: number | null;
       ytdBaseClose?: number | null;
+      ytdSince?: string | null;
     }>();
 
     const missing: string[] = [];
@@ -1939,10 +1942,12 @@ export class OnDemandService implements OnModuleDestroy {
    * year. Returned as a price rather than a percentage so the reader can measure
    * YTD to the SAME live price it displays (the stored % would end at whichever
    * bar was last written). The base is fixed for the whole year, so it is cached
-   * for hours. A ticker with no bar in the window (listed this year, no data)
-   * gets null — the UI shows a dash rather than a made-up figure.
+   * for hours. A ticker with no bar in that window was listed this year: its base
+   * is then its first close since listing (`ytdSince` says which day), so the
+   * column reads "since it began trading" instead of a dash. Only a ticker with
+   * no bars at all this year gets null.
    */
-  private async withYtdBase<T extends { ticker: string; ytdBaseClose?: number | null }>(rows: T[]): Promise<T[]> {
+  private async withYtdBase<T extends { ticker: string; ytdBaseClose?: number | null; ytdSince?: string | null }>(rows: T[]): Promise<T[]> {
     if (rows.length === 0) return rows;
     const etIso = (ms: number) =>
       new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ms));
@@ -1951,24 +1956,37 @@ export class OnDemandService implements OnModuleDestroy {
     const target = `${year - 1}-12-31`;
     const from = `${year - 1}-12-15`;
 
-    const baseClose = async (sym: string): Promise<number | null> => {
+    const baseClose = async (sym: string): Promise<{ close: number | null; since: string | null }> => {
       const key = `${sym}|${target}`;
       const hit = this.memYtdBase.get(key);
-      if (hit && now - hit.at < 6 * 3_600_000) return hit.close;
+      if (hit && now - hit.at < 6 * 3_600_000) return hit;
       const bars = await this.polygon.getAggsRange(sym, from, target).catch(() => [] as PolygonAggBar[]);
       const base = bars
         .filter((b) => b.c != null && b.c > 0 && etIso(b.t) <= target)
         .sort((a, b) => a.t - b.t)
         .at(-1);
-      const close = base?.c ?? null;
-      this.memYtdBase.set(key, { close, at: now });
-      return close;
+      let close = base?.c ?? null;
+      let since: string | null = null;
+      if (close == null) {
+        // No close before this year: it was listed this year. Measure from its first close.
+        const thisYear = await this.polygon.getAggsRange(sym, `${year}-01-01`, etIso(now)).catch(() => [] as PolygonAggBar[]);
+        const first = thisYear.filter((b) => b.c != null && b.c > 0).sort((a, b) => a.t - b.t)[0];
+        if (first) {
+          close = first.c;
+          since = etIso(first.t);
+        }
+      }
+      const entry = { close, since, at: now };
+      this.memYtdBase.set(key, entry);
+      return entry;
     };
 
     for (let i = 0; i < rows.length; i += 5) {
       await Promise.all(
         rows.slice(i, i + 5).map(async (r) => {
-          r.ytdBaseClose = await baseClose(r.ticker);
+          const b = await baseClose(r.ticker);
+          r.ytdBaseClose = b.close;
+          r.ytdSince = b.since;
         }),
       );
     }
