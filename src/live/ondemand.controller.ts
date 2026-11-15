@@ -26,6 +26,7 @@ import { TickerSearchService } from "./ticker-search.service";
 import { SearchedTickersService } from "./searched-tickers.service";
 import { EtfMarketService } from "./etf-market.service";
 import { EarningsTranscriptSummaryService } from "./earnings-transcript-summary.service";
+import { MoveExplainerService } from "./move-explainer.service";
 import { OPTIONS_UNIVERSE } from "../common/options-universe";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 import { DelistedTickerGuard } from "../common/delisted-ticker.guard";
@@ -57,6 +58,15 @@ import { Public } from "../common/public.decorator";
  */
 
 const TICKER_RE = /^[A-Z][A-Z0-9.-]{0,9}$/;
+
+/** A past trading day as YYYY-MM-DD, at most 400 days back; null otherwise. */
+function parseDay(v: string | undefined): string | null {
+  if (!v || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
+  const t = Date.parse(`${v}T00:00:00Z`);
+  if (!Number.isFinite(t) || new Date(t).toISOString().slice(0, 10) !== v) return null;
+  const age = Date.now() - t;
+  return age >= 0 && age <= 400 * 86_400_000 ? v : null;
+}
 
 /**
  * Copilot limits. The route is public, and each call spends model quota, so the
@@ -106,6 +116,7 @@ export class OnDemandController {
     private readonly delisted: DelistedTickersService,
     private readonly llmGateway: LlmGatewayService,
     private readonly stockDetails: StockDetailsService,
+    private readonly moveExplainer: MoveExplainerService,
   ) {}
 
   /**
@@ -777,6 +788,44 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
     const summary = await this.transcriptSummary.getSummary(sym);
     if (!summary) throw new NotFoundException(`No transcript summary available for ${sym}`);
     sendWithEtag(req, res, summary);
+  }
+
+  /**
+   * The heading and short explanation for one big price move (a Why It Moved
+   * card), written by the LLM from the articles around that day only. Generated
+   * once per ticker and day and stored; see MoveExplainerService.
+   */
+  @Get("move-explanation")
+  @UseGuards(FirebaseAuthGuard)
+  @Header("Cache-Control", "private, max-age=600")
+  async moveExplanation(
+    @Query("ticker") ticker: string | undefined,
+    @Query("date") date: string | undefined,
+    @Query("prevDate") prevDate: string | undefined,
+    @Query("name") name: string | undefined,
+    @Query("move") move: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const sym = (ticker ?? "").toUpperCase().trim();
+    if (!TICKER_RE.test(sym))
+      throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
+    const day = parseDay(date);
+    if (!day) throw new BadRequestException("date must be a past trading day as YYYY-MM-DD, within the last 400 days");
+    const prev = prevDate ? parseDay(prevDate) : null;
+    if (prevDate && (!prev || Date.parse(prev) >= Date.parse(day) || Date.parse(day) - Date.parse(prev) > 7 * 86_400_000))
+      throw new BadRequestException("prevDate must be the previous trading day as YYYY-MM-DD");
+    const pct = move == null || move === "" ? null : Number(move);
+    if (pct != null && (!Number.isFinite(pct) || Math.abs(pct) > 100))
+      throw new BadRequestException("move must be a percent between -100 and 100");
+    const result = await this.moveExplainer.getExplanation({
+      ticker: sym,
+      date: day,
+      prevDate: prev,
+      name: (name ?? "").replace(/[^\p{L}\p{N} .,&'-]/gu, "").slice(0, 80) || null,
+      movePct: pct,
+    });
+    sendWithEtag(req, res, result);
   }
 
   @Get("options-chain")

@@ -342,6 +342,13 @@ export const API_CATALOG = {
     vendors: ["FMP", ...LLM],
     check: { skip: "can start an LLM generation" },
   },
+  "GET /live/move-explanation": {
+    summary: "AI heading and short explanation for one big price move, written from that day's articles only.",
+    params: "ticker, date (YYYY-MM-DD), prevDate, name, move",
+    store: ["move_explanations"],
+    vendors: [...LLM],
+    check: { skip: "can start an LLM generation" },
+  },
   "GET /live/options-chain": {
     summary:
       "Options contracts for a ticker in the supported options universe.",

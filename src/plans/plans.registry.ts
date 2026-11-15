@@ -733,6 +733,7 @@ export const ROUTE_FEATURES: Record<string, RouteRequirement> = {
   "GET /live/estimates": ["earningsDetail"],
   "GET /live/earnings-transcript": ["earningsDetail"],
   "GET /live/earnings-transcript-summary": ["earningsDetail"],
+  "GET /live/move-explanation": ["stockIntelligence"],
   "GET /live/ai-analysis": ["aiAssistant"],
   "GET /live/ticker-analysis": ["aiAssistant"],
   "POST /live/copilot": ["aiAssistant"],
