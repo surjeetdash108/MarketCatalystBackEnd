@@ -33,6 +33,7 @@ import { MoverCatalystService } from "./mover-catalyst.service";
 import { ETFClassifier } from "./etf-classifier";
 import { EtfMarketService } from "./etf-market.service";
 import { EarningsTranscriptSummaryService } from "./earnings-transcript-summary.service";
+import { MoveExplainerService } from "./move-explainer.service";
 import { StockDetailsService } from "./stock-details.service";
 import { NewsWireService } from "./news-wire.service";
 import { EarningsWireService } from "./earnings-wire.service";
@@ -98,6 +99,7 @@ import { MoneyFlowService } from "./money-flow/money-flow.service";
     ETFClassifier,
     EtfMarketService,
     EarningsTranscriptSummaryService,
+    MoveExplainerService,
     StockDetailsService,
     NewsWireService,
     EarningsWireService,
@@ -128,6 +130,7 @@ import { MoneyFlowService } from "./money-flow/money-flow.service";
     ETFClassifier,
     EtfMarketService,
     EarningsTranscriptSummaryService,
+    MoveExplainerService,
     StockDetailsService,
     StrategyLabService,
     LabStoreService,
