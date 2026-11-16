@@ -14,9 +14,12 @@ import { emailHash } from "./email-normalise";
 /**
  * The retention offer shown in front of Cancel (decision b).
  *
- *   monthly: 50% off the next 2 invoices (Stripe: RETAIN50_2M coupon)
- *   annual:  credit = annual price ÷ 12 × 2 × 50% on the next invoice
- *            (Stripe: customer balance credit)
+ *   monthly: 50% off the next 2 monthly payments (repeating coupon)
+ *   annual:  the next annual payment is charged for 11 months — two months at
+ *            50% (0.5 + 0.5) plus the other 10 — i.e. annual price ÷ 12 off
+ *            (customer balance credit used by the next invoice)
+ *
+ * Accepting keeps the plan: a pending cancellation is switched off.
  *
  * Once per email address, ever: acceptance is recorded in
  * retention_offers/{sha256(normalised email)} — which survives account
@@ -48,6 +51,8 @@ export interface RetentionOffer {
   appliesFrom: string;
   headline: string;
   description: string;
+  /** The "keep my plan" button text, e.g. "Keep my plan: 50% off for 2 months". */
+  cta: string;
 }
 
 /**
@@ -145,9 +150,10 @@ export class RetentionService {
     const renews = m.scheduledChange
       ? { planId: String(m.scheduledChange.planId), interval: m.scheduledChange.interval as BillingInterval }
       : { planId: m.planId, interval };
-    const headline = `Keep your plan for ${RETENTION_PERCENT}% off for the next ${RETENTION_MONTHS} months`;
     if (interval === "annual") {
       const credit = retentionCredit(renews.planId, m.currency ?? "USD", renews.interval);
+      const full = catalogPrice(renews.planId, renews.interval)?.amount ?? 0;
+      const renewsAnnual = renews.interval === "annual";
       return {
         eligible: true,
         offer: {
@@ -158,11 +164,20 @@ export class RetentionService {
           creditAmount: credit.amount,
           currency: credit.currency,
           appliesFrom,
-          headline,
-          description: `A credit of ${money(credit.amount, credit.currency)} will be applied at your next renewal`,
+          headline: renewsAnnual
+            ? "Stay and pay for 11 months instead of 12"
+            : "Stay and get your first monthly payment free",
+          description: renewsAnnual
+            ? `Your next annual payment is ${money(full - credit.amount, credit.currency)} instead of ${money(full, credit.currency)}: two months at 50% (0.5 + 0.5) plus the other 10`
+            : `${money(credit.amount, credit.currency)} off your next payment`,
+          cta: renewsAnnual
+            ? "Keep my plan: pay for 11 months"
+            : "Keep my plan: next month free",
         },
       };
     }
+    const monthly =
+      catalogPrice(renews.planId, renews.interval)?.amount ?? m.amount ?? 0;
     return {
       eligible: true,
       offer: {
@@ -173,8 +188,9 @@ export class RetentionService {
         creditAmount: null,
         currency: m.currency ?? "USD",
         appliesFrom,
-        headline,
-        description: `${RETENTION_PERCENT}% off your next ${RETENTION_MONTHS} monthly invoices`,
+        headline: `Stay and get ${RETENTION_PERCENT}% off your next ${RETENTION_MONTHS} monthly payments`,
+        description: `${RETENTION_PERCENT}% off your next ${RETENTION_MONTHS} monthly payments: ${money(Math.round(monthly / 2), m.currency ?? "USD")} instead of ${money(monthly, m.currency ?? "USD")}`,
+        cta: `Keep my plan: ${RETENTION_PERCENT}% off for ${RETENTION_MONTHS} months`,
       },
     };
   }
@@ -221,23 +237,30 @@ export class RetentionService {
         message: "This offer is not available.",
       });
 
-    const provider = await this.access.requireLive();
     const offer = result.offer;
-    await (offer.mode === "balance_credit"
-      ? provider.applyRetentionDiscount({
-          subscriptionId: m.subscriptionId,
-          customerId: m.customerId,
-          mode: "balance_credit",
-          amount: offer.creditAmount,
-          currency: offer.currency,
-        })
-      : provider.applyRetentionDiscount({
-          subscriptionId: m.subscriptionId,
-          customerId: m.customerId,
-          mode: "percent_next_invoices",
-          percentOff: offer.percentOff,
-          invoices: offer.months,
-        }));
+    try {
+      const provider = await this.access.requireLive();
+      await (offer.mode === "balance_credit"
+        ? provider.applyRetentionDiscount({
+            subscriptionId: m.subscriptionId,
+            customerId: m.customerId,
+            mode: "balance_credit",
+            amount: offer.creditAmount,
+            currency: offer.currency,
+          })
+        : provider.applyRetentionDiscount({
+            subscriptionId: m.subscriptionId,
+            customerId: m.customerId,
+            mode: "percent_next_invoices",
+            percentOff: offer.percentOff,
+            invoices: offer.months,
+          }));
+    } catch (err) {
+      // Not applied: the one-time offer isn't used up.
+      await ref.delete().catch(() => undefined);
+      throw err;
+    }
+    const provider = await this.access.requireLive();
     await provider.setCustomerMetadata(m.customerId, {
       retention_offer_used: "true",
       retention_email_hash: hash,

@@ -64,7 +64,18 @@ export interface BillingProvider {
   createCustomer(input: {
     uid: string;
     email: string | null;
+    /** Test mode only: put the new customer on its own provider test clock (Stripe test clocks). */
+    testClock?: boolean;
   }): Promise<{ customerId: string }>;
+  /** Test mode: move the customer's test clock forward to `toMs` (renewals, trial ends, retries run). */
+  advanceTestClock?(
+    customerId: string,
+    toMs: number,
+  ): Promise<{ frozenTime: string; status: string }>;
+  /** Test mode: the customer's test clock (null when the customer isn't on one). */
+  testClockFor?(
+    customerId: string,
+  ): Promise<{ id: string; frozenTime: string; status: string } | null>;
   setCustomerMetadata(
     customerId: string,
     metadata: Record<string, string>,
@@ -76,6 +87,8 @@ export interface BillingProvider {
     price: PriceRef;
     discount: AppliedDiscount | null;
     region: BillingRegion | null;
+    /** Market Catalyst credits the customer chose to use (one-time discount, minor units). */
+    creditAmount?: number;
   }): Promise<CheckoutQuote>;
   createCheckout(input: {
     uid: string;
@@ -91,6 +104,8 @@ export interface BillingProvider {
     trialEndsAt?: string | null;
     /** Name/address for the provider's customer record and tax. */
     billing?: BillingDetails | null;
+    /** Market Catalyst credits the customer chose to use on the first payment (one-time discount). */
+    creditAmount?: number;
   }): Promise<CheckoutSession>;
   getCheckout(sessionId: string): Promise<CheckoutSession | null>;
   /**
@@ -101,6 +116,14 @@ export interface BillingProvider {
   liveSubscriptionIds?(customerId: string): Promise<string[]>;
   /** Account deletion: end every live subscription now (no proration, no refund). Returns how many. */
   cancelAllNow?(customerId: string): Promise<number>;
+  /** Ends one subscription now (full refund or a lost dispute): access stops straight away. */
+  cancelNow?(subscriptionId: string): Promise<void>;
+  /** Puts Market Catalyst credits on the subscription's next invoice (one-time discount, minor units). */
+  applyCreditToNextInvoice?(
+    subscriptionId: string,
+    amount: number,
+    currency: string,
+  ): Promise<void>;
   /**
    * Closes the customer's other unfinished checkouts (an unpaid first invoice,
    * a trial card form not yet confirmed) so a second tab can't complete a
@@ -118,9 +141,14 @@ export interface BillingProvider {
     kind: ProviderChangeKind;
   }): Promise<ChangePreview>;
   /**
-   * upgrade: immediate, prorated, charged now (must equal expectedAmountDue).
-   * downgrade: immediate, prorated, credited to the balance (must equal expectedCredit).
-   * scheduled: annual → monthly at the end of the annual period.
+   * upgrade ("switch now"): a higher plan (any billing period), or the same plan
+   * monthly → annual: immediate, prorated, charged now (must equal
+   * expectedAmountDue). Unused value above the new charge is returned as
+   * creditToBalance (never left in the provider balance).
+   * scheduled ("switch at renewal"): a lower plan (any billing period), or the
+   * same plan annual → monthly: the current plan runs to its period end, then
+   * the new plan's first charge. Clears a pending cancellation.
+   * downgrade: legacy immediate lower plan; not produced by classifyChange.
    */
   changePlan(input: {
     subscriptionId: string;
@@ -133,6 +161,8 @@ export interface BillingProvider {
     paymentMethodId?: string | null;
     /** Name and billing address entered in the payment step. */
     billing?: BillingDetails | null;
+    /** Market Catalyst credits the customer chose to use on this switch (one-time discount). */
+    creditAmount?: number;
   }): Promise<ChangeResult>;
   /**
    * Finishes a plan change whose payment needed bank confirmation (3-D Secure)

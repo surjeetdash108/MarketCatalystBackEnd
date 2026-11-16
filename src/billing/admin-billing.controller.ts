@@ -3,6 +3,8 @@ import {
   Controller,
   Get,
   HttpCode,
+  Inject,
+  NotFoundException,
   Param,
   Post,
   Query,
@@ -17,7 +19,17 @@ import {
   toCsv,
   type SubscriberFilter,
 } from "./admin-billing.service";
-import { CreatePromoDto, PriceChangeNoticeDto } from "./billing.dto";
+import {
+  CreatePromoDto,
+  PriceChangeNoticeDto,
+  TestClockAdvanceDto,
+  TestClockListDto,
+} from "./billing.dto";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import {
+  BILLING_PROVIDER,
+  type BillingProvider,
+} from "./provider/billing-provider";
 import { PromoService } from "./promo/promo.service";
 import { BillingReconcileJob } from "./reconcile.job";
 
@@ -29,7 +41,77 @@ export class AdminBillingController {
     private readonly admin: AdminBillingService,
     private readonly promos: PromoService,
     private readonly reconcile: BillingReconcileJob,
+    private readonly firebase: FirebaseAdminService,
+    @Inject(BILLING_PROVIDER) private readonly provider: BillingProvider | null,
   ) {}
+
+  // ── test clocks (Stripe test mode only) ───────────────────────────────
+
+  /** Emails whose NEW Stripe customer is put on a test clock (config/test_clocks). */
+  @Get("test-clocks")
+  async testClockList() {
+    const d = (
+      await this.firebase.firestore.doc("config/test_clocks").get()
+    ).data();
+    return {
+      emails: Array.isArray(d?.emails) ? d.emails : [],
+      livemode: this.provider?.livemode ?? null,
+    };
+  }
+
+  @Post("test-clocks")
+  @HttpCode(200)
+  async setTestClockList(@Body() body: TestClockListDto) {
+    const emails = [
+      ...new Set(
+        body.emails.map((e) => e.trim().toLowerCase()).filter(Boolean),
+      ),
+    ];
+    await this.firebase.firestore.doc("config/test_clocks").set({ emails });
+    return { emails };
+  }
+
+  private async customerOf(uid: string): Promise<string> {
+    const c = (
+      await this.firebase.firestore.collection("customers").doc(uid).get()
+    ).data();
+    if (!c?.customerId)
+      throw new NotFoundException("This user has no billing account yet.");
+    return String(c.customerId);
+  }
+
+  /** Where this user's test clock is. */
+  @Get("test-clock/:uid")
+  async testClock(@Param("uid") uid: string) {
+    if (!this.provider?.testClockFor)
+      throw new NotFoundException("Test clocks need Stripe in test mode.");
+    return {
+      clock: await this.provider.testClockFor(await this.customerOf(uid)),
+    };
+  }
+
+  /** Moves this user's test clock forward (by `days`, or to `to`): renewals, trial ends and retries run. */
+  @Post("test-clock/advance")
+  @HttpCode(200)
+  async advanceTestClock(@Body() body: TestClockAdvanceDto) {
+    if (
+      !this.provider?.advanceTestClock ||
+      !this.provider.testClockFor ||
+      this.provider.livemode
+    )
+      throw new NotFoundException("Test clocks need Stripe in test mode.");
+    const customerId = await this.customerOf(body.uid);
+    const clock = await this.provider.testClockFor(customerId);
+    if (!clock)
+      throw new NotFoundException(
+        "This user isn't on a test clock (add their email to the list before their first checkout).",
+      );
+    const from = Date.parse(clock.frozenTime);
+    const to = body.to
+      ? Date.parse(body.to)
+      : from + (body.days ?? 1) * 86_400_000;
+    return this.provider.advanceTestClock(customerId, to);
+  }
 
   @Get("subscribers")
   async subscribers(
@@ -60,7 +142,6 @@ export class AdminBillingController {
   subscriber(@Param("uid") uid: string) {
     return this.admin.subscriber(uid);
   }
-
 
   @Get("abandoned")
   async abandonedCheckouts() {

@@ -8,6 +8,7 @@ import { refundPolicy } from "./refund/refund-policy";
 import { emailHash } from "./retention/email-normalise";
 import { buildTimeline } from "./history-format";
 import { EmailVerificationService } from "../account/email-verification.service";
+import { CreditsService } from "./credits/credits.service";
 import {
   BadRequestException,
   ConflictException,
@@ -16,6 +17,7 @@ import {
   HttpStatus,
   Injectable,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { createHash } from "crypto";
@@ -39,7 +41,11 @@ import {
   PreviewStaleError,
   type BillingProvider,
 } from "./provider/billing-provider";
-import type { AppliedDiscount, PriceRef } from "./provider/types";
+import type {
+  AppliedDiscount,
+  PriceRef,
+  ProviderInvoice,
+} from "./provider/types";
 import {
   describePromo,
   GENERIC_PROMO_ERROR,
@@ -59,11 +65,16 @@ const LIVE = ["ACTIVE", "TRIALING", "PAST_DUE"];
 export type ChangeKind = "upgrade" | "downgrade" | "scheduled" | "same";
 
 /**
- * upgrade   higher plan on the same interval, or monthly → annual (any plan):
- *           immediate, prorated, charged now
- * downgrade lower plan on the same interval: immediate, prorated, the
- *           difference credited to the account balance
- * scheduled annual → monthly (any plan): at the end of the annual period
+ * How a switch happens (plan order Starter < Pro < Elite):
+ *
+ * upgrade   ("switch now") a higher plan, whatever the billing period on
+ *           either side, or the same plan monthly → annual: immediate,
+ *           prorated, charged now. Unused value above the new charge becomes
+ *           Market Catalyst credits.
+ * scheduled ("switch at renewal") a lower plan, whatever the billing period,
+ *           or the same plan annual → monthly: the current plan continues to
+ *           the end of its period; the next charge is the new plan.
+ * downgrade (legacy immediate lower plan) is never returned.
  */
 export function classifyChange(
   current: { planId: string; interval: BillingInterval },
@@ -71,13 +82,10 @@ export function classifyChange(
 ): ChangeKind {
   if (current.planId === target.planId && current.interval === target.interval)
     return "same";
-  if (current.interval === "annual" && target.interval === "monthly")
-    return "scheduled";
-  if (current.interval === "monthly" && target.interval === "annual")
-    return "upgrade";
-  return planRank(target.planId) > planRank(current.planId)
-    ? "upgrade"
-    : "scheduled";
+  const up = planRank(target.planId) - planRank(current.planId);
+  if (up > 0) return "upgrade";
+  if (up < 0) return "scheduled";
+  return target.interval === "annual" ? "upgrade" : "scheduled";
 }
 
 /** The current period's price after an active percent discount (what was paid). */
@@ -212,7 +220,31 @@ export class BillingService {
     private readonly clock: AppClock,
     private readonly config: ConfigService,
     private readonly verification: EmailVerificationService,
+    @Optional() private readonly credits?: CreditsService,
   ) {}
+
+  /** Market Catalyst credits can be used only with a provider that applies them (Stripe). */
+  private creditsUsable(provider: BillingProvider | null): boolean {
+    return !!this.credits && !!provider?.applyCreditToNextInvoice;
+  }
+
+  /** Test mode: tester accounts (config/test_clocks.emails) get a Stripe test clock. */
+  private async onTestClockList(email: string | null): Promise<boolean> {
+    if (!email) return false;
+    try {
+      const list: unknown = (
+        await this.db.doc("config/test_clocks").get()
+      ).data()?.emails;
+      return (
+        Array.isArray(list) &&
+        list
+          .map((e: unknown) => (typeof e === "string" ? e : "").trim().toLowerCase())
+          .includes(email.trim().toLowerCase())
+      );
+    } catch {
+      return false;
+    }
+  }
 
   private get db() {
     return this.firebase.firestore;
@@ -298,7 +330,9 @@ export class BillingService {
       .map((d) => d.data())
       .find((s) => s.provider === provider.name && s.customerId && sameMode(s));
     if (reuse) return String(reuse.customerId);
-    return (await provider.createCustomer({ uid, email })).customerId;
+    const testClock = !provider.livemode && (await this.onTestClockList(email));
+    return (await provider.createCustomer({ uid, email, testClock }))
+      .customerId;
   }
 
   /**
@@ -330,7 +364,9 @@ export class BillingService {
    * first charge on the 20th; subscribing on/after the 20th ⇒ charged now.
    * Still once per email and never after a real payment. Null = no trial.
    */
-  async trialWindowFor(uid: string): Promise<{ endsAt: number; days: number } | null> {
+  async trialWindowFor(
+    uid: string,
+  ): Promise<{ endsAt: number; days: number } | null> {
     const days = this.trialDays;
     if (days <= 0) return null;
     const c = (await this.db.collection("customers").doc(uid).get()).data();
@@ -342,10 +378,15 @@ export class BillingService {
       email = null;
     }
     if (!email) return null;
-    const claim = await this.db.collection("trial_claims").doc(emailHash(email)).get();
+    const claim = await this.db
+      .collection("trial_claims")
+      .doc(emailHash(email))
+      .get();
     if (claim.exists) return null;
     const now = this.clock.now();
-    const start = await this.subscriptions.accountStartMs(uid).catch(() => null);
+    const start = await this.subscriptions
+      .accountStartMs(uid)
+      .catch(() => null);
     const anchor = start == null ? now : Math.max(start, this.trialFloorMs);
     const endsAt = anchor + days * 86_400_000;
     // Less than an hour left isn't worth a trial (and the card step needs time).
@@ -378,6 +419,8 @@ export class BillingService {
         state?: string | null;
         postalCode?: string | null;
       } | null;
+      /** Use Market Catalyst credits on this payment (opt-in). */
+      useCredits?: boolean;
     },
   ) {
     const provider = await this.access.requireQuoteProvider();
@@ -409,12 +452,31 @@ export class BillingService {
           postalCode: input.region.postalCode ?? null,
         }
       : null;
+    const trialWindow = await this.trialWindowFor(uid);
+    // Credits come off a payment made today, so never on a free trial.
+    const creditsAvailable = this.creditsUsable(provider)
+      ? await this.credits.available(uid)
+      : 0;
+    const promoOff = discount
+      ? discountAmountFor(
+          normaliseDiscount(discount, price.interval, this.clock.now()),
+          price.amount,
+        )
+      : 0;
+    const creditAmount =
+      input.useCredits && !trialWindow
+        ? Math.min(creditsAvailable, Math.max(0, price.amount - promoOff))
+        : 0;
     // Staff preview with no provider connected yet: a local quote (no tax —
     // tax only ever comes from the provider) so steps 1–2 still render.
     const quote = provider
-      ? await provider.previewCheckout({ price, discount, region })
+      ? await provider.previewCheckout({
+          price,
+          discount,
+          region,
+          creditAmount,
+        })
       : localQuote(price, discount, this.clock.now());
-    const trialWindow = await this.trialWindowFor(uid);
     const trialDays = trialWindow?.days ?? 0;
     const now = this.clock.now();
     const trialEndsAt = trialWindow ? trialWindow.endsAt : null;
@@ -442,6 +504,8 @@ export class BillingService {
       },
       refundPolicy: refundPolicy(),
       providerConnected: provider !== null,
+      /** Market Catalyst credits the customer has, and the part used on this payment (when chosen). */
+      credits: { available: creditsAvailable, applied: creditAmount },
     };
   }
 
@@ -454,6 +518,8 @@ export class BillingService {
       promoCode?: string | null;
       consent?: { accepted: boolean; version: string } | null;
       marketingOptIn?: boolean;
+      /** Use Market Catalyst credits on the first payment (opt-in; never on a free trial). */
+      useCredits?: boolean;
       billing?: {
         name: string;
         address: {
@@ -508,7 +574,7 @@ export class BillingService {
         message: "You already have a subscription. Change your plan instead.",
       });
     }
-    let discount = null;
+    let discount: AppliedDiscount | null = null;
     let promoId: string | null = null;
     let promoCode: string | null = null;
     if (input.promoCode) {
@@ -517,6 +583,7 @@ export class BillingService {
         uid,
         planId: input.planId,
         interval: input.interval,
+        attach: true,
       });
       if (v.ok === false)
         throw new BadRequestException({
@@ -559,18 +626,53 @@ export class BillingService {
         ].join("|"),
       )
       .digest("hex");
-    const session = await provider.createCheckout({
-      uid,
-      customerId,
-      price,
-      discount,
-      successUrl: `${this.appUrl}/billing/success?session={CHECKOUT_SESSION_ID}`,
-      cancelUrl: `${this.appUrl}/manage-plan?checkout=cancelled&plan=${price.planId}&interval=${price.interval}`,
-      idempotencyKey,
-      billing,
-      trialDays,
-      trialEndsAt: trialWindow ? new Date(trialWindow.endsAt).toISOString() : null,
-    });
+    // Credits the customer chose to use: reserved now (a newer checkout replaces
+    // an older checkout's reservation), spent when the payment succeeds.
+    let creditAmount = 0;
+    if (input.useCredits && !trialWindow && this.creditsUsable(provider)) {
+      await this.credits.release(uid, "A new checkout replaced an earlier one");
+      const promoOff = discount
+        ? discountAmountFor(
+            normaliseDiscount(discount, price.interval, this.clock.now()),
+            price.amount,
+          )
+        : 0;
+      creditAmount = await this.credits.reserve(
+        uid,
+        Math.max(0, price.amount - promoOff),
+        null,
+      );
+    }
+    let session: Awaited<ReturnType<BillingProvider["createCheckout"]>>;
+    try {
+      session = await provider.createCheckout({
+        uid,
+        customerId,
+        price,
+        discount,
+        successUrl: `${this.appUrl}/billing/success?session={CHECKOUT_SESSION_ID}`,
+        cancelUrl: `${this.appUrl}/manage-plan?checkout=cancelled&plan=${price.planId}&interval=${price.interval}`,
+        idempotencyKey:
+          creditAmount > 0
+            ? `${idempotencyKey}-c${creditAmount}`
+            : idempotencyKey,
+        billing,
+        trialDays,
+        trialEndsAt: trialWindow
+          ? new Date(trialWindow.endsAt).toISOString()
+          : null,
+        creditAmount,
+      });
+    } catch (err) {
+      if (creditAmount > 0)
+        await this.credits.release(uid, "Checkout could not be created");
+      throw err;
+    }
+    if (creditAmount > 0)
+      await this.credits.attachPending(
+        uid,
+        session.subscriptionId ?? session.id,
+      );
     // One checkout at a time: an older unpaid one (another tab, another plan) is closed.
     await provider.closeOtherCheckouts?.(customerId, session.id);
     const now = this.clock.nowIso();
@@ -604,6 +706,7 @@ export class BillingService {
           amountDueToday: session.amountDueToday,
           tax: session.tax ?? 0,
           trialDays,
+          creditApplied: creditAmount,
           region,
           consent: {
             acceptedAt: now,
@@ -738,8 +841,16 @@ export class BillingService {
         preview.nextRenewalAmount - balanceAfter,
       ),
       cancelsPendingDowngrade: !!m.scheduledChange && kind !== "scheduled",
-      resumesCancelledPlan: m.cancelAtPeriodEnd && kind === "upgrade",
-      keepsCancelDate: m.cancelAtPeriodEnd && kind === "downgrade",
+      /** Any switch means the customer is staying: a pending cancellation is switched off. */
+      resumesCancelledPlan:
+        m.cancelAtPeriodEnd && (kind === "upgrade" || kind === "scheduled"),
+      keepsCancelDate: false,
+      /** Unused value left over by a switch now (e.g. annual → a higher monthly plan): goes to Market Catalyst credits. */
+      leftoverToCredits: preview.creditToBalance ?? 0,
+      /** Market Catalyst credits the customer could choose to use on this switch. */
+      creditsAvailable: this.creditsUsable(provider)
+        ? await this.credits.available(uid)
+        : 0,
     };
   }
 
@@ -754,6 +865,8 @@ export class BillingService {
       paymentMethodId?: string | null;
       billing?: BillingInput | null;
       consent?: { accepted: boolean; version: string } | null;
+      /** Use Market Catalyst credits on this switch (opt-in). */
+      useCredits?: boolean;
     },
   ) {
     const { provider, m, target, kind } = await this.assertChangeable(
@@ -798,6 +911,20 @@ export class BillingService {
         message: "Please agree to the renewal terms to continue.",
       });
     }
+    // Credits the customer chose to use: on what is charged now (switch now),
+    // or on the new plan's first charge (switch at renewal).
+    let creditAmount = 0;
+    if (input.useCredits && this.creditsUsable(provider)) {
+      // A switch now during the free trial charges nothing today (a $0 invoice
+      // would use the credits up), so credits apply only to real charges.
+      const charge =
+        kind === "scheduled"
+          ? target.amount
+          : kind === "upgrade" && m.status !== "TRIALING"
+            ? (input.expectedAmountDue ?? 0)
+            : 0;
+      creditAmount = await this.credits.reserve(uid, charge, m.subscriptionId);
+    }
     try {
       const result = await provider.changePlan({
         subscriptionId: m.subscriptionId,
@@ -808,21 +935,40 @@ export class BillingService {
         prorationDate: input.prorationDate ?? this.clock.now(),
         expectedAmountDue: kind === "upgrade" ? input.expectedAmountDue : null,
         expectedCredit: kind === "downgrade" ? input.expectedCredit : null,
+        creditAmount,
       });
-      if (input.consent?.accepted === true) {
-        await this.db.collection("plan_change_consents").doc().set({
+      if (result.status === "payment_failed" && creditAmount > 0)
+        await this.credits.release(uid, "The switch payment failed");
+      // Unused value above the new charge: Market Catalyst credits (never refunded,
+      // never spent unless the customer chooses to use them).
+      if (
+        result.status === "applied" &&
+        (result.creditToBalance ?? 0) > 0 &&
+        this.credits
+      )
+        await this.credits.add(
           uid,
-          from: { planId: m.planId, interval: m.interval },
-          to: { planId: target.planId, interval: target.interval },
-          kind,
-          result: result.status,
-          version: CONSENT_VERSION,
-          text: consentText(target.planId, target.interval, 0),
-          price: target.amount,
-          currency: target.currency,
-          acceptedAt: this.clock.nowIso(),
-          livemode: provider.livemode,
-        });
+          result.creditToBalance,
+          `Unused time when switching from ${planById(m.planId)?.name ?? m.planId} (${m.interval}) to ${planById(target.planId)?.name ?? target.planId} (${target.interval})`,
+          `switch-${result.invoiceId ?? `${m.subscriptionId}-${this.clock.now()}`}`,
+        );
+      if (input.consent?.accepted === true) {
+        await this.db
+          .collection("plan_change_consents")
+          .doc()
+          .set({
+            uid,
+            from: { planId: m.planId, interval: m.interval },
+            to: { planId: target.planId, interval: target.interval },
+            kind,
+            result: result.status,
+            version: CONSENT_VERSION,
+            text: consentText(target.planId, target.interval, 0),
+            price: target.amount,
+            currency: target.currency,
+            acceptedAt: this.clock.nowIso(),
+            livemode: provider.livemode,
+          });
       }
       if (result.status === "payment_failed") {
         throw new HttpException(
@@ -837,6 +983,8 @@ export class BillingService {
       }
       return { kind, ...result };
     } catch (err) {
+      if (creditAmount > 0)
+        await this.credits.release(uid, "The switch did not go through");
       if (err instanceof PreviewStaleError) {
         throw new ConflictException({
           statusCode: 409,
@@ -901,6 +1049,58 @@ export class BillingService {
     return { resumed: true, renewsAt: m.currentPeriodEnd };
   }
 
+  /** "Use my credits on my next payment" (Manage Plan): opt-in, up to the next payment. */
+  async useCreditsOnNextPayment(uid: string) {
+    const provider = await this.access.requireLive();
+    const m = await this.liveSubscription(uid);
+    if (!this.creditsUsable(provider))
+      throw new ConflictException({
+        statusCode: 409,
+        code: "credits_unavailable",
+        message: "Credits can't be used right now.",
+      });
+    const cur = await this.credits.get(uid);
+    if (cur.pending)
+      throw new ConflictException({
+        statusCode: 409,
+        code: "credits_already_set",
+        message: "Your credits are already set to come off a payment.",
+      });
+    const next: ProviderInvoice | null = m.cancelAtPeriodEnd
+      ? null
+      : await provider
+          .getUpcomingInvoice(m.subscriptionId)
+          .catch((): ProviderInvoice | null => null);
+    if (!next)
+      throw new ConflictException({
+        statusCode: 409,
+        code: "no_next_payment",
+        message: "There is no upcoming payment to use credits on.",
+      });
+    const amount = await this.credits.reserve(
+      uid,
+      Math.max(0, next.subtotal - next.discountAmount),
+      m.subscriptionId,
+    );
+    if (amount <= 0)
+      throw new ConflictException({
+        statusCode: 409,
+        code: "no_credits",
+        message: "You have no credits to use.",
+      });
+    try {
+      await provider.applyCreditToNextInvoice(
+        m.subscriptionId,
+        amount,
+        next.currency,
+      );
+    } catch (err) {
+      await this.credits.release(uid, "Credits could not be applied");
+      throw err;
+    }
+    return { applied: amount, on: next.periodStart };
+  }
+
   // ── billing page ──────────────────────────────────────────────────────
 
   async summary(uid: string) {
@@ -953,7 +1153,10 @@ export class BillingService {
       planId: effective.planId,
       planName: effective.planName,
       status: effective.status,
-      interval: effective.planId === "none" || !LIVE.includes(m?.status) ? null : (m?.interval ?? null),
+      interval:
+        effective.planId === "none" || !LIVE.includes(m?.status)
+          ? null
+          : (m?.interval ?? null),
       source: m?.source ?? null,
       /** Account credit (downgrades, annual retention) used automatically on the next invoices. */
       creditBalance:
@@ -986,6 +1189,22 @@ export class BillingService {
         : null,
       nextCharge,
       hasBillingAccount: !!m?.customerId,
+      /** Market Catalyst credits: balance, what's free to use, and what's set to come off a payment. */
+      credits: this.credits
+        ? await this.credits.get(uid).then((c) => ({
+            balance: c.balance,
+            available: Math.max(0, c.balance - (c.pending?.amount ?? 0)),
+            pending: c.pending?.amount ?? 0,
+            currency: c.currency,
+            usable: this.creditsUsable(provider),
+          }))
+        : {
+            balance: 0,
+            available: 0,
+            pending: 0,
+            currency: "USD",
+            usable: false,
+          },
     };
   }
 
@@ -1047,8 +1266,10 @@ export class BillingService {
         // Filter out phantom "subscribed" events where subscription was incomplete / NONE or not live
         if (e.type === "subscribed") {
           const to = e.to as Record<string, unknown> | undefined;
-          if (to?.status === "NONE" || to?.status === "incomplete") return false;
-          if (!hasLiveSub && (!to?.status || to.status === "NONE")) return false;
+          if (to?.status === "NONE" || to?.status === "incomplete")
+            return false;
+          if (!hasLiveSub && (!to?.status || to.status === "NONE"))
+            return false;
         }
         return true;
       })
@@ -1108,10 +1329,7 @@ export class BillingService {
   }
 
   /** Edits product-updates opt-in. */
-  async updateContact(
-    uid: string,
-    input: { marketingOptIn?: boolean },
-  ) {
+  async updateContact(uid: string, input: { marketingOptIn?: boolean }) {
     const ref = this.db.collection("customers").doc(uid);
     const now = this.clock.nowIso();
     const patch: Record<string, unknown> = { uid };

@@ -47,6 +47,7 @@ import { BILLING_PROVIDER } from "../../src/billing/provider/billing-provider";
 import { FakeBillingProvider } from "../../src/billing/provider/fake/fake-billing.provider";
 import { BillingReconcileJob } from "../../src/billing/reconcile.job";
 import { RetentionService } from "../../src/billing/retention/retention.service";
+import { CreditsService } from "../../src/billing/credits/credits.service";
 import { FakeAuth, T0, configOf } from "./billing-harness";
 import type { AuthTokenInfo } from "../../src/common/auth-token";
 import { CONSENT_VERSION } from "../../src/billing/checkout/consent";
@@ -183,6 +184,7 @@ export async function billingApp(opts: BillingAppOptions = {}) {
       PromoService,
       ReferralService,
       RetentionService,
+      CreditsService,
       AdminBillingService,
       BillingReconcileJob,
       EmailVerificationService,

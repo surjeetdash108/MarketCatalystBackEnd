@@ -77,9 +77,15 @@ export class BillingController {
    */
   @Post("referral/claim")
   @HttpCode(200)
-  async claimReferral(@CurrentUser() uid: string, @Body() body: ReferralClaimDto) {
+  async claimReferral(
+    @CurrentUser() uid: string,
+    @Body() body: ReferralClaimDto,
+  ) {
     const outcome = await this.referrals.claim(uid, body.code);
-    return { ok: outcome === "claimed" || outcome === "already_claimed", outcome };
+    return {
+      ok: outcome === "claimed" || outcome === "already_claimed",
+      outcome,
+    };
   }
 
   /**
@@ -136,7 +142,9 @@ export class BillingController {
     // the event handler when the purchase completes.
     try {
       const email = await this.email(uid);
-      const ref = this.firebase.firestore.collection("abandoned_checkouts").doc(uid);
+      const ref = this.firebase.firestore
+        .collection("abandoned_checkouts")
+        .doc(uid);
       const prev = (await ref.get()).data() ?? {};
       const now = new Date().toISOString();
       await ref.set(
@@ -147,7 +155,10 @@ export class BillingController {
           interval: body.interval,
           step: "Payment page",
           at: now,
-          firstAt: (prev.firstAt as string | undefined) ?? (prev.at as string | undefined) ?? now,
+          firstAt:
+            (prev.firstAt as string | undefined) ??
+            (prev.at as string | undefined) ??
+            now,
           attempts: Number(prev.attempts ?? 0) + 1,
         },
         { merge: true },
@@ -233,6 +244,13 @@ export class BillingController {
     return this.retention.accept(uid);
   }
 
+  /** Use Market Catalyst credits on the next payment (opt-in). */
+  @Post("credits/use-next")
+  @HttpCode(200)
+  useCredits(@CurrentUser() uid: string) {
+    return this.billing.useCreditsOnNextPayment(uid);
+  }
+
   @Get("contact")
   contact(@CurrentUser() uid: string) {
     return this.billing.contact(uid);
@@ -278,7 +296,6 @@ export class BillingController {
   timeline(@CurrentUser() uid: string) {
     return this.billing.timeline(uid).then((entries) => ({ entries }));
   }
-
 
   @Post("portal")
   @HttpCode(200)

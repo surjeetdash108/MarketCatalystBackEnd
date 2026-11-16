@@ -22,7 +22,8 @@ export type DiscountDuration = "once" | "repeating" | "forever";
 
 /** A discount attached to a subscription (from a promo code or the retention offer). */
 export interface AppliedDiscount {
-  source: "promo" | "retention";
+  /** "credit": Market Catalyst credits the customer chose to use on one payment. */
+  source: "promo" | "retention" | "credit";
   promoId?: string | null;
   code?: string | null;
   percentOff?: number | null;
@@ -116,6 +117,8 @@ export interface ProviderInvoice {
   subtotal: number;
   discountAmount: number;
   creditApplied: number;
+  /** Part of discountAmount that came from Market Catalyst credits (one-time credit discount). */
+  creditDiscount?: number;
   total: number;
   amountPaid: number;
   amountDue: number;
@@ -184,7 +187,11 @@ export type ChangeResult =
       status: "applied";
       invoiceId: string | null;
       amountCharged: number;
-      /** Credited to the customer balance (downgrades). */
+      /**
+       * Unused value left over when the unused time is worth more than the new
+       * charge. Never left in the provider's own balance (it would be spent
+       * automatically): the backend adds it to Market Catalyst credits.
+       */
       creditToBalance?: number;
       effectiveAt: string;
     }
@@ -242,7 +249,9 @@ export type ProviderEventType =
   | "invoice.action_required"
   | "invoice.upcoming"
   | "charge.refunded"
-  | "charge.dispute_created";
+  | "charge.dispute_created"
+  /** A dispute was decided; data.status "lost" ends access now. */
+  | "charge.dispute_closed";
 
 export interface ProviderEvent {
   id: string;
@@ -257,6 +266,8 @@ export interface ProviderEvent {
     invoiceId?: string | null;
     checkoutSessionId?: string | null;
     amount?: number | null;
+    /** Dispute outcome (charge.dispute_closed): "won" | "lost" | … */
+    status?: string | null;
   };
 }
 
