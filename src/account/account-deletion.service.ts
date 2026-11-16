@@ -15,6 +15,8 @@ const DOCS_BY_UID = [
   "referral_attributions",
   "launch_offers",
   "abandoned_checkouts",
+  // Market Catalyst credits are never refunded: deleting the account forfeits them.
+  "credits",
 ] as const;
 
 /** Collections whose docs carry the owner in a `uid` field. */
