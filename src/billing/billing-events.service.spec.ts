@@ -177,6 +177,19 @@ describe("billing event handler: the only writer of billing state", () => {
     });
   });
 
+  it("two live subscriptions: the account stays on the newer one; a late event about the older one doesn't take over", async () => {
+    const h = billingHarness();
+    const { subscriptionId } = await h.buy("u1", "pro", "monthly");
+    const pro = (await h.provider.getSubscription(subscriptionId))!;
+    const later = new Date(Date.parse(pro.startedAt) + 60_000).toISOString();
+    await h.events.applySubscription({ ...pro, id: "sub_elite_newer", planId: "elite", startedAt: later, updatedAt: pro.updatedAt + 1 }, null);
+    expect(h.fs.read("subscriptions", "u1")).toMatchObject({ subscriptionId: "sub_elite_newer", planId: "elite" });
+    const r = await h.events.applySubscription({ ...pro, updatedAt: pro.updatedAt + 2 }, null);
+    expect(r).toBe("ignored");
+    expect(h.fs.read("subscriptions", "u1")).toMatchObject({ subscriptionId: "sub_elite_newer", planId: "elite" });
+    expect(h.fs.read("billing_alerts", `duplicate_u1_${subscriptionId}`)).toMatchObject({ kind: "duplicate_subscription" });
+  });
+
   it("cancel at period end: paid access to the exact end, then no plan with claim and email", async () => {
     const h = billingHarness();
     const { subscriptionId } = await h.buy("u1", "pro", "monthly");

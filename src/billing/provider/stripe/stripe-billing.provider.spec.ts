@@ -914,3 +914,100 @@ describe("StripeBillingProvider — webhooks", () => {
     );
   });
 });
+
+describe("StripeBillingProvider — the plan picked last is the one paid for", () => {
+  const replay = <T extends object>(obj: T) => Object.assign(obj, { lastResponse: { headers: { "idempotent-replayed": "true" } } });
+
+  it("a replayed checkout that was closed since (picked another plan, then came back) gets a fresh one", async () => {
+    const m = mockClient();
+    const keys: string[] = [];
+    let n = 0;
+    m.raw.subscriptions.create = jest.fn((_p: unknown, o: { idempotencyKey: string }) => {
+      keys.push(o.idempotencyKey);
+      n++;
+      const s = subObj({ id: n === 1 ? "sub_pro_old" : "sub_pro_new", status: "incomplete" });
+      return Promise.resolve(n === 1 ? replay(s) : s);
+    }) as never;
+    m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ id: "sub_pro_old", status: "canceled" }))) as never;
+    const { p } = provider({}, m);
+    const s = await p.createCheckout({ uid: "u1", customerId: "cus_1", price: PRO_M, discount: null, successUrl: "s", cancelUrl: "c", idempotencyKey: "k1" });
+    expect(s.id).toBe("sub_pro_new");
+    expect(keys[0]).toBe("checkout-k1");
+    expect(keys[1]).toMatch(/^checkout-k1-[0-9a-f-]{36}$/);
+  });
+
+  it("a replayed checkout that is still open is reused (double click), with no second subscription", async () => {
+    const m = mockClient();
+    m.raw.subscriptions.create = jest.fn(() => Promise.resolve(replay(subObj({ id: "sub_open", status: "incomplete" })))) as never;
+    m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ id: "sub_open", status: "incomplete" }))) as never;
+    const { p } = provider({}, m);
+    const s = await p.createCheckout({ uid: "u1", customerId: "cus_1", price: PRO_M, discount: null, successUrl: "s", cancelUrl: "c", idempotencyKey: "k1" });
+    expect(s.id).toBe("sub_open");
+    expect(m.raw.subscriptions.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("a key reused with different parameters (idempotency error) gets a fresh checkout instead of failing", async () => {
+    const m = mockClient();
+    let n = 0;
+    m.raw.setupIntents.create = jest.fn((p: { metadata: Record<string, string> }) => {
+      n++;
+      if (n === 1) return Promise.reject(Object.assign(new Error("Keys for idempotent requests can only be used with the same parameters"), { type: "StripeIdempotencyError" }));
+      return Promise.resolve({ id: "seti_fresh", object: "setup_intent", status: "requires_payment_method", customer: "cus_1", client_secret: "x", metadata: p.metadata, created: T });
+    }) as never;
+    const { p } = provider({}, m);
+    const s = await p.createCheckout({ uid: "u1", customerId: "cus_1", price: PRO_M, discount: null, successUrl: "s", cancelUrl: "c", idempotencyKey: "k1", trialDays: 6 });
+    expect(s.id).toBe("seti_fresh");
+  });
+
+  it("closing other checkouts keeps any started after this one (two tabs settle on the newest)", async () => {
+    const subs = [subObj({ id: "sub_older", status: "incomplete", created: T - 60 }), subObj({ id: "sub_newer", status: "incomplete", created: T + 60 })];
+    const setups = [
+      { id: "seti_older", status: "requires_payment_method", created: T - 30, metadata: { planId: "pro" } },
+      { id: "seti_newer", status: "requires_payment_method", created: T + 30, metadata: { planId: "elite" } },
+    ];
+    const m = mockClient(subs, setups);
+    m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ id: "sub_mine", created: T }))) as never;
+    const { p } = provider({}, m);
+    await p.closeOtherCheckouts("cus_1", "sub_mine");
+    expect(m.calls["subscriptions.cancel"]).toEqual([["sub_older"]]);
+    expect(m.calls["setupIntents.cancel"]).toEqual([["seti_older"]]);
+  });
+
+  it("a card saved for a later pick wins even if the earlier pick's webhook arrives first", async () => {
+    const older = { ...SETI, id: "seti_pro", created: T, metadata: { uid: "u1", planId: "pro", interval: "monthly", lookupKey: "pro_monthly", trialDays: "7", coupon: "", currency: "USD" } };
+    const newer = { ...SETI, id: "seti_elite", created: T + 120, metadata: { uid: "u1", planId: "elite", interval: "monthly", lookupKey: "elite_monthly", trialDays: "7", coupon: "", currency: "USD" } };
+    const m = mockClient([], [older, newer]);
+    m.raw.setupIntents.retrieve = jest.fn((id: string) => Promise.resolve(id === "seti_pro" ? { ...older } : { ...newer })) as never;
+    m.raw.setupIntents.update = jest.fn((id: string, p: { metadata: Record<string, string> }) => Promise.resolve({ ...(id === "seti_pro" ? older : newer), metadata: p.metadata })) as never;
+    const { p } = provider({}, m);
+    const s = await p.getCheckout("seti_pro");
+    const created = m.calls["subscriptions.create"] as Array<[{ metadata: Record<string, string> }]>;
+    expect(created).toHaveLength(1);
+    expect(created[0][0].metadata).toMatchObject({ planId: "elite", setupIntentId: "seti_elite" });
+    expect(s).toMatchObject({ status: "expired", subscriptionId: null });
+    expect(m.raw.setupIntents.update).toHaveBeenCalledWith("seti_pro", { metadata: expect.objectContaining({ blocked: "superseded" }) });
+  });
+
+  it("a later pick replaces the earlier pick's $0 trial; a paid plan is never replaced", async () => {
+    const earlier = { ...SETI, id: "seti_pro", created: T };
+    const later = { ...SETI, id: "seti_elite", created: T + 120, metadata: { uid: "u1", planId: "elite", interval: "monthly", lookupKey: "elite_monthly", trialDays: "7", coupon: "", currency: "USD" } };
+    const trial = subObj({ id: "sub_pro_trial", status: "trialing", metadata: { uid: "u1", planId: "pro", interval: "monthly", setupIntentId: "seti_pro" } });
+    const m = mockClient([trial]);
+    m.raw.setupIntents.retrieve = jest.fn((id: string) => Promise.resolve(id === "seti_pro" ? { ...earlier } : { ...later })) as never;
+    m.raw.setupIntents.update = jest.fn((id: string, p: { metadata: Record<string, string> }) => Promise.resolve({ ...later, id, metadata: p.metadata })) as never;
+    const { p } = provider({}, m);
+    await p.getCheckout("seti_elite");
+    expect(m.calls["subscriptions.cancel"]).toEqual([["sub_pro_trial", { prorate: false, invoice_now: false }]]);
+    expect((m.calls["subscriptions.create"] as Array<[{ metadata: Record<string, string> }]>)[0][0].metadata).toMatchObject({ planId: "elite" });
+
+    const paid = subObj({ id: "sub_paid", status: "active" });
+    const m2 = mockClient([paid]);
+    m2.raw.setupIntents.retrieve = jest.fn(() => Promise.resolve({ ...later })) as never;
+    m2.raw.setupIntents.update = jest.fn((id: string, p: { metadata: Record<string, string> }) => Promise.resolve({ ...later, id, metadata: p.metadata })) as never;
+    const { p: p2 } = provider({}, m2);
+    await p2.getCheckout("seti_elite");
+    expect(m2.calls["subscriptions.cancel"] ?? []).toEqual([]);
+    expect(m2.calls["subscriptions.create"] ?? []).toEqual([]);
+    expect(m2.raw.setupIntents.update).toHaveBeenCalledWith("seti_elite", { metadata: expect.objectContaining({ blocked: "already_subscribed" }) });
+  });
+});

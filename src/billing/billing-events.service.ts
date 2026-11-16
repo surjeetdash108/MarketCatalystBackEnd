@@ -448,21 +448,49 @@ export class BillingEventsService implements OnModuleInit {
       LIVE.includes(prev.status) &&
       LIVE.includes(status)
     ) {
-      // Should never happen (checkout refuses a second subscription); if it
-      // does, the customer may be billed twice — flag it for an admin.
-      this.logger.error(
-        `DUPLICATE SUBSCRIPTION for ${uid}: ${prev.subscriptionId} and ${sub.id} are both live`,
-      );
-      await this.db
-        .collection("billing_alerts")
-        .doc(`duplicate_${uid}_${sub.id}`)
-        .set({
-          kind: "duplicate_subscription",
-          uid,
-          subscriptionIds: [prev.subscriptionId, sub.id],
-          at: this.clock.nowIso(),
-          ...this.mode(),
-        });
+      // Our record can lag: ask the provider whether the previous one is still live
+      // (a trial replaced by a later pick is already cancelled there).
+      const prevNow: ProviderSubscription | null = this.provider
+        ? await this.provider
+            .getSubscription(prev.subscriptionId)
+            .catch((): ProviderSubscription | null => null)
+        : null;
+      const prevStillLive = prevNow
+        ? LIVE.includes(mapStatus(prevNow.status))
+        : true;
+      if (prevStillLive) {
+        // Should never happen (checkout refuses a second subscription); if it
+        // does, the customer may be billed twice — flag it for an admin.
+        this.logger.error(
+          `DUPLICATE SUBSCRIPTION for ${uid}: ${prev.subscriptionId} and ${sub.id} are both live`,
+        );
+        await this.db
+          .collection("billing_alerts")
+          .doc(`duplicate_${uid}_${sub.id}`)
+          .set({
+            kind: "duplicate_subscription",
+            uid,
+            subscriptionIds: [prev.subscriptionId, sub.id],
+            at: this.clock.nowIso(),
+            ...this.mode(),
+          });
+        // The plan picked last wins: an OLDER live subscription never replaces
+        // the newer one on the account (the admin alert covers the double charge).
+        const prevStarted = Date.parse(
+          prevNow?.startedAt ?? prev.startedAt ?? "",
+        );
+        const subStarted = Date.parse(sub.startedAt ?? "");
+        if (
+          Number.isFinite(prevStarted) &&
+          Number.isFinite(subStarted) &&
+          subStarted < prevStarted
+        ) {
+          this.logger.warn(
+            `keeping ${prev.subscriptionId} for ${uid}: ${sub.id} is the older of two live subscriptions`,
+          );
+          return "ignored";
+        }
+      }
     }
     if (
       prev &&
