@@ -32,6 +32,7 @@ import type {
   DiscountDuration,
   PromoMirror,
 } from "../provider/types";
+import { emailHash } from "../retention/email-normalise";
 
 /**
  * Promo codes — our own engine in backend-only collections (promo_codes,
@@ -107,13 +108,17 @@ export class PromoService {
   private async referralPromo(
     code: string,
     uid: string,
+    attach: boolean,
   ): Promise<PromoValidation | null> {
     const ref = await this.referrals?.lookup(code);
     if (!ref) return null;
     if (!uid || ref.uid === uid) return { ok: false, reason: "not_found" };
     if (await this.isReturningCustomer(uid))
       return { ok: false, reason: "not_first_time" };
-    const claim = await this.referrals!.claim(uid, ref.code);
+    // Only a checkout attaches the referrer; previewing the code changes nothing.
+    const claim = await this.referrals.claim(uid, ref.code, {
+      dryRun: !attach,
+    });
     if (claim !== "claimed" && claim !== "already_claimed")
       return {
         ok: false,
@@ -282,10 +287,7 @@ export class PromoService {
 
   async findByCode(code: string): Promise<PromoCode | null> {
     const normalised = normaliseCode(code);
-    const snap = await this.col
-      .where("code", "==", normalised)
-      .limit(1)
-      .get();
+    const snap = await this.col.where("code", "==", normalised).limit(1).get();
     if (!snap.empty) return snap.docs[0].data() as PromoCode;
 
     return null;
@@ -296,6 +298,22 @@ export class PromoService {
       await this.firebase.firestore.collection("customers").doc(uid).get()
     ).data();
     if (c?.firstPaidAt) return true;
+    // Paid before under another account with the same email (deleted and signed up again).
+    try {
+      const email = (await this.firebase.auth.getUser(uid)).email;
+      if (
+        email &&
+        (
+          await this.firebase.firestore
+            .collection("paid_emails")
+            .doc(emailHash(email))
+            .get()
+        ).exists
+      )
+        return true;
+    } catch {
+      /* no auth record: fall through to the payment rows */
+    }
     const paid = await this.firebase.firestore
       .collection("payments")
       .where("userId", "==", uid)
@@ -310,10 +328,16 @@ export class PromoService {
     uid: string;
     planId: string;
     interval: BillingInterval;
+    /** True only at checkout: a referral code then attaches the referrer. */
+    attach?: boolean;
   }): Promise<PromoValidation> {
     if (!isPaidPlanId(input.planId))
       return { ok: false, reason: "not_paid_plan" };
-    const referral = await this.referralPromo(input.code, input.uid);
+    const referral = await this.referralPromo(
+      input.code,
+      input.uid,
+      input.attach === true,
+    );
     if (referral) return referral;
     const promo = await this.findByCode(input.code);
     if (!promo) return { ok: false, reason: "not_found" };
@@ -322,7 +346,9 @@ export class PromoService {
       return { ok: false, reason: "expired" };
     if (
       promo.maxRedemptions != null &&
-      promo.timesRedeemed >= promo.maxRedemptions
+      promo.timesRedeemed +
+        (await this.openCheckoutsWith(promo.id, input.uid)) >=
+        promo.maxRedemptions
     )
       return { ok: false, reason: "max_redemptions" };
     if (
@@ -338,6 +364,31 @@ export class PromoService {
     if (promo.firstTimeOnly && (await this.isReturningCustomer(input.uid)))
       return { ok: false, reason: "not_first_time" };
     return { ok: true, promo, discount: this.discountFor(promo) };
+  }
+
+  /**
+   * Other people's unpaid checkouts (last 23 hours) that use this code: they
+   * hold a place against maxRedemptions, so two people paying at the same time
+   * can't both take the last one.
+   */
+  private async openCheckoutsWith(
+    promoId: string,
+    uid: string,
+  ): Promise<number> {
+    const since = this.clock.now() - 23 * 3_600_000;
+    const snap = await this.firebase.firestore
+      .collection("checkout_sessions")
+      .where("promoId", "==", promoId)
+      .get();
+    return snap.docs
+      .map((d) => d.data())
+      .filter(
+        (x) =>
+          x.uid !== uid &&
+          x.status !== "complete" &&
+          x.status !== "expired" &&
+          Date.parse(String(x.createdAt ?? "")) >= since,
+      ).length;
   }
 
   discountFor(promo: PromoCode): AppliedDiscount {

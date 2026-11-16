@@ -22,6 +22,7 @@ import {
   type SubscriptionMirror,
 } from "../plans/subscriptions.service";
 import { EmailService } from "./email/email.service";
+import { CreditsService } from "./credits/credits.service";
 import {
   BILLING_PROVIDER,
   InvalidEventSignatureError,
@@ -136,6 +137,7 @@ export class BillingEventsService implements OnModuleInit {
     private readonly emails: EmailService,
     private readonly clock: AppClock,
     @Optional() private readonly referrals?: ReferralService,
+    @Optional() private readonly credits?: CreditsService,
   ) {}
 
   onModuleInit(): void {
@@ -258,6 +260,7 @@ export class BillingEventsService implements OnModuleInit {
         return;
       case "charge.refunded":
       case "charge.dispute_created":
+      case "charge.dispute_closed":
         if (d.invoiceId) await this.onChargeIssue(event);
         return;
       default:
@@ -273,7 +276,12 @@ export class BillingEventsService implements OnModuleInit {
     if (!email) return;
     const ref = this.db.collection("trial_claims").doc(emailHash(email));
     if ((await ref.get()).exists) return;
-    await ref.set({ uid, planId, claimedAt: this.clock.nowIso(), ...this.mode() });
+    await ref.set({
+      uid,
+      planId,
+      claimedAt: this.clock.nowIso(),
+      ...this.mode(),
+    });
   }
 
   /** { livemode } of the active provider; nothing when there is none (trials). */
@@ -423,9 +431,12 @@ export class BillingEventsService implements OnModuleInit {
     event: ProviderEvent | null,
   ): Promise<HandleResult> {
     const uid = sub.uid;
+    // Deleted accounts stay deleted, whichever path (webhook or reconcile) gets here.
+    if (await this.accountDeleted(uid)) return "ignored";
     const ref = this.db.collection(BILLING_COLLECTIONS.subscriptions).doc(uid);
     const prev = (await ref.get()).data() as MirrorDoc | undefined;
     const status = mapStatus(sub.status);
+    const samesub = prev?.subscriptionId === sub.id;
 
     // Ordering: a late event about an OLDER subscription must not replace a
     // newer live one (e.g. old sub's deletion arriving after a re-subscribe).
@@ -500,6 +511,17 @@ export class BillingEventsService implements OnModuleInit {
     ) {
       return "ignored"; // stale snapshot
     }
+    // An older unpaid checkout being closed doesn't replace the record of the
+    // newer checkout that is still waiting for payment.
+    if (
+      prev &&
+      prev.subscriptionId &&
+      prev.subscriptionId !== sub.id &&
+      prev.status === "NONE" &&
+      !LIVE.includes(status)
+    ) {
+      return "ignored";
+    }
 
     await this.ensureCustomer(uid, sub.customerId);
     const next: MirrorDoc = {
@@ -530,23 +552,48 @@ export class BillingEventsService implements OnModuleInit {
       lastEventId: event?.id ?? prev?.lastEventId ?? null,
       lastEventCreated:
         Math.max(event?.created ?? 0, prev?.lastEventCreated ?? 0) || null,
-      promoCode: prev?.promoCode ?? (await this.promoCodeFor(sub.id)),
+      // Taken from THIS subscription's checkout; a re-subscription never keeps
+      // the previous one's promo code or renewal consent.
+      promoCode: samesub
+        ? (prev?.promoCode ?? (await this.promoCodeFor(sub.id)))
+        : await this.promoCodeFor(sub.id),
       // Renewal consent shown and ticked at checkout (timestamp, text version, plan, price, IP).
       consent:
-        (prev?.consent as Record<string, unknown> | undefined) ??
+        (samesub ? prev?.consent : undefined) ??
         ((await this.checkoutRecordFor(sub.id))?.consent as
           Record<string, unknown> | undefined) ??
         null,
+      everLive: (samesub && prev?.everLive === true) || LIVE.includes(status),
       updatedAt: this.clock.nowIso(),
     };
     await ref.set(clean(next));
+    // Credits reserved for a payment on this subscription that will never
+    // happen (an unpaid checkout closed, or the plan ended) are free again.
+    if (this.credits && status === "CANCELLED") {
+      const c = await this.credits.get(uid);
+      if (
+        c.pending &&
+        (!c.pending.subscriptionId || c.pending.subscriptionId === sub.id)
+      )
+        await this.credits.release(
+          uid,
+          `Subscription ${sub.id} ended before the credits were used`,
+        );
+    }
     // A provider trial uses up this person's one free trial (normalised email).
-    if (status === "TRIALING" && !(prev?.status === "TRIALING" && prev?.source === "provider"))
+    if (
+      status === "TRIALING" &&
+      !(prev?.status === "TRIALING" && prev?.source === "provider")
+    )
       await this.claimTrial(uid, next.planId);
     await this.writeProjection(uid, next);
     await this.setPlanClaim(uid);
     await this.recordChanges(uid, prev, next, event);
-    await this.db.collection("abandoned_checkouts").doc(uid).delete().catch(() => {});
+    await this.db
+      .collection("abandoned_checkouts")
+      .doc(uid)
+      .delete()
+      .catch(() => {});
     return "processed";
   }
 
@@ -575,6 +622,12 @@ export class BillingEventsService implements OnModuleInit {
 
       return; // welcome email is sent from checkout.completed
     }
+    // Nothing to compare with yet (the first event about an unpaid checkout):
+    // the record is written; there is no change to report.
+    if (!prev) return;
+    // A different subscription that was never active (an unpaid checkout being
+    // closed or expiring) changes nothing the customer has.
+    if (!samesub && !nowLive) return;
     if (prev.planId !== next.planId || prev.interval !== next.interval) {
       await this.addHistory(
         uid,
@@ -599,7 +652,9 @@ export class BillingEventsService implements OnModuleInit {
         // An immediate downgrade (a scheduled one emailed when it was scheduled).
         const credit =
           this.provider && next.customerId
-            ? await this.provider.getCreditBalance(next.customerId).catch(() => null)
+            ? await this.provider
+                .getCreditBalance(next.customerId)
+                .catch(() => null)
             : null;
         await this.emails.downgraded(email, {
           fromPlanId: prev.planId,
@@ -683,7 +738,9 @@ export class BillingEventsService implements OnModuleInit {
         ctx,
       );
     }
-    if (prev.status !== next.status) {
+    // Only a plan the customer actually had can "end": an unpaid checkout
+    // going from incomplete to cancelled is neither history nor an email.
+    if (prev.status !== next.status && (wasLive || nowLive)) {
       await this.addHistory(
         uid,
         "status_changed",
@@ -691,7 +748,7 @@ export class BillingEventsService implements OnModuleInit {
         next.status,
         ctx,
       );
-      if (next.status === "CANCELLED")
+      if (next.status === "CANCELLED" && wasLive)
         await this.emails.planEnded(email, { planId: prev.planId });
     }
   }
@@ -747,8 +804,7 @@ export class BillingEventsService implements OnModuleInit {
         amount: session.amountDueToday,
         currency: session.currency,
         renewsAt: sub?.currentPeriodEnd ?? this.clock.nowIso(),
-        trialEndsAt:
-          sub?.status === "trialing" ? sub.currentPeriodEnd : null,
+        trialEndsAt: sub?.status === "trialing" ? sub.currentPeriodEnd : null,
         renewalAmount: sub?.amount ?? null,
       });
     }
@@ -869,6 +925,14 @@ export class BillingEventsService implements OnModuleInit {
         .collection(BILLING_COLLECTIONS.customers)
         .doc(inv.uid);
       const c = (await cref.get()).data();
+      // Market Catalyst credits the customer chose to use on this payment leave the balance now.
+      if (this.credits && (inv.creditDiscount ?? 0) > 0)
+        await this.credits.settle(
+          inv.uid,
+          inv.subscriptionId,
+          inv.creditDiscount,
+          `Used on invoice ${inv.number || inv.id}`,
+        );
       // The first real payment ($0 trial invoices don't count): it makes the
       // account a returning customer, and pays out a referral reward.
       if (!c?.firstPaidAt && inv.amountPaid > 0) {
@@ -876,6 +940,21 @@ export class BillingEventsService implements OnModuleInit {
           { firstPaidAt: inv.paidAt ?? this.clock.nowIso() },
           { merge: true },
         );
+        // Remembered by email too, so deleting the account and signing up again
+        // doesn't make the person a first-time customer (referrals, first-time codes).
+        const paidEmail = await this.emailFor(inv.uid);
+        if (paidEmail)
+          await this.db
+            .collection("paid_emails")
+            .doc(emailHash(paidEmail))
+            .set(
+              {
+                firstPaidAt: inv.paidAt ?? this.clock.nowIso(),
+                uid: inv.uid,
+                ...this.mode(),
+              },
+              { merge: true },
+            );
         if (this.referrals && inv.subscriptionId) {
           const promoCode =
             ((await this.checkoutRecordFor(inv.subscriptionId))?.promoCode as
@@ -932,16 +1011,26 @@ export class BillingEventsService implements OnModuleInit {
     });
   }
 
+  /**
+   * Refunds and disputes. The payment row records the real refunded amount.
+   * A full refund of the payment for the current period, or a lost dispute,
+   * ends the plan straight away (access stops now; nothing renews).
+   */
   private async onChargeIssue(event: ProviderEvent): Promise<void> {
     const ref = this.db
       .collection(BILLING_COLLECTIONS.payments)
       .doc(event.data.invoiceId);
+    const inv = this.provider
+      ? await this.provider.getInvoice(event.data.invoiceId)
+      : null;
     if (event.type === "charge.refunded") {
-      const inv = this.provider
-        ? await this.provider.getInvoice(event.data.invoiceId)
-        : null;
-      const refunded = inv?.amountRefunded ?? event.data.amount ?? 0;
-      const full = inv ? refunded >= inv.amountPaid : false;
+      const refunded = Math.max(
+        inv?.amountRefunded ?? 0,
+        event.data.amount ?? 0,
+      );
+      const full = inv
+        ? inv.amountPaid > 0 && refunded >= inv.amountPaid
+        : false;
       await ref.set(
         {
           amountRefunded: refunded,
@@ -950,12 +1039,42 @@ export class BillingEventsService implements OnModuleInit {
         },
         { merge: true },
       );
-    } else {
+      if (full && inv && Date.parse(inv.periodEnd) > this.clock.now())
+        await this.endNow(inv.subscriptionId, `full refund of ${inv.id}`);
+      return;
+    }
+    if (event.type === "charge.dispute_closed") {
+      const lost = event.data.status === "lost";
       await ref.set(
-        { disputed: true, disputedAt: this.clock.nowIso() },
+        {
+          disputed: true,
+          disputeStatus: event.data.status ?? null,
+          disputeClosedAt: this.clock.nowIso(),
+        },
         { merge: true },
       );
+      if (lost && inv)
+        await this.endNow(inv.subscriptionId, `lost dispute on ${inv.id}`);
+      return;
     }
+    await ref.set(
+      { disputed: true, disputedAt: this.clock.nowIso() },
+      { merge: true },
+    );
+  }
+
+  /** Ends a subscription now at the provider; its deletion event then removes access. */
+  private async endNow(
+    subscriptionId: string | null,
+    why: string,
+  ): Promise<void> {
+    if (!subscriptionId || !this.provider?.cancelNow) return;
+    const sub: ProviderSubscription | null = await this.provider
+      .getSubscription(subscriptionId)
+      .catch((): ProviderSubscription | null => null);
+    if (!sub || !LIVE.includes(mapStatus(sub.status))) return;
+    this.logger.warn(`ending ${subscriptionId} now: ${why}`);
+    await this.provider.cancelNow(subscriptionId);
   }
 
   // ── launch-day trial (decision i) ─────────────────────────────────────

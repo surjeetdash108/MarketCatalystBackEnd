@@ -464,7 +464,7 @@ describe("upgrade and downgrade", () => {
     expect((await u.get("/api/billing/invoices")).body.invoices[0]).toMatchObject({ planId: "pro", discountAmount: 0 });
   });
 
-  it("downgrade edge case: while cancelling, the downgrade is scheduled and keeps the cancel date", async () => {
+  it("switch at renewal while cancelling: the switch is scheduled and the cancellation is switched off", async () => {
     a = await billingApp();
     const { u } = await a.subscribe("u1", "pro", "monthly");
     await u.post("/api/billing/cancel");
@@ -474,7 +474,8 @@ describe("upgrade and downgrade", () => {
     expect(p.kind).toBe("scheduled");
     await u.post("/api/billing/change", { planId: "starter", interval: "monthly" });
     const after = (await u.get("/api/billing/summary")).body;
-    expect(after.cancelAtPeriodEnd).toBe(true);
+    expect(after.cancelAtPeriodEnd).toBe(false);
+    expect(after.scheduledChange).toMatchObject({ planId: "starter", interval: "monthly" });
   });
 
   it("downgrade edge case: past due is refused until paid", async () => {
@@ -620,8 +621,9 @@ describe("retention offer", () => {
         mode: "percent_next_invoices",
         percentOff: 50,
         months: 2,
-        headline:
-          "Keep your plan for 50% off for the next 2 months",
+        headline: "Stay and get 50% off your next 2 monthly payments",
+        description: "50% off your next 2 monthly payments: $29.50 instead of $59.00",
+        cta: "Keep my plan: 50% off for 2 months",
       },
     });
     await u.post("/api/billing/cancel");
@@ -680,8 +682,8 @@ describe("retention offer", () => {
     const { u } = await a.subscribe("u1", "elite", "annual");
     expect((await u.post("/api/billing/change", { planId: "starter", interval: "annual" })).body.status).toBe("scheduled");
     const offer = (await u.get("/api/billing/retention")).body.offer;
-    expect(offer).toMatchObject({ mode: "balance_credit", creditAmount: 3120, headline: "Keep your plan for 50% off for the next 2 months" });
-    expect(offer.description).toBe("A credit of $31.20 will be applied at your next renewal");
+    expect(offer).toMatchObject({ mode: "balance_credit", creditAmount: 3120, headline: "Stay and pay for 11 months instead of 12", cta: "Keep my plan: pay for 11 months" });
+    expect(offer.description).toBe("Your next annual payment is $343.20 instead of $374.40: two months at 50% (0.5 + 0.5) plus the other 10");
   });
 
   it("once per email ever: a new account with the same email (or a gmail variant) gets no offer", async () => {

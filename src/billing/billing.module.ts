@@ -19,6 +19,7 @@ import { AdminBillingController } from "./admin-billing.controller";
 import { AdminBillingService } from "./admin-billing.service";
 import { BillingReconcileJob } from "./reconcile.job";
 import { ReferralService } from "./referral/referral.service";
+import { CreditsService } from "./credits/credits.service";
 
 @Module({
   imports: [PlansModule],
@@ -38,6 +39,7 @@ import { ReferralService } from "./referral/referral.service";
     AdminBillingService,
     BillingReconcileJob,
     ReferralService,
+    CreditsService,
     CheckoutPreviewService,
     CheckoutPreviewInterceptor,
   ],
@@ -46,6 +48,7 @@ import { ReferralService } from "./referral/referral.service";
     BillingService,
     PromoService,
     RetentionService,
+    CreditsService,
   ],
 })
 export class BillingModule {}

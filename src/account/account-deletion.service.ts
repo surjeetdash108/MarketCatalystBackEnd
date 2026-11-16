@@ -70,9 +70,20 @@ export class AccountDeletionService {
     let subscriptionsCancelled = 0;
     const customer = (await db.collection("customers").doc(uid).get()).data();
     if (customer?.customerId && this.provider?.cancelAllNow) {
-      subscriptionsCancelled = await this.provider.cancelAllNow(
-        String(customer.customerId),
-      );
+      try {
+        subscriptionsCancelled = await this.provider.cancelAllNow(
+          String(customer.customerId),
+        );
+      } catch (err) {
+        // Nothing was deleted: take the marker back so this account's billing
+        // keeps updating, and let the user try again.
+        await db
+          .collection("deleted_accounts")
+          .doc(uid)
+          .delete()
+          .catch(() => undefined);
+        throw err;
+      }
     }
 
     let docsDeleted = 0;

@@ -53,6 +53,8 @@ export class CheckoutPreviewDto {
   @IsIn(INTERVALS) interval: "monthly" | "annual";
   @IsOptional() @IsString() @MaxLength(40) promoCode?: string;
   @IsOptional() @ValidateNested() @Type(() => RegionDto) region?: RegionDto;
+  /** Use Market Catalyst credits on this payment (opt-in). */
+  @IsOptional() @IsBoolean() useCredits?: boolean;
 }
 
 export class CheckoutDto {
@@ -64,6 +66,8 @@ export class CheckoutDto {
   /** Optional "Text me product updates" (stored with a timestamp; nothing is sent). */
   @IsOptional() @IsBoolean() marketingOptIn?: boolean;
   @ValidateNested() @Type(() => BillingDetailsDto) billing: BillingDetailsDto;
+  /** Use Market Catalyst credits on the first payment (opt-in; never on a free trial). */
+  @IsOptional() @IsBoolean() useCredits?: boolean;
 }
 
 export class PlanTargetDto {
@@ -81,11 +85,19 @@ export class ChangePlanDto extends PlanTargetDto {
    * the Payment Element for this change. It pays anything due now and the new
    * plan from its start — never a card on file. A Stripe id (pm_…), never card data.
    */
-  @IsOptional() @IsString() @Matches(/^pm_[A-Za-z0-9]+$/) paymentMethodId?: string;
+  @IsOptional()
+  @IsString()
+  @Matches(/^pm_[A-Za-z0-9]+$/)
+  paymentMethodId?: string;
   /** Name and billing address from the payment step (required with Stripe). */
-  @IsOptional() @ValidateNested() @Type(() => BillingDetailsDto) billing?: BillingDetailsDto;
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => BillingDetailsDto)
+  billing?: BillingDetailsDto;
   /** The renewal consent for the new plan (required with Stripe). */
   @IsOptional() @ValidateNested() @Type(() => ConsentDto) consent?: ConsentDto;
+  /** Use Market Catalyst credits on this switch (opt-in). */
+  @IsOptional() @IsBoolean() useCredits?: boolean;
 }
 
 export class PromoPreviewDto extends PlanTargetDto {
@@ -133,6 +145,16 @@ export class CreatePromoDto {
 export class PriceChangeNoticeDto extends PlanTargetDto {
   @IsInt() @Min(1) newAmount: number;
   @IsISO8601() effectiveAt: string;
+}
+
+export class TestClockAdvanceDto {
+  @IsString() @MaxLength(128) uid: string;
+  @IsOptional() @IsNumber() @Min(0) @Max(3660) days?: number;
+  @IsOptional() @IsISO8601() to?: string;
+}
+
+export class TestClockListDto {
+  @IsArray() @IsString({ each: true }) emails: string[];
 }
 
 export class ContactDto {

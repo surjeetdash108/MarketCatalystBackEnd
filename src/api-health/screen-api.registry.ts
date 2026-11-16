@@ -343,7 +343,8 @@ export const API_CATALOG = {
     check: { skip: "can start an LLM generation" },
   },
   "GET /live/move-explanation": {
-    summary: "AI heading and short explanation for one big price move, written from that day's articles only.",
+    summary:
+      "AI heading and short explanation for one big price move, written from that day's articles only.",
     params: "ticker, date (YYYY-MM-DD), prevDate, name, move",
     store: ["move_explanations"],
     vendors: [...LLM],
@@ -667,7 +668,8 @@ export const API_CATALOG = {
       "Validates a promo code server-side and returns the discounted price; rate-limited, one generic error.",
     params: "body: code, planId, interval",
     store: ["backend-only billing collections"],
-  },  "POST /api/billing/signup/promo": {
+  },
+  "POST /api/billing/signup/promo": {
     summary:
       "Validates a promo code server-side and returns the discounted price; rate-limited, one generic error.",
     params: "body: code, planId, interval",
@@ -697,6 +699,11 @@ export const API_CATALOG = {
     summary: "Undoes a pending cancellation before the end date.",
     store: ["backend-only billing collections"],
   },
+  "POST /api/billing/credits/use-next": {
+    summary:
+      "Uses the customer's Market Catalyst credits on their next payment (opt-in; never automatic).",
+    store: ["credits", "backend-only billing collections"],
+  },
   "GET /api/billing/retention": {
     summary:
       "Whether the retention offer applies (once per email, ever) and what it is.",
@@ -723,7 +730,8 @@ export const API_CATALOG = {
   "GET /api/billing/history": {
     summary: "The user's plan-change history.",
     store: ["backend-only billing collections"],
-  },  "GET /api/billing/timeline": {
+  },
+  "GET /api/billing/timeline": {
     summary:
       "Plain-language plan history: plan changes, trials, charges, credits and refunds, newest first, each with an exact timestamp.",
     params: "none",
@@ -834,14 +842,30 @@ export const API_CATALOG = {
   },
   "DELETE /api/account": {
     summary:
-      "Delete my account (body confirm: \"DELETE\"): cancels any live subscription now (no refund), removes the profile with watchlists/portfolio/notifications, notes, feature requests, referral code, billing mirrors and the sign-in. Payment history is kept.",
-    store: ["users", "subscriptions", "customers", "stock_comments", "feature_requests", "referral_codes", "deleted_accounts"],
+      'Delete my account (body confirm: "DELETE"): cancels any live subscription now (no refund), removes the profile with watchlists/portfolio/notifications, notes, feature requests, referral code, billing mirrors and the sign-in. Payment history is kept.',
+    store: [
+      "users",
+      "subscriptions",
+      "customers",
+      "stock_comments",
+      "feature_requests",
+      "referral_codes",
+      "deleted_accounts",
+    ],
     check: { skip: "destructive user write" },
   },
   "DELETE /api/admin/users/:uid": {
     summary:
       "Admin: delete a user everywhere — same as the user's own Delete account (sign-in, data, live subscription cancelled now).",
-    store: ["users", "subscriptions", "customers", "stock_comments", "feature_requests", "referral_codes", "deleted_accounts"],
+    store: [
+      "users",
+      "subscriptions",
+      "customers",
+      "stock_comments",
+      "feature_requests",
+      "referral_codes",
+      "deleted_accounts",
+    ],
     check: { skip: "destructive admin write" },
   },
   "POST /api/billing/referral/claim": {
@@ -900,7 +924,8 @@ export const API_CATALOG = {
     store: ["backend-only billing collections"],
   },
   "GET /api/admin/billing/abandoned": {
-    summary: "Lists users who initiated checkout or signup but did not complete payment.",
+    summary:
+      "Lists users who initiated checkout or signup but did not complete payment.",
     store: ["backend-only billing collections"],
   },
   "GET /api/admin/billing/audit": {
@@ -918,6 +943,24 @@ export const API_CATALOG = {
     summary:
       "Runs the billing reconcile now (repairs mirrors that drifted from the provider).",
     store: ["backend-only billing collections"],
+  },
+  "GET /api/admin/billing/test-clocks": {
+    summary:
+      "Emails whose new Stripe customer is put on a test clock (test mode only).",
+    store: ["config/test_clocks"],
+  },
+  "POST /api/admin/billing/test-clocks": {
+    summary: "Sets the test-clock email list (test mode only; admin; audited).",
+    store: ["config/test_clocks", "admin_audit"],
+  },
+  "GET /api/admin/billing/test-clock/:uid": {
+    summary: "Where a tester's Stripe test clock is (test mode only).",
+    store: ["Stripe test clocks"],
+  },
+  "POST /api/admin/billing/test-clock/advance": {
+    summary:
+      "Moves a tester's Stripe test clock forward so renewals, trial ends and retries run (test mode only; audited).",
+    store: ["Stripe test clocks", "admin_audit"],
   },
   "POST /api/stream-ticket": {
     summary:

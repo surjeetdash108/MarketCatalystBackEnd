@@ -1011,3 +1011,93 @@ describe("StripeBillingProvider — the plan picked last is the one paid for", (
     expect(m2.raw.setupIntents.update).toHaveBeenCalledWith("seti_elite", { metadata: expect.objectContaining({ blocked: "already_subscribed" }) });
   });
 });
+
+describe("StripeBillingProvider — switches, credits, refunds, test clocks", () => {
+  const PRO_A = { planId: "pro", interval: "annual" as const, amount: 56640, currency: "USD", lookupKey: "pro_annual" };
+
+  it("a switch now whose unused time is worth more than the new charge: the leftover is taken out of Stripe's balance and returned for credits", async () => {
+    const m = mockClient();
+    m.raw.subscriptions.update = jest.fn((_id: string, p: Record<string, unknown>) =>
+      Promise.resolve(p.items ? subObj({ latest_invoice: { id: "in_neg", total: -32085, amount_paid: 0, currency: "usd" } }) : subObj()),
+    ) as never;
+    const { p } = provider({}, m);
+    const r = await p.changePlan({ subscriptionId: "sub_1", target: ELITE_M, kind: "upgrade", prorationDate: T * 1000, expectedAmountDue: null });
+    expect(r).toMatchObject({ status: "applied", creditToBalance: 32085 });
+    expect(m.calls["customers.createBalanceTransaction"]).toEqual([
+      ["cus_1", { amount: 32085, currency: "usd", description: "Moved to Market Catalyst credits" }, { idempotencyKey: "leftover-in_neg" }],
+    ]);
+  });
+
+  it("monthly retention moving to annual now: the unused 50% months become half a month each off the annual payment (11 months)", async () => {
+    const end = T + 75 * 86400; // two monthly renewals (T+30d, T+60d) still inside the offer
+    const retention = { id: "di_ret", object: "discount", end, coupon: { id: "mc_retention_abc", percent_off: 50, amount_off: null, duration: "repeating", duration_in_months: 2, name: "Retention offer" } };
+    const m = mockClient();
+    m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ discounts: [retention] }))) as never;
+    const { p } = provider({}, m);
+    await p.previewChange({ subscriptionId: "sub_1", target: PRO_A, kind: "upgrade" });
+    const coupon = (m.calls["coupons.create"] as Array<[Record<string, unknown>]>).at(-1)![0];
+    expect(coupon).toMatchObject({ amount_off: Math.round((2 * 0.5 * 56640) / 12), duration: "once" });
+    const [preview] = (m.calls["invoices.createPreview"] as Array<[Record<string, unknown>]>).at(-1)!;
+    expect(preview.discounts).toEqual([{ coupon: coupon.id }]);
+  });
+
+  it("credits chosen at checkout come off the first payment once; never on a free trial", async () => {
+    const { p, m } = provider();
+    await p.createCheckout({ uid: "u1", customerId: "cus_1", price: PRO_M, discount: null, successUrl: "s", cancelUrl: "c", idempotencyKey: "k1", creditAmount: 2500 });
+    const [args] = (m.calls["subscriptions.create"] as Array<[Record<string, unknown>]>)[0];
+    const credit = (m.calls["coupons.create"] as Array<[Record<string, unknown>]>).find(([c]) => String(c.id).startsWith("mc_credit_"))![0];
+    expect(credit).toMatchObject({ amount_off: 2500, duration: "once", name: "Market Catalyst credits" });
+    expect(args.discounts).toEqual([{ coupon: credit.id }]);
+    const before = (m.calls["coupons.create"] as unknown[]).length;
+    await p.createCheckout({ uid: "u1", customerId: "cus_1", price: PRO_M, discount: null, successUrl: "s", cancelUrl: "c", idempotencyKey: "k2", trialDays: 7, creditAmount: 2500 });
+    expect((m.calls["coupons.create"] as unknown[]).length).toBe(before);
+  });
+
+  it("a credits discount is not shown as the plan's discount", async () => {
+    const credit = { id: "di_c", object: "discount", end: null, coupon: { id: "mc_credit_x", amount_off: 2500, percent_off: null, duration: "once", name: "Market Catalyst credits" } };
+    const m = mockClient();
+    m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ discounts: [credit] }))) as never;
+    const { p } = provider({}, m);
+    expect((await p.getSubscription("sub_1"))!.discount).toBeNull();
+  });
+
+  it("a switch at renewal while cancelling switches the cancellation off", async () => {
+    const m = mockClient();
+    m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ cancel_at_period_end: true }))) as never;
+    const { p } = provider({}, m);
+    await p.changePlan({ subscriptionId: "sub_1", target: STARTER_M, kind: "scheduled", prorationDate: T * 1000, expectedAmountDue: null });
+    expect(m.calls["subscriptions.update"][0]).toEqual(["sub_1", { cancel_at_period_end: false }]);
+  });
+
+  it("cancel remembers a scheduled switch; resume brings it back", async () => {
+    const m = mockClient();
+    m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ schedule: { id: "sub_sched_1", status: "active", phases: [{ start_date: T, items: [{ price: "price_pro_monthly" }] }, { start_date: T + 30 * 86400, items: [{ price: "price_starter_monthly" }] }] } }))) as never;
+    const { p } = provider({}, m);
+    jest.spyOn(Date, "now").mockReturnValue(T * 1000 + 1000);
+    await p.cancelAtPeriodEnd("sub_1");
+    const [, upd] = (m.calls["subscriptions.update"] as Array<[string, Record<string, unknown>]>).at(-1)!;
+    expect(upd).toMatchObject({ cancel_at_period_end: true, metadata: { mc_resume_switch: "starter:monthly" } });
+    m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ metadata: { uid: "u1", planId: "pro", interval: "monthly", mc_resume_switch: "starter:monthly" } }))) as never;
+    await p.resume("sub_1");
+    const phases = ((m.calls["subscriptionSchedules.update"] as Array<[string, { phases: Array<{ items: Array<{ price: string }> }> }]>).at(-1)![1]).phases;
+    expect(phases[1].items[0].price).toBe("price_starter_monthly");
+    (Date.now as jest.Mock).mockRestore();
+  });
+
+  it("webhook: a closed dispute carries its outcome", async () => {
+    const { p } = provider();
+    const ev = { id: "evt_dc", object: "event", type: "charge.dispute.closed", created: T, livemode: false, data: { object: { id: "dp_1", object: "dispute", status: "lost", amount: 5900, payment_intent: "pi_1", customer: "cus_1" } } };
+    const { payload, header } = signed(ev);
+    expect(await p.parseEvent(payload, header)).toMatchObject({ type: "charge.dispute_closed", data: { invoiceId: "in_1", status: "lost" } });
+  });
+
+  it("test mode: a tester's new customer is put on its own test clock", async () => {
+    const m = mockClient();
+    const created: unknown[] = [];
+    (m.raw as unknown as Record<string, unknown>).testHelpers = { testClocks: { create: jest.fn((x: unknown) => { created.push(x); return Promise.resolve({ id: "clock_1" }); }) } };
+    const { p } = provider({ STRIPE_SECRET_KEY: "sk_test_x" }, m);
+    await p.createCustomer({ uid: "u1", email: "t@example.com", testClock: true });
+    expect(created).toHaveLength(1);
+    expect(m.calls["customers.create"][0][0]).toMatchObject({ test_clock: "clock_1" });
+  });
+});

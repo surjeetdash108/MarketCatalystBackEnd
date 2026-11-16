@@ -33,6 +33,8 @@ import {
 
 /** How long after period end an ACTIVE mirror is still honoured, waiting for the renewal event. */
 export const RENEWAL_LEEWAY_MS = 2 * 86_400_000;
+/** How long after a trial's end it is still honoured, waiting for the "now paid" event. */
+export const TRIAL_CONVERSION_GRACE_MS = 3_600_000;
 const DAY = 86_400_000;
 
 export interface SubscriptionMirror {
@@ -46,6 +48,8 @@ export interface SubscriptionMirror {
   pastDueSince?: string | null;
   startedAt?: string | null;
   source?: "provider" | "launch_trial";
+  /** false while the subscription has never been active (an unpaid checkout); older records lack it. */
+  everLive?: boolean;
 }
 
 export interface EffectiveSubscription {
@@ -196,7 +200,11 @@ export class SubscriptionsService {
       entitled = Number.isNaN(end) || now <= end + RENEWAL_LEEWAY_MS;
       lapsed = !entitled;
     } else if (storedStatus === "TRIALING") {
-      entitled = !Number.isNaN(end) && now <= end;
+      // A trial that turns into a paid plan stays open for TRIAL_CONVERSION_GRACE_MS
+      // while the provider's "now active" event arrives (no "Choose a plan" flash).
+      // A trial the customer cancelled ends at the exact trial end.
+      const grace = mirror?.cancelAtPeriodEnd ? 0 : TRIAL_CONVERSION_GRACE_MS;
+      entitled = !Number.isNaN(end) && now <= end + grace;
       lapsed = !entitled;
     } else if (storedStatus === "PAST_DUE") {
       const since = mirror?.pastDueSince
@@ -218,7 +226,10 @@ export class SubscriptionsService {
       : (storedStatus ?? "NONE");
     // New account, never subscribed: INTRO_DAYS of the intro feature groups
     // (Market Catalyst), no card — then "Choose a plan".
-    if (!mirror && !entitled) {
+    // An unpaid checkout (never active) doesn't count as having subscribed.
+    const neverSubscribed =
+      !mirror || mirror.status === "NONE" || mirror.everLive === false;
+    if (neverSubscribed && !entitled) {
       let createdMs = createdMsOf(u);
       // The first account ever made with this email (signup_claims): a
       // deleted-and-recreated account doesn't restart the intro.

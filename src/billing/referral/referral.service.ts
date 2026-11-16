@@ -3,6 +3,7 @@ import { Inject, Injectable, Logger, Optional } from "@nestjs/common";
 import { AppClock } from "../../common/app-clock";
 import { FirebaseAdminService } from "../../common/firebase-admin.provider";
 import { SubscriptionsService } from "../../plans/subscriptions.service";
+import { emailHash } from "../retention/email-normalise";
 import {
   BILLING_PROVIDER,
   type BillingProvider,
@@ -98,7 +99,10 @@ export class ReferralService {
     for (let attempt = 0; !code && attempt < 5; attempt++) {
       const candidate =
         "MC-" +
-        Array.from({ length: 8 }, () => ALPHABET[randomInt(ALPHABET.length)]).join("");
+        Array.from(
+          { length: 8 },
+          () => ALPHABET[randomInt(ALPHABET.length)],
+        ).join("");
       const ref = this.db.collection("referral_codes").doc(candidate);
       const created = await this.db.runTransaction(async (tx) => {
         if ((await tx.get(ref)).exists) return false;
@@ -123,7 +127,9 @@ export class ReferralService {
     const c = normaliseReferralCode(code);
     if (!/^MC-[A-Z0-9]{4,16}$/.test(c)) return null;
     const snap = await this.db.collection("referral_codes").doc(c).get();
-    const uid = snap.exists ? (snap.data()?.uid as string | undefined) : undefined;
+    const uid = snap.exists
+      ? (snap.data()?.uid as string | undefined)
+      : undefined;
     return uid ? { code: c, uid } : null;
   }
 
@@ -131,7 +137,11 @@ export class ReferralService {
    * Attribute a new user to whoever referred them (signup from the link, or
    * the code typed at checkout). First code wins; the same code again is fine.
    */
-  async claim(friendUid: string, code: string): Promise<ClaimOutcome> {
+  async claim(
+    friendUid: string,
+    code: string,
+    opts: { dryRun?: boolean } = {},
+  ): Promise<ClaimOutcome> {
     const ref = await this.lookup(code);
     if (!ref) return "invalid";
     if (!friendUid || ref.uid === friendUid) return "self_referral";
@@ -142,8 +152,21 @@ export class ReferralService {
       this.db.collection("customers").doc(friendUid).get(),
       this.db.collection("subscriptions").doc(friendUid).get(),
     ]);
-    // New customers only: never paid and never had a subscription.
+    // New customers only: never paid (under this or an earlier account with the
+    // same email) and never had a subscription.
     if (cust.data()?.firstPaidAt || sub.exists) return "not_first_time";
+    try {
+      const email = (await this.firebase.auth.getUser(friendUid)).email;
+      if (
+        email &&
+        (await this.db.collection("paid_emails").doc(emailHash(email)).get())
+          .exists
+      )
+        return "not_first_time";
+    } catch {
+      /* no auth record */
+    }
+    if (opts.dryRun) return "claimed";
     const created = await this.db.runTransaction(async (tx) => {
       if ((await tx.get(attrRef)).exists) return false;
       tx.set(attrRef, {
@@ -159,7 +182,9 @@ export class ReferralService {
 
   /** The code this user was referred with, if any. */
   async attributedCode(friendUid: string): Promise<string | null> {
-    const d = (await this.db.collection("referral_attributions").doc(friendUid).get()).data();
+    const d = (
+      await this.db.collection("referral_attributions").doc(friendUid).get()
+    ).data();
     return d?.code ? String(d.code) : null;
   }
 

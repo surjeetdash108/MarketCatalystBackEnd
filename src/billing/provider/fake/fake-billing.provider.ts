@@ -365,7 +365,6 @@ export class FakeBillingProvider implements BillingProvider {
     await this.write(C.customers, c);
   }
 
-
   async getCustomer(customerId: string): Promise<FakeCustomer | null> {
     return this.read<FakeCustomer>(C.customers, customerId);
   }
@@ -542,7 +541,12 @@ export class FakeBillingProvider implements BillingProvider {
   }
 
   private async finaliseCheckout(
-    s: CheckoutSession & { lookupKey: string; amount: number; trialDays?: number; trialEndsAt?: string | null },
+    s: CheckoutSession & {
+      lookupKey: string;
+      amount: number;
+      trialDays?: number;
+      trialEndsAt?: string | null;
+    },
     c: FakeCustomer,
   ): Promise<string> {
     const now = this.clock.now();
@@ -552,7 +556,9 @@ export class FakeBillingProvider implements BillingProvider {
     const exactEnd = s.trialEndsAt ? Date.parse(s.trialEndsAt) : NaN;
     const end =
       trialDays > 0
-        ? Number.isFinite(exactEnd) ? exactEnd : now + trialDays * 86_400_000
+        ? Number.isFinite(exactEnd)
+          ? exactEnd
+          : now + trialDays * 86_400_000
         : addInterval(now, s.interval);
     const subtotal = trialDays > 0 ? 0 : s.amount;
     const discountAmount = discountAmountFor(s.discount, subtotal);
@@ -714,7 +720,14 @@ export class FakeBillingProvider implements BillingProvider {
     if (sub.status === "trialing") {
       // During the free trial nothing has been paid: the plan switches, the
       // trial end stays, and the first charge (at the new price) is at its end.
-      return { net: 0, amountDue: 0, credit: 0, lines: [] as InvoiceLine[], periodStart: start, periodEnd: end };
+      return {
+        net: 0,
+        amountDue: 0,
+        credit: 0,
+        lines: [] as InvoiceLine[],
+        periodStart: start,
+        periodEnd: end,
+      };
     }
     const remaining = Math.min(
       1,
@@ -722,7 +735,8 @@ export class FakeBillingProvider implements BillingProvider {
     );
     const pct =
       sub.discount?.percentOff != null &&
-      (sub.discount.remainingInvoices == null || sub.discount.remainingInvoices > 0)
+      (sub.discount.remainingInvoices == null ||
+        sub.discount.remainingInvoices > 0)
         ? sub.discount.percentOff
         : 0;
     const factor = 1 - pct / 100;
@@ -839,7 +853,8 @@ export class FakeBillingProvider implements BillingProvider {
       ...base,
       kind: input.kind,
       amountDueNow,
-      creditToBalance: input.kind === "downgrade" ? p.credit : 0,
+      // Unused value above the new charge (switch now): Market Catalyst credits.
+      creditToBalance: p.credit,
       effectiveAt: iso(at),
       nextRenewalDate: iso(p.periodEnd),
       lines: p.lines,
@@ -863,6 +878,8 @@ export class FakeBillingProvider implements BillingProvider {
   }): Promise<ChangeResult> {
     const sub = await this.mustSubscription(input.subscriptionId);
     if (input.kind === "scheduled") {
+      // Choosing next period's plan means staying: a pending cancellation ends.
+      sub.cancelAtPeriodEnd = false;
       sub.scheduledChange = {
         planId: input.target.planId,
         interval: input.target.interval,
@@ -885,7 +902,12 @@ export class FakeBillingProvider implements BillingProvider {
     if (input.kind === "downgrade") {
       if (input.expectedCredit != null && input.expectedCredit !== p.credit)
         throw new PreviewStaleError(input.expectedCredit, p.credit);
-      const invoiceId = await this.applyChange(sub, input.target, at, "downgrade");
+      const invoiceId = await this.applyChange(
+        sub,
+        input.target,
+        at,
+        "downgrade",
+      );
       return {
         status: "applied",
         invoiceId,
@@ -931,6 +953,8 @@ export class FakeBillingProvider implements BillingProvider {
       status: "applied",
       invoiceId,
       amountCharged: amountDue,
+      // Never kept in the provider balance; the backend adds it to Market Catalyst credits.
+      ...(p.credit > 0 ? { creditToBalance: p.credit } : {}),
       effectiveAt: iso(at),
     };
   }
@@ -966,9 +990,7 @@ export class FakeBillingProvider implements BillingProvider {
     if (p.amountDue > 0 || kind === "downgrade") {
       const c = await this.mustCustomer(sub.customerId);
       const creditUsed =
-        kind === "upgrade"
-          ? Math.min(Math.max(0, p.net), c.creditBalance)
-          : 0;
+        kind === "upgrade" ? Math.min(Math.max(0, p.net), c.creditBalance) : 0;
       const amountDue =
         kind === "upgrade" ? Math.max(0, p.net - creditUsed) : 0;
       if (creditUsed > 0) c.creditBalance -= creditUsed;
@@ -1007,9 +1029,7 @@ export class FakeBillingProvider implements BillingProvider {
     if (invoiceId) {
       const c = await this.mustCustomer(sub.customerId);
       const creditUsed =
-        kind === "upgrade"
-          ? Math.min(Math.max(0, p.net), c.creditBalance)
-          : 0;
+        kind === "upgrade" ? Math.min(Math.max(0, p.net), c.creditBalance) : 0;
       const amountDue =
         kind === "upgrade" ? Math.max(0, p.net - creditUsed) : 0;
       await this.emit("invoice.paid", {
@@ -1046,9 +1066,14 @@ export class FakeBillingProvider implements BillingProvider {
   async cancelAtPeriodEnd(subscriptionId: string): Promise<void> {
     const sub = await this.mustSubscription(subscriptionId);
     sub.cancelAtPeriodEnd = true;
-    sub.scheduledChange = null; // cancelling wins over a pending downgrade
-    delete (sub as ProviderSubscription & { scheduledTarget?: PriceRef })
-      .scheduledTarget;
+    // Cancelling wins over a pending switch, but "Resume" brings it back.
+    const x = sub as ProviderSubscription & {
+      scheduledTarget?: PriceRef;
+      resumeTarget?: PriceRef;
+    };
+    if (x.scheduledTarget) x.resumeTarget = x.scheduledTarget;
+    sub.scheduledChange = null;
+    delete x.scheduledTarget;
     sub.updatedAt = this.clock.now();
     await this.write(C.subscriptions, sub);
     await this.emit("subscription.updated", {
@@ -1079,10 +1104,40 @@ export class FakeBillingProvider implements BillingProvider {
     return live.length;
   }
 
+  async cancelNow(subscriptionId: string): Promise<void> {
+    const sub = await this.mustSubscription(subscriptionId);
+    if (sub.endedAt) return;
+    const now = this.clock.now();
+    sub.status = "canceled";
+    sub.canceledAt = iso(now);
+    sub.endedAt = iso(now);
+    sub.cancelAtPeriodEnd = false;
+    sub.updatedAt = now;
+    await this.write(C.subscriptions, sub);
+    await this.emit("subscription.deleted", {
+      uid: sub.uid,
+      customerId: sub.customerId,
+      subscriptionId: sub.id,
+    });
+  }
+
   async resume(subscriptionId: string): Promise<void> {
     const sub = await this.mustSubscription(subscriptionId);
     if (sub.endedAt) throw new Error("subscription has ended");
     sub.cancelAtPeriodEnd = false;
+    const x = sub as ProviderSubscription & {
+      scheduledTarget?: PriceRef;
+      resumeTarget?: PriceRef;
+    };
+    if (x.resumeTarget) {
+      x.scheduledTarget = x.resumeTarget;
+      sub.scheduledChange = {
+        planId: x.resumeTarget.planId,
+        interval: x.resumeTarget.interval,
+        effectiveAt: sub.currentPeriodEnd,
+      };
+      delete x.resumeTarget;
+    }
     sub.updatedAt = this.clock.now();
     await this.write(C.subscriptions, sub);
     await this.emit("subscription.updated", {
@@ -1358,7 +1413,6 @@ export class FakeBillingProvider implements BillingProvider {
       amount: inv.amountRefunded,
     });
   }
-
 
   async disputeInvoice(invoiceId: string): Promise<void> {
     const inv = await this.getInvoice(invoiceId);

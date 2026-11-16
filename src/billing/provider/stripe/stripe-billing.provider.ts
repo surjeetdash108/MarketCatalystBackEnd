@@ -76,6 +76,7 @@ export const STRIPE_EVENT_MAP: Record<string, ProviderEventType> = {
   "invoice.upcoming": "invoice.upcoming",
   "charge.refunded": "charge.refunded",
   "charge.dispute.created": "charge.dispute_created",
+  "charge.dispute.closed": "charge.dispute_closed",
 };
 /** Register exactly these on the webhook endpoint. */
 export const STRIPE_WEBHOOK_EVENTS = Object.keys(STRIPE_EVENT_MAP);
@@ -107,7 +108,9 @@ const ALLOWED_PAYMENT_METHODS = new Set([
 const lineOf = (l: Stripe.InvoiceLineItem): InvoiceLine => ({
   description: l.description ?? "",
   amount: l.amount,
-  periodStart: l.period?.start ? new Date(l.period.start * 1000).toISOString() : null,
+  periodStart: l.period?.start
+    ? new Date(l.period.start * 1000).toISOString()
+    : null,
   periodEnd: l.period?.end ? new Date(l.period.end * 1000).toISOString() : null,
   proration:
     (l as unknown as { proration?: boolean }).proration ??
@@ -274,23 +277,40 @@ export class StripeBillingProvider implements BillingProvider {
         name:
           d.source === "retention"
             ? "Retention offer"
-            : (d.code ?? "Promotion"),
+            : d.source === "credit"
+              ? "Market Catalyst credits"
+              : (d.code ?? "Promotion"),
         ...spec,
       } as Stripe.CouponCreateParams);
     }
     return id;
   }
 
-  private discountOf(sub: Stripe.Subscription): AppliedDiscount | null {
-    const d = (sub.discounts ?? []).find(
-      (x): x is Stripe.Discount => typeof x !== "string",
+  /** A one-time Market Catalyst credits discount for `amount` (minor units). */
+  private creditCoupon(amount: number, currency: string): Promise<string> {
+    return this.couponFor(
+      { source: "credit", amountOff: Math.round(amount), duration: "once" },
+      currency,
     );
-    if (!d) return null;
-    const raw = d as unknown as {
-      coupon?: Stripe.Coupon | string;
-      source?: { coupon?: Stripe.Coupon | string };
+  }
+
+  /** The plan's discount — Market Catalyst credits (a one-time payment discount) are not one. */
+  private discountOf(sub: Stripe.Subscription): AppliedDiscount | null {
+    const couponOf = (x: Stripe.Discount) => {
+      const raw = x as unknown as {
+        coupon?: Stripe.Coupon | string;
+        source?: { coupon?: Stripe.Coupon | string };
+      };
+      return raw.coupon ?? raw.source?.coupon;
     };
-    const c = raw.coupon ?? raw.source?.coupon;
+    const d = (sub.discounts ?? []).find((x): x is Stripe.Discount => {
+      if (typeof x === "string") return false;
+      const c = couponOf(x);
+      const id = typeof c === "string" ? c : c?.id;
+      return !String(id ?? "").startsWith("mc_credit_");
+    });
+    if (!d) return null;
+    const c = couponOf(d);
     if (!c || typeof c === "string") return null;
     const override = String(
       this.config.get("STRIPE_RETENTION_COUPON_ID", "") ?? "",
@@ -320,12 +340,57 @@ export class StripeBillingProvider implements BillingProvider {
   async createCustomer(input: {
     uid: string;
     email: string | null;
+    testClock?: boolean;
   }): Promise<{ customerId: string }> {
+    // Test clocks exist only in test mode, and a customer can join one only
+    // when it is created: renewals, trial ends and retries then run when the
+    // clock is advanced instead of in real time.
+    let clock: string | undefined;
+    if (input.testClock && !this.livemode) {
+      clock = (
+        await this.stripe.testHelpers.testClocks.create(
+          {
+            frozen_time: Math.floor(Date.now() / 1000),
+            name: `tester ${input.uid}`.slice(0, 300),
+          },
+          { idempotencyKey: `clock-${input.uid}` },
+        )
+      ).id;
+    }
     const c = await this.stripe.customers.create(
-      { email: input.email ?? undefined, metadata: { uid: input.uid } },
-      { idempotencyKey: `customer-${input.uid}` },
+      {
+        email: input.email ?? undefined,
+        metadata: { uid: input.uid },
+        ...(clock ? { test_clock: clock } : {}),
+      },
+      { idempotencyKey: `customer-${input.uid}${clock ? "-clock" : ""}` },
     );
     return { customerId: c.id };
+  }
+
+  async testClockFor(
+    customerId: string,
+  ): Promise<{ id: string; frozenTime: string; status: string } | null> {
+    if (this.livemode) return null;
+    const c = (await this.stripe.customers.retrieve(
+      customerId,
+    )) as Stripe.Customer;
+    const id = idOf(c.test_clock);
+    if (!id) return null;
+    const t = await this.stripe.testHelpers.testClocks.retrieve(id);
+    return { id: t.id, frozenTime: iso(t.frozen_time), status: t.status };
+  }
+
+  async advanceTestClock(
+    customerId: string,
+    toMs: number,
+  ): Promise<{ frozenTime: string; status: string }> {
+    const clock = await this.testClockFor(customerId);
+    if (!clock) throw new Error("This customer is not on a test clock.");
+    const t = await this.stripe.testHelpers.testClocks.advance(clock.id, {
+      frozen_time: Math.floor(toMs / 1000),
+    });
+    return { frozenTime: iso(t.frozen_time), status: t.status };
   }
 
   async setCustomerMetadata(
@@ -360,11 +425,19 @@ export class StripeBillingProvider implements BillingProvider {
     price: PriceRef;
     discount: AppliedDiscount | null;
     region: BillingRegion | null;
+    creditAmount?: number;
   }): Promise<CheckoutQuote> {
     const price = await this.priceId(input.price.lookupKey);
     const coupon = input.discount
       ? await this.couponFor(input.discount, input.price.currency)
       : null;
+    const credit =
+      (input.creditAmount ?? 0) > 0
+        ? await this.creditCoupon(input.creditAmount, input.price.currency)
+        : null;
+    const discounts = [coupon, credit]
+      .filter(Boolean)
+      .map((c) => ({ coupon: c }));
     let inv: Stripe.Invoice;
     try {
       inv = await this.stripe.invoices.createPreview({
@@ -381,7 +454,7 @@ export class StripeBillingProvider implements BillingProvider {
             }
           : {}),
         subscription_details: { items: [{ price }] },
-        ...(coupon ? { discounts: [{ coupon }] } : {}),
+        ...(discounts.length ? { discounts } : {}),
       });
     } catch (taxErr) {
       // Fail closed: never show a total without the tax that will be charged.
@@ -418,12 +491,21 @@ export class StripeBillingProvider implements BillingProvider {
     billing?: BillingDetails | null;
     trialDays?: number;
     trialEndsAt?: string | null;
+    creditAmount?: number;
   }): Promise<CheckoutSession> {
     if (input.billing) await this.applyBilling(input.customerId, input.billing);
     const price = await this.priceId(input.price.lookupKey);
     const coupon = input.discount
       ? await this.couponFor(input.discount, input.price.currency)
       : null;
+    // Credits only where something is charged today (never on a free trial).
+    const credit =
+      (input.creditAmount ?? 0) > 0 && !((input.trialDays ?? 0) > 0)
+        ? await this.creditCoupon(input.creditAmount, input.price.currency)
+        : null;
+    const subDiscounts = [coupon, credit]
+      .filter(Boolean)
+      .map((c) => ({ coupon: c }));
     const trial = (input.trialDays ?? 0) > 0;
     if (trial) {
       // Card first: the trial starts only once the card is saved (SetupIntent
@@ -488,7 +570,7 @@ export class StripeBillingProvider implements BillingProvider {
                 },
               }
             : {}),
-          ...(coupon ? { discounts: [{ coupon }] } : {}),
+          ...(subDiscounts.length ? { discounts: subDiscounts } : {}),
           metadata: {
             uid: input.uid,
             planId: input.price.planId,
@@ -1071,9 +1153,11 @@ export class StripeBillingProvider implements BillingProvider {
     }
     const priceId = await this.priceId(input.target.lookupKey);
     const p = this.changeParams(sub, input.target, priceId, prorationDate);
+    const carried = await this.retentionCarriedToAnnual(sub, input.target);
     const inv = await this.stripe.invoices.createPreview({
       customer: idOf(sub.customer)!,
       subscription: sub.id,
+      ...(carried ? { discounts: carried } : {}),
       subscription_details: {
         items: p.items,
         proration_behavior: p.proration_behavior,
@@ -1111,7 +1195,9 @@ export class StripeBillingProvider implements BillingProvider {
       interval: input.target.interval,
       currency: inv.currency.toUpperCase(),
       amountDueNow: input.kind === "upgrade" ? Math.max(0, inv.amount_due) : 0,
-      creditToBalance: input.kind === "downgrade" ? Math.max(0, -net) : 0,
+      // Unused time worth more than the new charge (e.g. Pro annual → Elite
+      // monthly now): the leftover becomes Market Catalyst credits.
+      creditToBalance: Math.max(0, -net),
       ...period,
       prorationDate,
       effectiveAt: new Date(prorationDate).toISOString(),
@@ -1136,6 +1222,7 @@ export class StripeBillingProvider implements BillingProvider {
     expectedCredit?: number | null;
     paymentMethodId?: string | null;
     billing?: BillingDetails | null;
+    creditAmount?: number;
   }): Promise<ChangeResult> {
     const sub = await this.retrieveSub(input.subscriptionId);
     const priceId = await this.priceId(input.target.lookupKey);
@@ -1178,48 +1265,54 @@ export class StripeBillingProvider implements BillingProvider {
         default_payment_method: input.paymentMethodId,
       });
     }
+    const credit =
+      (input.creditAmount ?? 0) > 0
+        ? await this.creditCoupon(input.creditAmount, input.target.currency)
+        : null;
     if (input.kind === "scheduled") {
-      // Lower plan or annual → monthly: keep the current plan to period end,
-      // then the new price via a schedule. In the free trial the first phase
-      // keeps the trial end — without it Stripe ends the trial at once.
-      const item = sub.items.data[0];
-      const schedId =
-        scheduleId ??
-        (
-          await this.stripe.subscriptionSchedules.create({
-            from_subscription: sub.id,
-          })
-        ).id;
-      const trialEnd = sub.status === "trialing" ? sub.trial_end : null;
-      // A discount the customer has (retention offer, promo) carries into the
-      // new plan — schedule phases without it drop it at the switch.
-      const discounts = this.discountRefs(sub);
-      await this.stripe.subscriptionSchedules.update(schedId, {
-        end_behavior: "release",
-        phases: [
-          {
-            items: [{ price: item.price.id }],
-            start_date: item.current_period_start,
-            end_date: item.current_period_end,
-            ...(trialEnd ? { trial_end: trialEnd } : {}),
-            ...(discounts.length ? { discounts } : {}),
-            metadata: { ...sub.metadata },
-          },
-          {
-            items: [{ price: priceId }],
-            ...(discounts.length ? { discounts } : {}),
-            metadata,
-            proration_behavior: "none",
-          },
-        ],
-      });
-      return {
-        status: "scheduled",
-        effectiveAt: iso(item.current_period_end)!,
-      };
+      // A lower plan (or annual → monthly): the current plan runs to its period
+      // end, then the new plan's first charge. Choosing next period's plan
+      // means the customer is staying: a pending cancellation is switched off.
+      if (sub.cancel_at_period_end)
+        await this.stripe.subscriptions.update(sub.id, {
+          cancel_at_period_end: false,
+        });
+      const effectiveAt = await this.scheduleSwitch(
+        sub,
+        priceId,
+        metadata,
+        credit,
+        scheduleId,
+      );
+      return { status: "scheduled", effectiveAt };
     }
     // A change drops a pending (scheduled) change.
     if (scheduleId) await this.stripe.subscriptionSchedules.release(scheduleId);
+    // Discounts for this switch: a monthly retention offer moving to annual is
+    // carried as "pay for 11 (or 11.5) months"; credits the customer chose to
+    // use come off this payment once. Restored if the payment fails.
+    const original = this.discountRefs(sub);
+    const carried = await this.retentionCarriedToAnnual(sub, input.target);
+    const switchDiscounts =
+      carried || credit
+        ? [...(carried ?? original), ...(credit ? [{ coupon: credit }] : [])]
+        : null;
+    if (switchDiscounts)
+      await this.stripe.subscriptions.update(sub.id, {
+        discounts: switchDiscounts,
+      });
+    const restoreDiscounts = async () => {
+      if (!switchDiscounts) return;
+      await this.stripe.subscriptions
+        .update(sub.id, {
+          discounts: original.length ? original : "",
+        })
+        .catch((err: Error) =>
+          this.logger.warn(
+            `discounts not restored on ${sub.id}: ${err.message}`,
+          ),
+        );
+    };
     const p = this.changeParams(
       sub,
       input.target,
@@ -1244,13 +1337,25 @@ export class StripeBillingProvider implements BillingProvider {
         metadata,
         ...(input.kind === "upgrade" ? { cancel_at_period_end: false } : {}),
       });
+      // Unused time worth more than the new charge: Stripe put the difference
+      // in the customer balance, where it would be spent automatically. Take
+      // it back out; the backend adds it to Market Catalyst credits instead.
+      const leftover = Math.max(0, -(inv?.total ?? 0));
+      if (leftover > 0 && inv?.id)
+        await this.stripe.customers.createBalanceTransaction(
+          customer,
+          {
+            amount: leftover,
+            currency: (inv.currency ?? input.target.currency).toLowerCase(),
+            description: "Moved to Market Catalyst credits",
+          },
+          { idempotencyKey: `leftover-${inv.id}` },
+        );
       return {
         status: "applied",
         invoiceId: inv?.id ?? null,
         amountCharged: inv?.amount_paid ?? 0,
-        ...(input.kind === "downgrade"
-          ? { creditToBalance: Math.max(0, -(inv?.total ?? 0)) }
-          : {}),
+        ...(leftover > 0 ? { creditToBalance: leftover } : {}),
         effectiveAt: new Date().toISOString(),
       };
     }
@@ -1275,7 +1380,103 @@ export class StripeBillingProvider implements BillingProvider {
         amountDue: inv.amount_due,
       };
     }
+    await restoreDiscounts();
     return { status: "payment_failed", reason: "card_declined" };
+  }
+
+  /**
+   * Puts `priceId` on the subscription from the end of the current period (a
+   * switch at renewal) through a subscription schedule. In the free trial the
+   * first phase keeps the trial end (without it Stripe ends the trial at once).
+   * The customer's discounts carry into the new plan; `credit` (Market Catalyst
+   * credits they chose to use) comes off the new plan's first charge.
+   */
+  private async scheduleSwitch(
+    sub: Stripe.Subscription,
+    priceId: string,
+    metadata: Record<string, string>,
+    credit: string | null,
+    scheduleId: string | null,
+  ): Promise<string> {
+    const item = sub.items.data[0];
+    const schedId =
+      scheduleId ??
+      (
+        await this.stripe.subscriptionSchedules.create({
+          from_subscription: sub.id,
+        })
+      ).id;
+    const trialEnd = sub.status === "trialing" ? sub.trial_end : null;
+    const discounts = this.discountRefs(sub);
+    const next = [...discounts, ...(credit ? [{ coupon: credit }] : [])];
+    await this.stripe.subscriptionSchedules.update(schedId, {
+      end_behavior: "release",
+      phases: [
+        {
+          items: [{ price: item.price.id }],
+          start_date: item.current_period_start,
+          end_date: item.current_period_end,
+          ...(trialEnd ? { trial_end: trialEnd } : {}),
+          ...(discounts.length ? { discounts } : {}),
+          metadata: { ...sub.metadata },
+        },
+        {
+          items: [{ price: priceId }],
+          ...(next.length ? { discounts: next } : {}),
+          metadata,
+          proration_behavior: "none",
+        },
+      ],
+    });
+    return iso(item.current_period_end);
+  }
+
+  /**
+   * A monthly retention offer (50% off the next 2 monthly payments) when the
+   * customer switches to annual now: each 50% month not yet used becomes half
+   * a month off the annual payment — the annual charge is for 11 months (both
+   * unused) or 11.5 (one used). Returns the discounts for the switch, or null
+   * when there is nothing to carry.
+   */
+  private async retentionCarriedToAnnual(
+    sub: Stripe.Subscription,
+    target: PriceRef,
+  ): Promise<Array<{ coupon: string } | { discount: string }> | null> {
+    const item = sub.items.data[0];
+    const fromInterval = CATALOG.get(item?.price?.lookup_key ?? "")?.interval;
+    if (target.interval !== "annual" || fromInterval !== "monthly") return null;
+    const d = this.discountOf(sub);
+    if (d?.source !== "retention" || d.duration !== "repeating" || !d.endsAt)
+      return null;
+    const end = Date.parse(d.endsAt);
+    let renewal = (item.current_period_end ?? 0) * 1000;
+    let unused = 0;
+    for (let i = 0; i < 12 && renewal > 0 && renewal < end; i++) {
+      unused++;
+      const r = new Date(renewal);
+      r.setUTCMonth(r.getUTCMonth() + 1);
+      renewal = r.getTime();
+    }
+    if (unused <= 0) return null;
+    const amount = Math.round((unused * 0.5 * target.amount) / 12);
+    const coupon = await this.couponFor(
+      { source: "retention", amountOff: amount, duration: "once" },
+      target.currency,
+    );
+    // Keep any other (non-retention) discount the customer has.
+    const others = (sub.discounts ?? [])
+      .filter((x): x is Stripe.Discount => typeof x !== "string")
+      .filter((x) => {
+        const raw = x as unknown as {
+          coupon?: Stripe.Coupon | string;
+          source?: { coupon?: Stripe.Coupon | string };
+        };
+        const c = raw.coupon ?? raw.source?.coupon;
+        const id = typeof c === "string" ? c : c?.id;
+        return !String(id ?? "").startsWith("mc_retention");
+      })
+      .map((x) => ({ discount: x.id }));
+    return [...others, { coupon }];
   }
 
   /**
@@ -1320,17 +1521,92 @@ export class StripeBillingProvider implements BillingProvider {
   }
 
   async cancelAtPeriodEnd(subscriptionId: string): Promise<void> {
-    const sub = await this.stripe.subscriptions.retrieve(subscriptionId);
+    const sub = await this.retrieveSub(subscriptionId);
     const s = idOf(sub.schedule as string | Stripe.SubscriptionSchedule | null);
+    // Remember a scheduled switch so "Resume" brings it back.
+    const pending = (await this.mapSubscription(sub)).scheduledChange;
     if (s) await this.stripe.subscriptionSchedules.release(s);
     await this.stripe.subscriptions.update(subscriptionId, {
       cancel_at_period_end: true,
+      ...(pending
+        ? {
+            metadata: {
+              ...sub.metadata,
+              mc_resume_switch: `${pending.planId}:${pending.interval}`,
+            },
+          }
+        : {}),
     });
   }
 
   async resume(subscriptionId: string): Promise<void> {
+    const before = await this.stripe.subscriptions.retrieve(subscriptionId);
+    const remembered = before.metadata?.mc_resume_switch ?? "";
+    const metadata = { ...before.metadata };
+    delete metadata.mc_resume_switch;
     await this.stripe.subscriptions.update(subscriptionId, {
       cancel_at_period_end: false,
+      ...(remembered
+        ? { metadata: { ...metadata, mc_resume_switch: "" } }
+        : {}),
+    });
+    // Bring back the switch that was scheduled before the cancellation.
+    const [planId, interval] = remembered.split(":");
+    const target = PLAN_DEFINITIONS.find((p) => p.id === planId)?.prices[
+      interval as BillingInterval
+    ];
+    if (target) {
+      const sub = await this.retrieveSub(subscriptionId);
+      await this.scheduleSwitch(
+        sub,
+        await this.priceId(target.lookupKey),
+        { ...metadata, planId, interval },
+        null,
+        idOf(sub.schedule),
+      );
+    }
+  }
+
+  async cancelNow(subscriptionId: string): Promise<void> {
+    await this.stripe.subscriptions.cancel(subscriptionId, {
+      prorate: false,
+      invoice_now: false,
+    });
+  }
+
+  /** Market Catalyst credits the customer chose to use on their next payment. */
+  async applyCreditToNextInvoice(
+    subscriptionId: string,
+    amount: number,
+    currency: string,
+  ): Promise<void> {
+    const sub = await this.retrieveSub(subscriptionId);
+    const credit = await this.creditCoupon(amount, currency);
+    const sched =
+      typeof sub.schedule === "string"
+        ? await this.stripe.subscriptionSchedules.retrieve(sub.schedule)
+        : (sub.schedule ?? null);
+    if (sched && sched.status === "active") {
+      // A switch is scheduled: the next payment is the new plan's first charge.
+      const target = (await this.mapSubscription(sub)).scheduledChange;
+      const priceKey = target
+        ? PLAN_DEFINITIONS.find((p) => p.id === target.planId)?.prices[
+            target.interval
+          ]?.lookupKey
+        : null;
+      if (target && priceKey) {
+        await this.scheduleSwitch(
+          sub,
+          await this.priceId(priceKey),
+          { ...sub.metadata, planId: target.planId, interval: target.interval },
+          credit,
+          sched.id,
+        );
+        return;
+      }
+    }
+    await this.stripe.subscriptions.update(subscriptionId, {
+      discounts: [...this.discountRefs(sub), { coupon: credit }],
     });
   }
 
@@ -1388,8 +1664,10 @@ export class StripeBillingProvider implements BillingProvider {
         },
         "USD",
       );
+      // Keeping the plan: a pending cancellation is switched off too.
       await this.stripe.subscriptions.update(input.subscriptionId, {
         discounts: [{ coupon }],
+        cancel_at_period_end: false,
       });
       // With a scheduled change pending, the schedule's phases must carry the
       // discount too, or it is dropped when the new plan starts.
@@ -1404,6 +1682,10 @@ export class StripeBillingProvider implements BillingProvider {
       currency: input.currency.toLowerCase(),
       description: "Retention offer credit",
     });
+    // Keeping the plan: a pending cancellation is switched off too.
+    await this.stripe.subscriptions.update(input.subscriptionId, {
+      cancel_at_period_end: false,
+    });
     return {
       description: `${(input.amount / 100).toFixed(2)} ${input.currency} credit on your next invoice`,
       appliesTo: "next_invoice",
@@ -1411,6 +1693,36 @@ export class StripeBillingProvider implements BillingProvider {
   }
 
   // ── invoices ──────────────────────────────────────────────────────────
+
+  /** The part of an invoice's discounts that came from Market Catalyst credits. */
+  private creditDiscountOf(inv: Stripe.Invoice): number {
+    const creditIds = new Set(
+      (inv.discounts ?? [])
+        .filter(
+          (d): d is Stripe.Discount =>
+            typeof d !== "string" && !("deleted" in d && d.deleted),
+        )
+        .filter((d) => {
+          const raw = d as unknown as {
+            coupon?: Stripe.Coupon | string;
+            source?: { coupon?: Stripe.Coupon | string };
+          };
+          const c = raw.coupon ?? raw.source?.coupon;
+          return String(typeof c === "string" ? c : (c?.id ?? "")).startsWith(
+            "mc_credit_",
+          );
+        })
+        .map((d) => d.id),
+    );
+    if (!creditIds.size) return 0;
+    return (inv.total_discount_amounts ?? [])
+      .filter((t) =>
+        creditIds.has(
+          typeof t.discount === "string" ? t.discount : t.discount.id,
+        ),
+      )
+      .reduce((a, t) => a + t.amount, 0);
+  }
 
   private async mapInvoice(
     inv: Stripe.Invoice,
@@ -1461,6 +1773,7 @@ export class StripeBillingProvider implements BillingProvider {
       currency: inv.currency.toUpperCase(),
       subtotal: inv.subtotal,
       discountAmount: sumAmounts(inv.total_discount_amounts),
+      creditDiscount: this.creditDiscountOf(inv),
       creditApplied: Math.max(
         0,
         (inv.starting_balance ?? 0) - (inv.ending_balance ?? 0),
@@ -1503,7 +1816,9 @@ export class StripeBillingProvider implements BillingProvider {
   async getInvoice(invoiceId: string): Promise<ProviderInvoice | null> {
     try {
       return await this.mapInvoice(
-        await this.stripe.invoices.retrieve(invoiceId),
+        await this.stripe.invoices.retrieve(invoiceId, {
+          expand: ["discounts"],
+        }),
       );
     } catch {
       return null;
@@ -1694,7 +2009,15 @@ export class StripeBillingProvider implements BillingProvider {
         data: {
           customerId: idOf(obj.customer as string),
           invoiceId,
-          amount: Number(obj.amount_refunded ?? obj.amount ?? 0),
+          // A refund event carries the total refunded so far on the charge.
+          amount: Number(
+            obj.object === "charge"
+              ? (obj.amount_refunded ?? 0)
+              : (obj.amount ?? 0),
+          ),
+          ...(obj.object === "dispute"
+            ? { status: typeof obj.status === "string" ? obj.status : "" }
+            : {}),
         },
       };
     }
