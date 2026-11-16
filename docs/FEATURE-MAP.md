@@ -34,7 +34,7 @@ An account with no active plan can use only: `/api/account` (sign-in, email veri
 
 | Feature | Screens | Widgets | Backend routes |
 |---|---|---|---|
-| Stock Intelligence | stock, si | — | `GET /market-data/companies`<br>`GET /live/quotes`<br>`GET /live/search`<br>`POST /live/searched-ticker`<br>`GET /live/news`<br>`GET /live/company`<br>`GET /live/company/summary`<br>`GET /live/splits` |
+| Stock Intelligence | stock, si | — | `GET /market-data/companies`<br>`GET /live/quotes`<br>`GET /live/search`<br>`POST /live/searched-ticker`<br>`GET /live/news`<br>`GET /live/company`<br>`GET /live/company/summary`<br>`GET /live/splits`<br>`GET /live/move-explanation` |
 | Daily Charts | — | — | `GET /live/bars` |
 | Intraday Charts | — | — | `GET /live/bars` |
 | Long History (5Y) | — | — | `GET /live/bars` |
