@@ -1,7 +1,10 @@
 import { billingApp, checkoutBody } from "../../test/support/billing-app";
+import { etCalendarDaysEnd } from "../common/et-calendar";
 import { DAY, T0 } from "../../test/support/billing-harness";
 import { CONSENT_VERSION, consentText } from "./checkout/consent";
 
+/** The trial ends at 11:59:59 PM US Eastern on the 7th calendar day after sign-up. */
+const END7 = etCalendarDaysEnd(T0, 7);
 jest.setTimeout(30_000);
 type App = Awaited<ReturnType<typeof billingApp>>;
 let a: App;
@@ -17,11 +20,11 @@ describe("7-day free trial on every plan (once per email, card required)", () =>
     const p = (await a.user("t1").post("/api/billing/checkout/preview", { planId, interval: "monthly", region: OR })).body;
     const price = { starter: 3900, pro: 5900, elite: 19900 }[planId]!;
     expect(p).toMatchObject({
-      trial: { days: 7, endsAt: new Date(T0 + 7 * DAY).toISOString() },
+      trial: { days: 7, endsAt: new Date(END7).toISOString() },
       dueToday: 0,
-      firstCharge: { amount: price, at: new Date(T0 + 7 * DAY).toISOString() },
+      firstCharge: { amount: price, at: new Date(END7).toISOString() },
       total: price,
-      renewsAt: new Date(T0 + 7 * DAY).toISOString(),
+      renewsAt: new Date(END7).toISOString(),
       consent: { version: CONSENT_VERSION, text: consentText(planId, "monthly", 7) },
     });
     expect(p.consent.text).toMatch(/^I understand my \w+ plan renews at \$\d+\/month after the trial until I cancel\. I agree to the Terms of Use and Privacy Policy\.$/);
@@ -73,7 +76,7 @@ describe("7-day free trial on every plan (once per email, card required)", () =>
     const { u } = await a.subscribe("t4", "starter", "monthly");
     a.clock.freeze(T0 + 2 * DAY);
     const p = (await u.post("/api/billing/change/preview", { planId: "pro", interval: "monthly" })).body;
-    expect(p).toMatchObject({ kind: "upgrade", amountDueNow: 0, breakdown: null, trialEndsAt: new Date(T0 + 7 * DAY).toISOString() });
+    expect(p).toMatchObject({ kind: "upgrade", amountDueNow: 0, breakdown: null, trialEndsAt: new Date(END7).toISOString() });
     await u.post("/api/billing/change", { planId: "pro", interval: "monthly", expectedAmountDue: 0, prorationDate: p.prorationDate });
     expect((await u.get("/api/me/entitlements")).body).toMatchObject({ planId: "pro", status: "TRIALING" });
     await a.advanceDays(6);

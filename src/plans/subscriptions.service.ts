@@ -1,5 +1,6 @@
 import { Injectable, Optional } from "@nestjs/common";
 import { AppClock } from "../common/app-clock";
+import { etCalendarDaysEnd, etDayDiff } from "../common/et-calendar";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { PlansService } from "./plans.service";
 import { emailHash } from "../billing/retention/email-normalise";
@@ -234,8 +235,15 @@ export class SubscriptionsService {
       // The first account ever made with this email (signup_claims): a
       // deleted-and-recreated account doesn't restart the intro.
       const first = Number(u.introStartedAt);
-      if (Number.isFinite(first) && (!Number.isFinite(createdMs) || first < createdMs)) createdMs = first;
-      const introEnd = createdMs + INTRO_DAYS * DAY;
+      if (
+        Number.isFinite(first) &&
+        (!Number.isFinite(createdMs) || first < createdMs)
+      )
+        createdMs = first;
+      // 11:59:59 PM US Eastern on the 7th calendar day after sign-up.
+      const introEnd = Number.isFinite(createdMs)
+        ? etCalendarDaysEnd(createdMs, INTRO_DAYS)
+        : NaN;
       // User must verify email (or Google sign-in) to receive 7-day free trial intro access
       const isVerified = u.emailVerified !== false;
       if (Number.isFinite(createdMs) && now < introEnd && isVerified) {
@@ -251,7 +259,7 @@ export class SubscriptionsService {
           expiryDate: new Date(introEnd).toISOString(),
           cancelAtPeriodEnd: false,
           expiredSinceLastWrite: false,
-          daysRemaining: Math.ceil((introEnd - now) / DAY),
+          daysRemaining: Math.max(1, etDayDiff(introEnd, now)),
           inGrace: false,
           graceEndsAt: null,
           entitled: false,

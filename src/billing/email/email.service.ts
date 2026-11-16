@@ -11,12 +11,13 @@ export function money(amount: number, currency = "USD"): string {
 }
 
 /** "9 December 2026" (UTC). */
+/** A date only (no time), on the US Eastern calendar the trial and intro end dates follow. */
 export function longDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-GB", {
     day: "numeric",
     month: "long",
     year: "numeric",
-    timeZone: "UTC",
+    timeZone: "America/New_York",
   });
 }
 

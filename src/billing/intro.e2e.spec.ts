@@ -1,6 +1,9 @@
 import { billingApp } from "../../test/support/billing-app";
+import { etCalendarDaysEnd } from "../common/et-calendar";
 import { DAY, T0 } from "../../test/support/billing-harness";
 
+/** The intro ends at 11:59:59 PM US Eastern on the 7th calendar day after sign-up. */
+const END7 = etCalendarDaysEnd(T0, 7);
 jest.setTimeout(30_000);
 type App = Awaited<ReturnType<typeof billingApp>>;
 let a: App;
@@ -15,13 +18,13 @@ describe("new-account intro: 7 days of Market Catalyst, no card, then Choose a p
     const u = a.user("n1");
     a.fs.seed("users", "n1", { email: "n1@example.com", createdAt: new Date(T0).toISOString() });
     let me = (await u.get("/api/me/entitlements")).body;
-    expect(me).toMatchObject({ planId: "intro", status: "INTRO", introEndsAt: new Date(T0 + 7 * DAY).toISOString(), trialDays: 7 });
+    expect(me).toMatchObject({ planId: "intro", status: "INTRO", introEndsAt: new Date(END7).toISOString(), trialDays: 7 });
     expect(me.entitlements.marketCatalyst).toBe(true); // dashboard
     expect(me.entitlements.screener).toBe(true);
     expect(me.entitlements.chartsDaily).toBe(true); // Stock Intelligence
     expect(me.entitlements.moneyFlow).toBe(true); // Money Flow
     expect(me.entitlements.strategyLab).toBe(false); // Strategy Lab (Elite only)
-    a.clock.freeze(T0 + 7 * DAY + 1);
+    a.clock.freeze(END7 + 1000);
     me = (await u.get("/api/me/entitlements")).body;
     expect(me).toMatchObject({ planId: "none", introEndsAt: null });
     expect(me.entitlements.marketCatalyst).toBe(false);
@@ -40,8 +43,8 @@ describe("new-account intro: 7 days of Market Catalyst, no card, then Choose a p
     a.fs.seed("users", "del2", { email: "patdoe@gmail.com", createdAt: new Date(T0 + 3 * DAY).toISOString() });
     let me = (await again.get("/api/me/entitlements")).body;
     // Still the first account's week: ends on day 7, not day 10.
-    expect(me).toMatchObject({ status: "INTRO", introEndsAt: new Date(T0 + 7 * DAY).toISOString() });
-    a.clock.freeze(T0 + 7 * DAY + 1);
+    expect(me).toMatchObject({ status: "INTRO", introEndsAt: new Date(END7).toISOString() });
+    a.clock.freeze(END7 + 1000);
     me = (await again.get("/api/me/entitlements")).body;
     expect(me).toMatchObject({ planId: "none" });
     // A different person still gets their own week.

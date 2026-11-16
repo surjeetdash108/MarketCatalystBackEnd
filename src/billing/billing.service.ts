@@ -9,6 +9,7 @@ import { emailHash } from "./retention/email-normalise";
 import { buildTimeline } from "./history-format";
 import { EmailVerificationService } from "../account/email-verification.service";
 import { CreditsService } from "./credits/credits.service";
+import { etCalendarDaysEnd, etDayDiff } from "../common/et-calendar";
 import {
   BadRequestException,
   ConflictException,
@@ -238,7 +239,9 @@ export class BillingService {
       return (
         Array.isArray(list) &&
         list
-          .map((e: unknown) => (typeof e === "string" ? e : "").trim().toLowerCase())
+          .map((e: unknown) =>
+            (typeof e === "string" ? e : "").trim().toLowerCase(),
+          )
           .includes(email.trim().toLowerCase())
       );
     } catch {
@@ -388,10 +391,12 @@ export class BillingService {
       .accountStartMs(uid)
       .catch(() => null);
     const anchor = start == null ? now : Math.max(start, this.trialFloorMs);
-    const endsAt = anchor + days * 86_400_000;
+    // 11:59:59 PM US Eastern on the 7th calendar day after sign-up (not 7 × 24 h).
+    const endsAt = etCalendarDaysEnd(anchor, days);
     // Less than an hour left isn't worth a trial (and the card step needs time).
     if (endsAt - now < MIN_TRIAL_MS) return null;
-    return { endsAt, days: Math.ceil((endsAt - now) / 86_400_000) };
+    // Calendar days left (the end day counts until 11:59 PM): signing up today → 7.
+    return { endsAt, days: Math.max(1, etDayDiff(endsAt, now)) };
   }
 
   /** Whole days of free trial left for this buyer (0 = none). */

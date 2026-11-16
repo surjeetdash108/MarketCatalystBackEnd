@@ -414,10 +414,7 @@ const NEVER_GRANTED: EntitlementKey[] = ENTITLEMENTS.filter(
 // ── Feature groups: the unit plans are sold in ─────────────────────────────
 
 export type FeatureGroupId =
-  | "marketDesk"
-  | "stockIntelligence"
-  | "moneyFlow"
-  | "strategyLab";
+  "marketDesk" | "stockIntelligence" | "moneyFlow" | "strategyLab";
 
 export interface FeatureGroup {
   id: FeatureGroupId;
@@ -550,7 +547,6 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
     limits: { watchlistTickers: null },
   },
 ];
-
 
 /** The effective plan of an account with no active paid plan. Not a plan anyone can buy. */
 export const NO_PLAN_ID = "none";
@@ -773,8 +769,14 @@ export const PLAN_EXEMPT_ROUTES: Array<{ prefix: string; reason: string }> = [
   { prefix: "/health", reason: "health check" },
   { prefix: "/public", reason: "website landing data" },
   { prefix: "/mcp", reason: "admin-issued API keys (McpApiKeyGuard)" },
-  { prefix: "/live/stream", reason: "needs a stream ticket, issued only on a plan" },
-  { prefix: "/live/tape/stream", reason: "needs a stream ticket, issued only on a plan" },
+  {
+    prefix: "/live/stream",
+    reason: "needs a stream ticket, issued only on a plan",
+  },
+  {
+    prefix: "/live/tape/stream",
+    reason: "needs a stream ticket, issued only on a plan",
+  },
 ];
 
 /** Intraday ranges served by /live/bars (minute bars). */
@@ -884,14 +886,9 @@ export const PLAN_CARD_BULLETS: Record<string, string[]> = {
   pro: [
     "Everything in Starter",
     "Money Flow by sector",
-    "Biggest institutional gainers and losers",
+    "See where money is rotating today: the top 15 movers each way and the price levels to watch",
   ],
-  elite: [
-    "Everything in Pro",
-    "Strategy Lab",
-    "Backtest any strategy",
-    "Strategy Lab entry, stop and target levels",
-  ],
+  elite: ["Everything in Pro", "Strategy Lab", "Backtest any strategy"],
 };
 
 /** What all three plans share — the "Every plan includes" list. */
