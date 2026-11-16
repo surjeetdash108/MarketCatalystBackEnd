@@ -541,12 +541,24 @@ export class BillingService {
         message: "You already have a subscription. Change your plan instead.",
       });
     }
-    const day = new Date(this.clock.now()).toISOString().slice(0, 10);
-    const idempotencyKey = createHash("sha256")
-      .update([uid, price.lookupKey, promoId ?? "", day].join("|"))
-      .digest("hex");
     const trialWindow = await this.trialWindowFor(uid);
     const trialDays = trialWindow?.days ?? 0;
+    // Guards a double click (same request within a few seconds), not a day:
+    // picking another plan and coming back must get a fresh, payable checkout
+    // (the provider also refuses to hand back one that was closed since).
+    const window = Math.floor(this.clock.now() / 10_000);
+    const idempotencyKey = createHash("sha256")
+      .update(
+        [
+          uid,
+          price.lookupKey,
+          promoId ?? "",
+          trialDays,
+          trialWindow?.endsAt ?? "",
+          window,
+        ].join("|"),
+      )
+      .digest("hex");
     const session = await provider.createCheckout({
       uid,
       customerId,

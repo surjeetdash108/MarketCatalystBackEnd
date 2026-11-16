@@ -1,4 +1,4 @@
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { Logger, ServiceUnavailableException } from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
 import Stripe from "stripe";
@@ -118,6 +118,10 @@ const lineOf = (l: Stripe.InvoiceLineItem): InvoiceLine => ({
     ).parent?.subscription_item_details?.proration ??
     false,
 });
+/** True when Stripe answered from an earlier request with the same idempotency key. */
+const replayed = (obj: unknown): boolean =>
+  (obj as { lastResponse?: { headers?: Record<string, string> } })?.lastResponse
+    ?.headers?.["idempotent-replayed"] === "true";
 const iso = (sec: number | null | undefined) =>
   sec ? new Date(sec * 1000).toISOString() : null;
 const idOf = (
@@ -331,7 +335,6 @@ export class StripeBillingProvider implements BillingProvider {
     await this.stripe.customers.update(customerId, { metadata });
   }
 
-
   // ── checkout ──────────────────────────────────────────────────────────
 
   /** Name and billing address on the customer. The full address stays at Stripe (Stripe Tax uses it). */
@@ -426,62 +429,114 @@ export class StripeBillingProvider implements BillingProvider {
       // Card first: the trial starts only once the card is saved (SetupIntent
       // confirmed in the Payment Element). $0 today; Stripe keeps the card and
       // charges it when the trial ends unless the customer cancels.
-      const si = await this.stripe.setupIntents.create(
+      const createSetup = (key: string) =>
+        this.stripe.setupIntents.create(
+          {
+            customer: input.customerId,
+            usage: "off_session",
+            payment_method_types: this.paymentMethodTypes,
+            metadata: {
+              uid: input.uid,
+              planId: input.price.planId,
+              interval: input.price.interval,
+              lookupKey: input.price.lookupKey,
+              trialDays: String(input.trialDays),
+              trialEnd: input.trialEndsAt
+                ? String(Math.floor(Date.parse(input.trialEndsAt) / 1000))
+                : "",
+              coupon: coupon ?? "",
+              currency: input.price.currency,
+            },
+          },
+          { idempotencyKey: key },
+        );
+      const si = await this.freshCheckout(
+        `trial-setup-${input.idempotencyKey}`,
+        createSetup,
+        async (s) => {
+          if (!replayed(s)) return true;
+          const now = await this.stripe.setupIntents.retrieve(s.id);
+          return now.status !== "canceled" && !now.metadata?.blocked;
+        },
+      );
+      return this.trialSessionOf(si, input.successUrl, input.cancelUrl);
+    }
+    const createSub = (key: string) =>
+      this.stripe.subscriptions.create(
         {
           customer: input.customerId,
-          usage: "off_session",
-          payment_method_types: this.paymentMethodTypes,
+          items: [{ price }],
+          payment_behavior: "default_incomplete",
+          payment_settings: {
+            save_default_payment_method: "on_subscription",
+            payment_method_types: this.paymentMethodTypes,
+          },
+          automatic_tax: { enabled: true },
+          // Trial: no charge today; the card is collected with the pending
+          // SetupIntent, and without a card the trial simply ends (no charge).
+          ...(trial
+            ? {
+                ...trialTerms(
+                  input.trialDays,
+                  input.trialEndsAt
+                    ? Math.floor(Date.parse(input.trialEndsAt) / 1000)
+                    : null,
+                  Math.floor(Date.now() / 1000),
+                ),
+                trial_settings: {
+                  end_behavior: { missing_payment_method: "cancel" as const },
+                },
+              }
+            : {}),
+          ...(coupon ? { discounts: [{ coupon }] } : {}),
           metadata: {
             uid: input.uid,
             planId: input.price.planId,
             interval: input.price.interval,
-            lookupKey: input.price.lookupKey,
-            trialDays: String(input.trialDays),
-            trialEnd: input.trialEndsAt ? String(Math.floor(Date.parse(input.trialEndsAt) / 1000)) : "",
-            coupon: coupon ?? "",
-            currency: input.price.currency,
           },
+          expand: trial
+            ? ["latest_invoice.confirmation_secret", "pending_setup_intent"]
+            : ["latest_invoice.confirmation_secret"],
         },
-        { idempotencyKey: `trial-setup-${input.idempotencyKey}` },
+        { idempotencyKey: key },
       );
-      return this.trialSessionOf(si, input.successUrl, input.cancelUrl);
-    }
-    const sub = await this.stripe.subscriptions.create(
-      {
-        customer: input.customerId,
-        items: [{ price }],
-        payment_behavior: "default_incomplete",
-        payment_settings: {
-          save_default_payment_method: "on_subscription",
-          payment_method_types: this.paymentMethodTypes,
-        },
-        automatic_tax: { enabled: true },
-        // Trial: no charge today; the card is collected with the pending
-        // SetupIntent, and without a card the trial simply ends (no charge).
-        ...(trial
-          ? {
-              ...trialTerms(input.trialDays, input.trialEndsAt ? Math.floor(Date.parse(input.trialEndsAt) / 1000) : null, Math.floor(Date.now() / 1000)),
-              trial_settings: {
-                end_behavior: { missing_payment_method: "cancel" as const },
-              },
-            }
-          : {}),
-        ...(coupon ? { discounts: [{ coupon }] } : {}),
-        metadata: {
-          uid: input.uid,
-          planId: input.price.planId,
-          interval: input.price.interval,
-        },
-        expand: trial
-          ? [
-              "latest_invoice.confirmation_secret",
-              "pending_setup_intent",
-            ]
-          : ["latest_invoice.confirmation_secret"],
+    const sub = await this.freshCheckout(
+      `checkout-${input.idempotencyKey}`,
+      createSub,
+      async (s) => {
+        if (!replayed(s)) return true;
+        const now = await this.stripe.subscriptions.retrieve(s.id);
+        return now.status === "incomplete";
       },
-      { idempotencyKey: `checkout-${input.idempotencyKey}` },
     );
     return this.sessionOf(sub, input.successUrl, input.cancelUrl);
+  }
+
+  /**
+   * Creates a checkout object under an idempotency key (a double click within
+   * the key's window gets the same object back), but never hands back one that
+   * is no longer payable: a replay of a checkout that was closed since (the
+   * customer picked another plan, then came back to this one) or a key reused
+   * with different parameters gets a fresh object under a new key. The plan
+   * the customer picks last is the one they pay for.
+   */
+  private async freshCheckout<T>(
+    key: string,
+    create: (key: string) => Promise<T>,
+    usable: (obj: T) => Promise<boolean>,
+  ): Promise<T> {
+    try {
+      const obj = await create(key);
+      if (await usable(obj)) return obj;
+    } catch (err) {
+      const e = err as { type?: string; rawType?: string };
+      if (
+        e.type !== "StripeIdempotencyError" &&
+        e.rawType !== "idempotency_error"
+      )
+        throw err;
+    }
+    return create(`${key}-${randomUUID()}`);
   }
 
   private sessionOf(
@@ -516,14 +571,13 @@ export class StripeBillingProvider implements BillingProvider {
         cat?.interval ||
         "monthly",
       discount: this.discountOf(sub),
-      amountDueToday:
-        trialing
-          ? 0
-          : inv
-            ? status === "complete"
-              ? inv.amount_paid
-              : inv.amount_due
-            : 0,
+      amountDueToday: trialing
+        ? 0
+        : inv
+          ? status === "complete"
+            ? inv.amount_paid
+            : inv.amount_due
+          : 0,
       tax: trialing ? 0 : inv ? sumAmounts(inv.total_taxes) : 0,
       currency: (inv?.currency ?? item?.price?.currency ?? "usd").toUpperCase(),
       expiresAt: iso(sub.created + 23 * 3600) ?? new Date().toISOString(),
@@ -548,12 +602,11 @@ export class StripeBillingProvider implements BillingProvider {
     return {
       id: si.id,
       url: "",
-      status:
-        subscriptionId
-          ? "complete"
-          : si.status === "canceled" || md.blocked
-            ? "expired"
-            : "open",
+      status: subscriptionId
+        ? "complete"
+        : si.status === "canceled" || md.blocked
+          ? "expired"
+          : "open",
       uid: md.uid ?? "",
       customerId: idOf(si.customer) ?? "",
       planId: md.planId ?? "",
@@ -570,33 +623,61 @@ export class StripeBillingProvider implements BillingProvider {
     };
   }
 
-  async liveSubscriptionIds(customerId: string): Promise<string[]> {
-    const out: string[] = [];
+  private async liveSubscriptions(
+    customerId: string,
+  ): Promise<Stripe.Subscription[]> {
+    const out: Stripe.Subscription[] = [];
     for await (const s of this.stripe.subscriptions.list({
       customer: customerId,
       status: "all",
       limit: 100,
     })) {
       if (["active", "trialing", "past_due", "unpaid"].includes(s.status))
-        out.push(s.id);
+        out.push(s);
     }
     return out;
+  }
+
+  async liveSubscriptionIds(customerId: string): Promise<string[]> {
+    return (await this.liveSubscriptions(customerId)).map((s) => s.id);
   }
 
   async cancelAllNow(customerId: string): Promise<number> {
     const ids = await this.liveSubscriptionIds(customerId);
     for (const id of ids)
-      await this.stripe.subscriptions.cancel(id, { prorate: false, invoice_now: false });
+      await this.stripe.subscriptions.cancel(id, {
+        prorate: false,
+        invoice_now: false,
+      });
     return ids.length;
   }
 
+  /**
+   * Closes the customer's other unfinished checkouts. The newest checkout wins:
+   * only ones started BEFORE `keep` are closed, so two checkouts racing (two
+   * tabs, two plans) settle on the one picked last instead of closing each other.
+   */
   async closeOtherCheckouts(customerId: string, keep: string): Promise<void> {
+    let keepCreated: number | null = null;
+    try {
+      const k = keep.startsWith("seti_")
+        ? await this.stripe.setupIntents.retrieve(keep)
+        : await this.stripe.subscriptions.retrieve(keep);
+      keepCreated = typeof k?.created === "number" ? k.created : null;
+    } catch {
+      keepCreated = null;
+    }
+    const newer = (created: number | undefined) =>
+      keepCreated != null &&
+      typeof created === "number" &&
+      created > keepCreated;
     for await (const s of this.stripe.subscriptions.list({
       customer: customerId,
       status: "incomplete",
       limit: 100,
     })) {
-      if (s.id !== keep) await this.stripe.subscriptions.cancel(s.id);
+      if (s.id !== keep && !newer(s.created))
+        await this.stripe.subscriptions.cancel(s.id);
     }
     for await (const si of this.stripe.setupIntents.list({
       customer: customerId,
@@ -604,8 +685,13 @@ export class StripeBillingProvider implements BillingProvider {
     })) {
       if (
         si.id !== keep &&
+        !newer(si.created) &&
         si.metadata?.planId &&
-        ["requires_payment_method", "requires_confirmation", "requires_action"].includes(si.status)
+        [
+          "requires_payment_method",
+          "requires_confirmation",
+          "requires_action",
+        ].includes(si.status)
       )
         await this.stripe.setupIntents.cancel(si.id);
     }
@@ -617,33 +703,122 @@ export class StripeBillingProvider implements BillingProvider {
    * so the webhook and a status check can both call it. Never a second
    * subscription: if the customer already has one, the trial isn't started.
    */
-  private async startTrialFromSetup(si: Stripe.SetupIntent): Promise<Stripe.SetupIntent> {
+  private async startTrialFromSetup(
+    si: Stripe.SetupIntent,
+  ): Promise<Stripe.SetupIntent> {
     const md = si.metadata ?? {};
     if (si.status !== "succeeded" || md.subscriptionId || md.blocked) return si;
     const customerId = idOf(si.customer)!;
-    if ((await this.liveSubscriptionIds(customerId)).length > 0) {
-      this.logger.warn(`trial ${si.id} not started: customer ${customerId} already has a subscription`);
-      return this.stripe.setupIntents.update(si.id, {
-        metadata: { ...md, blocked: "already_subscribed" },
+    // The plan picked last wins: a card saved later for another plan supersedes
+    // this one, whichever webhook happens to arrive first.
+    const newer = await this.newerSavedTrial(customerId, si);
+    if (newer) {
+      this.logger.log(
+        `trial ${si.id} superseded by ${newer.id} (picked later)`,
+      );
+      const blocked = await this.stripe.setupIntents.update(si.id, {
+        metadata: { ...md, blocked: "superseded" },
       });
+      await this.startTrialFromSetup(newer);
+      return blocked;
+    }
+    const live = await this.liveSubscriptions(customerId);
+    if (live.length > 0) {
+      // Only a $0 trial started from a card saved for an EARLIER pick is
+      // replaced; a paid plan is never touched (that's a plan change).
+      const replaceable = await this.trialsFromEarlierPicks(live, si);
+      if (!replaceable) {
+        this.logger.warn(
+          `trial ${si.id} not started: customer ${customerId} already has a subscription`,
+        );
+        return this.stripe.setupIntents.update(si.id, {
+          metadata: { ...md, blocked: "already_subscribed" },
+        });
+      }
+      for (const old of live) {
+        this.logger.log(`trial ${old.id} replaced by the later pick ${si.id}`);
+        await this.stripe.subscriptions.cancel(old.id, {
+          prorate: false,
+          invoice_now: false,
+        });
+      }
     }
     const price = await this.priceId(md.lookupKey);
     const sub = await this.stripe.subscriptions.create(
       {
         customer: idOf(si.customer)!,
         items: [{ price }],
-        default_payment_method: idOf(si.payment_method as string | Stripe.PaymentMethod | null)!,
-        ...trialTerms(Number(md.trialDays), md.trialEnd ? Number(md.trialEnd) : null, Math.floor(Date.now() / 1000)),
+        default_payment_method: idOf(
+          si.payment_method as string | Stripe.PaymentMethod | null,
+        )!,
+        ...trialTerms(
+          Number(md.trialDays),
+          md.trialEnd ? Number(md.trialEnd) : null,
+          Math.floor(Date.now() / 1000),
+        ),
         trial_settings: { end_behavior: { missing_payment_method: "cancel" } },
         automatic_tax: { enabled: true },
         ...(md.coupon ? { discounts: [{ coupon: md.coupon }] } : {}),
-        metadata: { uid: md.uid, planId: md.planId, interval: md.interval, setupIntentId: si.id },
+        metadata: {
+          uid: md.uid,
+          planId: md.planId,
+          interval: md.interval,
+          setupIntentId: si.id,
+        },
       },
       { idempotencyKey: `trial-${si.id}` },
     );
     return this.stripe.setupIntents.update(si.id, {
       metadata: { ...md, subscriptionId: sub.id },
     });
+  }
+
+  /** A card saved for a trial picked after `si` (newest first), not yet started or blocked. */
+  private async newerSavedTrial(
+    customerId: string,
+    si: Stripe.SetupIntent,
+  ): Promise<Stripe.SetupIntent | null> {
+    let best: Stripe.SetupIntent | null = null;
+    for await (const other of this.stripe.setupIntents.list({
+      customer: customerId,
+      limit: 100,
+    })) {
+      const md = other.metadata ?? {};
+      if (
+        other.id !== si.id &&
+        other.status === "succeeded" &&
+        md.planId &&
+        !md.blocked &&
+        !md.subscriptionId &&
+        typeof other.created === "number" &&
+        other.created > (si.created ?? 0) &&
+        (!best || other.created > best.created)
+      )
+        best = other;
+    }
+    return best;
+  }
+
+  /** True when every live subscription is a $0 trial started from a card saved for a pick made before `si`. */
+  private async trialsFromEarlierPicks(
+    live: Stripe.Subscription[],
+    si: Stripe.SetupIntent,
+  ): Promise<boolean> {
+    for (const s of live) {
+      const from = s.metadata?.setupIntentId;
+      if (s.status !== "trialing" || !from || from === si.id) return false;
+      try {
+        const origin = await this.stripe.setupIntents.retrieve(from);
+        if (!(
+          typeof origin.created === "number" &&
+          origin.created < (si.created ?? 0)
+        ))
+          return false;
+      } catch {
+        return false;
+      }
+    }
+    return true;
   }
 
   async getCheckout(sessionId: string): Promise<CheckoutSession | null> {
@@ -822,7 +997,11 @@ export class StripeBillingProvider implements BillingProvider {
           };
           const lp = raw.pricing?.price_details?.price ?? raw.price ?? null;
           const linePrice = typeof lp === "string" ? lp : (lp?.id ?? null);
-          if (linePrice !== priceId || l.period?.end !== periodEnd || l.amount <= 0)
+          if (
+            linePrice !== priceId ||
+            l.period?.end !== periodEnd ||
+            l.amount <= 0
+          )
             continue;
           paid += l.amount - sumAmounts(raw.discount_amounts);
           found = true;
@@ -1111,17 +1290,24 @@ export class StripeBillingProvider implements BillingProvider {
     if (!md.mc_change || !md.mc_plan || inv.status !== "paid") return false;
     const subId = idOf(
       (inv.parent?.subscription_details?.subscription ?? null) as
-        | string
-        | Stripe.Subscription
-        | null,
+        string | Stripe.Subscription | null,
     );
     if (!subId) return false;
     const sub = await this.stripe.subscriptions.retrieve(subId);
     if (sub.pending_update) return false;
     const resume = md.mc_change === "upgrade" && sub.cancel_at_period_end;
-    if (sub.metadata?.planId === md.mc_plan && sub.metadata?.interval === md.mc_interval && !resume) return false;
+    if (
+      sub.metadata?.planId === md.mc_plan &&
+      sub.metadata?.interval === md.mc_interval &&
+      !resume
+    )
+      return false;
     await this.stripe.subscriptions.update(sub.id, {
-      metadata: { ...sub.metadata, planId: md.mc_plan, interval: md.mc_interval },
+      metadata: {
+        ...sub.metadata,
+        planId: md.mc_plan,
+        interval: md.mc_interval,
+      },
       ...(resume ? { cancel_at_period_end: false } : {}),
     });
     return true;
@@ -1157,7 +1343,9 @@ export class StripeBillingProvider implements BillingProvider {
   }
 
   /** Rewrites an active schedule's current and future phases with the subscription's discounts. */
-  private async carryDiscountsIntoSchedule(subscriptionId: string): Promise<void> {
+  private async carryDiscountsIntoSchedule(
+    subscriptionId: string,
+  ): Promise<void> {
     const sub = await this.retrieveSub(subscriptionId);
     const sched =
       typeof sub.schedule === "string"
@@ -1176,7 +1364,9 @@ export class StripeBillingProvider implements BillingProvider {
         ...(ph.end_date ? { end_date: ph.end_date } : {}),
         ...(ph.trial_end ? { trial_end: ph.trial_end } : {}),
         metadata: { ...(ph.metadata ?? {}) },
-        ...(ph.proration_behavior ? { proration_behavior: ph.proration_behavior } : {}),
+        ...(ph.proration_behavior
+          ? { proration_behavior: ph.proration_behavior }
+          : {}),
         ...(discounts.length ? { discounts } : {}),
       }));
     await this.stripe.subscriptionSchedules.update(sched.id, {
