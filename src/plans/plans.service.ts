@@ -11,6 +11,22 @@ import {
 } from "./plans.registry";
 import { applyCatalog, isCatalogApplied } from "./catalog-apply";
 
+/**
+ * A stored plan with entitlement keys added after its catalog was applied
+ * filled in from the registry (what apply-catalog back-fills), so the pricing
+ * table and the admin editor match what entitlement resolution grants.
+ */
+function withNewKeys(plan: PlanDefinition): PlanDefinition {
+  const seed = planById(plan.id)?.featureFlags;
+  if (!seed) return plan;
+  const stored = (plan.featureFlags ?? {}) as Record<string, unknown>;
+  const missing = ENTITLEMENT_KEYS.filter((k) => typeof stored[k] !== "boolean");
+  if (missing.length === 0) return plan;
+  const featureFlags = { ...plan.featureFlags };
+  for (const k of missing) featureFlags[k] = seed[k] === true;
+  return { ...plan, featureFlags };
+}
+
 /** The registry catalog (what scripts/apply-catalog.ts writes). */
 function registryPlans(): PlanDefinition[] {
   return PLAN_DEFINITIONS;
@@ -66,7 +82,7 @@ export class PlansService {
         return plans;
       }
       const plans = snap.docs
-        .map((d) => ({ ...(d.data() as PlanDefinition), id: d.id }))
+        .map((d) => withNewKeys({ ...(d.data() as PlanDefinition), id: d.id }))
         .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
       this.cache = { plans, at: now };
       return plans;
