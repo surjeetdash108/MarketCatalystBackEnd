@@ -44,3 +44,9 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - UI hosting version: `5077cc98f37c1893`
 - Website build: `build-2026-11-17-001`
 - Code only (no env, rules or catalog-doc changes). Jobs not redeployed: the change is entitlements only.
+
+## 2026-11-18 — Market Catalyst Pulse + toggle order deploy (rollback values captured before)
+- backend worker: `market-catalyst-backend-00318-c4c`
+- live API: `market-catalyst-live-00267-nzz`
+- UI hosting version: `a772b5f6eb40c972`
+- New Firestore collection `pulse_posts` (admin posts); safe to leave in place on rollback.

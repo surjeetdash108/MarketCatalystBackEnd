@@ -1153,6 +1153,23 @@ export const API_CATALOG = {
   "DELETE /api/admin/posts/:id": {
     summary: "Deletes a blog post.",
   },
+  "GET /api/pulse": {
+    summary:
+      "Market Catalyst Pulse posts for the dashboard card, newest first.",
+  },
+  "GET /api/admin/pulse": {
+    summary: "Market Catalyst Pulse posts for the console's Pulse section.",
+  },
+  "POST /api/admin/pulse": {
+    summary: "Publishes a Market Catalyst Pulse post to every dashboard.",
+    params: "body: text, ticker?, name?, handle?",
+  },
+  "PATCH /api/admin/pulse/:id": {
+    summary: "Edits a Market Catalyst Pulse post (keeps its publish time).",
+  },
+  "DELETE /api/admin/pulse/:id": {
+    summary: "Deletes a Market Catalyst Pulse post.",
+  },
   "GET /api/admin/media": {
     summary: "The blog image library.",
   },
@@ -1338,6 +1355,7 @@ export const SCREENS = [
     summary:
       "Indices, What Matters Now, movers, news, Fear & Greed, recaps, the user's watchlist and portfolio.",
     apis: [
+      "GET /api/pulse",
       "GET /live/tape/stream",
       "GET /live/tape",
       "GET /live/snapshot",
@@ -1845,6 +1863,10 @@ export const SCREENS = [
       "POST /api/admin/posts",
       "PATCH /api/admin/posts/:id",
       "DELETE /api/admin/posts/:id",
+      "GET /api/admin/pulse",
+      "POST /api/admin/pulse",
+      "PATCH /api/admin/pulse/:id",
+      "DELETE /api/admin/pulse/:id",
       "GET /api/admin/media",
       "POST /api/admin/media",
       "DELETE /api/admin/media/:id",
