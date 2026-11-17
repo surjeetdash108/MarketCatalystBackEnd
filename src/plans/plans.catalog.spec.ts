@@ -52,9 +52,9 @@ describe("plan catalog", () => {
     expect(PLAN_GROUPS).toEqual({
       starter: ["marketDesk", "stockIntelligence"],
       pro: ["marketDesk", "stockIntelligence", "moneyFlow"],
-      elite: ["marketDesk", "stockIntelligence", "moneyFlow", "strategyLab"],
+      elite: ["marketDesk", "stockIntelligence", "moneyFlow", "strategyLab", "alphaSignals"],
     });
-    expect(FEATURE_GROUPS.map((g) => g.name)).toEqual(["Market Catalyst", "Stock Intelligence", "Money Flow", "Strategy Lab"]);
+    expect(FEATURE_GROUPS.map((g) => g.name)).toEqual(["Market Catalyst", "Stock Intelligence", "Money Flow", "Strategy Lab", "Alpha Signals"]);
     for (const p of PLAN_DEFINITIONS)
       for (const e of ENTITLEMENTS)
         expect([p.id, e.key, p.featureFlags[e.key]]).toEqual([
@@ -133,6 +133,7 @@ describe("plan catalog", () => {
     expect(lowestPlanFor("optionsChain")?.id).toBe("pro");
     expect(lowestPlanFor("strategyLab")?.id).toBe("elite");
     expect(lowestPlanFor("backtesting")?.id).toBe("elite");
+    expect(lowestPlanFor("alphaSignals")?.id).toBe("elite");
   });
 
   it("backtesting is built (not hidden) and only on Elite", () => {

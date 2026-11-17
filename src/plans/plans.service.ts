@@ -5,6 +5,7 @@ import {
   DEFAULT_PLAN_ID,
   ENTITLEMENT_KEYS,
   PLAN_DEFINITIONS,
+  planById,
   type EntitlementKey,
   type PlanDefinition,
 } from "./plans.registry";
@@ -139,9 +140,15 @@ export class PlansService {
     const plan =
       (planId ? await this.get(planId) : null) ??
       (await this.get(DEFAULT_PLAN_ID));
-    const flags = plan?.featureFlags ?? {};
+    const flags = (plan?.featureFlags ?? {}) as Record<string, unknown>;
+    // A key added after the stored catalog was applied isn't in the stored doc
+    // yet: use the registry's grant for that plan (what apply-catalog back-fills).
+    const seed = planById(plan?.id)?.featureFlags ?? {};
     return Object.fromEntries(
-      ENTITLEMENT_KEYS.map((k) => [k, flags[k] === true]),
+      ENTITLEMENT_KEYS.map((k) => [
+        k,
+        typeof flags[k] === "boolean" ? flags[k] === true : seed[k] === true,
+      ]),
     );
   }
 }

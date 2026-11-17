@@ -21,6 +21,7 @@ import { Public } from "../common/public.decorator";
 import {
   lowestPlanFor,
   ENTITLEMENTS,
+  TRIAL_WITHHELD,
   PLAN_DEFINITIONS,
 } from "../plans/plans.registry";
 import { SubscriptionsService } from "../plans/subscriptions.service";
@@ -410,6 +411,9 @@ export class MeEntitlementsController {
         built.map((e) => [e.key, lowestPlanFor(e.key)?.id ?? null]),
       ),
       hidden: ENTITLEMENTS.filter((e) => e.unbuilt).map((e) => e.key),
+      /** Plan features a free trial doesn't open yet (they open on the first payment). */
+      trialWithheld:
+        live && effective.status === "TRIALING" ? TRIAL_WITHHELD : [],
       limits: live
         ? (plan?.limits ?? { watchlistTickers: null })
         : { watchlistTickers: null },

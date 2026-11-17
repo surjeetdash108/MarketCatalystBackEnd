@@ -301,6 +301,15 @@ export const ENTITLEMENTS: EntitlementDef[] = [
     description:
       "Backtest any strategy against historical prices before you trade.",
   },
+  {
+    key: "alphaSignals",
+    label: "Alpha Signals",
+    group: "Alpha Signals",
+    featureGroup: "alphaSignals",
+    description:
+      "See intraday and swing setups, bullish and bearish, with entry, stop and target levels.",
+    note: "not during the free trial",
+  },
 
   // ── Not built: hidden everywhere, never sold ─────────────────────────────
   {
@@ -414,7 +423,11 @@ const NEVER_GRANTED: EntitlementKey[] = ENTITLEMENTS.filter(
 // ── Feature groups: the unit plans are sold in ─────────────────────────────
 
 export type FeatureGroupId =
-  "marketDesk" | "stockIntelligence" | "moneyFlow" | "strategyLab";
+  | "marketDesk"
+  | "stockIntelligence"
+  | "moneyFlow"
+  | "strategyLab"
+  | "alphaSignals";
 
 export interface FeatureGroup {
   id: FeatureGroupId;
@@ -450,14 +463,33 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
     summary:
       "Build or pick a strategy, backtest it, and get entry, stop and target levels.",
   },
+  {
+    id: "alphaSignals",
+    name: "Alpha Signals",
+    summary:
+      "Intraday and swing setups, bullish and bearish, each with an entry, stop and target. Opens once the free trial ends.",
+  },
 ];
 
 /** Plan id → the feature groups it grants (cumulative ladder). */
 export const PLAN_GROUPS: Record<string, FeatureGroupId[]> = {
   starter: ["marketDesk", "stockIntelligence"],
   pro: ["marketDesk", "stockIntelligence", "moneyFlow"],
-  elite: ["marketDesk", "stockIntelligence", "moneyFlow", "strategyLab"],
+  elite: [
+    "marketDesk",
+    "stockIntelligence",
+    "moneyFlow",
+    "strategyLab",
+    "alphaSignals",
+  ],
 };
+
+/**
+ * Entitlements a plan grants but a free trial (TRIALING) does not: they open
+ * once the first payment goes through. The intro never grants them either
+ * (they are not in INTRO_GROUPS). An admin per-user override still wins.
+ */
+export const TRIAL_WITHHELD: EntitlementKey[] = ["alphaSignals"];
 
 export function groupOf(key: EntitlementKey): FeatureGroupId | undefined {
   return ENTITLEMENTS.find((e) => e.key === key)?.featureGroup;
@@ -834,6 +866,7 @@ export const SCREEN_FEATURES: Record<string, EntitlementKey> = {
   "money-flow": "moneyFlow",
   options: "optionsChain",
   sl: "strategyLab",
+  "alpha-signals": "alphaSignals",
 };
 
 /** Screens an account without a plan can open (everything else: "Choose a plan"). */
@@ -888,7 +921,12 @@ export const PLAN_CARD_BULLETS: Record<string, string[]> = {
     "Money Flow by sector",
     "See where money is rotating today: the top 15 movers each way and the price levels to watch",
   ],
-  elite: ["Everything in Pro", "Strategy Lab", "Backtest any strategy"],
+  elite: [
+    "Everything in Pro",
+    "Strategy Lab",
+    "Backtest any strategy",
+    "Alpha Signals: intraday and swing setups (opens after the free trial)",
+  ],
 };
 
 /** What all three plans share — the "Every plan includes" list. */

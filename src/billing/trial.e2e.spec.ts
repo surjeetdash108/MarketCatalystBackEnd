@@ -49,6 +49,20 @@ describe("7-day free trial on every plan (once per email, card required)", () =>
     expect((await u.get("/api/me/entitlements")).body).toMatchObject({ planId: "pro", status: "ACTIVE" });
   });
 
+  it("Elite trial: Strategy Lab opens now, Alpha Signals stays closed until the first payment", async () => {
+    a = await trialApp();
+    const { u } = await a.subscribe("t2e", "elite", "monthly");
+    let me = (await u.get("/api/me/entitlements")).body;
+    expect(me).toMatchObject({ planId: "elite", status: "TRIALING", trialWithheld: ["alphaSignals"] });
+    expect(me.entitlements.strategyLab).toBe(true);
+    expect(me.entitlements.alphaSignals).toBe(false);
+    expect(me.requiredPlan.alphaSignals).toBe("elite");
+    await a.advanceDays(8);
+    me = (await u.get("/api/me/entitlements")).body;
+    expect(me).toMatchObject({ planId: "elite", status: "ACTIVE", trialWithheld: [] });
+    expect(me.entitlements.alphaSignals).toBe(true);
+  });
+
   it("once per email ever: a second account with the same inbox (gmail variant) gets no trial and pays today", async () => {
     a = await trialApp();
     await a.subscribe("first", "starter", "monthly", "success", undefined, "trial.person@gmail.com");

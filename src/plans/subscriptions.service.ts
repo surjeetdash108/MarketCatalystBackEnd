@@ -13,6 +13,7 @@ import {
   type SubscriptionStatus,
   INTRO_DAYS,
   INTRO_GROUPS,
+  TRIAL_WITHHELD,
   INTRO_PLAN_ID,
   keysForGroups,
 } from "./plans.registry";
@@ -279,7 +280,12 @@ export class SubscriptionsService {
     const entitlements = Object.fromEntries(
       ENTITLEMENT_KEYS.map((k) => [
         k,
-        typeof overrides[k] === "boolean" ? overrides[k] : planEntitlements[k],
+        typeof overrides[k] === "boolean"
+          ? overrides[k]
+          : // A free trial doesn't open TRIAL_WITHHELD features (Alpha Signals).
+            effectiveStatus === "TRIALING" && TRIAL_WITHHELD.includes(k)
+            ? false
+            : planEntitlements[k],
       ]),
     ) as Record<EntitlementKey, boolean>;
 
