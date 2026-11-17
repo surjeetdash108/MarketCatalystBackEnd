@@ -37,3 +37,10 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - live API: `market-catalyst-live-00254-2l5`
 - jobs image: `us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:87e1ce0dea1dde4ca8994994a6fbc5df449c3d3c35d7892a80390bfc42032ae9`
 - UI hosting version: `01a34dac7cb0219f`
+
+## 2026-11-18 — Alpha Signals module deploy (rollback values captured before)
+- backend worker: `market-catalyst-backend-00316-49x`
+- live API: `market-catalyst-live-00265-mng`
+- UI hosting version: `5077cc98f37c1893`
+- Website build: `build-2026-11-17-001`
+- Code only (no env, rules or catalog-doc changes). Jobs not redeployed: the change is entitlements only.
