@@ -38,6 +38,7 @@ import { StockDetailsService } from "./stock-details.service";
 import { NewsWireService } from "./news-wire.service";
 import { EarningsWireService } from "./earnings-wire.service";
 import { NewsWireController } from "./news-wire.controller";
+import { AdminTickerSearchController } from "./admin-ticker-search.controller";
 import { StrategyLabService } from "./strategy-lab.service";
 import { StrategyLabController } from "./strategy-lab.controller";
 import { LabStoreService } from "./strategy-lab/lab-store.service";
@@ -76,6 +77,7 @@ import { MoneyFlowService } from "./money-flow/money-flow.service";
     NewsWireController,
     StrategyLabController,
     MoneyFlowController,
+    AdminTickerSearchController,
   ],
   providers: [
     WhatMattersNowService,

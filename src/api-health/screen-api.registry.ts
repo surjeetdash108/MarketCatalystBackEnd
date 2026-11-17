@@ -1170,6 +1170,10 @@ export const API_CATALOG = {
   "DELETE /api/admin/pulse/:id": {
     summary: "Deletes a Market Catalyst Pulse post.",
   },
+  "GET /api/admin/ticker-search": {
+    summary: "Ticker search with live quotes for the console's Pulse ticker picker.",
+    params: "query: q (empty = largest companies)",
+  },
   "GET /api/admin/media": {
     summary: "The blog image library.",
   },
@@ -1867,6 +1871,7 @@ export const SCREENS = [
       "POST /api/admin/pulse",
       "PATCH /api/admin/pulse/:id",
       "DELETE /api/admin/pulse/:id",
+      "GET /api/admin/ticker-search",
       "GET /api/admin/media",
       "POST /api/admin/media",
       "DELETE /api/admin/media/:id",

@@ -50,3 +50,8 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - live API: `market-catalyst-live-00267-nzz`
 - UI hosting version: `a772b5f6eb40c972`
 - New Firestore collection `pulse_posts` (admin posts); safe to leave in place on rollback.
+
+## 2026-11-18 — admin ticker search for the Pulse picker (rollback values captured before)
+- backend worker: `market-catalyst-backend-00319-mth`
+- live API: `market-catalyst-live-00268-769`
+- UI hosting version: `27f2926caf866521`
