@@ -199,6 +199,38 @@ const BACKFILL_DAYS = 365 * 5;
 const MIN_HEALTHY_BARS = 65;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** corporate-actions' per-ticker "newest split already reflected" marker. */
+const CORPORATE_ACTIONS_JOB = "corporate-actions";
+/** How far back the daily split check looks (covers weekends and a missed run). */
+const SPLIT_LOOKBACK_DAYS = 7;
+
+/**
+ * Splits that need this ticker's stored daily history rewritten: a tracked
+ * ticker whose newest split in the window is newer than the split last
+ * reflected for it. One entry per ticker. A ticker seen for the first time
+ * counts as unreflected — the window is only days long, so this never turns
+ * into a mass reload of long-settled splits.
+ */
+export function splitsToReadjust<S extends { ticker: string; executionDate: string }>(
+  splits: S[],
+  universe: Set<string>,
+  reflected: Map<string, string | null>,
+): Array<{ ticker: string; executionDate: string }> {
+  const newest = new Map<string, string>();
+  for (const s of splits) {
+    if (!s.ticker || !s.executionDate || !universe.has(s.ticker)) continue;
+    const prev = newest.get(s.ticker);
+    if (!prev || s.executionDate > prev) newest.set(s.ticker, s.executionDate);
+  }
+  return [...newest]
+    .filter(([t, d]) => {
+      const done = reflected.get(t);
+      return !done || d > done;
+    })
+    .map(([ticker, executionDate]) => ({ ticker, executionDate }))
+    .sort((a, b) => a.ticker.localeCompare(b.ticker));
+}
+
 @Injectable()
 export class StockHistoryJob implements OnModuleInit {
   private readonly logger = new Logger(StockHistoryJob.name);
@@ -243,6 +275,7 @@ export class StockHistoryJob implements OnModuleInit {
       const floor = planHistoryFloor();
 
       const ranges = await this.readRanges(tickers);
+      const resplit = await this.readjustRecentSplits(tickers, today, ranges);
       const stranded = await this.findStranded(tickers, ranges, floor);
       const dates = weekdaysBefore(today, GROUPED_LOOKBACK_SESSIONS);
 
@@ -295,6 +328,23 @@ export class StockHistoryJob implements OnModuleInit {
 
       // Rotate the per-ticker queue with the cursor so a ticker whose fetch
       // keeps failing cannot hold the front of the queue every run.
+      // Freshly split tickers go first, outside the rotation, so their history
+      // is rewritten in this run rather than whenever the cursor reaches them.
+      const first = new Set(resplit.filter((t) => perTicker.includes(t)));
+      for (const ticker of first) {
+        try {
+          await this.syncTicker(ticker, ranges.get(ticker)!, false, today, floor);
+        } catch (err) {
+          this.logger.error(`Failed re-fetching split history for ${ticker}: ${(err as Error).message}`);
+        }
+        await sleep(this.bars.requestDelayMs);
+      }
+      if (first.size) {
+        const rest = perTicker.filter((t) => !first.has(t));
+        perTicker.length = 0;
+        perTicker.push(...rest);
+      }
+
       const cursor = await this.meta.getCursor(JOB_NAME);
       const take = Math.min(PER_TICKER_CAP, perTicker.length);
       let barsWritten = g.barsWritten;
@@ -353,6 +403,47 @@ export class StockHistoryJob implements OnModuleInit {
   }
 
   /** Both watermark edges for every ticker, in batched reads. */
+  /**
+   * Daily split check, market-wide in one call: a tracked ticker with a split
+   * executed in the last SPLIT_LOOKBACK_DAYS that isn't reflected yet gets its
+   * synced range cleared, so this run deep-fills its whole window adjusted
+   * (merge:false overwrites every bar on one basis) and the 52-week range and
+   * 5-day move stop mixing pre- and post-split prices. The split is then
+   * marked reflected (corporate-actions' marker, so that job won't reset it
+   * again). Honours SPLIT_READJUST_ENABLED like corporate-actions. A failed
+   * splits call changes nothing.
+   */
+  private async readjustRecentSplits(
+    tickers: string[],
+    today: string,
+    ranges: Map<string, SyncedRange>,
+  ): Promise<string[]> {
+    if (process.env.SPLIT_READJUST_ENABLED !== "true") return [];
+    let splits: Array<{ ticker: string; executionDate: string }>;
+    try {
+      const after = isoDate(addDays(new Date(`${today}T00:00:00Z`), -SPLIT_LOOKBACK_DAYS));
+      splits = await this.polygon.getSplitsInRange(after, today);
+    } catch (err) {
+      this.logger.warn(`split check failed: ${(err as Error).message}`);
+      return [];
+    }
+    const universe = new Set(tickers);
+    const candidates = [...new Set(splits.map((s) => s.ticker).filter((t) => universe.has(t)))];
+    const reflected = new Map<string, string | null>();
+    for (const t of candidates) {
+      reflected.set(t, (await this.meta.getSyncedRange(CORPORATE_ACTIONS_JOB, t)).lastSyncedThrough);
+    }
+    const out: string[] = [];
+    for (const { ticker, executionDate } of splitsToReadjust(splits, universe, reflected)) {
+      await this.meta.clearSyncedRange(JOB_NAME, ticker);
+      await this.meta.setWatermark(CORPORATE_ACTIONS_JOB, ticker, executionDate);
+      ranges.set(ticker, { lastSyncedThrough: null, earliestSyncedFrom: null });
+      out.push(ticker);
+      this.logger.log(`Split for ${ticker} (executed ${executionDate}): re-fetching its adjusted history.`);
+    }
+    return out;
+  }
+
   private async readRanges(
     tickers: string[],
   ): Promise<Map<string, SyncedRange>> {
