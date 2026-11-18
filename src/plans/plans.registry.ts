@@ -801,6 +801,7 @@ export const PLAN_EXEMPT_ROUTES: Array<{ prefix: string; reason: string }> = [
   { prefix: "/api/settings", reason: "account settings" },
   { prefix: "/api/billing", reason: "Manage Plan, checkout, billing history" },
   { prefix: "/api/me", reason: "entitlements (drives Choose a plan)" },
+  { prefix: "/api/feedback", reason: "anyone signed in can send feedback, plan or not" },
   { prefix: "/plans", reason: "the public plan catalog" },
   { prefix: "/health", reason: "health check" },
   { prefix: "/public", reason: "website landing data" },

@@ -1162,6 +1162,12 @@ export const API_CATALOG = {
     summary:
       "Market Catalyst Pulse posts for the dashboard card, newest first; ?q= searches text, ticker, name and handle.",
   },
+  "POST /api/feedback": {
+    summary: "Saves a signed-in user's feedback from the in-app feedback box (uid and email from the token).",
+  },
+  "GET /api/admin/feedback": {
+    summary: "All user feedback, newest first, for the console's Feedback section.",
+  },
   "GET /api/admin/pulse": {
     summary: "Market Catalyst Pulse posts for the console's Pulse section.",
   },
