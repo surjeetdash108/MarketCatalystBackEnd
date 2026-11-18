@@ -2,6 +2,7 @@
 import { Logger } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import * as Sentry from "@sentry/node";
+import compression from "compression";
 import { json, urlencoded } from "express";
 import { createGlobalValidationPipe } from "./common/validation";
 import { AppModule } from "./app.module";
@@ -77,6 +78,18 @@ async function bootstrap() {
   // with a larger cap — blog content converted from multi-page Word/PDF uploads
   // exceeds 100kb and was 413'ing on POST/PATCH /admin/blogs.
   const app = await NestFactory.create(AppModule, { bodyParser: false });
+  // gzip JSON responses (the per-ticker news list alone was ~4.5 MB raw). SSE
+  // streams (/live/stream, /live/tape/stream) must stay unbuffered, so they are
+  // skipped; everything else follows the library's default compressible-type rule.
+  app.use(
+    compression({
+      filter: (req, res) => {
+        const type = String(res.getHeader("Content-Type") ?? "");
+        if (type.includes("text/event-stream")) return false;
+        return compression.filter(req, res);
+      },
+    }),
+  );
   // rawBody: provider webhooks verify their signature over the exact bytes sent.
   app.use(
     json({
