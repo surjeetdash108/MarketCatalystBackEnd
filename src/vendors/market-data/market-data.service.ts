@@ -601,32 +601,47 @@ export class MarketDataService extends PolygonService {
     );
   }
 
+  /**
+   * IPO calendar: Polygon first. FMP's ipos-calendar answers a wide window with
+   * only its last few days (7 months → this week's 10 rows, measured
+   * 2026-11-18) and carries no price on priced deals, so FMP-first stored 9
+   * docs a day and froze every older IPO; Polygon returns the whole window
+   * with final_issue_price. FMP is the fallback, asked a month at a time.
+   */
   async getIpoCalendar(from: string, to: string) {
-    return this.fmpFirst(
-      `ipo calendar ${from}..${to}`,
-      async () => {
-        const today = etParts(Date.now()).date;
-        const rows = (await this.fmpApi.request(`ipos-calendar?from=${from}&to=${to}`)) as Row[];
-        return rows
-          .filter((r) => r.symbol && isUsSymbol(String(r.symbol)))
-          .map((r) => {
-            const { price, single } = normalizePriceRange(r.priceRange);
-            const status = ipoStatusFor(r.actions, String(r.date ?? ""), today);
-            return {
-              date: String(r.date ?? ""),
-              symbol: fromFmpSymbol(String(r.symbol)),
-              name: String(r.company ?? ""),
-              exchange: String(r.exchange ?? ""),
-              price,
-              finalPrice: status === "priced" || status === "history" ? single : null,
-              numberOfShares: num(r.shares),
-              totalSharesValue: num(r.dealSize),
-              status,
-            };
-          });
-      },
-      () => super.getIpoCalendar(from, to),
-    );
+    try {
+      const rows = await super.getIpoCalendar(from, to);
+      if (rows.length > 0 || !this.fmpApi.enabled) return rows;
+      this.routeLogger.debug(`ipo calendar ${from}..${to}: Polygon empty — FMP fallback`);
+    } catch (err) {
+      if (!this.fmpApi.enabled) throw err;
+      this.routeLogger.warn(`ipo calendar ${from}..${to}: Polygon failed (${(err as Error)?.message ?? err}) — FMP fallback`);
+    }
+    const out: Awaited<ReturnType<PolygonService["getIpoCalendar"]>> = [];
+    for (const [f, t] of monthWindows(from, to)) out.push(...(await this.fmpIpoMonth(f, t)));
+    return out;
+  }
+
+  private async fmpIpoMonth(from: string, to: string) {
+    const today = etParts(Date.now()).date;
+    const rows = (await this.fmpApi.request(`ipos-calendar?from=${from}&to=${to}`)) as Row[];
+    return rows
+      .filter((r) => r.symbol && isUsSymbol(String(r.symbol)))
+      .map((r) => {
+        const { price, single } = normalizePriceRange(r.priceRange);
+        const status = ipoStatusFor(r.actions, String(r.date ?? ""), today);
+        return {
+          date: String(r.date ?? ""),
+          symbol: fromFmpSymbol(String(r.symbol)),
+          name: String(r.company ?? ""),
+          exchange: String(r.exchange ?? ""),
+          price,
+          finalPrice: status === "priced" || status === "history" ? single : null,
+          numberOfShares: num(r.shares),
+          totalSharesValue: num(r.dealSize),
+          status,
+        };
+      });
   }
 
   // ── Market clock ──────────────────────────────────────────────────────────
@@ -792,4 +807,17 @@ export class MarketDataService extends PolygonService {
         };
       });
   }
+}
+
+/** [from, to] split at calendar-month edges (YYYY-MM-DD, inclusive). */
+export function monthWindows(from: string, to: string): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  let f = from;
+  while (f <= to) {
+    const [y, m] = f.split("-").map(Number);
+    const last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    out.push([f, last < to ? last : to]);
+    f = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
+  }
+  return out;
 }
