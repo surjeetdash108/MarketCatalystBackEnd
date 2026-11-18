@@ -120,6 +120,7 @@ export class TickerUniverseJob implements OnModuleInit {
           .get(),
       ]);
       await chunkedBatchSet(this.firebase.firestore, "tickers", docs);
+      await this.stampCompanyTypes(tickers);
       const fetchedIds = new Set(tickers.map((t) => t.ticker));
       await this.restoreRelisted(
         prevDelisted.docs.map((d) => d.id).filter((id) => fetchedIds.has(id)),
@@ -289,6 +290,34 @@ export class TickerUniverseJob implements OnModuleInit {
     }
     this.delisted.invalidate();
     this.logger.log(`ticker-universe: ${relisted.length} relisted: ${relisted.join(", ")}`);
+  }
+
+  /**
+   * Copies each symbol's security type (CS, ADRC, ETF, ETV, ETS, PFD, UNIT…)
+   * onto its existing `companies` doc, so the screens can keep "stock" lists to
+   * stocks (isCommonEquity reads `type`): UUP (ETV), MSTY (ETS), CBRZ (ETF) and
+   * WVVIP (PFD) sat on Alpha Signals' stock screens. Only docs that exist, and
+   * only when the type changed — no stubs, no daily rewrite of every doc.
+   */
+  private async stampCompanyTypes(tickers: Array<{ ticker: string; type?: string | null }>): Promise<number> {
+    const db = this.firebase.firestore;
+    const typed = tickers.filter((t) => typeof t.type === "string" && t.type);
+    let stamped = 0;
+    for (let i = 0; i < typed.length; i += 300) {
+      const chunk = typed.slice(i, i + 300);
+      const snaps = await db.getAll(...chunk.map((t) => db.collection("companies").doc(t.ticker)));
+      const batch = db.batch();
+      let n = 0;
+      snaps.forEach((snap, j) => {
+        if (!snap.exists || snap.get("type") === chunk[j].type) return;
+        batch.set(snap.ref, { type: chunk[j].type }, { merge: true });
+        n++;
+      });
+      if (n) await batch.commit();
+      stamped += n;
+    }
+    if (stamped) this.logger.log(`ticker-universe: stamped security type on ${stamped} company doc(s)`);
+    return stamped;
   }
 
   /** Which of `tickers` have a `companies` doc. */
