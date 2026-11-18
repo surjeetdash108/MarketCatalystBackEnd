@@ -1,10 +1,10 @@
 import { billingApp, checkoutBody } from "../../test/support/billing-app";
-import { etCalendarDaysEnd } from "../common/et-calendar";
+import { freeWindowEnd } from "../common/et-calendar";
 import { DAY, T0 } from "../../test/support/billing-harness";
 import { CONSENT_VERSION, consentText } from "./checkout/consent";
 
 /** The trial ends at 11:59:59 PM US Eastern on the 7th calendar day after sign-up. */
-const END7 = etCalendarDaysEnd(T0, 7);
+const END7 = freeWindowEnd(T0, 7);
 jest.setTimeout(30_000);
 type App = Awaited<ReturnType<typeof billingApp>>;
 let a: App;

@@ -1,6 +1,6 @@
 import { Injectable, Optional } from "@nestjs/common";
 import { AppClock } from "../common/app-clock";
-import { etCalendarDaysEnd, etDayDiff } from "../common/et-calendar";
+import { freeDaysLeft, freeWindowEnd } from "../common/et-calendar";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { PlansService } from "./plans.service";
 import { emailHash } from "../billing/retention/email-normalise";
@@ -241,9 +241,9 @@ export class SubscriptionsService {
         (!Number.isFinite(createdMs) || first < createdMs)
       )
         createdMs = first;
-      // 11:59:59 PM US Eastern on the 7th calendar day after sign-up.
+      // 7 Eastern calendar days counting the sign-up day (Nov 13 → Nov 19, 11:59:59 PM ET).
       const introEnd = Number.isFinite(createdMs)
-        ? etCalendarDaysEnd(createdMs, INTRO_DAYS)
+        ? freeWindowEnd(createdMs, INTRO_DAYS)
         : NaN;
       // User must verify email (or Google sign-in) to receive 7-day free trial intro access
       const isVerified = u.emailVerified !== false;
@@ -260,7 +260,7 @@ export class SubscriptionsService {
           expiryDate: new Date(introEnd).toISOString(),
           cancelAtPeriodEnd: false,
           expiredSinceLastWrite: false,
-          daysRemaining: Math.max(1, etDayDiff(introEnd, now)),
+          daysRemaining: Math.max(1, freeDaysLeft(introEnd, now)),
           inGrace: false,
           graceEndsAt: null,
           entitled: false,

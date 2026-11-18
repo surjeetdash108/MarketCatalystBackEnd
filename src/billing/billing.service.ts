@@ -9,7 +9,7 @@ import { emailHash } from "./retention/email-normalise";
 import { buildTimeline } from "./history-format";
 import { EmailVerificationService } from "../account/email-verification.service";
 import { CreditsService } from "./credits/credits.service";
-import { etCalendarDaysEnd, etDayDiff } from "../common/et-calendar";
+import { freeDaysLeft, freeWindowEnd } from "../common/et-calendar";
 import {
   BadRequestException,
   ConflictException,
@@ -32,7 +32,6 @@ import {
   planRank,
   type BillingInterval,
   TRIAL_DAYS,
-  TRIAL_WINDOW_FLOOR,
 } from "../plans/plans.registry";
 import { SubscriptionsService } from "../plans/subscriptions.service";
 import { BillingAccessService } from "./billing-access.service";
@@ -351,20 +350,12 @@ export class BillingService {
   }
 
   /**
-   * Existing accounts (made before this rule) get their 7 days from this
-   * moment, not from sign-up. Env TRIAL_WINDOW_FLOOR (ISO) overrides it.
-   */
-  private get trialFloorMs(): number {
-    const raw = String(this.config.get("TRIAL_WINDOW_FLOOR", "") ?? "").trim();
-    const ms = Date.parse(raw || TRIAL_WINDOW_FLOOR);
-    return Number.isFinite(ms) ? ms : 0;
-  }
-
-  /**
-   * The free trial is 7 days in total, counted from when the person's first
-   * account was made (or TRIAL_WINDOW_FLOOR for older accounts), not from
-   * when they subscribe. Signed up on the 13th and subscribing on the 17th ⇒
-   * first charge on the 20th; subscribing on/after the 20th ⇒ charged now.
+   * The free trial is the same 7 days as the new-account intro: 7 Eastern
+   * calendar days counting the day the person's first account was made, not
+   * from when they subscribe. Signed up on the 13th ⇒ the trial ends on the
+   * 19th at 11:59 PM ET: subscribing on the 17th ⇒ first charge on the 20th;
+   * subscribing on/after the 20th ⇒ no trial, charged now. Every account,
+   * old or new, gets only those 7 days.
    * Still once per email and never after a real payment. Null = no trial.
    */
   async trialWindowFor(
@@ -390,13 +381,13 @@ export class BillingService {
     const start = await this.subscriptions
       .accountStartMs(uid)
       .catch(() => null);
-    const anchor = start == null ? now : Math.max(start, this.trialFloorMs);
-    // 11:59:59 PM US Eastern on the 7th calendar day after sign-up (not 7 × 24 h).
-    const endsAt = etCalendarDaysEnd(anchor, days);
+    const anchor = start ?? now;
+    // 11:59:59 PM US Eastern on day 7, the sign-up day being day 1 (not 7 × 24 h).
+    const endsAt = freeWindowEnd(anchor, days);
     // Less than an hour left isn't worth a trial (and the card step needs time).
     if (endsAt - now < MIN_TRIAL_MS) return null;
-    // Calendar days left (the end day counts until 11:59 PM): signing up today → 7.
-    return { endsAt, days: Math.max(1, etDayDiff(endsAt, now)) };
+    // Calendar days left, today included: signing up today → 7, last day → 1.
+    return { endsAt, days: Math.max(1, freeDaysLeft(endsAt, now)) };
   }
 
   /** Whole days of free trial left for this buyer (0 = none). */

@@ -1,5 +1,6 @@
 import { billingApp } from "../../test/support/billing-app";
 import { T0 } from "../../test/support/billing-harness";
+import { freeWindowEnd } from "../common/et-calendar";
 
 jest.setTimeout(30_000);
 type App = Awaited<ReturnType<typeof billingApp>>;
@@ -35,6 +36,8 @@ describe("admin: people who tried to sign up but didn't finish", () => {
     expect(r.checkoutAbandoned[0].firstAttemptAt <= r.checkoutAbandoned[0].lastAttemptAt).toBe(true);
     expect(r.signedUpNoPlan.map((x: { uid: string }) => x.uid)).toEqual(["idle"]);
     expect(r.signedUpNoPlan[0]).toMatchObject({ email: "idle@example.com", signedUpAt: created });
+    // Same 7-day window the user sees: sign-up day counts, ends 11:59 PM ET.
+    expect(r.signedUpNoPlan[0].introEndsAt).toBe(new Date(freeWindowEnd(Date.parse(created), 7)).toISOString());
     expect((await a.user("u9").get("/api/admin/billing/abandoned")).status).toBe(403);
   });
 });

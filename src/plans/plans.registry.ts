@@ -589,11 +589,12 @@ export const NO_PLAN_ID = "none";
  * 0 turns trials off.
  */
 export const TRIAL_DAYS = 7;
-/**
- * The trial is TRIAL_DAYS from account creation. Accounts made before this
- * rule shipped count from here instead (end of 14 Nov 2026, US Eastern).
+/*
+ * The trial is the new-account intro's window: TRIAL_DAYS Eastern calendar
+ * days counting the sign-up day (common/et-calendar freeWindowEnd). There is
+ * no second window for older accounts: once those 7 days pass, a plan bills
+ * from the moment it's bought.
  */
-export const TRIAL_WINDOW_FLOOR = "2026-11-15T05:00:00.000Z";
 
 /**
  * A new account that hasn't chosen a plan gets INTRO_DAYS of these feature

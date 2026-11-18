@@ -1,9 +1,9 @@
 import { billingApp } from "../../test/support/billing-app";
-import { etCalendarDaysEnd } from "../common/et-calendar";
+import { freeWindowEnd } from "../common/et-calendar";
 import { DAY, T0 } from "../../test/support/billing-harness";
 
 /** The intro ends at 11:59:59 PM US Eastern on the 7th calendar day after sign-up. */
-const END7 = etCalendarDaysEnd(T0, 7);
+const END7 = freeWindowEnd(T0, 7);
 jest.setTimeout(30_000);
 type App = Awaited<ReturnType<typeof billingApp>>;
 let a: App;
@@ -14,7 +14,7 @@ afterEach(async () => {
 describe("new-account intro: 7 days of Market Catalyst, no card, then Choose a plan", () => {
   it("a new account without a plan gets Market Catalyst only, for 7 days, then no plan", async () => {
     // The trial shares the intro's window (account creation + 7 days).
-    a = await billingApp({ env: { SUBSCRIPTIONS_ENABLED: "true", TRIAL_DAYS: "7", TRIAL_WINDOW_FLOOR: "2000-01-01T00:00:00Z" } });
+    a = await billingApp({ env: { SUBSCRIPTIONS_ENABLED: "true", TRIAL_DAYS: "7" } });
     const u = a.user("n1");
     a.fs.seed("users", "n1", { email: "n1@example.com", createdAt: new Date(T0).toISOString() });
     let me = (await u.get("/api/me/entitlements")).body;

@@ -1,4 +1,5 @@
 import { StaffAccessService } from "../account/staff-access.service";
+import { freeWindowEnd } from "../common/et-calendar";
 import {
   BadRequestException,
   Inject,
@@ -381,7 +382,7 @@ export class AdminBillingService {
         name: (u.data.name as string) ?? null,
         signedUpAt: created,
         introEndsAt: created
-          ? new Date(Date.parse(created) + INTRO_DAYS * DAY).toISOString()
+          ? new Date(freeWindowEnd(Date.parse(created), INTRO_DAYS)).toISOString()
           : null,
       });
     }
