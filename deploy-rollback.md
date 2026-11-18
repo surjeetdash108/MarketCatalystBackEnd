@@ -65,3 +65,8 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - backend worker: `market-catalyst-backend-00321-tm9`
 - live API: `market-catalyst-live-00271-wmq`
 - UI hosting version (site marketcatalyst): `1abde182ccb0c755`
+
+## 2026-11-19 — feedback store + admin Feedback, upgrade success copy (rollback values captured before)
+- backend worker: `market-catalyst-backend-00323-2mb`
+- live API: `market-catalyst-live-00273-k8w`
+- UI hosting version (site marketcatalyst): `adbc3121570f08cf`
