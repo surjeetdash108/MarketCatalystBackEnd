@@ -55,7 +55,7 @@ import {
   officialBarsFor,
   type IndicatorBar,
 } from "../sync/technical-indicators.job";
-import { computeRsScore, rsPercentile } from "../sync/rs-rating.job";
+import { computeRsScore, rsEligibleType, rsPercentile } from "../sync/rs-rating.job";
 import {
   computeTechComponents,
   techRatingFromComponents,
@@ -1162,7 +1162,7 @@ export class OnDemandService implements OnModuleDestroy {
               });
             }
           }
-          if (rsScore != null && rsScores.length >= MIN_RANK_DISTRIBUTION) {
+          if (rsScore != null && rsScores.length >= MIN_RANK_DISTRIBUTION && (await this.rsTypeOk(ticker))) {
             result.rsRating = rsPercentile(rsScore, rsScores);
             result.rsRatingUpdatedAt = new Date().toISOString();
           }
@@ -1206,6 +1206,23 @@ export class OnDemandService implements OnModuleDestroy {
       );
       return {};
     }
+  }
+
+  private readonly rsTypeCache = new Map<string, boolean>();
+
+  /** RS ranks common stock and ADRs only (same rule as the nightly rs-rating job). */
+  private async rsTypeOk(ticker: string): Promise<boolean> {
+    const hit = this.rsTypeCache.get(ticker);
+    if (hit !== undefined) return hit;
+    const type = await this.firebase.firestore
+      .collection("tickers")
+      .doc(ticker)
+      .get()
+      .then((d) => (d.exists ? (d.data()?.type as string | undefined) : undefined))
+      .catch(() => undefined);
+    const ok = rsEligibleType(type);
+    this.rsTypeCache.set(ticker, ok);
+    return ok;
   }
 
   /**
@@ -2059,7 +2076,7 @@ export class OnDemandService implements OnModuleDestroy {
               .sort((a, b) => a.t - b.t)
               .map((b) => b.c as number)
               .slice(-260);
-            const score = computeRsScore(closes);
+            const score = (await this.rsTypeOk(r.ticker)) ? computeRsScore(closes) : null;
             const others = [...dist].filter(([t]) => t !== r.ticker).map(([, v]) => v);
             hit = { rating: score == null ? null : rsPercentile(score, others), at: now };
             this.memRsRating.set(key, hit);
