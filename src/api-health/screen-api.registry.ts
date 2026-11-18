@@ -1155,7 +1155,7 @@ export const API_CATALOG = {
   },
   "GET /api/pulse": {
     summary:
-      "Market Catalyst Pulse posts for the dashboard card, newest first.",
+      "Market Catalyst Pulse posts for the dashboard card, newest first; ?q= searches text, ticker, name and handle.",
   },
   "GET /api/admin/pulse": {
     summary: "Market Catalyst Pulse posts for the console's Pulse section.",

@@ -70,3 +70,28 @@ describe("Market Catalyst Pulse", () => {
     expect(ROUTE_FEATURES["GET /api/pulse"]).toEqual(["marketCatalyst"]);
   });
 });
+
+describe("Market Catalyst Pulse search", () => {
+  const at = (m: number) => new Date(Date.parse("2026-11-18T14:00:00Z") + m * 60_000);
+  async function seeded() {
+    const s = svc();
+    await s.create({ text: "NVDA, AMD lead the chip bid", ticker: "NVDA" }, at(1));
+    await s.create({ text: "Fed minutes at 2 PM", name: "Macro Desk", handle: "macro" }, at(2));
+    await s.create({ text: "Oil slides as inventories build" }, at(3));
+    await s.create({ text: "AMD guides above consensus", ticker: "AMD" }, at(4));
+    return s;
+  }
+  it("matches ticker ($ optional), words in the text, name and handle — newest first", async () => {
+    const s = await seeded();
+    expect((await s.search("$nvda")).map((p) => p.ticker)).toEqual(["NVDA"]);
+    expect((await s.search("amd")).map((p) => p.text)).toEqual(["AMD guides above consensus", "NVDA, AMD lead the chip bid"]);
+    expect((await s.search("fed minutes")).map((p) => p.handle)).toEqual(["macro"]);
+    expect((await s.search("macro desk")).length).toBe(1);
+    expect((await s.search("@macro")).length).toBe(1);
+  });
+  it("every word must match; an empty query is the plain list", async () => {
+    const s = await seeded();
+    expect(await s.search("oil fed")).toEqual([]);
+    expect((await s.search("   ")).length).toBe(4);
+  });
+});
