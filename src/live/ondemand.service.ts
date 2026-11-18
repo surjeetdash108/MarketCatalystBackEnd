@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { FieldValue } from "firebase-admin/firestore";
+import { articlesSince, isMissingIndexError } from "./news-since.util";
 import {
   NEWS_ADAPTER,
   NEWS_FMP_ADAPTER,
@@ -352,6 +353,10 @@ const FIN_STATEMENT_RETRY_MS = 6 * 3600_000;
 // gap for a ticker the bulk sweep hasn't reached recently, so a shorter TTL is
 // fine — articles that age out just mean the next request re-checks the vendor.
 const NEWS_TTL_MS = 15 * 60_000;
+/** How long a ticker's full article list is served from instance memory. */
+const NEWS_MEM_MS = 5 * 60_000;
+/** Shared result of an incremental (`since`) poll, so concurrent users don't each query. */
+const NEWS_SINCE_MEMO_MS = 30_000;
 /** 13F tab holder list: FMP pages of 100, largest holders first (~10 calls). */
 const MAX_13F_HOLDERS = 1_000;
 /**
@@ -500,6 +505,14 @@ export class OnDemandService implements OnModuleDestroy {
     string,
     { data: Record<string, unknown>[]; at: number }
   >();
+  /** When this instance last confirmed a ticker's stored news is fresh (swept by
+   *  the job, or just filled). Lets incremental polls skip the full re-read. */
+  private readonly newsFreshAt = new Map<string, number>();
+  private readonly memNewsSince = new Map<
+    string,
+    { data: Record<string, unknown>[]; at: number }
+  >();
+  private newsIndexWarned = false;
   private readonly memOptions = new Map<
     string,
     { data: Record<string, unknown>; at: number }
@@ -2733,7 +2746,7 @@ export class OnDemandService implements OnModuleDestroy {
    */
   async getNews(ticker: string): Promise<Record<string, unknown>[]> {
     const mem = this.memNews.get(ticker);
-    if (mem && Date.now() - mem.at < 5 * 60_000) return mem.data;
+    if (mem && Date.now() - mem.at < NEWS_MEM_MS) return mem.data;
 
     const snap = await this.firebase.firestore
       .collection("news")
@@ -2748,6 +2761,7 @@ export class OnDemandService implements OnModuleDestroy {
     if (docs.length > 0 && Date.now() - freshestUpdate < NEWS_TTL_MS) {
       const sorted = [...docs].sort(byPublishedAtDesc);
       this.memNews.set(ticker, { data: sorted, at: Date.now() });
+      this.newsFreshAt.set(ticker, Date.now());
       return sorted;
     }
 
@@ -2789,6 +2803,7 @@ export class OnDemandService implements OnModuleDestroy {
         String(y.publishedAt).localeCompare(String(x.publishedAt)),
       );
       const now = new Date().toISOString();
+      const storedIds = new Set(docs.map((d) => d.id));
       const articles = merged.slice(0, NEWS_ARTICLE_CAP).map((a) => {
         const docId = `${ticker}_${a.id}`;
         return {
@@ -2796,6 +2811,9 @@ export class OnDemandService implements OnModuleDestroy {
           // Same field set news.job.ts's bulk sweep writes — no `id` field,
           // since the doc id itself carries it (added back on read below).
           data: {
+            // First write of this article: stamp `createdAt` like the bulk job
+            // does, so the incremental `since` poll (which keys on it) sees it.
+            ...(storedIds.has(docId) ? {} : { createdAt: now }),
             ticker: a.ticker,
             headline: a.headline,
             summary: a.summary,
@@ -2832,11 +2850,64 @@ export class OnDemandService implements OnModuleDestroy {
           String(b.publishedAt).localeCompare(String(a.publishedAt)),
         );
       this.memNews.set(ticker, { data: sorted, at: Date.now() });
+      this.newsFreshAt.set(ticker, Date.now());
       return sorted;
     })().finally(() => this.inflight.delete(key));
 
     this.inflight.set(key, p);
     return p;
+  }
+
+  /**
+   * Incremental variant of getNews for `GET /live/news?since=`: only articles
+   * created after `sinceMs`. Avoids re-reading the ticker's whole history from
+   * Firestore (thousands of docs for a heavily covered name):
+   *   1. full list still in instance memory (<5 min)  → filter it, no read;
+   *   2. ticker confirmed fresh within the last 15 min → indexed query for just
+   *      the newer docs (needs the news(ticker, createdAt) composite index);
+   *   3. otherwise → getNews (full read, refills from the vendors if stale).
+   * Until the index is deployed the query fails FAILED_PRECONDITION and this
+   * falls through to (3), so deploying the code before the index is safe.
+   */
+  async getNewsSince(
+    ticker: string,
+    sinceMs: number,
+  ): Promise<Record<string, unknown>[]> {
+    const now = Date.now();
+    const mem = this.memNews.get(ticker);
+    if (mem && now - mem.at < NEWS_MEM_MS) return articlesSince(mem.data, sinceMs);
+
+    const freshAt = this.newsFreshAt.get(ticker);
+    if (freshAt !== undefined && now - freshAt < NEWS_TTL_MS) {
+      const memoKey = `${ticker}|${sinceMs}`;
+      const memo = this.memNewsSince.get(memoKey);
+      if (memo && now - memo.at < NEWS_SINCE_MEMO_MS) return memo.data;
+      try {
+        const snap = await this.firebase.firestore
+          .collection("news")
+          .where("ticker", "==", ticker)
+          .where("createdAt", ">", new Date(sinceMs).toISOString())
+          .get();
+        const data = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }) as Record<string, unknown>)
+          .sort(byPublishedAtDesc);
+        if (this.memNewsSince.size > 500) {
+          for (const [k, v] of this.memNewsSince)
+            if (now - v.at >= NEWS_SINCE_MEMO_MS) this.memNewsSince.delete(k);
+        }
+        this.memNewsSince.set(memoKey, { data, at: now });
+        return data;
+      } catch (err) {
+        if (!isMissingIndexError(err)) throw err;
+        if (!this.newsIndexWarned) {
+          this.newsIndexWarned = true;
+          this.logger.warn(
+            "news(ticker, createdAt) index missing — incremental news polls fall back to a full read. Deploy firestore.indexes.json.",
+          );
+        }
+      }
+    }
+    return articlesSince(await this.getNews(ticker), sinceMs);
   }
 
   // ── Options chain (curated 8-ticker universe) ──────────────────────────

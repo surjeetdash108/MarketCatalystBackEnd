@@ -15,6 +15,7 @@ import {
 import type { Request, Response } from "express";
 import { createHash } from "crypto";
 import { OnDemandService, BARS_TFS, BARS_INTERVALS } from "./ondemand.service";
+import { parseSince } from "./news-since.util";
 import { AiAnalysisService } from "./ai-analysis.service";
 import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
 import { WhatMattersNowService } from "./what-matters-now.service";
@@ -742,13 +743,22 @@ ${JSON.stringify(ctx).slice(0, COPILOT_CONTEXT_MAX_CHARS)}`,
   )
   async news(
     @Query("ticker") ticker: string | undefined,
+    @Query("since") since: string | undefined,
     @Req() req: Request,
     @Res() res: Response,
   ) {
     const sym = (ticker ?? "").toUpperCase().trim();
     if (!TICKER_RE.test(sym))
       throw new BadRequestException("ticker must be 1-10 chars, A-Z0-9.-");
-    const articles = await this.ondemand.getNews(sym);
+    // Optional incremental poll: only articles new or changed since `since`
+    // (an ISO timestamp); an empty list when nothing moved. Absent = full list.
+    const sinceMs = parseSince(since);
+    if (sinceMs === null)
+      throw new BadRequestException("since must be an ISO-8601 timestamp");
+    const articles =
+      sinceMs === undefined
+        ? await this.ondemand.getNews(sym)
+        : await this.ondemand.getNewsSince(sym, sinceMs);
     sendWithEtag(req, res, articles);
   }
 
