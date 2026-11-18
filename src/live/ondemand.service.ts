@@ -819,10 +819,13 @@ export class OnDemandService implements OnModuleDestroy {
   }
 
   /**
-   * Append-only refresh of an existing doc: fetch from the last stored bar's
-   * date (inclusive — the tail bar may have been partial when captured) to
-   * today, replace that tail bar and append the rest. rangeDays is preserved,
-   * so a 5Y-widened doc stays 5Y without ever re-downloading 5 years.
+   * Refresh of an existing doc: fetch from the last stored bar's US Eastern
+   * day to today and replace EVERY stored bar from that day on with the
+   * vendor's current copy. The delayed feed revises bars after first serving
+   * them (late prints: FCX's 09:30 bar was first served with high = the $52.18
+   * open, later $52.63), so the latest session can't be treated as settled —
+   * only days before it are kept as stored. An empty answer keeps the stored
+   * bars. rangeDays is preserved, so a 5Y doc never re-downloads 5 years.
    */
   private async refreshIncremental(
     ticker: string,
@@ -837,7 +840,7 @@ export class OnDemandService implements OnModuleDestroy {
     const p = (async (): Promise<BarsDoc> => {
       const { multiplier, timespan } = RES_PARAMS[resolution];
       const lastT = doc.bars[doc.bars.length - 1].t;
-      const from = isoDate(new Date(lastT));
+      const from = etDate(new Date(lastT));
       const to = etDate();
       this.stats.barsVendorCalls++;
       const raw: PolygonAggBar[] = await this.polygon.getAggsRange(
@@ -849,9 +852,12 @@ export class OnDemandService implements OnModuleDestroy {
         50_000,
       );
       const now = new Date().toISOString();
-      const kept = doc.bars.filter((b) => b.t < lastT); // drop the possibly-partial tail
+      const onOrAfterFrom = (t: number) => etDate(new Date(t)) >= from;
+      let cut = doc.bars.length;
+      while (cut > 0 && onOrAfterFrom(doc.bars[cut - 1].t)) cut--;
+      const kept = raw.length ? doc.bars.slice(0, cut) : doc.bars;
       const appended = raw
-        .filter((b) => b.t >= lastT)
+        .filter((b) => onOrAfterFrom(b.t))
         .map((b) => ({
           t: b.t,
           o: b.o,

@@ -157,3 +157,31 @@ describe("stock_bars incremental refresh stays bounded", () => {
   });
 });
 
+
+describe("stock_bars incremental refresh takes the vendor's revisions of the current session", () => {
+  // Errors 18–20 (FCX/SCCO/B): the stored 09:30 5-minute bar kept the high the
+  // delayed feed first reported (= the official open, $52.18) after Polygon
+  // revised it to $52.63; only the last stored bar was ever replaced.
+  it("every bar from the last stored bar's day is replaced, not only the tail", async () => {
+    const now = Date.now();
+    const start = now - 3 * 3_600_000; // three hours of today's 5-minute bars
+    const stored = Array.from({ length: 36 }, (_, i) => ({ t: start + i * 300_000, o: 52.18, h: 52.18, l: 51.45, c: 51.46, v: 10, vw: 51.8 }));
+    const revised = stored.map((b, i) => (i === 0 ? { ...b, h: 52.63, l: 51.44, c: 51.45 } : b)) as PolygonAggBar[];
+    const { svc, store } = harness(revised);
+    store.set("FCX_5min", { ticker: "FCX", resolution: "5min", bars: stored, rangeDays: 9, barCount: stored.length, createdAt: new Date(now - 2 * DAY).toISOString(), updatedAt: "", source: "polygon-ondemand" });
+    const res = await svc.getBarsByInterval("FCX", "5m");
+    const saved = store.get("FCX_5min") as { bars: Array<{ t: number; h: number }> };
+    expect(saved.bars.find((b) => b.t === start)?.h).toBe(52.63);
+    expect(saved.bars).toHaveLength(stored.length);
+    expect(Math.max(...res.bars.map((b) => b.h))).toBe(52.63);
+  });
+
+  it("an empty vendor answer keeps what's stored", async () => {
+    const now = Date.now();
+    const stored = Array.from({ length: 6 }, (_, i) => ({ t: now - 3_600_000 + i * 300_000, o: 1, h: 2, l: 1, c: 1.5, v: 1, vw: 1 }));
+    const { svc, store } = harness([]);
+    store.set("FCX_5min", { ticker: "FCX", resolution: "5min", bars: stored, rangeDays: 9, barCount: stored.length, createdAt: new Date(now - 2 * DAY).toISOString(), updatedAt: "", source: "polygon-ondemand" });
+    await svc.getBarsByInterval("FCX", "5m");
+    expect((store.get("FCX_5min") as { bars: unknown[] }).bars).toHaveLength(6);
+  });
+});
