@@ -181,7 +181,7 @@ const RISKS: Record<string, JobRisk> = {
 const PREMARKET_PHASE = "0 8 * * 1-5";
 const VIA_PREMARKET: string[] = [
   "market-indices", "sectors", "market-movers", "market-breadth", "fear-greed",
-  "macro-events", "macro-regime", "earnings", "ipos", "edgar-ipo-pipeline",
+  "macro-events", "macro-regime", "earnings", "ipos", "index-members", "edgar-ipo-pipeline",
   "news", "analyst-actions", "companies", "companies-financials-backfill",
   "stock-history", "edgar-8k", "technical-indicators", "rs-rating", "tech-rating",
   "financials", "fundamentals-growth", "corporate-actions", "beta", "recaps",

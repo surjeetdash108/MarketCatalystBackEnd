@@ -17,6 +17,7 @@ export const MARKET_WIDE: string[] = [
   "macro-regime", // FRED-only, self-contained regime label
   "earnings",
   "ipos",
+  "index-members", // live S&P 500 / NDX lists; builds missing members' company docs before PER_TICKER
   // edgar-ipo-pipeline moved to Saturday: S-1/424B registrations move over
   // weeks, so a weekday fetch bought nothing and sat ahead of market-hours
   // work. `ipos` stays here — a debut prices on a weekday and is wanted the

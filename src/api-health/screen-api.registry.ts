@@ -582,6 +582,11 @@ export const API_CATALOG = {
     store: ["ipos"],
     producers: ["ipos"],
   },
+  "GET /market-data/index-members": {
+    summary: "Live S&P 500 and Nasdaq-100 constituent lists (Alpha Signals' Top S&P 500 screen).",
+    store: ["config"],
+    producers: ["index-members"],
+  },
   "GET /market-data/ipo-pipeline": {
     summary: "SEC S-1 / 424B registrations in the IPO pipeline.",
     store: ["ipo_pipeline"],

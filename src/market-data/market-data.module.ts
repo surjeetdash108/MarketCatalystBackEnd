@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { IndexMembersController } from "./index-members.controller";
 import { LiveModule } from "../live/live.module";
 import { AiInfrastructureController } from "./ai-infrastructure.controller";
 import { AnalystActionsController } from "./analyst-actions.controller";
@@ -64,6 +65,7 @@ import { EtfHoldingsService } from "./etf-holdings.service";
     MoverCatalystsController,
     AiInfrastructureController,
     EtfHoldingsController,
+    IndexMembersController,
   ],
   providers: [MarketDataService, EtfHoldingsService],
   exports: [EtfHoldingsService],

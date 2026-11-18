@@ -711,6 +711,7 @@ export const ROUTE_FEATURES: Record<string, RouteRequirement> = {
   "GET /market-data/macro-regime": ["macro"],
   "GET /market-data/dividends": ["macro"],
   "GET /market-data/ipos": ["ipos"],
+  "GET /market-data/index-members": ["marketCatalyst"],
   "GET /market-data/ipo-pipeline": ["ipos"],
   "GET /market-data/recaps": ["recaps"],
   "GET /market-data/earnings": ["earningsHub"],
