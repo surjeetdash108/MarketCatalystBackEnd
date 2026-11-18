@@ -60,3 +60,8 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - backend worker: `market-catalyst-backend-00320-cl9`
 - live API: `market-catalyst-live-00270-fvq`
 - UI hosting version (site marketcatalyst): `edd87e721b27958b` (new: `3f2e31b7f7ab4c2d`)
+
+## 2026-11-19 — trial window, Alpha Signals workbook fixes, RS rating, Pulse search, index members (rollback values captured before)
+- backend worker: `market-catalyst-backend-00321-tm9`
+- live API: `market-catalyst-live-00271-wmq`
+- UI hosting version (site marketcatalyst): `1abde182ccb0c755`
