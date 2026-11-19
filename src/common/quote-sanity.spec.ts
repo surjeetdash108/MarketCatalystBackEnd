@@ -135,6 +135,34 @@ describe("sanitizeQuote (Nov 19 workbook rows 1, 2, 11, 12)", () => {
     expect(out.changePct).toBeCloseTo((0.922 / 0.8885 - 1) * 100, 6);
     expect(out.adjusted).toBe("stale-quote");
   });
+  it("the day range is the regular session's (an odd-lot low can't make a new 52-week low)", () => {
+    const out = sanitizeQuote(
+      {
+        price: 50.2,
+        previousClose: 50,
+        dayLow: 44.1,
+        dayHigh: 51,
+        vendorAt: NOW - 5_000,
+      },
+      {
+        prevClose: 50,
+        tradedToday: true,
+        sessionLow: 49.8,
+        sessionHigh: 51,
+        sessionPrice: 50.2,
+        lastMinuteAt: NOW - 60_000,
+        otc: false,
+      },
+      NOW,
+      OPEN,
+    );
+    expect([out.price, out.dayLow, out.dayHigh, out.adjusted]).toEqual([
+      50.2,
+      49.8,
+      51,
+      null,
+    ]);
+  });
   it("a healthy quote is untouched apart from the official base", () => {
     const out = sanitizeQuote(
       {

@@ -132,10 +132,13 @@ export function sanitizeQuote(
         ref.lastMinuteAt - q.vendorAt > STALE_MS;
       if (outside || stale) {
         price = ref.sessionPrice;
-        dayLow = ref.sessionLow;
-        dayHigh = ref.sessionHigh;
         adjusted = outside ? "outside-session-range" : "stale-quote";
       }
+      // The day range is the regular session's (widened to the price shown):
+      // the vendor's can include odd-lot prints, which must not set a new
+      // 52-week low or high.
+      dayLow = Math.min(ref.sessionLow, price ?? ref.sessionLow);
+      dayHigh = Math.max(ref.sessionHigh, price ?? ref.sessionHigh);
     }
   }
   const change = price != null && prev != null ? price - prev : null;
