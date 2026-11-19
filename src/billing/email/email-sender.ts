@@ -17,7 +17,16 @@ export type EmailTag =
   | "plan_ended"
   | "receipt"
   | "launch_offer"
-  | "verification_code";
+  | "verification_code"
+  | "account_welcome"
+  | "trial_started"
+  | "getting_started"
+  | "first_activation"
+  | "trial_ending"
+  | "trial_ended"
+  | "password_reset"
+  | "login_alert"
+  | "account_deleted";
 
 export interface EmailMessage {
   tag: EmailTag;
@@ -26,6 +35,8 @@ export interface EmailMessage {
   replyTo: string;
   subject: string;
   text: string;
+  /** Branded HTML version (email-template.ts); the text stays the plain-text part. */
+  html?: string;
 }
 
 /** Where email goes. The real provider (SendGrid, Postmark, …) is a later config choice. */

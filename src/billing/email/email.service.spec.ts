@@ -82,13 +82,25 @@ describe("EmailService", () => {
     expect(sender.outbox[6].text).toContain("$566.40");
   });
 
-  it("uses placeholder sender identity until configured", async () => {
+  it("sends from and replies to info@marketcatalyst.ai, with a branded HTML part", async () => {
     const { sender, emails } = setup();
     await emails.planEnded("u@example.com", { planId: "pro" });
-    expect(sender.outbox[0].from).toBe(
-      "MarketCatalyst [PLACEHOLDER] <noreply@example.com>",
-    );
-    expect(sender.outbox[0].replyTo).toBe("support@example.com");
+    expect(sender.outbox[0].from).toBe("MarketCatalyst <info@marketcatalyst.ai>");
+    expect(sender.outbox[0].replyTo).toBe("info@marketcatalyst.ai");
+    expect(sender.outbox[0].html).toContain("Your plan has ended");
+    expect(sender.outbox[0].html).not.toMatch(/\{\{/);
+  });
+
+  it("Pro/Elite confirmations and annual renewal reminders use their designs; monthly reminders are skipped", async () => {
+    const { sender, emails } = setup();
+    await emails.welcome("u@example.com", { planId: "elite", interval: "annual", amount: 179100, currency: "USD", renewsAt: "2027-11-19T12:00:00Z" });
+    expect(sender.outbox[0].html).toContain("$1,791.00 / year");
+    expect(sender.outbox[0].html).toContain("19 Nov 2027");
+    await emails.renewalReminder("u@example.com", { planId: "pro", interval: "monthly", amount: 5900, currency: "USD", renewsAt: "2026-12-19T12:00:00Z" });
+    expect(sender.outbox).toHaveLength(1);
+    await emails.renewalReminder("u@example.com", { planId: "pro", interval: "annual", amount: 53100, currency: "USD", renewsAt: "2027-11-19T12:00:00Z" });
+    expect(sender.outbox[1].html).toContain("renews automatically on");
+    expect(sender.outbox[1].html).not.toContain("Paying monthly?");
   });
 
   it("skips silently without a recipient and never logs a full address", async () => {

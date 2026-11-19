@@ -106,9 +106,8 @@ describe("scripts/check-placeholders.mjs", () => {
       expect(placeholder.out).toContain(
         "env EMAIL_REPLY_TO is not set on market-catalyst-live, market-catalyst-backend",
       );
-      expect(placeholder.out).toMatch(
-        /email\.service\.ts:\d+ default is a placeholder and EMAIL_REPLY_TO/,
-      );
+      // The code default itself is real now (info@marketcatalyst.ai), so only the service value is flagged.
+      expect(placeholder.out).not.toMatch(/email\.service\.ts:\d+ default is a placeholder/);
       const real = run([
         "--production",
         `--service-config=${cfg({ [LIVE]: { EMAIL_REPLY_TO: { value: "help@mc-real.ai" } }, [WORKER]: { EMAIL_REPLY_TO: { value: "help@mc-real.ai" } } })}`,

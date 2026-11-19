@@ -51,7 +51,10 @@ export class SendGridEmailSender implements EmailSender {
       from: parseAddress(message.from),
       reply_to: parseAddress(message.replyTo),
       subject: message.subject,
-      content: [{ type: "text/plain", value: message.text }],
+      content: [
+        { type: "text/plain", value: message.text },
+        ...(message.html ? [{ type: "text/html", value: message.html }] : []),
+      ],
       categories: [message.tag],
       tracking_settings: {
         click_tracking: { enable: false },
