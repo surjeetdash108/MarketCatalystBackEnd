@@ -72,8 +72,8 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - UI hosting version (site marketcatalyst): `adbc3121570f08cf`
 
 ## 2026-11-19 — Nov 19 workbook fixes, quote check, Polygon-first intraday, job images (rollback values captured before)
-- backend worker: ``
-- live API: ``
-- premarket-job image: ``
-- history-backfill-job image: ``
+- backend worker: `market-catalyst-backend-00324-n9g`
+- live API: `market-catalyst-live-00274-x6f`
+- premarket-job image: `us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:0963c79a490699f118fc047a80175938c109e6f59a926532c3446dfbb8f4f73e`
+- history-backfill-job image: `us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:0963c79a490699f118fc047a80175938c109e6f59a926532c3446dfbb8f4f73e`
 - UI hosting version (site marketcatalyst): `d86d578badf478b7`
