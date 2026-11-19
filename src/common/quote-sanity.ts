@@ -14,6 +14,19 @@
  * session — never the snapshot's own previous_close.
  */
 
+/** The fields of a Polygon v3 snapshot row the check reads. */
+export interface PolygonSnapshotRow {
+  ticker?: string;
+  session?: {
+    low?: number;
+    high?: number;
+    price?: number;
+    close?: number;
+    previous_close?: number;
+  };
+  last_minute?: { last_updated?: number; otc?: boolean };
+}
+
 export interface QuoteRef {
   /** Official close of the last completed session (grouped daily). */
   prevClose: number | null;
@@ -57,7 +70,7 @@ const STALE_MS = 5 * 60_000;
 
 /** Reference from one Polygon v3 snapshot result; `openMs` = today's 09:30 ET (null before the open). */
 export function quoteRefFromPolygon(
-  r: any,
+  r: PolygonSnapshotRow | null | undefined,
   officialPrev: number | null | undefined,
   openMs: number | null,
 ): QuoteRef {
@@ -173,10 +186,13 @@ export function regularOpenMs(now: number): number | null {
 export class QuoteReferenceCache {
   private prev: { forDay: string; closes: Map<string, number> } | null = null;
   private prevLoading: Promise<void> | null = null;
-  private readonly rows = new Map<string, { at: number; row: any }>();
+  private readonly rows = new Map<
+    string,
+    { at: number; row: PolygonSnapshotRow }
+  >();
 
   constructor(
-    private readonly rawSnapshot: (tickers: string[]) => Promise<any[]>,
+    private readonly rawSnapshot: (tickers: string[]) => Promise<unknown[]>,
     private readonly groupedDaily: (
       date: string,
     ) => Promise<Array<{ T?: string; c?: number }>>,
@@ -203,7 +219,7 @@ export class QuoteReferenceCache {
           Date.parse(`${today}T12:00:00Z`) - back * 86_400_000,
         );
         if (d.getUTCDay() === 0 || d.getUTCDay() === 6) continue;
-        const bars = await this.groupedDaily(
+        const bars: Array<{ T?: string; c?: number }> = await this.groupedDaily(
           d.toISOString().slice(0, 10),
         ).catch(() => []);
         if (bars.length > 100) {
@@ -235,9 +251,9 @@ export class QuoteReferenceCache {
           return !hit || now - hit.at > this.refMs;
         });
         for (let i = 0; i < need.length; i += 250) {
-          const got = await this.rawSnapshot(need.slice(i, i + 250)).catch(
+          const got = (await this.rawSnapshot(need.slice(i, i + 250)).catch(
             () => [],
-          );
+          )) as PolygonSnapshotRow[];
           for (const r of got)
             if (r?.ticker) this.rows.set(String(r.ticker), { at: now, row: r });
         }
