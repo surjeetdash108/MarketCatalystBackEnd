@@ -1,6 +1,10 @@
 import { OnDemandService } from "./ondemand.service";
 
 describe("OnDemandService.getCompany returns earliest upcoming earnings date (Item 2)", () => {
+  // The cases name fixed dates (Nov 18 / Nov 25 2026): run them on Nov 17 so
+  // "upcoming" doesn't expire as the calendar moves on.
+  beforeEach(() => jest.useFakeTimers({ now: Date.parse("2026-11-17T15:00:00Z"), doNotFake: ["nextTick", "setImmediate", "setTimeout", "setInterval"] }));
+  afterEach(() => jest.useRealTimers());
   function harness(storedNextEarningsDate: string | null, fmpNextDate: string | null) {
     const docData = {
       ticker: "JACK",

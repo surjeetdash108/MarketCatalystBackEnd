@@ -163,8 +163,11 @@ describe("stock_bars incremental refresh takes the vendor's revisions of the cur
   // delayed feed first reported (= the official open, $52.18) after Polygon
   // revised it to $52.63; only the last stored bar was ever replaced.
   it("every bar from the last stored bar's day is replaced, not only the tail", async () => {
+    // A fixed session (Nov 18, 09:30–12:30 ET) so the bars are regular-session
+    // bars whatever time the suite runs.
+    jest.useFakeTimers({ now: Date.parse("2026-11-18T18:00:00Z"), doNotFake: ["nextTick", "setImmediate", "setTimeout", "setInterval"] });
     const now = Date.now();
-    const start = now - 3 * 3_600_000; // three hours of today's 5-minute bars
+    const start = Date.parse("2026-11-18T14:30:00Z");
     const stored = Array.from({ length: 36 }, (_, i) => ({ t: start + i * 300_000, o: 52.18, h: 52.18, l: 51.45, c: 51.46, v: 10, vw: 51.8 }));
     const revised = stored.map((b, i) => (i === 0 ? { ...b, h: 52.63, l: 51.44, c: 51.45 } : b)) as PolygonAggBar[];
     const { svc, store } = harness(revised);
@@ -174,6 +177,7 @@ describe("stock_bars incremental refresh takes the vendor's revisions of the cur
     expect(saved.bars.find((b) => b.t === start)?.h).toBe(52.63);
     expect(saved.bars).toHaveLength(stored.length);
     expect(Math.max(...res.bars.map((b) => b.h))).toBe(52.63);
+    jest.useRealTimers();
   });
 
   it("an empty vendor answer keeps what's stored", async () => {
