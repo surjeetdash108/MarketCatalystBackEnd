@@ -77,3 +77,10 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - premarket-job image: `us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:0963c79a490699f118fc047a80175938c109e6f59a926532c3446dfbb8f4f73e`
 - history-backfill-job image: `us-central1-docker.pkg.dev/market-catalyst-502415/cloud-run-source-deploy/market-catalyst-backend@sha256:0963c79a490699f118fc047a80175938c109e6f59a926532c3446dfbb8f4f73e`
 - UI hosting version (site marketcatalyst): `d86d578badf478b7`
+
+## 2026-11-20 — branded emails (SendGrid, placeholder key), verification code, lifecycle emails + Nov 19 workbook release (rollback values captured before)
+- backend worker: `market-catalyst-backend-00324-n9g`
+- live API: `market-catalyst-live-00274-x6f`
+- premarket-job / history-backfill-job image: `…market-catalyst-backend@sha256:0963c79a490699f118fc047a80175938c109e6f59a926532c3446dfbb8f4f73e`
+- UI hosting version (site marketcatalyst): `d86d578badf478b7`
+- env added on both services: EMAIL_PROVIDER, EMAIL_PROVIDER_API_KEY (placeholder), EMAIL_FROM_ADDRESS, EMAIL_REPLY_TO, OTP_TEST_CODE_ENABLED, EMAIL_LINK_SECRET (Secret Manager); new Cloud Scheduler job sync-email-lifecycle. To undo: remove those env vars, delete the scheduler job.
