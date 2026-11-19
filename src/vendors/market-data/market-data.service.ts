@@ -136,6 +136,20 @@ export class MarketDataService extends PolygonService {
     if (isPolygonOnlyTicker(ticker)) return polygon();
     const interval = timespan === "day" && multiplier === 1 ? "day" : fmpInterval(timespan, multiplier);
     if (!interval) return polygon();
+    // Intraday: Polygon's prices first. FMP's minute bars leave out the opening
+    // auction and first prints (FCX Nov 18 09:30: FMP o 51.94 h 52.14 vs the
+    // official open 52.18 and first-bar high 52.63), which put every opening
+    // range and day high at or below the open. FMP only when Polygon is empty.
+    if (interval !== "day") {
+      try {
+        const bars = await polygon();
+        if (bars.length > 0) return bars;
+      } catch (err) {
+        this.routeLogger.warn(`bars ${ticker} ${multiplier}${timespan}: Polygon failed (${(err as Error)?.message ?? err}) — FMP fallback`);
+      }
+      if (!this.fmpApi.enabled) return [];
+      return (await this.fmpIntradayBars(ticker, interval, from, to).catch(() => [])).slice(0, limit);
+    }
     return this.fmpFirst(
       `bars ${ticker} ${multiplier}${timespan}`,
       async () => {

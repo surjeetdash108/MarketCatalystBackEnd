@@ -65,7 +65,8 @@ describe("MarketDataService (FMP primary, Polygon fallback)", () => {
     expect(poly).toHaveBeenCalledTimes(3);
   });
 
-  it("pages intraday history backwards past FMP's per-call cap and dedupes the overlap", async () => {
+  it("pages intraday history backwards past FMP's per-call cap and dedupes the overlap (FMP fallback)", async () => {
+    jest.spyOn(PolygonService.prototype, "getAggsRange").mockResolvedValue([]);
     const request = jest.fn()
       // first page: newest, cut mid-day on the 15th
       .mockResolvedValueOnce([
