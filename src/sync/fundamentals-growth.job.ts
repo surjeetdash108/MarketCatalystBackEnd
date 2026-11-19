@@ -191,6 +191,9 @@ export class FundamentalsGrowthJob implements OnModuleInit {
               // stale: they have no FMP history, which is precisely why the GAAP
               // fallback ran for them in the first place.
               epsGrowthYoY: epsGrowthFinal,
+              // GAAP diluted EPS growth from the same annual statements as the
+              // revenue growth above (one basis for the screens' EPS vs revenue).
+              epsDilutedGrowthYoY: epsGrowth == null ? null : round(epsGrowth),
               ...(grossMargin != null
                 ? { grossMargin: round(grossMargin) }
                 : {}),

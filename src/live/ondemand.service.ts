@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
+import { fyDilutedEpsGrowth } from "../common/eps-growth.util";
 import { FieldValue } from "firebase-admin/firestore";
 import { articlesSince, isMissingIndexError } from "./news-since.util";
 import {
@@ -1501,6 +1502,7 @@ export class OnDemandService implements OnModuleDestroy {
       let grossMargin = (prevCo.grossMargin as number | null | undefined) ?? null;
       let revenueGrowthYoY = (prevCo.revenueGrowthYoY as number | null | undefined) ?? null;
       let epsGrowthYoY = (prevCo.epsGrowthYoY as number | null | undefined) ?? null;
+      let epsDilutedGrowthYoY = (prevCo.epsDilutedGrowthYoY as number | null | undefined) ?? null;
       if (this.fmp.enabled) {
         const fmpSym = toFmpSymbol(ticker);
         const [ratios, growth, finSnap] = await Promise.all([
@@ -1514,6 +1516,9 @@ export class OnDemandService implements OnModuleDestroy {
         const g = growth?.[0];
         const rg = Number(g?.growthRevenue);
         if (Number.isFinite(rg)) revenueGrowthYoY = round4(rg);
+        // Same statement as revenue growth: the screens' EPS-vs-revenue basis.
+        const dg = fyDilutedEpsGrowth(g);
+        if (dg != null || g) epsDilutedGrowthYoY = dg;
         const hist = (finSnap?.data()?.epsHistory ?? []) as EpsHistoryRow[];
         const nonGaap = latestAnnualEpsGrowth(hist);
         if (nonGaap != null) {
@@ -1577,6 +1582,7 @@ export class OnDemandService implements OnModuleDestroy {
         eps,
         epsTtm: eps,
         epsGrowthYoY,
+        epsDilutedGrowthYoY,
         revenueGrowthYoY,
         grossMargin,
         dividendYield,
