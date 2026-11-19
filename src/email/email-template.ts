@@ -43,7 +43,9 @@ function load(name: TemplateName): string {
   return t;
 }
 
-export function escapeHtml(v: unknown): string {
+export function escapeHtml(
+  v: string | number | boolean | null | undefined,
+): string {
   return String(v ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
