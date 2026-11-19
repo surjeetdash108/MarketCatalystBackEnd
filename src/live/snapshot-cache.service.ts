@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
+import { fromFmpSymbol, toFmpSymbol } from "../vendors/market-data/fmp-mapping.util";
 import { QuoteReferenceCache, regularOpenMs, sanitizeQuote, type QuoteRef } from "../common/quote-sanity";
 import { createHash } from "crypto";
 import { ConfigService } from "@nestjs/config";
@@ -689,7 +690,9 @@ export class SnapshotCacheService implements OnModuleDestroy {
       // Bounded batches: one URL carrying every tracked symbol can fail whole.
       const rows: Awaited<ReturnType<FmpService["getQuotes"]>> = [];
       for (let i = 0; i < tickers.length; i += FMP_QUOTE_CHUNK) {
-        rows.push(...(await this.fmp.getQuotes(tickers.slice(i, i + FMP_QUOTE_CHUNK))));
+        // FMP spells class shares with a dash (BRK-B); asked "BRK.B" it returns
+        // nothing and the ticker fell back to Polygon's stale previous close.
+        rows.push(...(await this.fmp.getQuotes(tickers.slice(i, i + FMP_QUOTE_CHUNK).map(toFmpSymbol))));
         this.stats.upstreamCalls += batched ? 1 : Math.min(FMP_QUOTE_CHUNK, tickers.length - i);
       }
       // Outside regular hours the quote is still the close; one batch call
@@ -705,7 +708,7 @@ export class SnapshotCacheService implements OnModuleDestroy {
         }
         this.stats.upstreamCalls++;
       }
-      return rows.map((q) => mapFmpQuote(q, trades.get(q.symbol), now));
+      return rows.map((q) => ({ ...mapFmpQuote(q, trades.get(q.symbol), now), ticker: fromFmpSymbol(String(q.symbol)) }));
     }
     if (source !== "polygon") return [];
 
