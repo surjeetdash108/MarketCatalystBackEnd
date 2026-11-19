@@ -33,7 +33,7 @@ describe("email verification code", () => {
       expiresInSeconds: 600,
       resendInSeconds: 60,
     });
-    const code = lastCode(a);
+    const code = lastCode(a)!;
     expect(code).toMatch(/^\d{6}$/);
     expect(
       JSON.stringify(a.fs.read("email_verifications", "v1")),
@@ -50,7 +50,7 @@ describe("email verification code", () => {
     a = await billingApp();
     const u = a.user("v2", "v2@example.com", { emailVerified: false });
     await u.post("/api/account/email-verification/send");
-    const right = lastCode(a);
+    const right = lastCode(a)!;
     const wrong = right === "000000" ? "111111" : "000000";
     expect(
       (await u.post("/api/account/email-verification/verify", { code: wrong }))
@@ -70,7 +70,7 @@ describe("email verification code", () => {
     a = await billingApp();
     const u = a.user("v3", "v3@example.com", { emailVerified: false });
     await u.post("/api/account/email-verification/send");
-    const code = lastCode(a);
+    const code = lastCode(a)!;
     a.clock.freeze(a.clock.now() + CODE_TTL_MS + 1);
     expect(
       (await u.post("/api/account/email-verification/verify", { code })).body
@@ -100,7 +100,7 @@ describe("email verification code", () => {
     expect(
       (
         await u.post("/api/account/email-verification/verify", {
-          code: lastCode(a),
+          code: lastCode(a)!,
         })
       ).body.verified,
     ).toBe(true);
