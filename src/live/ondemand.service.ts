@@ -402,6 +402,9 @@ function inExtendedSession(): boolean {
   return weekday >= 1 && weekday <= 5 && hour >= 4 && hour < 20;
 }
 
+/** Calendar days of stored bars a refresh re-fetches and replaces. */
+const REVISE_BACK_DAYS = 7;
+
 function isFresh(
   createdAtIso: string | undefined,
   resolution: Resolution,
@@ -819,9 +822,9 @@ export class OnDemandService implements OnModuleDestroy {
   }
 
   /**
-   * Refresh of an existing doc: fetch from the last stored bar's US Eastern
-   * day to today and replace EVERY stored bar from that day on with the
-   * vendor's current copy. The delayed feed revises bars after first serving
+   * Refresh of an existing doc: fetch from REVISE_BACK_DAYS before the last
+   * stored bar's US Eastern day to today and replace EVERY stored bar from
+   * that day on with the vendor's current copy. The delayed feed revises bars after first serving
    * them (late prints: FCX's 09:30 bar was first served with high = the $52.18
    * open, later $52.63), so the latest session can't be treated as settled —
    * only days before it are kept as stored. An empty answer keeps the stored
@@ -840,7 +843,11 @@ export class OnDemandService implements OnModuleDestroy {
     const p = (async (): Promise<BarsDoc> => {
       const { multiplier, timespan } = RES_PARAMS[resolution];
       const lastT = doc.bars[doc.bars.length - 1].t;
-      const from = etDate(new Date(lastT));
+      // A week back from the tail, not just its day: bars stored before the
+      // session-revision fix kept the delayed feed's first view (MDRN's Nov 13
+      // first bar: high 6.00 = the open, Polygon 6.25), and the 5-day charts
+      // and ranges read that week. Still one vendor call per refresh.
+      const from = etDate(new Date(lastT - REVISE_BACK_DAYS * 86_400_000));
       const to = etDate();
       this.stats.barsVendorCalls++;
       const raw: PolygonAggBar[] = await this.polygon.getAggsRange(

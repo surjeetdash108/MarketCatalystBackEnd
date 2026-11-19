@@ -189,3 +189,27 @@ describe("stock_bars incremental refresh takes the vendor's revisions of the cur
     expect((store.get("FCX_5min") as { bars: unknown[] }).bars).toHaveLength(6);
   });
 });
+
+describe("stock_bars refresh also heals the last week's frozen bars", () => {
+  // Nov 19 workbook row 13 (MDRN): the stored Nov 13 first bar kept high 6.00
+  // (the open) from before the session-revision fix; Polygon's bar reads 6.25.
+  it("a bar revised by the vendor 4 days before the tail is replaced", async () => {
+    jest.useFakeTimers({ now: Date.parse("2026-11-19T16:00:00Z"), doNotFake: ["nextTick", "setImmediate", "setTimeout", "setInterval"] });
+    const nov13 = Date.parse("2026-11-13T14:30:00Z");
+    const nov19 = Date.parse("2026-11-19T14:30:00Z");
+    const stored = [
+      { t: nov13, o: 6, h: 6, l: 5.57, c: 5.73, v: 1, vw: 5.8 },
+      { t: nov13 + 300_000, o: 5.73, h: 5.9, l: 5.5, c: 5.6, v: 1, vw: 5.7 },
+      { t: nov19, o: 1.98, h: 2.0, l: 1.95, c: 1.99, v: 1, vw: 1.98 },
+    ];
+    const vendor = [{ ...stored[0], h: 6.25 }, stored[1], stored[2], { t: nov19 + 300_000, o: 1.99, h: 2.09, l: 1.98, c: 2.05, v: 1, vw: 2.0 }] as PolygonAggBar[];
+    const { svc, store, getAggsRange } = harness(vendor);
+    store.set("MDRN_5min", { ticker: "MDRN", resolution: "5min", bars: stored, rangeDays: 9, barCount: stored.length, createdAt: new Date(Date.now() - 2 * DAY).toISOString(), updatedAt: "", source: "polygon-ondemand" });
+    await svc.getBarsByInterval("MDRN", "5m");
+    const saved = store.get("MDRN_5min") as { bars: Array<{ t: number; h: number }> };
+    expect(saved.bars.find((b) => b.t === nov13)?.h).toBe(6.25);
+    expect(saved.bars).toHaveLength(4);
+    expect((getAggsRange.mock.calls[0] as unknown[])[1]).toBe("2026-11-12");
+    jest.useRealTimers();
+  });
+});
