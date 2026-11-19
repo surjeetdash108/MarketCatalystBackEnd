@@ -170,6 +170,7 @@ export class IposJob implements OnModuleInit {
             numberOfShares: e.numberOfShares,
             totalSharesValue: e.totalSharesValue,
             status: e.status,
+            securityType: e.securityType ?? null,
             source,
             warnings: result.warnings,
             updatedAt: new Date().toISOString(),

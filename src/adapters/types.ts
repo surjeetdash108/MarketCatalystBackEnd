@@ -98,6 +98,8 @@ export interface CanonicalIpoEvent {
   numberOfShares: number | null;
   totalSharesValue: number | null;
   status: string;
+  /** Vendor security type (Polygon: CS, ADRC, SP = SPAC units, UNIT, WARRANT…); null when unknown. */
+  securityType?: string | null;
 }
 
 export interface CanonicalSectorPerformance {

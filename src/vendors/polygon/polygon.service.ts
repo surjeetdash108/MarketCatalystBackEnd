@@ -1075,6 +1075,7 @@ export class PolygonService {
       numberOfShares: number | null;
       totalSharesValue: number | null;
       status: string;
+      securityType?: string | null;
     }>
   > {
     const out = [];
@@ -1105,6 +1106,7 @@ export class PolygonService {
           numberOfShares: r.max_shares_offered ?? r.shares_outstanding ?? null,
           totalSharesValue: r.total_offer_size ?? null,
           status: r.ipo_status ?? "",
+          securityType: typeof r.security_type === "string" ? r.security_type : null,
         });
       }
       url = res.next_url ? `${res.next_url}&apiKey=${this.apiKey}` : null;

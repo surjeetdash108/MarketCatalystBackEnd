@@ -47,3 +47,4 @@ describe("IPO calendar: Polygon first (final offer prices, the whole window)", (
     expect(rows.map((r) => r.symbol)).toEqual(["LYCA"]);
   });
 });
+
