@@ -317,7 +317,7 @@ export class MarketDataService extends PolygonService {
         const sic = isFund ? null : (secSic ?? polySic);
         return {
           ticker: ticker.toUpperCase(),
-          name: p.companyName,
+          name: issuerName(p.companyName, poly?.name),
           market: "stocks",
           locale: "us",
           type: p.isEtf ? "ETF" : p.isFund ? "FUND" : p.isAdr ? "ADRC" : "CS",
@@ -401,7 +401,7 @@ export class MarketDataService extends PolygonService {
       // mutual funds or NASDAQ test symbols (BBBYW, FPCRX, ZXZZT) the
       // screener reports as plain stock.
       if (!p && fromPolygon.length > 0 && !/^[A-Z]{1,4}$/.test(f.ticker)) continue;
-      out.push(p ? { ...p, name: f.name || p.name } : f);
+      out.push(p ? { ...p, name: issuerName(f.name, p.name) } : f);
       seen.add(f.ticker);
     }
     for (const p of fromPolygon) if (!seen.has(p.ticker)) out.push(p);
@@ -860,4 +860,18 @@ export function monthWindows(from: string, to: string): Array<[string, string]> 
     f = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
   }
   return out;
+}
+
+/**
+ * FMP's name, unless Polygon's is the same name with the issuer's own
+ * capitalization (FMP "Exxonmobil Holdings Corporation", Polygon "ExxonMobil
+ * Holdings Corporation"): then Polygon's spelling. A genuinely different name
+ * (share-class suffix, rename) stays FMP's.
+ */
+export function issuerName(fmp: unknown, polygon: unknown): string {
+  const f = typeof fmp === "string" ? fmp.trim() : "";
+  const p = typeof polygon === "string" ? polygon.trim() : "";
+  if (!f) return p;
+  if (p && p !== f && p.toLowerCase() === f.toLowerCase()) return p;
+  return f;
 }

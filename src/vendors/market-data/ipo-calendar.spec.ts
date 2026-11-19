@@ -1,4 +1,4 @@
-import { MarketDataService } from "./market-data.service";
+import { MarketDataService, issuerName } from "./market-data.service";
 import { PolygonService } from "../polygon/polygon.service";
 import type { ConfigService } from "@nestjs/config";
 import type { FmpService } from "../fmp/fmp.service";
@@ -48,3 +48,12 @@ describe("IPO calendar: Polygon first (final offer prices, the whole window)", (
   });
 });
 
+
+describe("issuer capitalization (Nov 19 Logic #3: 'Exxonmobil' vs 'ExxonMobil')", () => {
+  it("keeps the vendor spelling with inner capitals when the names differ only in case", () => {
+    expect(issuerName("Exxonmobil Holdings Corporation", "ExxonMobil Holdings Corporation")).toBe("ExxonMobil Holdings Corporation");
+    expect(issuerName("Apple Inc.", "Apple Inc.")).toBe("Apple Inc.");
+    expect(issuerName("Alphabet Inc. Class A", "Alphabet Inc.")).toBe("Alphabet Inc. Class A");
+    expect(issuerName(null, "NVIDIA Corp")).toBe("NVIDIA Corp");
+  });
+});
