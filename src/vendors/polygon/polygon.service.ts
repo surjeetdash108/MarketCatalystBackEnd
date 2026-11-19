@@ -170,6 +170,15 @@ export class PolygonService {
     return this.pageDelayMs;
   }
 
+  /** The v3 universal snapshot rows as Polygon sends them (session + last_minute), for the quote check. */
+  async getUniversalSnapshotRaw(tickers: string[]): Promise<any[]> {
+    if (tickers.length === 0) return [];
+    const res = await fetchJson<{ results?: any[] }>(
+      `${this.baseUrl}/v3/snapshot?ticker.any_of=${tickers.map(encodeURIComponent).join(",")}&limit=250&apiKey=${this.apiKey}`,
+    );
+    return res.results ?? [];
+  }
+
   async getGroupedDaily(date: string): Promise<PolygonAggBar[]> {
     const res = await fetchJson<{ results?: PolygonAggBar[] }>(
       `${this.baseUrl}/v2/aggs/grouped/locale/us/market/stocks/${date}?apiKey=${this.apiKey}`,

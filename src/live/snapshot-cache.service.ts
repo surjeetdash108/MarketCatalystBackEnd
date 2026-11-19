@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
+import { QuoteReferenceCache, regularOpenMs, sanitizeQuote, type QuoteRef } from "../common/quote-sanity";
 import { createHash } from "crypto";
 import { ConfigService } from "@nestjs/config";
 import { fetchJson } from "../common/http.util";
@@ -570,6 +571,7 @@ export class SnapshotCacheService implements OnModuleDestroy {
       }
       if (primaryErr && quotes.length === 0) throw primaryErr;
       quotes = await this.withOfficialDayBars(quotes);
+      quotes = await this.sanitized(quotes);
 
       const now = Date.now();
       for (const q of quotes) {
@@ -639,6 +641,43 @@ export class SnapshotCacheService implements OnModuleDestroy {
     if (source === "polygon") return !!this.apiKey;
     if (source === "fmp") return this.fmp.enabled;
     return false;
+  }
+
+  private refCache: QuoteReferenceCache | null = null;
+
+  /**
+   * The same check the company quotes get (common/quote-sanity.ts): the
+   * official previous close as the base, and once the session is open a
+   * regular-session price — so a screen's live overlay can't show an odd-lot
+   * or out-of-range print (AAPG $12.715 with no regular trade, TCGLF $7.47).
+   * Best-effort: without Polygon, or on a failed reference read, quotes pass.
+   */
+  private async sanitized(quotes: SnapshotQuote[]): Promise<SnapshotQuote[]> {
+    if (!this.apiKey || quotes.length === 0) return quotes;
+    this.refCache ??= new QuoteReferenceCache(
+      async (tickers) =>
+        (await fetchJson<{ results?: unknown[] }>(
+          `${this.baseUrl}/v3/snapshot?ticker.any_of=${tickers.map(encodeURIComponent).join(",")}&limit=250&apiKey=${this.apiKey}`,
+        )).results ?? [],
+      async (date) =>
+        ((await fetchJson<{ results?: Array<{ T?: string; c?: number }> }>(
+          `${this.baseUrl}/v2/aggs/grouped/locale/us/market/stocks/${date}?adjusted=true&apiKey=${this.apiKey}`,
+        )).results ?? []),
+    );
+    let refs: Map<string, QuoteRef>;
+    try {
+      refs = await this.refCache.refs(quotes.map((q) => q.ticker));
+    } catch {
+      return quotes;
+    }
+    const now = Date.now();
+    const openMs = regularOpenMs(now);
+    return quotes.map((q) => {
+      const r = refs.get(q.ticker);
+      if (!r) return q;
+      const x = sanitizeQuote({ price: q.price, previousClose: q.previousClose, dayLow: q.dayLow, dayHigh: q.dayHigh, vendorAt: q.vendorUpdatedAt }, r, now, openMs);
+      return { ...q, price: x.price, change: x.change, changePct: x.changePct, previousClose: x.previousClose, dayLow: x.dayLow, dayHigh: x.dayHigh };
+    });
   }
 
   private async fetchFrom(

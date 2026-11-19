@@ -1,4 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { QuoteReferenceCache, regularOpenMs, sanitizeQuote, type QuoteRef } from "../../common/quote-sanity";
 import { ConfigService } from "@nestjs/config";
 import { FmpService } from "../fmp/fmp.service";
 import { SecEdgarService } from "../sec-edgar/sec-edgar.service";
@@ -758,7 +759,44 @@ export class MarketDataService extends PolygonService {
     const missing = tickers.filter((t) => !have.has(t));
     const fromPolygon = missing.length ? await super.getUniversalSnapshot(missing) : [];
     const byTicker = new Map([...fromPolygon, ...fromFmp].map((s) => [s.ticker, s] as const));
-    return tickers.map((t) => byTicker.get(t)).filter((s): s is Snap => !!s);
+    const list = tickers.map((t) => byTicker.get(t)).filter((s): s is Snap => !!s);
+    return this.sanitized(list);
+  }
+
+  /** Vendor update time (FMP `timestamp`) of the last fmpSnapshot rows, by ticker. */
+  private fmpQuoteAt = new Map<string, number>();
+  private readonly quoteRefs = new QuoteReferenceCache(
+    (t) => super.getUniversalSnapshotRaw(t),
+    (d) => super.getGroupedDaily(d),
+  );
+
+  /**
+   * Every snapshot row passes sanitizeQuote: the official previous close as
+   * the base (never Polygon's stale snapshot previous_close), and once the
+   * session is open a regular-session price (common/quote-sanity.ts). A
+   * failed reference read leaves the vendor rows as they were.
+   */
+  private async sanitized<T extends { ticker: string; price: number | null; change: number | null; changePercent: number | null; previousClose: number | null; high: number | null; low: number | null }>(list: T[]): Promise<T[]> {
+    if (list.length === 0) return list;
+    let refs: Map<string, QuoteRef>;
+    try {
+      refs = await this.quoteRefs.refs(list.map((s) => s.ticker));
+    } catch {
+      return list;
+    }
+    const now = Date.now();
+    const openMs = regularOpenMs(now);
+    return list.map((s) => {
+      const r = refs.get(s.ticker);
+      if (!r) return s;
+      const q = sanitizeQuote(
+        { price: s.price, previousClose: s.previousClose, dayLow: s.low, dayHigh: s.high, vendorAt: this.fmpQuoteAt.get(s.ticker) ?? null },
+        r,
+        now,
+        openMs,
+      );
+      return { ...s, price: q.price, change: q.change, changePercent: q.changePct, previousClose: q.previousClose, low: q.dayLow, high: q.dayHigh };
+    });
   }
 
   private async fmpSnapshot(tickers: string[]) {
@@ -779,6 +817,8 @@ export class MarketDataService extends PolygonService {
       .map((q) => {
         const ticker = symToTicker.get(String(q.symbol))!;
         const price = num(q.price)!;
+        const at = num(q.timestamp);
+        if (at != null) this.fmpQuoteAt.set(ticker, at * 1000);
         // /stable/quote is regular-session only: before the open `price` is
         // still the prior close, after the close it is today's close — which
         // is exactly the base each extended-hours move is measured from.
