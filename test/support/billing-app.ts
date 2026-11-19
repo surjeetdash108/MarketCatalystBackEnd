@@ -53,9 +53,13 @@ import type { AuthTokenInfo } from "../../src/common/auth-token";
 import { CONSENT_VERSION } from "../../src/billing/checkout/consent";
 import { EmailVerificationService } from "../../src/account/email-verification.service";
 import { StaffAccessService } from "../../src/account/staff-access.service";
-import { AdminStaffController, AdminUsersController } from "../../src/account/admin-staff.controller";
+import {
+  AdminStaffController,
+  AdminUsersController,
+} from "../../src/account/admin-staff.controller";
 import { AccountDeletionService } from "../../src/account/account-deletion.service";
 import { AccountController } from "../../src/account/account.controller";
+import { EmailLifecycleService } from "../../src/email/email-lifecycle.service";
 import { FakeFirestore } from "./fake-firestore";
 
 /** Test auth: `x-test-uid` header; the token info mirrors the FakeAuth record (as a fresh ID token would). */
@@ -189,6 +193,17 @@ export async function billingApp(opts: BillingAppOptions = {}) {
       BillingReconcileJob,
       EmailVerificationService,
       StaffAccessService,
+      // Account/lifecycle emails are covered by src/email specs; billing tests stub them.
+      {
+        provide: EmailLifecycleService,
+        useValue: {
+          onVerified: () => Promise.resolve(),
+          recordSignIn: () => Promise.resolve(),
+          emailPrefs: () => Promise.resolve({ marketing: true }),
+          setEmailPrefs: (_u: string, m: boolean) =>
+            Promise.resolve({ marketing: m }),
+        },
+      },
       CheckoutPreviewService,
     ],
   })
@@ -266,7 +281,7 @@ export async function billingApp(opts: BillingAppOptions = {}) {
     fs,
     auth,
     clock,
-    provider: provider as FakeBillingProvider,
+    provider: provider,
     sender,
     flags: moduleRef.get(FeatureFlagsService),
     events: moduleRef.get(BillingEventsService),

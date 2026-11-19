@@ -37,6 +37,9 @@ const EXPECTED_PUBLIC = new Set([
   "GET /live/logo", // company logos loaded by <img src>, which cannot send a token
   "POST /api/billing/webhook", // provider webhook, authenticated by its signature over the raw body
   "POST /api/billing/signup/promo", // signup page promo quote before sign-in; rate limited per IP
+  "GET /api/email/unsubscribe", // one-click unsubscribe link in an email; signed token, no login
+  "GET /api/account/secure", // "Secure my account" in a new sign-in alert; signed token, no login
+  "POST /api/account/password-reset", // forgot password, signed out by nature; rate limited per address, never reveals an account
 ]);
 
 interface Route {

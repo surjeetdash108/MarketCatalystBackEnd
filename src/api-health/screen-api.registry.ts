@@ -1162,6 +1162,21 @@ export const API_CATALOG = {
     summary:
       "Market Catalyst Pulse posts for the dashboard card, newest first; ?q= searches text, ticker, name and handle.",
   },
+  "GET /api/email/unsubscribe": {
+    summary: "One-click unsubscribe from promotional email (signed link); returns a small page.",
+  },
+  "GET /api/account/secure": {
+    summary: "'Secure my account' from a new sign-in alert (signed link): signs out every session and emails a password reset.",
+  },
+  "POST /api/account/password-reset": {
+    summary: "Sends the branded password reset email; never reveals whether the address has an account.",
+  },
+  "GET /api/account/email-prefs": {
+    summary: "The signed-in user's promotional email preference.",
+  },
+  "POST /api/account/email-prefs": {
+    summary: "Turns promotional email on or off for the signed-in user.",
+  },
   "POST /api/feedback": {
     summary: "Saves a signed-in user's feedback from the in-app feedback box (uid and email from the token).",
   },

@@ -49,7 +49,11 @@ export class AdminUsersController {
   @Delete(":uid")
   async remove(@Param("uid") uid: string) {
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(uid))
-      throw new BadRequestException({ statusCode: 400, code: "bad_uid", message: "Invalid user id." });
+      throw new BadRequestException({
+        statusCode: 400,
+        code: "bad_uid",
+        message: "Invalid user id.",
+      });
     return this.deletion.deleteAccount(uid, "admin");
   }
 }

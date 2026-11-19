@@ -8,6 +8,30 @@ import { createHash, randomInt, timingSafeEqual } from "crypto";
 import { AppClock } from "../common/app-clock";
 import { FirebaseAdminService } from "../common/firebase-admin.provider";
 import { EmailService } from "../billing/email/email.service";
+import { ConfigService } from "@nestjs/config";
+import { StaffAccessService } from "./staff-access.service";
+
+/** Testing aid: this code verifies a TEST account only (see testCodeAllowed). */
+export const OTP_TEST_CODE = "000000";
+
+/**
+ * 000000 is accepted only when OTP_TEST_CODE_ENABLED=true AND the account is
+ * ours (an @marketcatalyst.ai address or on the staff list) — never for a
+ * customer, so it can't be used to verify someone else's address. Turn the
+ * flag off once testing is done.
+ */
+export function testCodeAllowed(
+  enabled: unknown,
+  email: string | null | undefined,
+  isStaff: boolean,
+): boolean {
+  if (
+    (typeof enabled === "string" ? enabled : "").toLowerCase() !== "true" ||
+    !email
+  )
+    return false;
+  return /@marketcatalyst\.ai$/i.test(email.trim()) || isStaff;
+}
 
 /**
  * 6-digit email verification for email/password accounts (Google accounts
@@ -54,6 +78,8 @@ export class EmailVerificationService {
     private readonly firebase: FirebaseAdminService,
     private readonly emails: EmailService,
     private readonly clock: AppClock,
+    private readonly config: ConfigService,
+    private readonly staff: StaffAccessService,
   ) {}
 
   private get db() {
@@ -129,6 +155,17 @@ export class EmailVerificationService {
   async verify(uid: string, code: string) {
     const u = await this.firebase.auth.getUser(uid);
     if (u.emailVerified) return { verified: true };
+    if (
+      code === OTP_TEST_CODE &&
+      testCodeAllowed(
+        this.config.get("OTP_TEST_CODE_ENABLED"),
+        u.email,
+        await this.staff.isListed(u.email).catch(() => false),
+      )
+    ) {
+      await this.firebase.auth.updateUser(uid, { emailVerified: true });
+      return { verified: true };
+    }
     const ref = this.db.collection("email_verifications").doc(uid);
     const d = (await ref.get()).data() as CodeDoc | undefined;
     const bad = (c: string, message: string): never => {

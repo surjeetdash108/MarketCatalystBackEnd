@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import type { Request } from "express";
+import type { UserRecord } from "firebase-admin/auth";
 import { IsString, Matches } from "class-validator";
 import { clientIp } from "../common/client-ip";
 import { CurrentUser } from "../common/current-user.decorator";
@@ -17,6 +18,9 @@ import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 import { AccountDeletionService } from "./account-deletion.service";
 import { EmailVerificationService } from "./email-verification.service";
 import { StaffAccessService } from "./staff-access.service";
+import { EmailLifecycleService } from "../email/email-lifecycle.service";
+import { FirebaseAdminService } from "../common/firebase-admin.provider";
+import { EmailService } from "../billing/email/email.service";
 
 export class VerifyCodeDto {
   @IsString()
@@ -36,6 +40,9 @@ export class AccountController {
     private readonly verification: EmailVerificationService,
     private readonly staff: StaffAccessService,
     private readonly deletion: AccountDeletionService,
+    private readonly lifecycle: EmailLifecycleService,
+    private readonly firebase: FirebaseAdminService,
+    private readonly emails: EmailService,
   ) {}
 
   /**
@@ -49,9 +56,19 @@ export class AccountController {
       throw new BadRequestException({
         statusCode: 400,
         code: "confirm_required",
-        message: 'Type DELETE to confirm.',
+        message: "Type DELETE to confirm.",
       });
+    // Captured before the sign-in record is gone, for the confirmation email.
+    const who = (await this.firebase.auth
+      .getUser(uid)
+      .catch(() => null)) as UserRecord | null;
     const r = await this.deletion.deleteAccount(uid, "self");
+    if (who?.email) {
+      void this.emails.accountDeleted(who.email, {
+        firstName: (who.displayName ?? "").trim().split(/\s+/)[0] || "there",
+        deletedAt: new Date().toISOString(),
+      });
+    }
     return { deleted: true, subscriptionsCancelled: r.subscriptionsCancelled };
   }
 
@@ -62,7 +79,13 @@ export class AccountController {
    */
   @Post("sync-claims")
   @HttpCode(200)
-  async syncClaims(@CurrentUser() uid: string) {
+  async syncClaims(@CurrentUser() uid: string, @Req() req: Request) {
+    // Sign-in / token refresh: a new device gets the new sign-in alert.
+    void this.lifecycle.recordSignIn(
+      uid,
+      clientIp(req),
+      req.headers["user-agent"] ?? null,
+    );
     const r = await this.staff.syncClaim(uid);
     return { staff: r.staff, refreshToken: r.changed };
   }
@@ -80,7 +103,24 @@ export class AccountController {
 
   @Post("email-verification/verify")
   @HttpCode(200)
-  verify(@CurrentUser() uid: string, @Body() body: VerifyCodeDto) {
-    return this.verification.verify(uid, body.code);
+  async verify(@CurrentUser() uid: string, @Body() body: VerifyCodeDto) {
+    const r = await this.verification.verify(uid, body.code);
+    void this.lifecycle.onVerified(uid); // Welcome, then Trial started
+    return r;
+  }
+
+  /** Promotional email preference (Settings). Account, billing and security mail always go. */
+  @Get("email-prefs")
+  emailPrefs(@CurrentUser() uid: string) {
+    return this.lifecycle.emailPrefs(uid);
+  }
+
+  @Post("email-prefs")
+  @HttpCode(200)
+  setEmailPrefs(
+    @CurrentUser() uid: string,
+    @Body() body: { marketing?: unknown },
+  ) {
+    return this.lifecycle.setEmailPrefs(uid, body?.marketing === true);
   }
 }

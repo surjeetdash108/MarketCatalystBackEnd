@@ -107,6 +107,7 @@ const SCHEDULER: JobManifestEntry[] = [
   { name: "sectors", trigger: "scheduler", schedules: ["0 18 * * 1-5"] },
   { name: "ticker-universe", trigger: "scheduler", schedules: ["0 8 * * 1-5"] },
   { name: "sec-form4", trigger: "scheduler", schedules: ["0 8 * * 6"], note: "moved off the weekday premarket path — insider filings tolerate a weekend cadence" },
+  { name: "email-lifecycle", trigger: "scheduler", schedules: ["15 * * * *"], note: "hourly: Welcome/Trial started catch-up (Google sign-ups), Getting started and First activation on day 2, Trial ending 3 days before and Trial ended on the day; each at most once per person (email_log). Cloud Scheduler entry sync-email-lifecycle (deploy/create-email-lifecycle-scheduler.sh) — a code deploy does not create it" },
   { name: "billing-reconcile", trigger: "scheduler", schedules: ["30 3 * * *"], note: "nightly billing mirror repair from Stripe. Cloud Scheduler entry sync-billing-reconcile (deploy/create-billing-reconcile-scheduler.sh) — a code deploy does not create it" },
   { name: "sec-13f", trigger: "scheduler", schedules: ["0 9 * * 6"], note: "13-F is a QUARTERLY filing; a weekday fetch re-read unchanged data ahead of the market-hours jobs" },
   { name: "institutional-ownership", trigger: "scheduler", schedules: ["0 10 * * *"], note: "fires daily but only WORKS inside the 13-F filing window (quarter end to deadline+15) or on Saturdays — filings arrive daily across that window and essentially never outside it. A skipped day makes no vendor call" },

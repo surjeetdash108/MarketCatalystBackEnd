@@ -10,7 +10,9 @@ afterEach(async () => {
 function seedData(app: App, uid: string) {
   app.fs.seed("users", uid, { email: `${uid}@example.com`, name: "X" });
   app.fs.seed(`users/${uid}/watchlists`, "w1", { name: "Tech" });
-  app.fs.seed(`users/${uid}/portfolios/default/holdings`, "AAPL", { shares: 1 });
+  app.fs.seed(`users/${uid}/portfolios/default/holdings`, "AAPL", {
+    shares: 1,
+  });
   app.fs.seed("stock_comments", "c1", { uid, text: "note" });
   app.fs.seed("stock_comments", "c2", { uid: "someone_else", text: "keep" });
   app.fs.seed("feature_requests", "f1", { uid, text: "idea" });
@@ -21,7 +23,9 @@ describe("delete account: everything, everywhere", () => {
   it("self-delete needs confirm: DELETE", async () => {
     a = await billingApp();
     const u = a.user("d0", "d0@example.com");
-    expect((await u.delete("/api/account").send({ confirm: "yes" })).status).toBe(400);
+    expect(
+      (await u.delete("/api/account").send({ confirm: "yes" })).status,
+    ).toBe(400);
     expect(a.auth.users.has("d0")).toBe(true);
   });
 
@@ -29,13 +33,25 @@ describe("delete account: everything, everywhere", () => {
     a = await billingApp();
     await a.subscribe("d1", "pro", "monthly");
     seedData(a, "d1");
-    const subId = (a.fs.read("subscriptions", "d1") as { subscriptionId: string }).subscriptionId;
-    const r = await a.as("d1").delete("/api/account").send({ confirm: "DELETE" });
+    const subId = (
+      a.fs.read("subscriptions", "d1") as { subscriptionId: string }
+    ).subscriptionId;
+    const r = await a
+      .as("d1")
+      .delete("/api/account")
+      .send({ confirm: "DELETE" });
     expect(r.status).toBe(200);
     expect(r.body).toEqual({ deleted: true, subscriptionsCancelled: 1 });
     expect((await a.provider.getSubscription(subId))?.status).toBe("canceled");
     expect(a.auth.users.has("d1")).toBe(false);
-    for (const [col, id] of [["users", "d1"], ["subscriptions", "d1"], ["customers", "d1"], ["user_sessions", "d1"], ["stock_comments", "c1"], ["feature_requests", "f1"]])
+    for (const [col, id] of [
+      ["users", "d1"],
+      ["subscriptions", "d1"],
+      ["customers", "d1"],
+      ["user_sessions", "d1"],
+      ["stock_comments", "c1"],
+      ["feature_requests", "f1"],
+    ])
       expect(a.fs.read(col, id)).toBeUndefined();
     expect(a.fs.ids("users/d1/watchlists")).toEqual([]);
     expect(a.fs.ids("users/d1/portfolios/default/holdings")).toEqual([]);
@@ -52,7 +68,11 @@ describe("delete account: everything, everywhere", () => {
     seedData(a, "d2");
     const r = await a.admin.delete("/api/admin/users/d2");
     expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ uid: "d2", authDeleted: true, subscriptionsCancelled: 0 });
+    expect(r.body).toMatchObject({
+      uid: "d2",
+      authDeleted: true,
+      subscriptionsCancelled: 0,
+    });
     expect(a.fs.read("users", "d2")).toBeUndefined();
     expect(a.auth.users.has("d2")).toBe(false);
     // Already gone (e.g. removed in the Firebase console): still cleans up, no error.

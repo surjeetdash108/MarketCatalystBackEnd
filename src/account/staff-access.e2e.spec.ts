@@ -58,12 +58,12 @@ describe("staff claim sync", () => {
     a = await billingApp();
     await withStaffList(a, [STAFF]);
     a.user("s1", STAFF, { emailVerified: true, provider: "google.com" });
-    a.auth.users.get("s1")!.customClaims = { plan: "pro", admin: false };
+    a.auth.users.get("s1").customClaims = { plan: "pro", admin: false };
     expect((await a.as("s1").post("/api/account/sync-claims")).body).toEqual({
       staff: true,
       refreshToken: true,
     });
-    expect(a.auth.users.get("s1")!.customClaims).toEqual({
+    expect(a.auth.users.get("s1").customClaims).toEqual({
       plan: "pro",
       admin: false,
       staff: true,
@@ -79,7 +79,7 @@ describe("staff claim sync", () => {
       staff: false,
       refreshToken: true,
     });
-    expect(a.auth.users.get("s1")!.customClaims).toEqual({
+    expect(a.auth.users.get("s1").customClaims).toEqual({
       plan: "pro",
       admin: false,
     });

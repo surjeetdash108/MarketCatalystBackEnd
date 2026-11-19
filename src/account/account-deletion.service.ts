@@ -62,7 +62,10 @@ export class AccountDeletionService {
     return this.firebase.firestore;
   }
 
-  async deleteAccount(uid: string, by: "self" | "admin"): Promise<DeletionReport> {
+  async deleteAccount(
+    uid: string,
+    by: "self" | "admin",
+  ): Promise<DeletionReport> {
     const db = this.db;
     await db
       .collection("deleted_accounts")
