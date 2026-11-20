@@ -84,3 +84,8 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - premarket-job / history-backfill-job image: `…market-catalyst-backend@sha256:0963c79a490699f118fc047a80175938c109e6f59a926532c3446dfbb8f4f73e`
 - UI hosting version (site marketcatalyst): `d86d578badf478b7`
 - env added on both services: EMAIL_PROVIDER, EMAIL_PROVIDER_API_KEY (placeholder), EMAIL_FROM_ADDRESS, EMAIL_REPLY_TO, OTP_TEST_CODE_ENABLED, EMAIL_LINK_SECRET (Secret Manager); new Cloud Scheduler job sync-email-lifecycle. To undo: remove those env vars, delete the scheduler job.
+
+## 2026-11-20 15:16 ET — Firestore rules lockdown + browser key restriction (rollback values captured before)
+- Firestore rules, (default) and mc-regional: previous ruleset `d87ae866-8526-484f-be61-71a0cb1873b2` (both). New: `1bc2bde8-a2f8-46ee-ad62-3733060ef654` (default), `3aab6e9c-eb7b-46a3-9ff4-2d15b64ab3e4` (mc-regional), from MarketCatalystUI prod 583b215. Change: 18 market-data collections deny all client reads (the backend reads them with the Admin SDK). Roll back in the Firebase console (Firestore → Rules → History) on each database, or `firebase deploy --only firestore:rules` from MarketCatalystUI at 1f4e4f9.
+- Browser API key `833362a8-6eb3-4009-baad-75eceebb3788` ("Browser key (auto created by Firebase)"): before = no referrer restriction, 27 API targets; backup at `~/browser-key-backup-2026-11-20.json` on the deploying machine. After = 10 allowed referrers (our app, website, Firebase hosting domains, localhost) and 4 APIs (identitytoolkit, securetoken, firebaseinstallations, firebase). Roll back with `MarketCatalystUI/scripts/restrict-browser-key.sh rollback` (BACKUP=<path>), or remove restrictions in GCP console → APIs & Services → Credentials.
+- No service, job or hosting change.
