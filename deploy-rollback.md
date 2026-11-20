@@ -113,3 +113,9 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - Before: live `market-catalyst-live-00277-ms9`, worker `market-catalyst-backend-00327-8sf`, both with plain env `EMAIL_PROVIDER_API_KEY=SG.PLACEHOLDER` (emails only logged).
 - After: live `market-catalyst-live-00278-rc7`, worker `market-catalyst-backend-00328-4zc`, `EMAIL_PROVIDER_API_KEY` from Secret Manager `SENDGRID_API_KEY:latest` (restricted key "marketcatalyst-prod-mail", Mail Send only). Domain marketcatalyst.ai authenticated in SendGrid (DKIM CNAMEs + DMARC p=none in Cloudflare); click/open tracking off. Account on SendGrid free trial until 2027-01-19 — upgrade before launch.
 - Roll back: `gcloud run services update-traffic <svc> --to-revisions=<before>=100`, or swap the env back. Revoke the key in SendGrid → Settings → API Keys if it is ever exposed.
+
+## 2026-11-20 — lifecycle email once per person + free-access wording
+- Before: worker `market-catalyst-backend-00328-4zc`, live `market-catalyst-live-00278-rc7` (SendGrid secret already wired).
+- After (backend prod 8d54406): worker `market-catalyst-backend-00329-mth`, live `market-catalyst-live-00279-rk2`, jobs on `…market-catalyst-backend@sha256:b8e79a160b6dc484aa2e23c34b8c4bbe2ba05d1f3b88c0a9e52c5817e19be880`. Env/secrets unchanged.
+- New Firestore collections (written by the backend only): `email_sent/{emailHash}` (lifecycle mail sent per person), `email_optouts/{emailHash}` (promotional opt-out per person). Both kept on account deletion.
+- Roll back: `gcloud run services update-traffic <svc> --to-revisions=<before>=100` for both services.
