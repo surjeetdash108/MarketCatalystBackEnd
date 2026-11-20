@@ -108,3 +108,8 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - Key `833362a8-6eb3-4009-baad-75eceebb3788` before: 10 referrers incl. the non-matching `http://localhost:*/*` and `http://127.0.0.1:*/*` (blocked local dev); 4 APIs.
 - After: 16 referrers (production unchanged; localhost/127.0.0.1 on ports 3000 and 3001 explicitly, plus `localhost`, `localhost:*`, `127.0.0.1`, `127.0.0.1:*` for any port); 5 APIs (added `firestore.googleapis.com`, needed by Money Flow's direct read of `money_flow/latest` — the Firestore web SDK sends the key). From MarketCatalystUI prod 5ca801d `scripts/restrict-browser-key.sh`; `verify` passes.
 - Roll back: `scripts/restrict-browser-key.sh rollback` (BACKUP=~/browser-key-backup-2026-11-20.json restores the unrestricted original).
+
+## 2026-11-20 17:18 ET — SendGrid live (real API key)
+- Before: live `market-catalyst-live-00277-ms9`, worker `market-catalyst-backend-00327-8sf`, both with plain env `EMAIL_PROVIDER_API_KEY=SG.PLACEHOLDER` (emails only logged).
+- After: live `market-catalyst-live-00278-rc7`, worker `market-catalyst-backend-00328-4zc`, `EMAIL_PROVIDER_API_KEY` from Secret Manager `SENDGRID_API_KEY:latest` (restricted key "marketcatalyst-prod-mail", Mail Send only). Domain marketcatalyst.ai authenticated in SendGrid (DKIM CNAMEs + DMARC p=none in Cloudflare); click/open tracking off. Account on SendGrid free trial until 2027-01-19 — upgrade before launch.
+- Roll back: `gcloud run services update-traffic <svc> --to-revisions=<before>=100`, or swap the env back. Revoke the key in SendGrid → Settings → API Keys if it is ever exposed.
