@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { QuoteReferenceCache, regularOpenMs, sanitizeQuote, type QuoteRef } from "../../common/quote-sanity";
+import { clipLatePrintSpikes } from "../../common/late-print-filter";
 import { ConfigService } from "@nestjs/config";
 import { FmpService } from "../fmp/fmp.service";
 import { SecEdgarService } from "../sec-edgar/sec-edgar.service";
@@ -132,7 +133,14 @@ export class MarketDataService extends PolygonService {
     multiplier = 1,
     limit = 5000,
   ): Promise<PolygonAggBar[]> {
-    const polygon = () => super.getAggsRange(ticker, from, to, timespan, multiplier, limit);
+    // Polygon's intraday aggregates count late-reported trades in the minute
+    // they were reported (ANT 2026-11-19: opening prices as 14:26–15:05 highs);
+    // clipLatePrintSpikes removes those wicks. Daily bars are left alone.
+    const intraday = timespan === "minute" || timespan === "hour";
+    const polygon = async () => {
+      const bars = await super.getAggsRange(ticker, from, to, timespan, multiplier, limit);
+      return intraday ? clipLatePrintSpikes(bars) : bars;
+    };
     if (isPolygonOnlyTicker(ticker)) return polygon();
     const interval = timespan === "day" && multiplier === 1 ? "day" : fmpInterval(timespan, multiplier);
     if (!interval) return polygon();
@@ -174,7 +182,10 @@ export class MarketDataService extends PolygonService {
     to: string,
   ): Promise<{ polygon: PolygonAggBar[]; fmp: PolygonAggBar[] }> {
     const [polygon, fmp] = await Promise.all([
-      super.getAggsRange(ticker, from, to, "minute", 1, 50_000).catch(() => [] as PolygonAggBar[]),
+      super
+        .getAggsRange(ticker, from, to, "minute", 1, 50_000)
+        .then(clipLatePrintSpikes)
+        .catch(() => [] as PolygonAggBar[]),
       this.fmpApi.enabled && !isPolygonOnlyTicker(ticker)
         ? this.fmpIntradayBars(ticker, "1min", from, to).catch(() => [] as PolygonAggBar[])
         : Promise.resolve([] as PolygonAggBar[]),

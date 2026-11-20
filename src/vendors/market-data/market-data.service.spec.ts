@@ -54,6 +54,41 @@ describe("MarketDataService (FMP primary, Polygon fallback)", () => {
     await expect(broken.getMinuteBarsByFeed("X", "a", "b")).resolves.toMatchObject({ polygon: [{ v: 367 }], fmp: [] });
   });
 
+  describe("late-reported prints in Polygon intraday bars (ANT 2026-11-19)", () => {
+    // 20 quiet minutes around $96 with one $112.96 high: a late print, not a trade at that minute.
+    const t0 = Date.UTC(2026, 10, 19, 19, 20);
+    const tape = () => Array.from({ length: 20 }, (_, i) => {
+      const o = 96 + (i % 2 ? 0.1 : -0.1), c = 96 + (i % 2 ? -0.1 : 0.1);
+      return { T: "ANT", t: t0 + i * 60_000, o, h: (i === 6 ? 112.96 : Math.max(o, c) + 0.05), l: Math.min(o, c) - 0.05, c, v: 1000 };
+    });
+
+    it("clips the spike in intraday bars served to charts (getAggsRange)", async () => {
+      jest.spyOn(PolygonService.prototype, "getAggsRange").mockResolvedValue(tape());
+      const bars = await make(jest.fn()).getAggsRange("ANT", "2026-11-19", "2026-11-19", "minute", 1, 50_000);
+      expect(Math.max(...bars.map((b) => b.h))).toBeLessThan(97);
+      expect(bars[6].c).toBe(tape()[6].c); // body untouched
+    });
+
+    it("clips it on sizes FMP has no endpoint for, which go straight to Polygon", async () => {
+      jest.spyOn(PolygonService.prototype, "getAggsRange").mockResolvedValue(tape());
+      const bars = await make(jest.fn()).getAggsRange("ANT", "a", "b", "minute", 3);
+      expect(Math.max(...bars.map((b) => b.h))).toBeLessThan(97);
+    });
+
+    it("clips it in the Polygon feed Money Flow reconciles (getMinuteBarsByFeed)", async () => {
+      jest.spyOn(PolygonService.prototype, "getAggsRange").mockResolvedValue(tape());
+      const { polygon } = await make(jest.fn().mockResolvedValue([])).getMinuteBarsByFeed("ANT", "2026-11-19", "2026-11-19");
+      expect(Math.max(...polygon.map((b) => b.h))).toBeLessThan(97);
+    });
+
+    it("leaves daily bars alone (Polygon fallback for a day bar)", async () => {
+      const day = tape();
+      jest.spyOn(PolygonService.prototype, "getAggsRange").mockResolvedValue(day);
+      const bars = await make(jest.fn().mockResolvedValue([])).getAggsRange("ANT", "a", "b");
+      expect(bars[6].h).toBe(112.96);
+    });
+  });
+
   it("routes Polygon-only tickers and unsupported sizes straight to Polygon", async () => {
     const poly = jest.spyOn(PolygonService.prototype, "getAggsRange").mockResolvedValue([]);
     const request = jest.fn();
