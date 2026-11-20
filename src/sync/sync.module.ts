@@ -56,6 +56,7 @@ import { SyncController } from "./sync.controller";
 import { AnthropicModule } from "../vendors/anthropic/anthropic.module";
 import { EodRecapJob } from "./eod-recap.job";
 import { WebSubPingJob } from "./websub-ping.job";
+import { MoneyFlowSnapshotJob } from "./money-flow-snapshot.job";
 import { TickerUniverseJob } from "./ticker-universe.job";
 import { PremarketJob } from "./premarket.job";
 import { PremarketPostJob } from "./premarket-post.job";
@@ -134,6 +135,7 @@ import { MarketDataModule } from "../market-data/market-data.module";
     PremarketJob,
     EodRecapJob,
     WebSubPingJob,
+    MoneyFlowSnapshotJob,
     PremarketPostJob,
     D03PremarketMoversJob,
     D04AnalystCallsJob,

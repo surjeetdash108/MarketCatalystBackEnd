@@ -20,6 +20,16 @@ import {
   type RawBar,
   type StockIn,
 } from "./money-flow.calc";
+import {
+  SNAPSHOT_COLLECTION,
+  SNAPSHOT_DOC,
+  SNAPSHOT_MAX_GZ_BYTES,
+  SNAPSHOT_SCHEMA,
+  decodeSnapshot,
+  encodeSnapshot,
+  snapshotUsable,
+  type SnapshotDoc,
+} from "./money-flow-snapshot";
 
 /** Board rebuild interval; a request inside it gets the cached board. */
 export const BOARD_TTL_MS = 15_000;
@@ -85,6 +95,7 @@ export class MoneyFlowService {
   private readonly logger = new Logger(MoneyFlowService.name);
   private board: { at: number; value: MoneyFlowBoard } | null = null;
   private building: Promise<MoneyFlowBoard> | null = null;
+  private snapshotRead: { at: number; value: { builtAt: number; board: MoneyFlowBoard } | null } | null = null;
   private constituents: { at: number; sp500: Set<string>; nasdaq100: Set<string>; names: Map<string, string> } | null =
     null;
   private reference: Reference | null = null;
@@ -100,9 +111,49 @@ export class MoneyFlowService {
 
   async get(): Promise<MoneyFlowBoard> {
     if (this.board && Date.now() - this.board.at < BOARD_TTL_MS) return this.board.value;
+    // The worker saves a board every minute (money-flow-snapshot job): serve it
+    // instead of building one while the user waits. A build is the last resort,
+    // only when no usable saved board exists (worker stalled, or never ran).
+    const saved = await this.readSnapshot();
+    if (saved && snapshotUsable(saved.builtAt, Date.now())) {
+      this.board = { at: Date.now(), value: saved.board };
+      return saved.board;
+    }
     const pending = this.refresh();
     // Serve the previous board while the next one builds.
     return this.board ? this.board.value : pending;
+  }
+
+  /**
+   * Build a fresh board and save it for the live API and the browser (worker,
+   * money-flow-snapshot job). Reuses this instance's caches, so on a warm worker
+   * most runs only refresh quotes; bars refresh every BARS_TTL_MS.
+   */
+  async rebuildAndSave(): Promise<{ sessionDate: string; builtAt: number; jsonBytes: number; gzBytes: number }> {
+    const board = await this.refresh();
+    const doc = encodeSnapshot(board);
+    if (doc.gzBytes > SNAPSHOT_MAX_GZ_BYTES) {
+      throw new Error(`money-flow snapshot too large to save: ${doc.gzBytes} gzipped bytes`);
+    }
+    await this.firebase.firestore.collection(SNAPSHOT_COLLECTION).doc(SNAPSHOT_DOC).set(doc);
+    return { sessionDate: doc.sessionDate, builtAt: doc.builtAt, jsonBytes: doc.jsonBytes, gzBytes: doc.gzBytes };
+  }
+
+  /** The saved board, read at most once per BOARD_TTL_MS; null when missing or unreadable. */
+  private async readSnapshot(): Promise<{ builtAt: number; board: MoneyFlowBoard } | null> {
+    if (this.snapshotRead && Date.now() - this.snapshotRead.at < BOARD_TTL_MS) return this.snapshotRead.value;
+    let value: { builtAt: number; board: MoneyFlowBoard } | null = null;
+    try {
+      const snap = await this.firebase.firestore.collection(SNAPSHOT_COLLECTION).doc(SNAPSHOT_DOC).get();
+      const data = snap.exists ? (snap.data() as Partial<SnapshotDoc>) : null;
+      if (data?.gz && data.schema === SNAPSHOT_SCHEMA && typeof data.builtAt === "number") {
+        value = { builtAt: data.builtAt, board: decodeSnapshot({ gz: data.gz }) };
+      }
+    } catch (err) {
+      this.logger.warn(`money-flow snapshot read failed: ${(err as Error).message}`);
+    }
+    this.snapshotRead = { at: Date.now(), value };
+    return value;
   }
 
   private refresh(): Promise<MoneyFlowBoard> {

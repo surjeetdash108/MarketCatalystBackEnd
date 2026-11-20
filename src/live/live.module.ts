@@ -138,6 +138,8 @@ import { MoneyFlowService } from "./money-flow/money-flow.service";
     LabStoreService,
     LabUniverseService,
     LabResultsService,
+    // The worker's money-flow-snapshot job builds and saves the board.
+    MoneyFlowService,
   ],
 })
 export class LiveModule {}

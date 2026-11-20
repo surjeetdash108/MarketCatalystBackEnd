@@ -149,8 +149,10 @@ export const API_CATALOG = {
   },
   "GET /live/money-flow": {
     summary:
-      "Money Flow board: flows, movers, levels and scores built server-side from Polygon bars and FMP quotes; cached 30s.",
+      "Money Flow board: flows, movers, levels and scores from Polygon bars and FMP quotes. Serves the board the worker saves every market minute (money_flow/latest); builds on request only when no usable saved board exists.",
     vendors: ["Polygon", "FMP"],
+    store: ["money_flow"],
+    producers: ["money-flow-snapshot"],
   },
   "GET /live/what-matters-now": {
     summary:
