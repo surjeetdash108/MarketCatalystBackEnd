@@ -140,6 +140,42 @@ export class SubscriptionsService {
     return known.length ? Math.min(...known) : null;
   }
 
+  /**
+   * The person behind an account, for "once per person" decisions (lifecycle
+   * emails): the hashed-email key and the first account ever made with that
+   * email (signup_claims, written here if missing). `isFirst` is true for that
+   * first account — a deleted-and-recreated account is not. Null without an email.
+   */
+  async personOf(
+    userId: string,
+  ): Promise<{ emailKey: string; firstUid: string; isFirst: boolean } | null> {
+    const uData = ((await this.firebase.firestore.collection("users").doc(userId).get()).data() ?? {}) as Record<string, unknown>;
+    try {
+      const authUser = await this.firebase.auth.getUser(userId);
+      if (authUser.email) uData.email = authUser.email;
+      if (authUser.metadata?.creationTime && !uData.createdAt && !uData.accountCreatedAt) {
+        uData.accountCreatedAt = new Date(authUser.metadata.creationTime).toISOString();
+      }
+    } catch {
+      /* ignore */
+    }
+    const email = typeof uData.email === "string" ? uData.email : null;
+    if (!email) return null;
+    await this.firstAccountMs(userId, uData); // makes sure the claim exists
+    const emailKey = emailHash(email);
+    let firstUid = userId;
+    try {
+      const snap = await this.firebase.firestore.collection("signup_claims").doc(emailKey).get();
+      const recorded = snap.exists
+        ? (snap.data() as { firstUid?: unknown } | undefined)?.firstUid
+        : null;
+      if (typeof recorded === "string" && recorded) firstUid = recorded;
+    } catch {
+      /* unknown → treat this account as the first */
+    }
+    return { emailKey, firstUid, isFirst: firstUid === userId };
+  }
+
   private readonly firstAccountCache = new Map<string, number>();
 
   /**

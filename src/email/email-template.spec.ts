@@ -25,7 +25,7 @@ const SAMPLE: Record<TemplateName, Record<string, string | boolean>> = {
   welcome: base,
   "getting-started": base,
   "first-activation": base,
-  "trial-started": { ...base, trialEnd: "26 Nov 2026" },
+  "trial-started": { ...base, trialEnd: "26 Nov 2026", daysLeft: "7 days left" },
   "trial-ending": { ...base, trialEnd: "26 Nov 2026" },
   "trial-ended": { ...base, trialEnd: "26 Nov 2026" },
   "pro-confirmed": {

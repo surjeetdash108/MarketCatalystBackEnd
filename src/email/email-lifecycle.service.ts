@@ -11,6 +11,7 @@ import { SubscriptionsService } from "../plans/subscriptions.service";
 import { INTRO_DAYS } from "../plans/plans.registry";
 import { signLinkToken, verifyLinkToken } from "./email-links";
 import { deviceLabel } from "./device-label";
+import { emailHash } from "../billing/retention/email-normalise";
 
 const JOB_NAME = "email-lifecycle";
 const DAY = 86_400_000;
@@ -29,9 +30,15 @@ const KNOWN_DEVICES_MAX = 20;
  *    Trial ending 3 days before the free week ends, Trial ended on the day;
  *  - new sign-in alert (from the sign-in claim sync), "Secure my account",
  *    one-click unsubscribe, and the password reset email.
- * Each is sent at most once per person (email_log/{uid}); promotional mail
- * honours users/{uid}.emailPrefs.marketing === false and carries an
- * unsubscribe link.
+ * Welcome, Trial started and the onboarding emails go only to the FIRST account
+ * ever made with an email (signup_claims); every lifecycle email is sent at
+ * most once per PERSON (email_sent/{emailHash}, plus the older per-account
+ * email_log/{uid}), so deleting and recreating an account doesn't repeat them.
+ * Trial ending / ended follow the free week of the first account. Promotional
+ * mail honours users/{uid}.emailPrefs.marketing === false and the person-level
+ * opt-out (email_optouts/{emailHash}, kept when an account is deleted), and
+ * carries an unsubscribe link. Security mail (sign-in alert, password reset)
+ * always goes out.
  */
 @Injectable()
 export class EmailLifecycleService implements OnModuleInit {
@@ -48,7 +55,7 @@ export class EmailLifecycleService implements OnModuleInit {
 
   onModuleInit() {
     this.registry.register(JOB_NAME, () => this.run(), {
-      collections: ["email_log"],
+      collections: ["email_log", "email_sent", "email_optouts"],
       cronExpression: "15 * * * *",
       timeZone: "America/New_York",
     });
@@ -89,12 +96,88 @@ export class EmailLifecycleService implements OnModuleInit {
     });
   }
 
-  async marketingAllowed(uid: string): Promise<boolean> {
-    const d = (await this.db.collection("users").doc(uid).get()).data();
-    return (
-      (d?.emailPrefs as { marketing?: boolean } | undefined)?.marketing !==
-      false
+  /**
+   * True the first time `key` is claimed for the PERSON (email_sent/{emailHash}),
+   * so deleting the account and signing up again with the same email doesn't
+   * send it twice. Sends logged before this existed count too: this account's
+   * email_log and the first account's (signup_claims.firstUid).
+   */
+  async oncePerPerson(
+    uid: string,
+    person: { emailKey: string; firstUid: string },
+    key: string,
+  ): Promise<boolean> {
+    const personRef = this.db.collection("email_sent").doc(person.emailKey);
+    const logRefs = [...new Set([uid, person.firstUid])].map((id) =>
+      this.db.collection("email_log").doc(id),
     );
+    return this.db.runTransaction(async (tx) => {
+      const snaps = await Promise.all(
+        [personRef, ...logRefs].map((r) => tx.get(r)),
+      );
+      const at = new Date().toISOString();
+      const sentBefore = snaps.some(
+        (s) =>
+          s.exists && (s.data() as Record<string, unknown> | undefined)?.[key],
+      );
+      if (sentBefore) {
+        if (
+          !snaps[0].exists ||
+          !(snaps[0].data() as Record<string, unknown>)?.[key]
+        )
+          tx.set(personRef, { [key]: at }, { merge: true });
+        return false;
+      }
+      tx.set(personRef, { [key]: at }, { merge: true });
+      tx.set(
+        this.db.collection("email_log").doc(uid),
+        { [key]: at },
+        { merge: true },
+      );
+      return true;
+    });
+  }
+
+  /**
+   * Promotional mail allowed: this account hasn't turned it off, and the PERSON
+   * hasn't unsubscribed — an opt-out is kept by email (email_optouts/{emailHash})
+   * so it survives deleting and recreating the account.
+   */
+  async marketingAllowed(uid: string, email?: string | null): Promise<boolean> {
+    const d = (await this.db.collection("users").doc(uid).get()).data();
+    if (
+      (d?.emailPrefs as { marketing?: boolean } | undefined)?.marketing ===
+      false
+    )
+      return false;
+    const addr = email ?? (await this.emailOf(uid));
+    if (!addr) return true;
+    const opt = await this.db
+      .collection("email_optouts")
+      .doc(emailHash(addr))
+      .get();
+    const optOut = opt.exists
+      ? (opt.data() as { marketing?: boolean } | undefined)
+      : undefined;
+    return optOut?.marketing !== false;
+  }
+
+  /** The account's email from Firebase Auth, or null (no such user / no email). */
+  private async emailOf(uid: string): Promise<string | null> {
+    const user = (await this.firebase.auth
+      .getUser(uid)
+      .catch(() => null)) as UserRecord | null;
+    return user?.email ?? null;
+  }
+
+  /** Record (or clear) the person-level promotional opt-out for this account's email. */
+  private async setPersonOptOut(uid: string, optedOut: boolean): Promise<void> {
+    const addr = await this.emailOf(uid);
+    if (!addr) return;
+    const ref = this.db.collection("email_optouts").doc(emailHash(addr));
+    if (optedOut)
+      await ref.set({ marketing: false, at: new Date().toISOString() });
+    else await ref.delete();
   }
 
   unsubscribeUrl(uid: string): string | null {
@@ -109,18 +192,33 @@ export class EmailLifecycleService implements OnModuleInit {
       : `${this.appUrl}/auth/forgot-password`;
   }
 
-  /** Welcome and Trial started, right after the email is verified (once each). */
+  /**
+   * Welcome and Trial started, right after the email is verified — only for the
+   * FIRST account ever made with this email, once per person. A recreated
+   * account gets neither (its free week started with the first account), and
+   * is marked so the hourly sweep doesn't look again.
+   */
   async onVerified(uid: string): Promise<void> {
     try {
       const u = await this.firebase.auth.getUser(uid);
       if (!u.email || !u.emailVerified) return;
-      if (await this.once(uid, "welcome"))
+      const person = await this.subscriptions.personOf(uid);
+      if (!person) return;
+      if (!person.isFirst) {
+        const note = `skipped: recreated account (first was ${person.firstUid})`;
+        await this.db
+          .collection("email_log")
+          .doc(uid)
+          .set({ welcome: note, trialStarted: note }, { merge: true });
+        return;
+      }
+      if (await this.oncePerPerson(uid, person, "welcome"))
         await this.emails.accountWelcome(u.email);
       const eff = await this.subscriptions.forUser(uid);
       if (
         eff.status === "INTRO" &&
         eff.expiryDate &&
-        (await this.once(uid, "trialStarted"))
+        (await this.oncePerPerson(uid, person, "trialStarted"))
       )
         await this.emails.trialStarted(u.email, {
           trialEndsAt: eff.expiryDate,
@@ -172,18 +270,30 @@ export class EmailLifecycleService implements OnModuleInit {
     const log =
       (await this.db.collection("email_log").doc(uid).get()).data() ?? {};
     if (!log.welcome) await this.onVerified(uid);
+    const person = await this.subscriptions.personOf(uid);
+    if (!person) return sent;
     const age = now - created;
-    const marketing = await this.marketingAllowed(uid);
+    const marketing = await this.marketingAllowed(uid, u.email);
     const unsub = this.unsubscribeUrl(uid);
-    if (marketing && unsub && age >= 2 * DAY && age < 7 * DAY) {
-      if (await this.once(uid, "gettingStarted")) {
+    // Onboarding is for the first account only; a recreated one already had it.
+    if (
+      person.isFirst &&
+      marketing &&
+      unsub &&
+      age >= 2 * DAY &&
+      age < 7 * DAY
+    ) {
+      if (await this.oncePerPerson(uid, person, "gettingStarted")) {
         await this.emails.gettingStarted(u.email, { unsubscribeUrl: unsub });
         sent++;
       }
       const lastIn = Date.parse(u.metadata.lastSignInTime ?? "");
       const neverBack =
         !Number.isFinite(lastIn) || lastIn - created < 30 * 60_000;
-      if (neverBack && (await this.once(uid, "firstActivation"))) {
+      if (
+        neverBack &&
+        (await this.oncePerPerson(uid, person, "firstActivation"))
+      ) {
         await this.emails.firstActivation(u.email, { unsubscribeUrl: unsub });
         sent++;
       }
@@ -196,7 +306,7 @@ export class EmailLifecycleService implements OnModuleInit {
         unsub &&
         left > 0 &&
         left <= 3 * DAY &&
-        (await this.once(uid, "trialEnding"))
+        (await this.oncePerPerson(uid, person, "trialEnding"))
       ) {
         await this.emails.trialEnding(u.email, {
           trialEndsAt: eff.expiryDate,
@@ -217,7 +327,7 @@ export class EmailLifecycleService implements OnModuleInit {
         end != null &&
         now >= end &&
         now - end < 3 * DAY &&
-        (await this.once(uid, "trialEnded"))
+        (await this.oncePerPerson(uid, person, "trialEnded"))
       ) {
         await this.emails.trialEnded(u.email, {
           trialEndsAt: new Date(end).toISOString(),
@@ -312,6 +422,7 @@ export class EmailLifecycleService implements OnModuleInit {
       .collection("users")
       .doc(uid)
       .set({ emailPrefs: { marketing: false } }, { merge: true });
+    await this.setPersonOptOut(uid, true);
     return true;
   }
 
@@ -319,6 +430,7 @@ export class EmailLifecycleService implements OnModuleInit {
     return { marketing: await this.marketingAllowed(uid) };
   }
 
+  /** The settings toggle: also sets or clears the person-level opt-out. */
   async setEmailPrefs(
     uid: string,
     marketing: boolean,
@@ -327,6 +439,7 @@ export class EmailLifecycleService implements OnModuleInit {
       .collection("users")
       .doc(uid)
       .set({ emailPrefs: { marketing } }, { merge: true });
+    await this.setPersonOptOut(uid, !marketing);
     return { marketing };
   }
 

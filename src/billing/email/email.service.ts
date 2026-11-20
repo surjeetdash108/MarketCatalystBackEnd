@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, Optional } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { planById } from "../../plans/plans.registry";
+import { freeDaysLeft } from "../../common/et-calendar";
 import { EMAIL_SENDER, type EmailSender, type EmailTag } from "./email-sender";
 import { FirebaseAdminService } from "../../common/firebase-admin.provider";
 import {
@@ -539,15 +540,23 @@ export class EmailService {
     );
   }
 
-  /** The free week began (new-account intro). */
-  trialStarted(to: string, p: { trialEndsAt: string }) {
+  /**
+   * The free week began (new-account intro: Market Catalyst, Stock Intelligence
+   * and Money Flow, no plan, no card, no automatic charge). Shows the real end
+   * date and the calendar days left, today included.
+   */
+  trialStarted(to: string, p: { trialEndsAt: string; now?: number }) {
+    const left = freeDaysLeft(Date.parse(p.trialEndsAt), p.now ?? Date.now());
+    const daysLeft = left <= 1 ? "last day" : `${left} days left`;
     return this.sendTemplate(
       "trial_started",
       to,
-      "Your MarketCatalyst Starter trial is live",
+      "Your free MarketCatalyst access has started",
       "trial-started",
-      { trialEnd: shortDate(p.trialEndsAt) },
-      [`Your free trial runs until ${longDate(p.trialEndsAt)}.`],
+      { trialEnd: shortDate(p.trialEndsAt), daysLeft },
+      [
+        `You have free access to Market Catalyst, Stock Intelligence and Money Flow until ${longDate(p.trialEndsAt)} (${daysLeft}). No card, no automatic charge.`,
+      ],
     );
   }
 
@@ -583,11 +592,11 @@ export class EmailService {
     return this.sendTemplate(
       "trial_ending",
       to,
-      "Your Starter trial ends in 3 days",
+      "Your free MarketCatalyst access ends in 3 days",
       "trial-ending",
       { trialEnd: shortDate(p.trialEndsAt) },
       [
-        `Your free trial ends on ${longDate(p.trialEndsAt)}. Choose a plan: ${this.appUrl}/choose-plan`,
+        `Your free access ends on ${longDate(p.trialEndsAt)}. No card is on file, so nothing will be charged. Choose a plan: ${this.appUrl}/choose-plan`,
       ],
       { unsubscribeUrl: p.unsubscribeUrl },
     );
@@ -598,11 +607,11 @@ export class EmailService {
     return this.sendTemplate(
       "trial_ended",
       to,
-      "Your MarketCatalyst trial has ended",
+      "Your free MarketCatalyst access has ended",
       "trial-ended",
       { trialEnd: shortDate(p.trialEndsAt) },
       [
-        `Your free trial ended on ${longDate(p.trialEndsAt)}. Choose a plan: ${this.appUrl}/choose-plan`,
+        `Your free access ended on ${longDate(p.trialEndsAt)}. Choose a plan: ${this.appUrl}/choose-plan`,
       ],
       { unsubscribeUrl: p.unsubscribeUrl },
     );

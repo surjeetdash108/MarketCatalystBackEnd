@@ -41,8 +41,11 @@ export interface DeletionReport {
  * code, billing mirrors, and finally the sign-in account.
  *
  * Kept on purpose: payment and subscription history (accounting/tax records),
- * referral reward records, and the hashed-email trial/signup claims (so a
- * deleted-and-recreated account can't restart the free trial).
+ * referral reward records, the hashed-email trial/signup claims (so a
+ * deleted-and-recreated account can't restart the free trial), and the
+ * hashed-email lifecycle-mail log and promotional opt-out (email_sent,
+ * email_optouts: a recreated account gets no second Welcome, and an
+ * unsubscribe is still honoured).
  * deleted_accounts/{uid} is written first so late provider events for this
  * uid are ignored instead of re-creating its records.
  */

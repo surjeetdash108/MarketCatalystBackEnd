@@ -139,4 +139,31 @@ describe("EmailService", () => {
       expect(msg.subject.toLowerCase()).not.toContain("free plan");
     }
   });
+  it("Trial started describes the free intro truthfully: no plan, no card, the real end date and days left", async () => {
+    const { sender, emails } = setup();
+    // A recreated or late-verified account can have fewer than 7 days left.
+    await emails.trialStarted("user@example.com", {
+      trialEndsAt: "2026-11-25T04:59:59.999Z", // Nov 24, 11:59:59 PM ET
+      now: Date.parse("2026-11-21T15:00:00Z"), // Nov 21 ET → 4 calendar days, today included
+    });
+    const msg = sender.outbox[0];
+    expect(msg.subject).toBe("Your free MarketCatalyst access has started");
+    expect(msg.text).toContain("Market Catalyst, Stock Intelligence and Money Flow");
+    expect(msg.text).toContain("24 November 2026 (4 days left)");
+    expect(msg.text).toContain("No card, no automatic charge");
+    for (const part of [msg.subject, msg.text, msg.html]) {
+      expect(part).not.toMatch(/Starter trial|\$39\/mo|next 7 days/);
+    }
+    expect(msg.html).toContain("Money Flow: where institutional money is moving");
+  });
+
+  it("Trial ending / ended no longer call the free intro a Starter trial", async () => {
+    const { sender, emails } = setup();
+    await emails.trialEnding("user@example.com", { trialEndsAt: END, unsubscribeUrl: "http://app.test/u" });
+    await emails.trialEnded("user@example.com", { trialEndsAt: END, unsubscribeUrl: "http://app.test/u" });
+    for (const m of sender.outbox) {
+      expect(`${m.subject} ${m.text} ${m.html}`).not.toMatch(/Starter trial/);
+    }
+    expect(sender.outbox[0].text).toContain("nothing will be charged");
+  });
 });

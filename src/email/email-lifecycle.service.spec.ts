@@ -3,6 +3,7 @@ import { EmailLifecycleService } from "./email-lifecycle.service";
 import { deviceLabel } from "./device-label";
 import { signLinkToken } from "./email-links";
 import { testCodeAllowed } from "../account/email-verification.service";
+import { emailHash } from "../billing/retention/email-normalise";
 
 const DAY = 86_400_000;
 const NOW = Date.parse("2026-12-05T15:00:00Z");
@@ -10,6 +11,8 @@ const NOW = Date.parse("2026-12-05T15:00:00Z");
 function setup(
   user: { created: number; lastIn?: number; verified?: boolean },
   eff: Record<string, unknown>,
+  /** The first account ever made with this email; "u1" (this one) by default. */
+  firstUid = "u1",
 ) {
   const fs = new FakeFirestore();
   const sent: string[] = [];
@@ -46,6 +49,12 @@ function setup(
   const subs = {
     forUser: () => Promise.resolve(eff),
     accountStartMs: () => Promise.resolve(user.created),
+    personOf: () =>
+      Promise.resolve({
+        emailKey: "hash-ana",
+        firstUid,
+        isFirst: firstUid === "u1",
+      }),
   };
   const config = {
     get: (k: string, d?: unknown) =>
@@ -165,6 +174,128 @@ describe("lifecycle emails", () => {
     expect(
       (await t.fs.collection("users").doc("u1").get()).data(),
     ).toMatchObject({ emailPrefs: { marketing: false } });
+  });
+});
+
+describe("lifecycle emails: once per PERSON (deleted and recreated accounts)", () => {
+  it("recreated account: no Welcome, Trial started or onboarding — its free week began with the first account", async () => {
+    const t = setup(
+      { created: NOW - 2.5 * DAY },
+      { status: "INTRO", expiryDate: new Date(NOW + 5 * DAY).toISOString() },
+      "u0", // the first account with this email was u0
+    );
+    await t.sweep();
+    expect(t.sent).toEqual([]);
+    // Marked, so the hourly sweep doesn't keep re-checking it.
+    const log = ((await t.fs.collection("email_log").doc("u1").get()).data() ??
+      {}) as { welcome?: string; trialStarted?: string };
+    expect(log.welcome).toContain("recreated");
+    expect(log.trialStarted).toContain("recreated");
+  });
+
+  it("recreated account: Trial ending still follows the original free week, once per person", async () => {
+    const t = setup(
+      { created: NOW - 2.5 * DAY },
+      { status: "INTRO", expiryDate: new Date(NOW + 2 * DAY).toISOString() },
+      "u0",
+    );
+    await t.sweep();
+    expect(t.sent).toEqual(["trialEnding"]);
+    await t.sweep();
+    expect(t.sent).toEqual(["trialEnding"]);
+    expect(
+      (await t.fs.collection("email_sent").doc("hash-ana").get()).data(),
+    ).toHaveProperty("trialEnding");
+  });
+
+  it("a send already made to the person (by email) is not repeated on a new account", async () => {
+    const t = setup(
+      { created: NOW - 2.5 * DAY },
+      { status: "INTRO", expiryDate: new Date(NOW + 2 * DAY).toISOString() },
+      "u0",
+    );
+    await t.fs
+      .collection("email_sent")
+      .doc("hash-ana")
+      .set({ trialEnding: "2026-12-04T15:00:00Z" });
+    await t.sweep();
+    expect(t.sent).toEqual([]);
+  });
+
+  it("sends logged on the first account before this change (email_log/{firstUid}) count too", async () => {
+    const t = setup(
+      { created: NOW - 2.5 * DAY },
+      { status: "INTRO", expiryDate: new Date(NOW + 2 * DAY).toISOString() },
+      "u0",
+    );
+    await t.fs
+      .collection("email_log")
+      .doc("u0")
+      .set({ trialEnding: "2026-12-04T15:00:00Z" });
+    await t.sweep();
+    expect(t.sent).toEqual([]);
+    expect(
+      (await t.fs.collection("email_sent").doc("hash-ana").get()).data(),
+    ).toHaveProperty("trialEnding");
+  });
+
+  it("first account: Welcome and Trial started are claimed for the person, so they never go out twice", async () => {
+    const t = setup(
+      { created: NOW - DAY },
+      { status: "INTRO", expiryDate: new Date(NOW + 5 * DAY).toISOString() },
+    );
+    await t.svc.onVerified("u1");
+    await t.svc.onVerified("u1");
+    expect(t.sent).toEqual(["accountWelcome", "trialStarted"]);
+    const person = ((
+      await t.fs.collection("email_sent").doc("hash-ana").get()
+    ).data() ?? {}) as Record<string, unknown>;
+    expect(typeof person.welcome).toBe("string");
+    expect(typeof person.trialStarted).toBe("string");
+  });
+});
+
+describe("promotional opt-out survives deleting the account", () => {
+  it("unsubscribe records the opt-out by email; a fresh account with that email gets no promotional mail", async () => {
+    const first = setup({ created: NOW - DAY }, { status: "INTRO" });
+    await first.svc.unsubscribe(signLinkToken("s3cret", "u1", "unsubscribe"));
+    expect(
+      (
+        await first.fs
+          .collection("email_optouts")
+          .doc(emailHash("ana@example.com"))
+          .get()
+      ).data(),
+    ).toMatchObject({ marketing: false });
+
+    // A new account (empty profile) with the same email, opt-out still on file.
+    const again = setup(
+      { created: NOW - 2.5 * DAY },
+      { status: "INTRO", expiryDate: new Date(NOW + 2 * DAY).toISOString() },
+    );
+    await again.fs
+      .collection("email_optouts")
+      .doc(emailHash("ana@example.com"))
+      .set({ marketing: false });
+    expect(await again.svc.marketingAllowed("u1")).toBe(false);
+    await again.sweep();
+    expect(again.sent).toEqual(["accountWelcome", "trialStarted"]); // account emails only
+  });
+
+  it("turning promotional mail back on in settings clears the opt-out", async () => {
+    const t = setup({ created: NOW - DAY }, { status: "INTRO" });
+    await t.svc.setEmailPrefs("u1", false);
+    expect(await t.svc.marketingAllowed("u1")).toBe(false);
+    await t.svc.setEmailPrefs("u1", true);
+    expect(await t.svc.marketingAllowed("u1")).toBe(true);
+    expect(
+      (
+        await t.fs
+          .collection("email_optouts")
+          .doc(emailHash("ana@example.com"))
+          .get()
+      ).exists,
+    ).toBe(false);
   });
 });
 
