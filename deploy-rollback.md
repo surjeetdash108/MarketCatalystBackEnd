@@ -95,3 +95,11 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - live API: `market-catalyst-live-00275-2mj` (image `…/market-catalyst-live@sha256:f0daf557da8373c721254a91c6434602f89d01c2d1e5a7c9b73ab7a66a4321ef`)
 - premarket-job / history-backfill-job image: `…/market-catalyst-backend@sha256:28999c6043811dacf55f0e3ca8b0acededc6963a1ef4da59389ea8fac367b306`
 - Code only (backend prod 1f32f93); no env, scheduler, rules or hosting change. Deployed: worker `market-catalyst-backend-00326-vjz`, live `market-catalyst-live-00276-btf`, jobs on `…market-catalyst-backend@sha256:e761223f5f86bd9d2d26a7c18e2987cdae93bb1a33f98f2c5a481683805a3e2c`.
+
+## 2026-11-20 16:20 ET — Money Flow saved board (rollback values captured before)
+- backend worker: `market-catalyst-backend-00326-vjz`; live API: `market-catalyst-live-00276-btf`; jobs image `…market-catalyst-backend@sha256:e761223f5f86bd9d2d26a7c18e2987cdae93bb1a33f98f2c5a481683805a3e2c`.
+- Deployed (backend prod 5f3aee2): worker `market-catalyst-backend-00327-8sf`, live `market-catalyst-live-00277-ms9`, jobs on `…market-catalyst-backend@sha256:c458276e14b1365c3c80c2f43f4b124d3eeae79ee3a01233a4286fa714010352`.
+- UI Hosting (site marketcatalyst): previous version `83300b475846cf0e`; new `055e7975a5e834db` (UI prod 104ce8f).
+- Firestore rules: added `money_flow/latest` read for Pro+/staff (UI prod 104ce8f), both databases.
+- New Cloud Scheduler job `sync-money-flow-snapshot` (`* 9-16 * * 1-5` America/New_York → worker /sync/money-flow-snapshot/run). New Firestore doc `money_flow/latest`.
+- Fast off switch (no deploy): `gcloud scheduler jobs pause sync-money-flow-snapshot --location us-central1 --project market-catalyst-502415`. Within 10 minutes of the session the saved board is ignored by both the live API and the browser, and Money Flow builds on request as before. Full rollback: the revisions/version above, delete the scheduler job.
