@@ -103,3 +103,8 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - Firestore rules: added `money_flow/latest` read for Pro+/staff (UI prod 104ce8f), both databases.
 - New Cloud Scheduler job `sync-money-flow-snapshot` (`* 9-16 * * 1-5` America/New_York → worker /sync/money-flow-snapshot/run). New Firestore doc `money_flow/latest`.
 - Fast off switch (no deploy): `gcloud scheduler jobs pause sync-money-flow-snapshot --location us-central1 --project market-catalyst-502415`. Within 10 minutes of the session the saved board is ignored by both the live API and the browser, and Money Flow builds on request as before. Full rollback: the revisions/version above, delete the scheduler job.
+
+## 2026-11-20 16:32 ET — browser key: localhost on any port + Firestore API
+- Key `833362a8-6eb3-4009-baad-75eceebb3788` before: 10 referrers incl. the non-matching `http://localhost:*/*` and `http://127.0.0.1:*/*` (blocked local dev); 4 APIs.
+- After: 16 referrers (production unchanged; localhost/127.0.0.1 on ports 3000 and 3001 explicitly, plus `localhost`, `localhost:*`, `127.0.0.1`, `127.0.0.1:*` for any port); 5 APIs (added `firestore.googleapis.com`, needed by Money Flow's direct read of `money_flow/latest` — the Firestore web SDK sends the key). From MarketCatalystUI prod 5ca801d `scripts/restrict-browser-key.sh`; `verify` passes.
+- Roll back: `scripts/restrict-browser-key.sh rollback` (BACKUP=~/browser-key-backup-2026-11-20.json restores the unrestricted original).
