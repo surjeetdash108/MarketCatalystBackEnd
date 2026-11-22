@@ -32,7 +32,7 @@ export interface PurgeResult {
   usersReset: string[];
 }
 
-const RESET_PROJECTION = {
+export const RESET_PROJECTION = {
   currentPlan: "none",
   subscriptionStatus: null,
   subscriptionInterval: null,
