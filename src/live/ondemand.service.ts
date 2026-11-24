@@ -40,6 +40,7 @@ import {
   alignReportedEstimate,
   buildEpsHistory,
   applyCalendarEstimates,
+  nullImplausibleRevenue,
   type CalendarEstimate,
   ttmReportedEpsFromRows,
   type SplitEvent,
@@ -2640,6 +2641,12 @@ export class OnDemandService implements OnModuleDestroy {
         ?.annual;
       if (annual.length === 0 && Array.isArray(prevAnnual)) {
         annual = prevAnnual;
+      }
+      // A vendor's full-year revenue sometimes arrives wrong right after a filing
+      // (HPE, 23 Nov 2026), which turns the derived Q4 negative; blank those
+      // figures rather than store an impossible one.
+      for (const note of nullImplausibleRevenue(quarters, annual)) {
+        this.logger.warn(`financials ${ticker}: ${note}`);
       }
 
       // Deep FMP quarterly EPS history → annual EPS (sum by fiscal year). Keep
