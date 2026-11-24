@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { fyDilutedEpsGrowth } from "../common/eps-growth.util";
 import { FieldValue } from "firebase-admin/firestore";
 import { articlesSince, isMissingIndexError } from "./news-since.util";
+import { isBarsDocFresh } from "./bars-freshness";
 import {
   NEWS_ADAPTER,
   NEWS_FMP_ADAPTER,
@@ -320,10 +321,8 @@ const COMPANY_SUMMARY_TTL_MS = 5 * 60_000;
 const SUMMARY_CALL_BUDGET_MS = 3_000;
 /** Earnings transcripts change once a quarter — re-check at most daily. */
 const TRANSCRIPT_TTL_MS = 24 * 3600_000;
-/** Daily bars: at most one vendor refresh per ticker per day. */
+/** Cache age for the daily-cadence docs below (profiles, financials, …). Chart bars use bars-freshness.ts. */
 const DAILY_TTL_MS = 20 * 3600_000;
-/** Intraday bars during the extended session (04:00–20:00 ET weekdays). */
-const INTRADAY_SESSION_TTL_MS = 15 * 60_000;
 /** Usage counters are flushed to Firestore at most this often. */
 const USAGE_FLUSH_MS = 60_000;
 
@@ -383,42 +382,20 @@ function byPublishedAtDesc(
   return String(b.publishedAt).localeCompare(String(a.publishedAt));
 }
 
-/** ET clock parts without a tz library. */
-function etParts(now = new Date()): { weekday: number; hour: number } {
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    hour12: false,
-    weekday: "short",
-    hour: "numeric",
-  });
-  const parts = fmt.formatToParts(now);
-  const wd = parts.find((p) => p.type === "weekday")?.value ?? "Mon";
-  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "12") % 24;
-  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(wd);
-  return { weekday, hour };
-}
-
-/** True while US extended trading (pre + regular + after) could move intraday bars. */
-function inExtendedSession(): boolean {
-  const { weekday, hour } = etParts();
-  return weekday >= 1 && weekday <= 5 && hour >= 4 && hour < 20;
-}
-
 /** Calendar days of stored bars a refresh re-fetches and replaces. */
 const REVISE_BACK_DAYS = 7;
 
+/**
+ * Whether a stored bars doc can be served. Age alone is not enough: the doc must
+ * also have been saved after the latest session boundary (open / settled close),
+ * so a chart never shows a candle caught before the open or mid-session. See
+ * bars-freshness.ts.
+ */
 function isFresh(
   createdAtIso: string | undefined,
   resolution: Resolution,
 ): boolean {
-  if (!createdAtIso) return false;
-  const age = Date.now() - Date.parse(createdAtIso);
-  if (!Number.isFinite(age) || age < 0) return false;
-  if (resolution === "daily") return age < DAILY_TTL_MS;
-  // Intraday: refetch every 15 min while a session is running; once the session
-  // is over, anything fetched after it ended stays fresh until the next one.
-  if (inExtendedSession()) return age < INTRADAY_SESSION_TTL_MS;
-  return age < 12 * 3600_000;
+  return isBarsDocFresh(createdAtIso, resolution === "daily");
 }
 
 // Forward-annualized dividend helpers (SPECIAL_DIVIDEND_TYPES, DivHistItem,

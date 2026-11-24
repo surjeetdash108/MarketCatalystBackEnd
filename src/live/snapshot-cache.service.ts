@@ -125,6 +125,17 @@ export interface SnapshotQuote {
    * price (see mapFmpQuote).
    */
   regularClose: number | null;
+  /**
+   * The move (%) of the latest COMPLETED regular session, kept while `changePct`
+   * is measuring something else. In pre-market `changePct` is the pre-market
+   * print against the last close, so for a stock with no pre-market trade it is
+   * 0.00 and Monday's real move (AAPL +1.90, MSFT +1.65, NVDA +31.48 at 04:36
+   * ET on 24 Nov) is nowhere in the row: the heatmap, whose page says "as of
+   * Monday close", showed ~95% of its tiles flat. Null while the regular session
+   * is running (then `changePct` is that move) and when the quote cannot be tied
+   * to an earlier session. Optional: the Polygon path does not fill it.
+   */
+  lastSessionChangePct?: number | null;
   /** "open" | "closed" | "early_trading" | "late_trading" per the vendor. */
   marketStatus: string | null;
 }
@@ -246,6 +257,16 @@ export function mapFmpQuote(
     lateTradingChangePct: null,
     regularTradingChangePct: q.changePercentage,
     regularClose: q.price,
+    // FMP's own change belongs to the regular session its price is from. Pre-market
+    // that must be an EARLIER date's print (a print stamped today is not a closed
+    // session's move); after the close it is today's.
+    lastSessionChangePct:
+      session === "open"
+        ? null
+        : session === "early_trading" &&
+            !(q.timestamp != null && etClock(q.timestamp * 1000).date < etClock(now).date)
+          ? null
+          : q.changePercentage ?? null,
     marketStatus: session,
   };
   const pct = (a: number, b: number | null) =>
