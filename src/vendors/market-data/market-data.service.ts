@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { QuoteReferenceCache, regularOpenMs, sanitizeQuote, type QuoteRef } from "../../common/quote-sanity";
+import { ExDividendToday, dividendCalendarPath, type DividendCalendarRow } from "../../common/ex-dividend-today";
 import { clipLatePrintSpikes } from "../../common/late-print-filter";
 import { ConfigService } from "@nestjs/config";
 import { FmpService } from "../fmp/fmp.service";
@@ -794,6 +795,10 @@ export class MarketDataService extends PolygonService {
     (t) => super.getUniversalSnapshotRaw(t),
     (d) => super.getGroupedDaily(d),
   );
+  /** Cash dividends going ex today: the day's change is measured from the adjusted close (common/ex-dividend-today.ts). */
+  private readonly exDividends = new ExDividendToday(
+    async (day) => (await this.fmpApi.request(dividendCalendarPath(day))) as DividendCalendarRow[],
+  );
 
   /**
    * Every snapshot row passes sanitizeQuote: the official previous close as
@@ -811,6 +816,7 @@ export class MarketDataService extends PolygonService {
     }
     const now = Date.now();
     const openMs = regularOpenMs(now);
+    const exDiv = await this.exDividends.get(now).catch(() => new Map<string, number>());
     return list.map((s) => {
       const r = refs.get(s.ticker);
       if (!r) return s;
@@ -819,6 +825,7 @@ export class MarketDataService extends PolygonService {
         r,
         now,
         openMs,
+        exDiv.get(s.ticker) ?? null,
       );
       return { ...s, price: q.price, change: q.change, changePercent: q.changePct, previousClose: q.previousClose, low: q.dayLow, high: q.dayHigh };
     });

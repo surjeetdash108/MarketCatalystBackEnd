@@ -36,3 +36,44 @@ describe("share-class-grouping.util", () => {
     expect(deduplicated.map(c => c.ticker)).toEqual(["BIG", "SMALL"]);
   });
 });
+
+import { dedupeIssuers, isFundType, issuerKey } from "./share-class-grouping.util";
+
+describe("stock-map membership (no CIK on any company doc)", () => {
+  const B = 1e9;
+  const docs = [
+    { ticker: "GOOGL", name: "Alphabet Inc.", type: "CS", marketCap: 3441 * B },
+    { ticker: "GOOG", name: "Alphabet Inc.", type: "CS", marketCap: 3438 * B },
+    { ticker: "GOOGM", name: "Alphabet Inc. Depository Shs Repr 1/20th Conv Pfd Registered Shs", type: "CS", marketCap: 3547 * B },
+    { ticker: "BRK.A", name: "Berkshire Hathaway Inc.", type: "CS", marketCap: 1229 * B },
+    { ticker: "BRK.B", name: "Berkshire Hathaway Inc.", type: "CS", marketCap: 800 * B },
+    { ticker: "VTI", name: "Vanguard Morningstar Total Stock Market ETF", type: "ETF", marketCap: 2182 * B },
+    { ticker: "JPM", name: "JPMorgan Chase & Co.", type: "CS", marketCap: 841 * B },
+    { ticker: "NODOC", name: null, marketCap: 5 * B },
+  ];
+
+  it("Alphabet's three listings and Berkshire's two each count once; the ETF is dropped", () => {
+    const out = dedupeIssuers(docs);
+    // GOOGL survives, not GOOGM: the depositary share has the biggest (wrong) cap but is not the common stock
+    expect(out.map((d) => d.ticker)).toEqual(["GOOGL", "BRK.A", "JPM", "NODOC"]);
+  });
+
+  it("the depositary share of the preferred collapses onto Alphabet", () => {
+    expect(issuerKey(docs[2])).toBe(issuerKey(docs[0]));
+    expect(issuerKey(docs[3])).toBe(issuerKey(docs[4]));
+  });
+
+  it("a doc with no name keys on its own ticker; a CIK wins over the name", () => {
+    expect(issuerKey({ ticker: "NODOC", name: null })).toBe("TKR_NODOC");
+    expect(issuerKey({ ticker: "A", name: "Alphabet Inc.", cik: "0001652044" })).toBe("CIK_1652044");
+  });
+
+  it("class wording is stripped (Under Armour Class A / Class C)", () => {
+    expect(issuerKey({ ticker: "UAA", name: "Under Armour, Inc. Class A" })).toBe(issuerKey({ ticker: "UA", name: "Under Armour, Inc. Class C" }));
+  });
+
+  it("isFundType: ETF, ETN, ETV, FUND only", () => {
+    expect(["ETF", "ETN", "ETV", "FUND", "etf"].every((t) => isFundType(t))).toBe(true);
+    expect(["CS", "ADRC", "PFD", null, undefined].some((t) => isFundType(t as string))).toBe(false);
+  });
+});

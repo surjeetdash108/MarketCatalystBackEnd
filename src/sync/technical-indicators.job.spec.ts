@@ -69,6 +69,31 @@ describe("computeIndicators — week5Closes", () => {
   });
 });
 
+describe("computeIndicators — month21Closes", () => {
+  it("returns the last 22 dated closes, oldest → newest; [0] is the base of monthChangePct", () => {
+    const bars = makeBars();
+    const ind = computeIndicators(bars, new Map(), NOW)!;
+    expect(ind.month21Closes).toHaveLength(22);
+    const last22 = bars.slice(-22);
+    ind.month21Closes!.forEach((c, i) => {
+      expect(c.date).toBe(last22[i].barDate);
+      expect(c.close).toBeCloseTo(last22[i].close, 4);
+    });
+    const first = ind.month21Closes![0].close;
+    const last = ind.month21Closes![21].close;
+    expect(((last / first - 1) * 100)).toBeCloseTo(ind.monthChangePct!, 1);
+  });
+
+  it("is null when any of the 22 bars has no date, and when the history is too short", () => {
+    const bars = makeBars();
+    delete bars[bars.length - 10].barDate;
+    expect(computeIndicators(bars, new Map(), NOW)!.month21Closes).toBeNull();
+    const short = computeIndicators(makeBars(21), new Map(), NOW);
+    // Too little history for a 21-session move: no closes published with it.
+    if (short) expect(short.month21Closes).toBeNull();
+  });
+});
+
 describe("anchor52wToPrice", () => {
   it("measures distance from the displayed price, not the last bar close", () => {
     // MSFT 2026-10-12: bars end 10-09 (close 535.06), price is the 10-12 close.

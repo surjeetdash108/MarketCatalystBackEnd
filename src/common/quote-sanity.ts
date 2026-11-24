@@ -103,8 +103,14 @@ export function sanitizeQuote(
   ref: QuoteRef | null | undefined,
   now: number,
   openMs: number | null,
+  exDividend?: number | null,
 ): SaneQuote {
   const prev = pos(ref?.prevClose) ?? pos(q.previousClose);
+  const changeBase = exAdjustedPrevious(
+    prev,
+    pos(q.previousClose),
+    pos(exDividend),
+  );
   let price = pos(q.price);
   let dayLow = pos(q.dayLow);
   let dayHigh = pos(q.dayHigh);
@@ -141,22 +147,47 @@ export function sanitizeQuote(
       dayHigh = Math.max(ref.sessionHigh, price ?? ref.sessionHigh);
     }
   }
-  const change = price != null && prev != null ? price - prev : null;
+  // The move is measured from the dividend-adjusted close on an ex-date. A stock
+  // that has not traded today stays at the official close, move 0.
+  const base = adjusted === "no-trade-today" ? prev : changeBase;
+  const change = price != null && base != null ? price - base : null;
   const changePct =
-    price != null && prev != null
+    price != null && base != null
       ? adjusted === "no-trade-today"
         ? 0
-        : ((price - prev) / prev) * 100
+        : ((price - base) / base) * 100
       : null;
   return {
     price,
-    previousClose: prev,
+    previousClose: base,
     change,
     changePct,
     dayLow,
     dayHigh,
     adjusted,
   };
+}
+
+/**
+ * The previous close a day's change is measured from.
+ *
+ * Normally the official close (`official`). On a stock's ex-dividend date the
+ * exchange and every consumer feed use that close LESS the cash dividend, which
+ * the vendor's own `previousClose` carries. It is adopted only when it matches
+ * `official - dividend` to within rounding, so a vendor close that is merely
+ * stale (BRK.B, two sessions back) is never mistaken for an adjustment.
+ */
+export function exAdjustedPrevious(
+  official: number | null,
+  vendorPrev: number | null,
+  dividend: number | null,
+): number | null {
+  if (official == null || vendorPrev == null || dividend == null)
+    return official;
+  const adjusted = official - dividend;
+  if (!(adjusted > 0)) return official;
+  const tolerance = Math.max(0.02, official * 0.0005);
+  return Math.abs(vendorPrev - adjusted) <= tolerance ? vendorPrev : official;
 }
 
 /** Today's 09:30 ET as epoch ms when it has passed on a weekday, else null. */

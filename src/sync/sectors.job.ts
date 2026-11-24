@@ -8,6 +8,7 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { SECTORS_ADAPTER, type SectorsAdapter } from "../adapters/types";
 import { SyncRegistry } from "../common/sync-registry.service";
 import { etDate } from "../common/market-calendar.util";
+import { dedupeIssuers } from "../common/share-class-grouping.util";
 
 const JOB_NAME = "sectors";
 
@@ -16,6 +17,67 @@ function slug(sector: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "");
+}
+
+/** The `companies` fields the sector aggregate reads. */
+export interface SectorDocFields {
+  ticker?: string;
+  name?: string | null;
+  type?: string | null;
+  cik?: string | null;
+  sector?: string | null;
+  marketCap?: number | null;
+  pctChange?: number | null;
+  delisted?: boolean;
+}
+
+/**
+ * Cap-weighted move per sector over the STOCKS in it: funds (ETF/ETN/ETV/FUND)
+ * are not members, and one company is counted once however many share classes
+ * list (GOOG + GOOGL, BRK.A + BRK.B, a depositary share of a preferred) — the
+ * same rules as the Heatmap's buildSectorList, so the Dashboard and the map
+ * agree. Before this, 43 ETFs made up 42% of Finance's weight.
+ */
+export function aggregateSectors(
+  docs: SectorDocFields[],
+): Map<string, { weighted: number; capSum: number; members: number }> {
+  const bySector = new Map<
+    string,
+    Array<
+      SectorDocFields & { ticker: string; marketCap: number; pctChange: number }
+    >
+  >();
+  for (const c of docs) {
+    // A soft-deleted doc keeps its last move forever; it is not a member.
+    if (c.delisted === true) continue;
+    const sector = c.sector?.trim();
+    // A member needs both a weight and a move; anything else would either
+    // skew the average or contribute nothing.
+    if (!sector || c.marketCap == null || c.pctChange == null) continue;
+    if (!(c.marketCap > 0) || !Number.isFinite(c.pctChange)) continue;
+    const list = bySector.get(sector) ?? [];
+    list.push({
+      ...c,
+      ticker: c.ticker ?? "",
+      marketCap: c.marketCap,
+      pctChange: c.pctChange,
+    });
+    bySector.set(sector, list);
+  }
+  const agg = new Map<
+    string,
+    { weighted: number; capSum: number; members: number }
+  >();
+  for (const [sector, list] of bySector) {
+    const members = dedupeIssuers(list);
+    if (members.length === 0) continue;
+    agg.set(sector, {
+      weighted: members.reduce((n, m) => n + m.marketCap * m.pctChange, 0),
+      capSum: members.reduce((n, m) => n + m.marketCap, 0),
+      members: members.length,
+    });
+  }
+  return agg;
 }
 
 @Injectable()
@@ -60,30 +122,12 @@ export class SectorsJob implements OnModuleInit {
       const db = this.firebase.firestore;
       const snap = await db.collection("companies").get();
 
-      const agg = new Map<
-        string,
-        { weighted: number; capSum: number; members: number }
-      >();
-      for (const d of snap.docs) {
-        const c = d.data() as {
-          sector?: string | null;
-          marketCap?: number | null;
-          pctChange?: number | null;
-          delisted?: boolean;
-        };
-        // A soft-deleted doc keeps its last move forever; it is not a member.
-        if (c.delisted === true) continue;
-        const sector = c.sector?.trim();
-        // A member needs both a weight and a move; anything else would either
-        // skew the average or contribute nothing.
-        if (!sector || c.marketCap == null || c.pctChange == null) continue;
-        if (!(c.marketCap > 0) || !Number.isFinite(c.pctChange)) continue;
-        const cur = agg.get(sector) ?? { weighted: 0, capSum: 0, members: 0 };
-        cur.weighted += c.marketCap * c.pctChange;
-        cur.capSum += c.marketCap;
-        cur.members += 1;
-        agg.set(sector, cur);
-      }
+      const agg = aggregateSectors(
+        snap.docs.map((d) => ({
+          ticker: d.id,
+          ...(d.data() as SectorDocFields),
+        })),
+      );
 
       const date = etDate();
       const writes: PendingWrite[] = [];

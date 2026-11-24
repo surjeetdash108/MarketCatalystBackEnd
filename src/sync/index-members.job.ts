@@ -54,18 +54,26 @@ export class IndexMembersJob implements OnModuleInit {
 
   async run() {
     try {
-      const [sp, nd] = await Promise.all([
+      const [sp, nd, dj] = await Promise.all([
         this.fmp.request("sp500-constituent"),
         this.fmp.request("nasdaq-constituent"),
+        // The Dow is a bonus list for the Heatmap's Dow tab: its failure must not
+        // sink the two lists everything else reads.
+        this.fmp.request("dowjones-constituent").catch(() => []),
       ]);
       const sp500 = constituentTickers(sp);
       const nasdaq100 = constituentTickers(nd);
+      const dow30 = constituentTickers(dj);
       // A thin answer is a vendor hiccup, not an index: keep yesterday's lists.
       if (sp500.length < 400 || nasdaq100.length < 80) {
         throw new Error(`implausible constituent lists (S&P ${sp500.length}, NDX ${nasdaq100.length})`);
       }
       const db = this.firebase.firestore;
-      await db.doc(INDEX_MEMBERS_DOC).set({ sp500, nasdaq100, updatedAt: new Date().toISOString() });
+      // Merged, so a thin Dow answer leaves yesterday's `dow30` in place.
+      await db.doc(INDEX_MEMBERS_DOC).set(
+        { sp500, nasdaq100, ...(dow30.length >= 25 ? { dow30 } : {}), updatedAt: new Date().toISOString() },
+        { merge: true },
+      );
 
       const members = [...new Set([...sp500, ...nasdaq100])];
       const missing: string[] = [];

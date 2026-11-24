@@ -58,7 +58,8 @@ export interface QuarterlyEstimatesLookup {
    * Prefer this over Polygon's GAAP diluted EPS for surprise math. */
   epsActualFor(periodEnd: string | null): number | null;
   /** Consensus revenue estimate for that quarter (raw dollars), from the same
-   * FMP report row — drives the quarterly sales %surp. */
+   * FMP report row — drives the quarterly sales %surp. Null until that report
+   * carries an actual: an estimate with no print is not a surprise baseline. */
   revenueEstimateFor(periodEnd: string | null): number | null;
 }
 
@@ -297,7 +298,13 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
     // one-off tax items (PANW being a textbook case).
     const points = rows
       .filter((r) => r.date && (r.estimatedEarning != null || r.actualEarningResult != null || r.revenueEstimated != null))
-      .map((r) => ({ date: r.date, eps: r.estimatedEarning, actual: r.actualEarningResult, revenueEst: r.revenueEstimated ?? null }));
+      .map((r) => ({
+        date: r.date,
+        eps: r.estimatedEarning,
+        actual: r.actualEarningResult,
+        revenueEst: r.revenueEstimated ?? null,
+        revenueActual: r.revenueActual ?? null,
+      }));
     if (points.length === 0) return EMPTY_QUARTERLY;
     const nearest = (periodEnd: string | null) => {
       if (!periodEnd) return null;
@@ -321,7 +328,21 @@ export class FmpEarningsEstimatesAdapter implements EarningsEstimatesAdapter {
     return {
       epsEstimateFor: (periodEnd) => nearest(periodEnd)?.eps ?? null,
       epsActualFor: (periodEnd) => nearest(periodEnd)?.actual ?? null,
-      revenueEstimateFor: (periodEnd) => nearest(periodEnd)?.revenueEst ?? null,
+      // A revenue estimate is a surprise baseline only once that same report has
+      // actually been made, so it is gated on the matched row carrying an actual
+      // (EPS or revenue). Applied AFTER `nearest()` picks the row, never by
+      // dropping no-actual rows first: a quarter whose own report is still
+      // pending must not fall through to the next quarter's report.
+      //
+      // ANT (listed Nov 2026, never reported as a public company): FMP carried
+      // an `/earnings` row dated 2 Nov with a $16,959,670,000 revenue estimate
+      // and no actual, a placeholder within $3.7M of the $16,956,000,000 in its
+      // IPO prospectus. Paired with Sep-26 it printed a "0%" surprise that
+      // measured nothing.
+      revenueEstimateFor: (periodEnd) => {
+        const p = nearest(periodEnd);
+        return p && (p.actual != null || p.revenueActual != null) ? p.revenueEst : null;
+      },
     };
   }
 
