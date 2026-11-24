@@ -119,3 +119,10 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - After (backend prod 8d54406): worker `market-catalyst-backend-00329-mth`, live `market-catalyst-live-00279-rk2`, jobs on `…market-catalyst-backend@sha256:b8e79a160b6dc484aa2e23c34b8c4bbe2ba05d1f3b88c0a9e52c5817e19be880`. Env/secrets unchanged.
 - New Firestore collections (written by the backend only): `email_sent/{emailHash}` (lifecycle mail sent per person), `email_optouts/{emailHash}` (promotional opt-out per person). Both kept on account deletion.
 - Roll back: `gcloud run services update-traffic <svc> --to-revisions=<before>=100` for both services.
+
+## 2026-11-24 ~11:00 ET — issue sheet T31-T51 (IPO job refresh + UI batch)
+- Before: worker `market-catalyst-backend-00331-2hw`; premarket-job / history-backfill-job image `…market-catalyst-backend@sha256:3316aa91ac591db948ea625b87d2a8c58285ef86c648cb103880cdf5d9d2bf0f`. UI Hosting (site marketcatalyst) previous release 2026-11-24 16:33 IST.
+- After (backend prod 3b2b041 merge): worker `market-catalyst-backend-00332-t7g`, both jobs on `…market-catalyst-backend@sha256:0c3f19ed6f8469d96c1f1db924d9c474bc7d23a5fb05811f9fae170e2d5baa45`. Live API unchanged. `ipos` job run once by hand: 143 rows written, 69 stale rows re-checked (past-dated "pending" 53 → 11).
+- UI prod 9bdd0ff (T31-T51 batch). Firestore rules: added `users/{uid}/saved_screens` (owner-only), both databases.
+- Website prod 9dab656 (homepage workspace count) via App Hosting auto-rollout.
+- Roll back: `gcloud run services update-traffic market-catalyst-backend --to-revisions=market-catalyst-backend-00331-2hw=100`; `gcloud run jobs update premarket-job --image <before digest>` (same for history-backfill-job); UI: Firebase console → Hosting → marketcatalyst → roll back to the previous release.
