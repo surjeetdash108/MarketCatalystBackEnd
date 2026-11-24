@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { fromFmpSymbol, toFmpSymbol } from "../vendors/market-data/fmp-mapping.util";
 import { QuoteReferenceCache, regularOpenMs, sanitizeQuote, type QuoteRef } from "../common/quote-sanity";
+import { ExDividendToday, dividendCalendarPath, type DividendCalendarRow } from "../common/ex-dividend-today";
 import { createHash } from "crypto";
 import { ConfigService } from "@nestjs/config";
 import { fetchJson } from "../common/http.util";
@@ -667,6 +668,11 @@ export class SnapshotCacheService implements OnModuleDestroy {
 
   private refCache: QuoteReferenceCache | null = null;
 
+  /** Cash dividends going ex today: the day's change is measured from the adjusted close (common/ex-dividend-today.ts). */
+  private readonly exDividends = new ExDividendToday(
+    async (day) => (await this.fmp.request(dividendCalendarPath(day))) as DividendCalendarRow[],
+  );
+
   /**
    * The same check the company quotes get (common/quote-sanity.ts): the
    * official previous close as the base, and once the session is open a
@@ -694,10 +700,11 @@ export class SnapshotCacheService implements OnModuleDestroy {
     }
     const now = Date.now();
     const openMs = regularOpenMs(now);
+    const exDiv = await this.exDividends.get(now).catch(() => new Map<string, number>());
     return quotes.map((q) => {
       const r = refs.get(q.ticker);
       if (!r) return q;
-      const x = sanitizeQuote({ price: q.price, previousClose: q.previousClose, dayLow: q.dayLow, dayHigh: q.dayHigh, vendorAt: q.vendorUpdatedAt }, r, now, openMs);
+      const x = sanitizeQuote({ price: q.price, previousClose: q.previousClose, dayLow: q.dayLow, dayHigh: q.dayHigh, vendorAt: q.vendorUpdatedAt }, r, now, openMs, exDiv.get(q.ticker) ?? null);
       return { ...q, price: x.price, change: x.change, changePct: x.changePct, previousClose: x.previousClose, dayLow: x.dayLow, dayHigh: x.dayHigh };
     });
   }

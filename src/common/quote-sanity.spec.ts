@@ -1,4 +1,4 @@
-import { quoteRefFromPolygon, sanitizeQuote } from "./quote-sanity";
+import { exAdjustedPrevious, quoteRefFromPolygon, sanitizeQuote } from "./quote-sanity";
 
 const ns = (iso: string) => Date.parse(iso) * 1e6;
 const NOW = Date.parse("2026-11-19T15:58:00Z"); // 10:58 ET, Nov 19
@@ -251,5 +251,72 @@ describe("QuoteReferenceCache", () => {
     await c.refs(["AAPG"], NOW + 1000);
     expect(raw).toHaveBeenCalledTimes(1); // reused within a minute
     expect(grouped).toHaveBeenCalledTimes(1); // once per session
+  });
+});
+
+describe("ex-dividend day: the change is measured from the adjusted close", () => {
+  const live = (prevClose: number) => ({
+    prevClose,
+    tradedToday: true,
+    sessionLow: 1068,
+    sessionHigh: 1094.75,
+    sessionPrice: 1089.97,
+    lastMinuteAt: NOW - 60_000,
+    otc: false,
+  });
+
+  it("COST, $30 special dividend: +2.1% like Google/Yahoo, not -0.7% from the unadjusted close", () => {
+    const out = sanitizeQuote(
+      { price: 1089.97, previousClose: 1067.91, dayLow: 1068, dayHigh: 1094.75 },
+      live(1097.91),
+      NOW,
+      OPEN,
+      30,
+    );
+    expect(out.previousClose).toBe(1067.91);
+    expect(out.change).toBeCloseTo(22.06, 2);
+    expect(out.changePct).toBeCloseTo(2.066, 2);
+  });
+
+  it("no dividend known for the ticker: unchanged (official close, -0.7%)", () => {
+    const out = sanitizeQuote(
+      { price: 1089.97, previousClose: 1067.91, dayLow: 1068, dayHigh: 1094.75 },
+      live(1097.91),
+      NOW,
+      OPEN,
+    );
+    expect(out.previousClose).toBe(1097.91);
+    expect(out.changePct).toBeCloseTo(-0.7, 1);
+  });
+
+  it("a stale vendor close that is not official-minus-dividend is never adopted (BRK.B-style)", () => {
+    const out = sanitizeQuote(
+      { price: 568.8, previousClose: 586.76, dayLow: 567.93, dayHigh: 573.13 },
+      live(574.62),
+      NOW,
+      OPEN,
+      1.5,
+    );
+    expect(out.previousClose).toBe(574.62);
+  });
+
+  it("a stock that has not traded today stays at the official close, 0%", () => {
+    const out = sanitizeQuote(
+      { price: 12.715, previousClose: 12.5, dayLow: null, dayHigh: null },
+      { ...live(13.0129), tradedToday: false, sessionLow: null, sessionHigh: null, sessionPrice: null },
+      NOW,
+      OPEN,
+      0.5129,
+    );
+    expect(out).toMatchObject({ price: 13.0129, changePct: 0, previousClose: 13.0129, adjusted: "no-trade-today" });
+  });
+
+  it("exAdjustedPrevious: JNJ 270.05 - 1.34 = 268.71; rounding slack; missing inputs fall back", () => {
+    expect(exAdjustedPrevious(270.05, 268.71, 1.34)).toBe(268.71);
+    expect(exAdjustedPrevious(40.15, 39.66, 0.4925)).toBe(39.66); // vendor rounds to the cent
+    expect(exAdjustedPrevious(270.05, 268.71, null)).toBe(270.05);
+    expect(exAdjustedPrevious(270.05, null, 1.34)).toBe(270.05);
+    expect(exAdjustedPrevious(null, 268.71, 1.34)).toBeNull();
+    expect(exAdjustedPrevious(10, 9, 15)).toBe(10); // dividend larger than the price: ignored
   });
 });

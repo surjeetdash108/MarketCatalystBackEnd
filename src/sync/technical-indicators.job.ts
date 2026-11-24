@@ -537,6 +537,20 @@ export function computeIndicators(
           date: b.barDate as string,
           close: Math.round(b.close * 10000) / 10000,
         }));
+  // The same for the 21-session move: the last 22 dated closes, oldest → newest.
+  // While the newest entry is the latest session the move's base is [0]; once a
+  // later session's live price is the end of the window, today counts as one of
+  // the 21 and the base is [1]. The Heatmap's 1M frame reads it that way, since
+  // monthChangePct alone ends at the last stored bar — a session behind by
+  // mid-day. Null whenever the move is null or any of the 22 bars has no date.
+  const month21Window = bars.slice(-22);
+  const month21Closes =
+    monthChangePct == null || month21Window.length < 22 || !month21Window.every((b) => b.barDate)
+      ? null
+      : month21Window.map((b) => ({
+          date: b.barDate,
+          close: Math.round(b.close * 10000) / 10000,
+        }));
   const latestClose = closes[closes.length - 1];
 
   // Full MA ladder for the drawer; sma50/sma200 stay as their own fields too.
@@ -636,6 +650,8 @@ export function computeIndicators(
       week5BaseClose == null ? null : Math.round(week5BaseClose * 10000) / 10000,
     /** Last 6 dated closes, oldest → newest (see week5Closes above). */
     week5Closes,
+    /** Last 22 dated closes, oldest → newest (see month21Closes above). */
+    month21Closes,
 
     /** Rolling RSI(14) line for the RSI pane. */
     rsi14Series: rsiHistory.map((v) => Math.round(v * 10) / 10),

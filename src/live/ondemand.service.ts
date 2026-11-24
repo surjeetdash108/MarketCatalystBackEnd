@@ -1771,6 +1771,7 @@ export class OnDemandService implements OnModuleDestroy {
       monthlyChange: ind?.monthChangePct ?? null,
       week5BaseClose: ind?.week5BaseClose ?? null,
       week5Closes: ind?.week5Closes ?? null,
+      month21Closes: ind?.month21Closes ?? null,
       // Lets the frontend tell this apart from the full company doc.
       partial: true,
       source: "polygon-summary",
