@@ -63,6 +63,37 @@ describe("mapFmpQuote", () => {
     expect(q.earlyTradingChangePct).toBeNull();
   });
 
+  // 24 Nov 2026, 04:36 ET (real vendor rows): the raw quote still held Monday's
+  // whole move while the mapped pre-market row said +0.00, so the heatmap ("as of
+  // Monday close") showed ~95% of its tiles flat.
+  it("pre-market keeps the last session's own move beside the (flat) pre-market change", () => {
+    const monday = quote({
+      price: 349.08,
+      previousClose: 342.56,
+      change: 6.52,
+      changePercentage: 1.90332,
+      timestamp: secs("2026-11-23T16:00:01-05:00"),
+    });
+    const q = mapFmpQuote(monday, undefined, et("2026-11-24T04:36:00-05:00"));
+    expect(q.marketStatus).toBe("early_trading");
+    expect(q.changePct).toBe(0); // the pre-market change is unchanged: nothing has traded
+    expect(q.regularTradingChangePct).toBeNull(); // and the header's session logic is not disturbed
+    expect(q.lastSessionChangePct).toBeCloseTo(1.90332, 5);
+  });
+
+  it("pre-market ignores a quote stamped today: that is not a closed session's move", () => {
+    const rolled = quote({ changePercentage: 0.4, timestamp: secs("2026-11-24T04:20:00-05:00") });
+    const q = mapFmpQuote(rolled, undefined, et("2026-11-24T04:36:00-05:00"));
+    expect(q.lastSessionChangePct).toBeNull();
+  });
+
+  it("is null while the regular session runs (changePct is that move) and the day's move after the close", () => {
+    const today = quote({ changePercentage: 0.088, timestamp: secs("2026-10-13T11:00:00-04:00") });
+    expect(mapFmpQuote(today, undefined, et("2026-10-13T11:00:30-04:00")).lastSessionChangePct).toBeNull();
+    const after = mapFmpQuote(quote(), trade(340.37, "2026-10-13T19:30:00-04:00"), et("2026-10-13T19:31:00-04:00"));
+    expect(after.lastSessionChangePct).toBe(0.088);
+  });
+
   it("after hours: day move from the closes, after-hours move on its own", () => {
     const q = mapFmpQuote(
       quote(),
