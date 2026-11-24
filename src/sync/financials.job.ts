@@ -82,6 +82,62 @@ export function dropPredecessorHistory<T extends { endDate?: string | null }>(
   }
   return sorted;
 }
+/**
+ * Blanks revenue figures that are arithmetically impossible, in place, and
+ * returns a note for each so the caller can log it. EPS and everything else on
+ * the row is left alone, and a negative revenue is NOT treated as wrong in
+ * general (a crypto miner or a trust can report one) — only these two patterns,
+ * which a vendor produces when its full-year figure arrives wrong:
+ *
+ *  A. Q1–Q3 of a fiscal year are positive, Q4 is negative, and the full year is
+ *     below the first three quarters. The vendor derives Q4 as full year minus
+ *     nine months, so a bad full year turns Q4 negative. HPE on 23 Nov 2026:
+ *     full year $14.5B (really the latest quarter alone) against $32.2B for Q1–Q3,
+ *     Q4 stored as −$17.6B. Both the Q4 revenue and that full-year revenue go.
+ *  B. All four quarters are positive and the full year is under half of their
+ *     sum (FERG: $8.8B against $31.9B). The full-year revenue goes.
+ *
+ * Blank is shown as "—" by the screens: a missing figure beats a wrong one.
+ */
+export function nullImplausibleRevenue(
+  quarters: QuarterFinancials[],
+  annual: AnnualFinancials[],
+): string[] {
+  const byYear = new Map<string, Map<string, QuarterFinancials>>();
+  for (const q of quarters) {
+    if (!q.fiscalYear || !q.fiscalPeriod) continue;
+    const year =
+      byYear.get(String(q.fiscalYear)) ?? new Map<string, QuarterFinancials>();
+    year.set(q.fiscalPeriod, q);
+    byYear.set(String(q.fiscalYear), year);
+  }
+  const fixes: string[] = [];
+  const bn = (v: number) => `${(v / 1e9).toFixed(2)}B`;
+  for (const a of annual) {
+    if (!a.fiscalYear || a.revenue == null) continue;
+    const year = byYear.get(String(a.fiscalYear));
+    if (!year) continue;
+    const [q1, q2, q3, q4] = ["Q1", "Q2", "Q3", "Q4"].map((p) => year.get(p));
+    const [r1, r2, r3, r4] = [q1, q2, q3, q4].map((q) => q?.revenue ?? null);
+    if (r1 == null || r2 == null || r3 == null) continue;
+    if (r1 <= 0 || r2 <= 0 || r3 <= 0) continue;
+    const nine = r1 + r2 + r3;
+    if (r4 != null && r4 < 0 && a.revenue < nine) {
+      fixes.push(
+        `FY${a.fiscalYear}: Q4 revenue ${bn(r4)} with full year ${bn(a.revenue)} under Q1–Q3 ${bn(nine)} — blanked both`,
+      );
+      q4.revenue = null;
+      a.revenue = null;
+    } else if (r4 != null && r4 > 0 && a.revenue < 0.5 * (nine + r4)) {
+      fixes.push(
+        `FY${a.fiscalYear}: full year ${bn(a.revenue)} under half of its four quarters ${bn(nine + r4)} — blanked it`,
+      );
+      a.revenue = null;
+    }
+  }
+  return fixes;
+}
+
 const DELAY_MS = 120;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -754,6 +810,12 @@ export class FinancialsJob implements OnModuleInit {
           }
           const annualBefore = annual.length;
           annual = dropPredecessorHistory(annual, MAX_ANNUAL_GAP_MONTHS);
+          for (const note of nullImplausibleRevenue(
+            quartersContinuous,
+            annual,
+          )) {
+            this.logger.warn(`${ticker}: ${note}`);
+          }
           if (annual.length !== annualBefore) {
             this.logger.warn(
               `${ticker}: dropped ${annualBefore - annual.length} pre-gap annual row(s) — ticker reused by a predecessor entity`,
