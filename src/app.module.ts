@@ -17,6 +17,7 @@ import { SyncModule } from "./sync/sync.module";
 import { ApiHealthModule } from "./api-health/api-health.module";
 import { BlogsModule } from "./blogs/blogs.module";
 import { PulseModule } from "./pulse/pulse.module";
+import { ContentPipelineModule } from "./content-pipeline/content-pipeline.module";
 import { FeedbackModule } from "./feedback/feedback.module";
 import { McpModule } from "./mcp/mcp.module";
 import { BillingCoreModule } from "./billing/billing-core.module";
@@ -102,6 +103,7 @@ const workerModules = isLiveRole
     // Market Catalyst Pulse: admin posts (AdminGuard) shown on every dashboard
     // (GET /api/pulse). Both roles so the live service serves it.
     PulseModule,
+    ContentPipelineModule,
     FeedbackModule,
     // POST /mcp (McpApiKeyGuard) + /api/admin/mcp-keys (AdminGuard). Both roles,
     // same reasoning as BlogsModule above: an external MCP client reaches

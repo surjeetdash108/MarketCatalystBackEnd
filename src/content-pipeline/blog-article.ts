@@ -44,11 +44,29 @@ const toneSchema = { type: "string", enum: ["up", "down", "neutral"] };
 export const BLOG_ARTICLE_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["title", "dek", "intro", "stats", "sections", "watch", "readMinutes"],
+  required: [
+    "title",
+    "dek",
+    "intro",
+    "stats",
+    "sections",
+    "watch",
+    "readMinutes",
+  ],
   properties: {
-    title: { type: "string", description: "Headline in title case, specific, with the key number or fact." },
-    dek: { type: "string", description: "One-sentence subtitle that adds the main supporting facts." },
-    intro: { type: "string", description: "Opening paragraph: what happened and why it matters." },
+    title: {
+      type: "string",
+      description:
+        "Headline in title case, specific, with the key number or fact.",
+    },
+    dek: {
+      type: "string",
+      description: "One-sentence subtitle that adds the main supporting facts.",
+    },
+    intro: {
+      type: "string",
+      description: "Opening paragraph: what happened and why it matters.",
+    },
     stats: {
       type: "array",
       description: "Exactly three key figures taken from the notes.",
@@ -57,8 +75,14 @@ export const BLOG_ARTICLE_SCHEMA = {
         additionalProperties: false,
         required: ["num", "label", "tone"],
         properties: {
-          num: { type: "string", description: "The figure as written, e.g. \"~37,000\", \"-13%\", \"$1\"." },
-          label: { type: "string", description: "What the figure is, under 70 characters." },
+          num: {
+            type: "string",
+            description: 'The figure as written, e.g. "~37,000", "-13%", "$1".',
+          },
+          label: {
+            type: "string",
+            description: "What the figure is, under 70 characters.",
+          },
           tone: toneSchema,
         },
       },
@@ -75,7 +99,8 @@ export const BLOG_ARTICLE_SCHEMA = {
           paragraphs: { type: "array", items: { type: "string" } },
           tableHeaders: {
             type: "array",
-            description: "Two column headers when the section has a table, else empty.",
+            description:
+              "Two column headers when the section has a table, else empty.",
             items: { type: "string" },
           },
           tableRows: {
@@ -85,27 +110,50 @@ export const BLOG_ARTICLE_SCHEMA = {
               type: "object",
               additionalProperties: false,
               required: ["label", "value", "tone"],
-              properties: { label: { type: "string" }, value: { type: "string" }, tone: toneSchema },
+              properties: {
+                label: { type: "string" },
+                value: { type: "string" },
+                tone: toneSchema,
+              },
             },
           },
         },
       },
     },
-    watch: { type: "string", description: "What to watch next: the upcoming events or data points from the notes." },
-    readMinutes: { type: "integer", description: "Estimated reading time in minutes (2 to 6)." },
+    watch: {
+      type: "string",
+      description:
+        "What to watch next: the upcoming events or data points from the notes.",
+    },
+    readMinutes: {
+      type: "integer",
+      description: "Estimated reading time in minutes (2 to 6).",
+    },
   },
 } as const;
 
 /** Rejects a structurally incomplete article (the schema can't express counts or non-empty strings). */
 export function checkArticle(a: BlogArticle): BlogArticle {
   const missing = (s: unknown) => typeof s !== "string" || !s.trim();
-  if (missing(a.title) || missing(a.dek) || missing(a.intro) || missing(a.watch)) throw new Error("article is missing its headline, subtitle, intro or what-to-watch");
-  if (!Array.isArray(a.sections) || a.sections.length === 0) throw new Error("article has no sections");
+  if (
+    missing(a.title) ||
+    missing(a.dek) ||
+    missing(a.intro) ||
+    missing(a.watch)
+  )
+    throw new Error(
+      "article is missing its headline, subtitle, intro or what-to-watch",
+    );
+  if (!Array.isArray(a.sections) || a.sections.length === 0)
+    throw new Error("article has no sections");
   if (!Array.isArray(a.stats)) throw new Error("article has no stats");
   return {
     ...a,
     stats: a.stats.slice(0, 3),
-    readMinutes: Math.min(8, Math.max(2, Math.round(Number(a.readMinutes) || 3))),
+    readMinutes: Math.min(
+      8,
+      Math.max(2, Math.round(Number(a.readMinutes) || 3)),
+    ),
   };
 }
 
@@ -118,13 +166,24 @@ export function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-const numClass = (t: Tone) => (t === "up" ? "num up" : t === "down" ? "num dn" : "num");
-const cellClass = (t: Tone) => (t === "up" ? ' class="pos"' : t === "down" ? ' class="dn"' : "");
+const numClass = (t: Tone) =>
+  t === "up" ? "num up" : t === "down" ? "num dn" : "num";
+const cellClass = (t: Tone) =>
+  t === "up" ? ' class="pos"' : t === "down" ? ' class="dn"' : "";
 
 /** "Published Nov 24, 2026 · 12:51 PM ET · 3 min read", in New York time. */
 export function readLine(at: Date, minutes: number): string {
-  const date = at.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "America/New_York" });
-  const time = at.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" });
+  const date = at.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "America/New_York",
+  });
+  const time = at.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "America/New_York",
+  });
   return `Published ${date} · ${time} ET · ${minutes} min read`;
 }
 
@@ -134,7 +193,10 @@ export function articleBodyHtml(a: BlogArticle): string {
   if (a.stats.length > 0) {
     parts.push(
       `<div class="stat-strip">\n${a.stats
-        .map((s) => `  <div class="stat-box"><div class="${numClass(s.tone)}">${e(s.num)}</div><div class="label">${e(s.label)}</div></div>`)
+        .map(
+          (s) =>
+            `  <div class="stat-box"><div class="${numClass(s.tone)}">${e(s.num)}</div><div class="label">${e(s.label)}</div></div>`,
+        )
         .join("\n")}\n</div>`,
     );
   }
@@ -145,13 +207,18 @@ export function articleBodyHtml(a: BlogArticle): string {
       const [h1 = "Measure", h2 = "Latest"] = s.tableHeaders;
       parts.push(
         `<div class="table-scroll"><div class="post-doc-scroll"><table>\n  <thead><tr><th>${e(h1)}</th><th>${e(h2)}</th></tr></thead>\n  <tbody>\n${s.tableRows
-          .map((r) => `    <tr><td class="metric">${e(r.label)}</td><td${cellClass(r.tone)}>${e(r.value)}</td></tr>`)
+          .map(
+            (r) =>
+              `    <tr><td class="metric">${e(r.label)}</td><td${cellClass(r.tone)}>${e(r.value)}</td></tr>`,
+          )
           .join("\n")}\n  </tbody>\n</table></div></div>`,
       );
     }
   }
   parts.push(`<div class="callout"><b>What to watch.</b> ${e(a.watch)}</div>`);
-  parts.push(`<p><i>This article is informational only and is not investment advice.</i></p>`);
+  parts.push(
+    `<p><i>This article is informational only and is not investment advice.</i></p>`,
+  );
   return parts.join("\n\n");
 }
 
@@ -200,9 +267,12 @@ ${articleBodyHtml(a)}
 
 const SECTION_GUIDE: Record<BlogSection, string> = {
   News: "A news story about one company or event: lead with what happened and the market reaction, then the context and the numbers, then what it means and what to watch.",
-  Earnings: "An earnings story: lead with the result and the stock reaction, give the reported figures against estimates or the year-ago period in a table, then guidance, the reasons behind the reaction, and what to watch.",
-  Recap: "A market recap: lead with how the market or the group moved and why, then the biggest movers and drivers, each with its number, then what to watch next session.",
-  Educational: "An explainer for retail investors: open with why the topic matters now, explain the idea in plain words with the example from the notes, and close with what to look for. Stats and tables only where the notes give figures.",
+  Earnings:
+    "An earnings story: lead with the result and the stock reaction, give the reported figures against estimates or the year-ago period in a table, then guidance, the reasons behind the reaction, and what to watch.",
+  Recap:
+    "A market recap: lead with how the market or the group moved and why, then the biggest movers and drivers, each with its number, then what to watch next session.",
+  Educational:
+    "An explainer for retail investors: open with why the topic matters now, explain the idea in plain words with the example from the notes, and close with what to look for. Stats and tables only where the notes give figures.",
 };
 
 /** The writer's standing instructions. Stable across requests (cache-friendly). */
@@ -236,9 +306,13 @@ export interface WriteRequest {
 export function writerUserPrompt(r: WriteRequest): string {
   const lines = [
     `Section: ${r.section} (${BLOG_SECTIONS[r.section].kick}). ${SECTION_GUIDE[r.section]}`,
-    r.headline ? `Working headline from the editor (improve it if needed): ${r.headline}` : "Write the headline yourself.",
+    r.headline
+      ? `Working headline from the editor (improve it if needed): ${r.headline}`
+      : "Write the headline yourself.",
     r.tickers.length ? `Tickers: ${r.tickers.join(", ")}` : "",
-    r.links.length ? `Source links (for reference only; do not fetch or cite them): ${r.links.join(" ")}` : "",
+    r.links.length
+      ? `Source links (for reference only; do not fetch or cite them): ${r.links.join(" ")}`
+      : "",
     "",
     "<editor_notes>",
     r.notes,

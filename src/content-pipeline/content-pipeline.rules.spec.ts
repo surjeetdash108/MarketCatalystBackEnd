@@ -1,5 +1,10 @@
 import { BadRequestException } from "@nestjs/common";
-import { cleanSubmission, cleanTickers, parseFeedBody, pulseText } from "./content-pipeline.rules";
+import {
+  cleanSubmission,
+  cleanTickers,
+  parseFeedBody,
+  pulseText,
+} from "./content-pipeline.rules";
 
 describe("content pipeline rules", () => {
   it("needs at least one destination", () => {
@@ -8,33 +13,70 @@ describe("content pipeline rules", () => {
 
   it("cleans a blog + feed submission", () => {
     const s = cleanSubmission({
-      blog: { section: "News", tickers: "LCID, $uber", notes: "  facts  ", links: "https://example.com/a" },
-      feed: { header: "Lucid robotaxi", body: "Summary\n* Progress: driverless", tickers: ["lcid"] },
+      blog: {
+        section: "News",
+        tickers: "LCID, $uber",
+        notes: "  facts  ",
+        links: "https://example.com/a",
+      },
+      feed: {
+        header: "Lucid robotaxi",
+        body: "Summary\n* Progress: driverless",
+        tickers: ["lcid"],
+      },
     });
-    expect(s.blog).toEqual({ section: "News", headline: null, tickers: ["LCID", "UBER"], notes: "facts", links: ["https://example.com/a"] });
+    expect(s.blog).toEqual({
+      section: "News",
+      headline: null,
+      tickers: ["LCID", "UBER"],
+      notes: "facts",
+      links: ["https://example.com/a"],
+    });
     expect(s.feed?.tickers).toEqual(["LCID"]);
     expect(s.pulse).toBeNull();
   });
 
   it("only accepts the blog's existing sections", () => {
-    expect(() => cleanSubmission({ blog: { section: "Analysis", notes: "x" } })).toThrow(/Section must be one of/);
+    expect(() =>
+      cleanSubmission({ blog: { section: "Analysis", notes: "x" } }),
+    ).toThrow(/Section must be one of/);
   });
 
   it("requires notes, header and body", () => {
-    expect(() => cleanSubmission({ blog: { section: "News", notes: " " } })).toThrow(/Notes/);
-    expect(() => cleanSubmission({ feed: { header: "h" } })).toThrow(/Live Feed body/);
+    expect(() =>
+      cleanSubmission({ blog: { section: "News", notes: " " } }),
+    ).toThrow(/Notes/);
+    expect(() => cleanSubmission({ feed: { header: "h" } })).toThrow(
+      /Live Feed body/,
+    );
   });
 
   it("keeps a Pulse post within the 500-character limit", () => {
-    expect(() => cleanSubmission({ pulse: { header: "h".repeat(200), body: "b".repeat(400) } })).toThrow(/together/);
-    const ok = cleanSubmission({ pulse: { header: "NVDA up", body: "After hours.", ticker: "$nvda" } });
-    expect(ok.pulse).toEqual({ header: "NVDA up", body: "After hours.", ticker: "NVDA" });
-    expect(pulseText("NVDA up", "After hours.")).toBe("NVDA up\n\nAfter hours.");
+    expect(() =>
+      cleanSubmission({
+        pulse: { header: "h".repeat(200), body: "b".repeat(400) },
+      }),
+    ).toThrow(/together/);
+    const ok = cleanSubmission({
+      pulse: { header: "NVDA up", body: "After hours.", ticker: "$nvda" },
+    });
+    expect(ok.pulse).toEqual({
+      header: "NVDA up",
+      body: "After hours.",
+      ticker: "NVDA",
+    });
+    expect(pulseText("NVDA up", "After hours.")).toBe(
+      "NVDA up\n\nAfter hours.",
+    );
   });
 
   it("rejects bad tickers and links", () => {
     expect(() => cleanTickers("NVDA, 12bad")).toThrow(/isn't a valid ticker/);
-    expect(() => cleanSubmission({ blog: { section: "News", notes: "x", links: "javascript:alert(1)" } })).toThrow();
+    expect(() =>
+      cleanSubmission({
+        blog: { section: "News", notes: "x", links: "javascript:alert(1)" },
+      }),
+    ).toThrow();
   });
 
   it("splits a Live Feed body into summary and labelled bullets", () => {

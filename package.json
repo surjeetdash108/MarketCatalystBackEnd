@@ -29,6 +29,8 @@
     "purge-test-billing": "ts-node --transpile-only scripts/purge-test-billing.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.13.0",
+    "@google-cloud/pubsub": "^6.4.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
