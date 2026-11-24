@@ -6,5 +6,6 @@ import { PulseService } from "./pulse.service";
 @Module({
   controllers: [PulseController, PulseAdminController],
   providers: [PulseService],
+  exports: [PulseService],
 })
 export class PulseModule {}

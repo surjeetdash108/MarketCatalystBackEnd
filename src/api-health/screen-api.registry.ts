@@ -585,7 +585,8 @@ export const API_CATALOG = {
     producers: ["ipos"],
   },
   "GET /market-data/index-members": {
-    summary: "Live S&P 500 and Nasdaq-100 constituent lists (Alpha Signals' Top S&P 500 screen).",
+    summary:
+      "Live S&P 500 and Nasdaq-100 constituent lists (Alpha Signals' Top S&P 500 screen).",
     store: ["config"],
     producers: ["index-members"],
   },
@@ -1165,13 +1166,16 @@ export const API_CATALOG = {
       "Market Catalyst Pulse posts for the dashboard card, newest first; ?q= searches text, ticker, name and handle.",
   },
   "GET /api/email/unsubscribe": {
-    summary: "One-click unsubscribe from promotional email (signed link); returns a small page.",
+    summary:
+      "One-click unsubscribe from promotional email (signed link); returns a small page.",
   },
   "GET /api/account/secure": {
-    summary: "'Secure my account' from a new sign-in alert (signed link): signs out every session and emails a password reset.",
+    summary:
+      "'Secure my account' from a new sign-in alert (signed link): signs out every session and emails a password reset.",
   },
   "POST /api/account/password-reset": {
-    summary: "Sends the branded password reset email; never reveals whether the address has an account.",
+    summary:
+      "Sends the branded password reset email; never reveals whether the address has an account.",
   },
   "GET /api/account/email-prefs": {
     summary: "The signed-in user's promotional email preference.",
@@ -1180,10 +1184,12 @@ export const API_CATALOG = {
     summary: "Turns promotional email on or off for the signed-in user.",
   },
   "POST /api/feedback": {
-    summary: "Saves a signed-in user's feedback from the in-app feedback box (uid and email from the token).",
+    summary:
+      "Saves a signed-in user's feedback from the in-app feedback box (uid and email from the token).",
   },
   "GET /api/admin/feedback": {
-    summary: "All user feedback, newest first, for the console's Feedback section.",
+    summary:
+      "All user feedback, newest first, for the console's Feedback section.",
   },
   "GET /api/admin/pulse": {
     summary: "Market Catalyst Pulse posts for the console's Pulse section.",
@@ -1198,8 +1204,39 @@ export const API_CATALOG = {
   "DELETE /api/admin/pulse/:id": {
     summary: "Deletes a Market Catalyst Pulse post.",
   },
+  "POST /api/admin/content": {
+    summary:
+      "Content pipeline submit: one item per destination. Pulse and Live Feed post at once; blog items are queued for the AI writer (Pub/Sub content-pipeline).",
+    params:
+      "body: blog? {section, headline?, tickers?, notes, links?}, pulse? {header, body, ticker?}, feed? {header, body, tickers?}",
+  },
+  "GET /api/admin/content": {
+    summary:
+      "Content pipeline items, newest first, with status, plus whether the AI writer has a key.",
+  },
+  "GET /api/admin/content/:id": {
+    summary:
+      "One content pipeline item: its input, and for a written blog item the article as it will appear.",
+  },
+  "POST /api/admin/content/:id/approve": {
+    summary: "Publishes a written blog draft waiting for review.",
+  },
+  "POST /api/admin/content/:id/send-back": {
+    summary:
+      "Sends a blog draft back to the AI writer with the editor's note; it is rewritten.",
+    params: "body: note",
+  },
+  "POST /api/admin/content/:id/retry": {
+    summary:
+      "Re-queues a failed or waiting blog item, or re-posts a failed Pulse / Live Feed item.",
+  },
+  "GET /api/live-feed": {
+    summary:
+      "MarketCatalyst's own Live Feed posts (from the admin Content pipeline), newest first, pinned atop Intraday commentary.",
+  },
   "GET /api/admin/ticker-search": {
-    summary: "Ticker search with live quotes for the console's Pulse ticker picker.",
+    summary:
+      "Ticker search with live quotes for the console's Pulse ticker picker.",
     params: "query: q (empty = largest companies)",
   },
   "GET /api/admin/media": {
@@ -1422,6 +1459,7 @@ export const SCREENS = [
       "GET /live/snapshot",
       "GET /live/news-wire",
       "GET /live/earnings-wire",
+      "GET /api/live-feed",
       "GET /live/ticker-analysis",
       "GET /live/ticker-announcements",
       "GET /live/scan/biggest-pct",
@@ -1903,6 +1941,24 @@ export const SCREENS = [
       "GET /api/admin/media",
       "POST /api/admin/media",
       "DELETE /api/admin/media/:id",
+    ],
+  },
+  {
+    id: "admin-content",
+    label: "Admin · Content pipeline",
+    group: "Admin",
+    route: "/admin/content",
+    source: "public/admin/console.html",
+    summary:
+      "Submit to Blog / Pulse / Live Feed and track each item; review and approve AI-written blog drafts.",
+    apis: [
+      "POST /api/admin/content",
+      "GET /api/admin/content",
+      "GET /api/admin/content/:id",
+      "POST /api/admin/content/:id/approve",
+      "POST /api/admin/content/:id/send-back",
+      "POST /api/admin/content/:id/retry",
+      "GET /api/admin/ticker-search",
     ],
   },
   {

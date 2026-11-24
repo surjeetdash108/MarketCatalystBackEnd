@@ -57,6 +57,8 @@ import { AnthropicModule } from "../vendors/anthropic/anthropic.module";
 import { EodRecapJob } from "./eod-recap.job";
 import { WebSubPingJob } from "./websub-ping.job";
 import { MoneyFlowSnapshotJob } from "./money-flow-snapshot.job";
+import { ContentBlogWriterJob } from "./content-blog-writer.job";
+import { ContentPipelineModule } from "../content-pipeline/content-pipeline.module";
 import { TickerUniverseJob } from "./ticker-universe.job";
 import { PremarketJob } from "./premarket.job";
 import { PremarketPostJob } from "./premarket-post.job";
@@ -74,6 +76,7 @@ import { MarketDataModule } from "../market-data/market-data.module";
     PolygonModule,
     // The daily recap job writes a blog post and asks an LLM for its prose.
     BlogsModule,
+    ContentPipelineModule,
     AnthropicModule,
     GroqModule,
     OpenRouterModule,
@@ -136,6 +139,7 @@ import { MarketDataModule } from "../market-data/market-data.module";
     EodRecapJob,
     WebSubPingJob,
     MoneyFlowSnapshotJob,
+    ContentBlogWriterJob,
     PremarketPostJob,
     D03PremarketMoversJob,
     D04AnalystCallsJob,
