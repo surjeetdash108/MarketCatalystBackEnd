@@ -1,0 +1,23 @@
+# Runs on every push and pull request. A red ✗ here means: don't deploy.
+# The placeholder gate also runs inside `npm run build` (prebuild) in the
+# Docker image build, so a failing gate blocks a Cloud Run deploy too.
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: No placeholders in shipped code
+        run: npm run check:placeholders
+      - name: Type check
+        run: npx tsc --noEmit -p tsconfig.json
+      - name: Tests
+        run: npx jest

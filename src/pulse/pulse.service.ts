@@ -166,11 +166,12 @@ export class PulseService {
     id: string,
     body: PulseBody,
     now = new Date(),
+    opts: { unlimited?: boolean } = {},
   ): Promise<PulsePost> {
     const ref = this.col.doc(id);
     const snap = await ref.get();
     if (!snap.exists) throw new NotFoundException("Post not found.");
-    const clean = cleanPulseBody(body, true);
+    const clean = cleanPulseBody(body, true, opts.unlimited ? Infinity : PULSE_TEXT_MAX);
     const patch = { ...clean, updatedAt: now.toISOString() };
     await ref.update(patch);
     return toPost(id, { ...snap.data(), ...patch });

@@ -26,6 +26,9 @@ function fakeFirestore() {
           opts?.merge ? { ...(docs.get(id) ?? {}), ...v } : { ...v },
         );
       },
+      delete: async () => {
+        docs.delete(id);
+      },
     });
     const snapOf = (entries: [string, Record<string, unknown>][]) => ({
       docs: entries.map(([id, v]) => ({ id, data: () => v })),
@@ -91,12 +94,15 @@ function setup(opts: { enabled?: boolean; write?: jest.Mock } = {}) {
   const blogs = {
     create: jest.fn(async () => ({ id: "post1" })),
     update: jest.fn(async () => ({ id: "post1" })),
+    remove: jest.fn(async () => ({ id: "post1" })),
   };
   const pulse = {
     create: jest.fn(async () => ({
       id: "p1",
       createdAt: "2026-11-25T15:00:00.000Z",
     })),
+    update: jest.fn(async () => ({ id: "p1" })),
+    remove: jest.fn(async () => ({ ok: true })),
   };
   const writer = {
     enabled: opts.enabled ?? true,
@@ -231,4 +237,39 @@ describe("ContentPipelineService", () => {
     const id = (await svc.submit(blogBody, "admin")).items[0].id;
     await expect(svc.approve(id)).rejects.toThrow(/waiting for review/);
   });
+
+  it("edits a posted Pulse and Live Feed item in place, and deletes items with what they posted", async () => {
+    const { svc, fs, pulse, blogs } = setup();
+    const { items } = await svc.submit(
+      { ...blogBody, pulse: { header: "NVDA up", body: "After hours." }, feed: { header: "Lucid", body: "Summary" } },
+      "admin@marketcatalyst.ai",
+    );
+    const [p, f, b] = items;
+    await svc.edit(p.id, { body: "After hours, +3%." });
+    expect(pulse.update).toHaveBeenCalledWith("p1", { text: "**NVDA up**\n\nAfter hours, +3%.", ticker: "" }, undefined, { unlimited: true });
+    await svc.edit(f.id, { header: "Lucid robotaxi", body: "New summary\n* Step: driverless" });
+    const feedPost = [...fs.data.get("live_feed_posts").values()][0];
+    expect(feedPost).toMatchObject({ header: "Lucid robotaxi", summary: "New summary" });
+
+    await svc.remove(p.id);
+    expect(pulse.remove).toHaveBeenCalledWith("p1");
+    await svc.remove(f.id);
+    expect(fs.data.get("live_feed_posts").size).toBe(0);
+    await svc.remove(b.id);
+    expect(blogs.remove).not.toHaveBeenCalled(); // never written, no post yet
+    expect(fs.data.get("content_items").size).toBe(0);
+  });
+
+  it("a generated post held for review is published as is on approve", async () => {
+    const { svc, fs, blogs } = setup();
+    fs.data.set("content_items", new Map([["h1", {
+      kind: "blog", status: "review", source: "generator", blogPostId: "post9", heldReasons: ["Revenue surprise over 25%"],
+      tickers: ["AECOM"], note: "Held for review", createdAt: "x", updatedAt: "x", batchId: "b", submittedBy: "earnings-article",
+    }]]));
+    const v = await svc.approve("h1");
+    expect(blogs.update).toHaveBeenCalledWith("post9", { status: "published" });
+    expect(v.status).toBe("posted");
+    await expect(svc.edit("h1", { notes: "x" })).rejects.toThrow(/already written/);
+  });
 });
+

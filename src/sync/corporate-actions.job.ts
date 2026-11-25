@@ -45,6 +45,34 @@ const DELAY_MS = 120;
 const SPLIT_READJUST_ENABLED = process.env.SPLIT_READJUST_ENABLED === "true";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** A first-seen split this recent may post-date the stored bars, so it re-backfills. */
+export const RECENT_SPLIT_DAYS = 45;
+
+/**
+ * What to do about a ticker's newest executed split.
+ *  - "reset": clear stock-history's range so the next run re-fetches the whole
+ *    window adjusted (one basis).
+ *  - "baseline": record it without a reset (an old split the stored, adjusted
+ *    history already reflects).
+ *  - "none": already accounted for.
+ * A first sighting used to be a baseline whatever its date, so a split that
+ * executed AFTER the bars were stored was never applied: SNDK's 20 Nov 2026
+ * split left 797 → 79 in its closes and a "-90% in 5 days" on Alpha Signals.
+ */
+export function splitAction(
+  execDate: string,
+  reflectedSplitDate: string | null,
+  today: string,
+): "reset" | "baseline" | "none" {
+  if (reflectedSplitDate == null) {
+    const ageDays =
+      (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${execDate}T00:00:00Z`)) /
+      86_400_000;
+    return ageDays <= RECENT_SPLIT_DAYS ? "reset" : "baseline";
+  }
+  return execDate > reflectedSplitDate ? "reset" : "none";
+}
+
 interface AnnualTotal {
   year: number;
   total: number;
@@ -126,17 +154,24 @@ export function raiseStreak(
 ): number {
   const maxByYear = new Map<number, number>();
   for (const d of history) {
-    if (!d.exDividendDate || d.cashAmount == null || !(d.cashAmount > 0)) continue;
+    if (!d.exDividendDate || d.cashAmount == null || !(d.cashAmount > 0))
+      continue;
     const y = Number(d.exDividendDate.slice(0, 4));
     if (!Number.isFinite(y)) continue;
     maxByYear.set(y, Math.max(maxByYear.get(y) ?? 0, d.cashAmount));
   }
   const years = [...maxByYear.keys()].sort((a, b) => b - a);
   // Raised = more than 0.5% above the prior year (rounding noise is not a raise).
-  const raised = (y: number) => maxByYear.has(y - 1) && maxByYear.get(y)! > maxByYear.get(y - 1)! * 1.005;
+  const raised = (y: number) =>
+    maxByYear.has(y - 1) && maxByYear.get(y)! > maxByYear.get(y - 1)! * 1.005;
   let i = 0;
   // This year without a raise yet does not break a streak that ran to last year.
-  if (years[0] != null && !raised(years[0]) && years[0] === new Date().getUTCFullYear()) i = 1;
+  if (
+    years[0] != null &&
+    !raised(years[0]) &&
+    years[0] === new Date().getUTCFullYear()
+  )
+    i = 1;
   let streak = 0;
   for (; i < years.length; i++) {
     if (raised(years[i])) streak++;
@@ -261,7 +296,9 @@ export class CorporateActionsJob implements OnModuleInit {
                 annualTotals: totals.slice(0, ANNUAL_YEARS),
                 ttmTotal:
                   trailing?.perShare ??
-                  (ttm.length > 0 ? Math.round(ttmTotal * 10000) / 10000 : null),
+                  (ttm.length > 0
+                    ? Math.round(ttmTotal * 10000) / 10000
+                    : null),
                 ttmPayments: ttm.length,
                 yieldPct: fwd?.yieldPct ?? trailing?.yieldPct ?? null,
                 forwardYieldPct: fwd?.yieldPct ?? null,
@@ -270,7 +307,9 @@ export class CorporateActionsJob implements OnModuleInit {
                 trailingPerShare: trailing?.perShare ?? null,
                 yieldBasisPrice: price,
                 cagr5yPct: dividendCagr(regularTotals, CAGR_YEARS),
-                increaseStreakYears: raiseStreak(history.filter(isRegularDividend)),
+                increaseStreakYears: raiseStreak(
+                  history.filter(isRegularDividend),
+                ),
                 frequency: history[0]?.frequency ?? null,
                 isPayer: yields.isPayer,
                 source: "polygon",
@@ -308,16 +347,18 @@ export class CorporateActionsJob implements OnModuleInit {
           // reload. Only splits that execute AFTER the baseline can desync it,
           // and those are exactly what force the reset.
           const newestExecutedSplit =
-            rawSplits.find((s) => s.executionDate && s.executionDate <= today) ??
-            null;
+            rawSplits.find(
+              (s) => s.executionDate && s.executionDate <= today,
+            ) ?? null;
           if (SPLIT_READJUST_ENABLED && newestExecutedSplit) {
             const execDate = newestExecutedSplit.executionDate;
             const { lastSyncedThrough: reflectedSplitDate } =
               await this.meta.getSyncedRange(JOB_NAME, ticker);
-            if (reflectedSplitDate == null) {
-              // Baseline only — no reset (see above).
+            const action = splitAction(execDate, reflectedSplitDate, today);
+            if (action === "baseline") {
+              // An old split the stored history already reflects — no reset.
               await this.meta.setWatermark(JOB_NAME, ticker, execDate);
-            } else if (execDate > reflectedSplitDate) {
+            } else if (action === "reset") {
               await this.meta.clearSyncedRange(STOCK_HISTORY_JOB_NAME, ticker);
               await this.meta.setWatermark(JOB_NAME, ticker, execDate);
               splitResets++;

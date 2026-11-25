@@ -161,7 +161,9 @@ export function gapText(kind: "eps" | "revenue", actual: number, estimate: numbe
   if (v === "inline") return "In line";
   if (v === "none") return null;
   const word = v === "beat" ? "Beat" : "Miss";
-  if (kind === "eps" && Math.abs(estimate) < 0.005) {
+  // Near-zero estimates turn small gaps into "Beat by 76033%" (B-11): under
+  // 10 cents the gap is stated in cents.
+  if (kind === "eps" && Math.abs(estimate) < 0.1) {
     return `${word} by ${formatEps(Math.abs(actual - estimate))}`;
   }
   return `${word} by ${formatGapPct(((actual - estimate) / Math.abs(estimate)) * 100)}`;
@@ -208,7 +210,8 @@ export function changeCell(
 
 export function formatEps(v: number): string {
   const s = `$${Math.abs(v).toFixed(2)}`;
-  return v < 0 ? `-${s}` : s;
+  // A value that rounds to zero is "$0.00", never "-$0.00" (B-13).
+  return v < 0 && s !== "$0.00" ? `-${s}` : s;
 }
 
 /** "$108.4B", "$391.4M", "$950K" — table and tile form. */

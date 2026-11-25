@@ -88,7 +88,10 @@ export function fallbackTitle(f: ArticleFacts): string {
     t = `${n} ${verdictVerb(f)} ${q} Estimates${growth}`;
     if (t.length > 95) t = `${n} ${verdictVerb(f)} ${q} Estimates With ${rev} in Revenue`;
   }
-  return t.length <= 99 ? t : t.slice(0, 99).replace(/\s+\S*$/, "");
+  // Never cut a headline mid-phrase (B-14: "…but EPS Misses at"): an over-long
+  // one falls back to the short form, which always fits.
+  if (t.length <= 110) return t;
+  return f.overall === "none" ? `${n} Reports ${q} Results` : `${n} ${verdictVerb(f)} ${q} Estimates`;
 }
 
 function vsEstimate(kind: "eps" | "revenue", f: ArticleFacts, prose: boolean): string {

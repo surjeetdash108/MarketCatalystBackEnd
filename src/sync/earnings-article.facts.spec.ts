@@ -90,7 +90,7 @@ describe("beat / miss bands (skill §3)", () => {
 
   it("measures the gap against the unrounded estimate", () => {
     // $0.10 vs $0.05422 is an 84% beat — not the 100% a rounded $0.05 gives.
-    expect(gapText("eps", 0.1, 0.05422)).toBe("Beat by 84%");
+    expect(gapText("eps", 0.1, 0.05422)).toBe("Beat by $0.05");
     expect(gapText("revenue", 391415000, 376531900)).toBe("Beat by 4.0%");
     expect(gapText("revenue", 99.7, 100)).toBe("Miss by 0.3%");
     expect(gapText("eps", 1.65, 1.65)).toBe("In line");
@@ -175,7 +175,7 @@ describe("buildFacts", () => {
     const f = facts(figInput());
     expect(f.quarter).toBe("Q3 2026");
     expect(f.overall).toBe("beat");
-    expect(f.eps.gapText).toBe("Beat by 84%");
+    expect(f.eps.gapText).toBe("Beat by $0.05");
     expect(f.revenue.prior).toBe(370083000);
     expect(f.revenue.yearAgo).toBe(274173000);
     expect(f.revenue.yoyPct!.toFixed(1)).toBe("42.8");

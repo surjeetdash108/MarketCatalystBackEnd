@@ -488,8 +488,8 @@ export class EmailService {
   }
 
   launchOffer(to: string, p: { code: string; trialEndsAt: string }) {
-    return this.send("launch_offer", to, "[LAUNCH EMAIL SUBJECT PLACEHOLDER]", [
-      "[LAUNCH EMAIL COPY PLACEHOLDER]",
+    return this.send("launch_offer", to, "Your MarketCatalyst launch offer", [
+      "Thank you for using MarketCatalyst before launch.",
       `You have Pro at no charge until ${longDate(p.trialEndsAt)}. After that, choose a plan to keep using MarketCatalyst.`,
       `Your one-time code for your first year: ${p.code}`,
     ]);

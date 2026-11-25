@@ -149,7 +149,7 @@ describe("composed article", () => {
 
   it("has the skill's parts with FMP figures and no blanks", () => {
     const h = html();
-    expect(h).toContain('<td class="pos">Beat by 84%</td>');
+    expect(h).toContain('<td class="pos">Beat by $0.05</td>');
     expect(h).toContain('<td class="pos">Beat by 4.0%</td>');
     expect(h).toContain("<th>Change</th><th>YoY</th><th>QoQ</th>");
     expect(h).toContain('<td class="metric">Revenue</td><td class="pos">&#9650; 43%</td><td class="pos">&#9650; 5.8%</td>');
@@ -191,5 +191,24 @@ describe("composed article", () => {
     expect(h).not.toContain("<th>YoY</th>");
     expect(h).not.toContain('<td class="metric">Revenue</td><td>$');
     expect(article(h)).not.toMatch(/—|undefined|null|NaN/);
+  });
+});
+
+describe("audit fixes in the composed scorecard", () => {
+  it("B-03: 'including this one' only when this quarter beat", () => {
+    const beat = facts();
+    const h1 = composeArticle(beat, fallbackCopy(beat), { createdMs: Date.now(), related: RELATED }).documentHtml;
+    if (beat.eps.verdict === "beat") expect(h1).toMatch(/including this one/);
+    const miss = { ...beat, eps: { ...beat.eps, verdict: "miss" as const } };
+    const h2 = composeArticle(miss, fallbackCopy(miss), { createdMs: Date.now(), related: RELATED }).documentHtml;
+    expect(h2).not.toMatch(/including this one/);
+    expect(h2).toMatch(/this quarter it missed/);
+  });
+  it("B-14: a long headline is never cut mid-phrase", () => {
+    const f = facts();
+    const long = { ...f, shortName: "Universal Technical Institute Holdings International Group" };
+    const t = fallbackCopy(long).title;
+    expect(t.length).toBeLessThanOrEqual(110);
+    expect(t).not.toMatch(/\b(at|of|to|as|but|and)$/);
   });
 });

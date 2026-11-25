@@ -57,7 +57,7 @@ gcloud scheduler jobs "${action}" http "${NAME}" \
 
 # ── EOD Recap Blog post (15 min after market close: 16:15 ET / 15:15 CT) ──────
 EOD_NAME="sync-eod-recap"
-EOD_SCHEDULE="15 16 * * 1-5"  # 16:15 ET / 15:15 CT weekdays (15 min post-close)
+EOD_SCHEDULE="45 16 * * 1-5"  # 16:45 ET weekdays: official closes final (the feed is ~15 min delayed)
 EOD_URI="${SERVICE_URL}/sync/eod-recap/run"
 
 echo "→ ${EOD_NAME}  ('${EOD_SCHEDULE}' ${TZ_NAME})  ${EOD_URI}"
