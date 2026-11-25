@@ -139,7 +139,10 @@ function gaapSection(f: ArticleFacts): { title: string; bullets: Bullet[] } | nu
 function recordSection(f: ArticleFacts): { title: string; bullets: Bullet[] } | null {
   const bullets: Bullet[] = [];
   if (f.record.epsOf >= 2) {
-    bullets.push({ label: "EPS record", text: `${epsName(f, true)} beat the estimate in ${f.record.epsBeats} of the last ${f.record.epsOf} reports, including this one.` });
+    // "including this one" only when this quarter was itself a beat (B-03: it
+    // followed "Miss by 11%" on 160 posts).
+    const tail = f.eps.verdict === "beat" ? ", including this one" : f.eps.verdict === "inline" ? "; this quarter it matched" : "; this quarter it missed";
+    bullets.push({ label: "EPS record", text: `${epsName(f, true)} beat the estimate in ${f.record.epsBeats} of the last ${f.record.epsOf} reports${tail}.` });
   }
   if (f.record.revOf >= 2) {
     bullets.push({ label: "Revenue record", text: `Revenue beat the estimate in ${f.record.revBeats} of the last ${f.record.revOf} reports.` });
