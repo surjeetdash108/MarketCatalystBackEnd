@@ -707,6 +707,10 @@ describe("StripeBillingProvider — subscriptions and plan changes", () => {
   });
 
   it("retention on a subscription with a pending scheduled change also rewrites the schedule's phases with the discount", async () => {
+    // Phases are kept only while they haven't ended (vs the real clock). T is a
+    // fixed date (26 Oct 2026), so pin "now" to it: from 25 Nov 2026 the first
+    // phase had "ended" and this test failed on the calendar, not the code.
+    jest.useFakeTimers({ now: T * 1000, doNotFake: ["nextTick", "setImmediate", "setTimeout", "setInterval", "queueMicrotask"] });
     const m = mockClient();
     const end = T + 30 * 86400;
     m.raw.subscriptions.retrieve = jest.fn(() => Promise.resolve(subObj({ schedule: "sub_sched_1", discounts: [{ id: "di_ret", coupon: { id: "mc_retention_x" } }] })));
@@ -720,6 +724,7 @@ describe("StripeBillingProvider — subscriptions and plan changes", () => {
     expect(id).toBe("sub_sched_1");
     expect(upd.phases.map((ph) => ph.discounts)).toEqual([[{ discount: "di_ret" }], [{ discount: "di_ret" }]]);
     expect(upd.phases[1]).toMatchObject({ items: [{ price: "price_starter_monthly" }], proration_behavior: "none" });
+    jest.useRealTimers();
   });
 
   it("a stale preview is refused", async () => {
