@@ -146,3 +146,14 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - After (backend prod 8df7ede): worker `market-catalyst-backend-00336-m7m`, live `market-catalyst-live-00285-5g4`, both jobs on `…@sha256:d5f479707bc1…`. New job `forward-estimates` (premarket per-ticker phase) writes `nextFyEps` / `nextFyEnd` / `nextFyEpsAt` on companies docs of S&P 500 + NDX members; seeded by hand for all 518 members on 26 Nov. sectors.job now skips WARRANT/RIGHT/UNIT/SP types.
 - UI prod a6d3c18 (Firebase Hosting).
 - Roll back: `gcloud run services update-traffic market-catalyst-backend --to-revisions=market-catalyst-backend-00335-9p5=100` and `… market-catalyst-live --to-revisions=market-catalyst-live-00284-bv7=100`; `gcloud run jobs update premarket-job --image <before digest>` (same for history-backfill-job); UI: Firebase console → Hosting → roll back. The extra companies fields are harmless if left.
+
+## 2026-11-26 ET — Site-audit fixes, Content pipeline edit/delete, Alpha Signals screens
+- Before: worker `market-catalyst-backend-00336-m7m`, live `market-catalyst-live-00285-5g4`, both jobs on `…@sha256:d5f479707bc1…`.
+- After (backend prod 908ad14): worker `market-catalyst-backend-00337-r2k`, live `market-catalyst-live-00286-wzv`, both jobs on `…@sha256:3a6d6ee4edbb…`. UI prod e6bdcdc (Firebase Hosting). Website prod bdadcd2 (App Hosting rollouts).
+- Production data changed (backups in ~/Downloads/MarketCatalyst-backups-2026-11-26):
+  - 203 blog posts corrected (B-03 wording, B-11 cent gaps, B-13 -$0.00, B-21 model notes removed, B-17/B-23 wording) — originals in posts/<id>.json.
+  - 3 duplicate posts set to draft (rhTHxB9rABEwpsowWs1l, UsoYNkyBliHJOA3FPOVV, baH44tAsES2qaoyUoYCn) + 301s in the website's DUPLICATE_POSTS.
+  - 8 FAQ entries reworded (faq-03/06/09/10/12/13/14/16) — originals in faqs-backup-2026-11-26.json.
+  - sync_watermarks/stock-history__{SXTC,SCCO,SOXX,AIIO,STKH,SNDK} deleted so the next stock-history run re-fetches split-adjusted history.
+- NOT done (blocked by the auto-mode check): Cloud Scheduler `sync-eod-recap` is still `15 16 * * 1-5`; to move it: `gcloud scheduler jobs update http sync-eod-recap --location us-central1 --project market-catalyst-502415 --schedule="45 16 * * 1-5"`.
+- Roll back: `gcloud run services update-traffic market-catalyst-backend --to-revisions=market-catalyst-backend-00336-m7m=100` and `… market-catalyst-live --to-revisions=market-catalyst-live-00285-5g4=100`; jobs `--image …@sha256:d5f479707bc1…`; UI/website via the Firebase console; restore posts/FAQs from the backup JSON (PATCH the saved fields).
