@@ -1,7 +1,12 @@
-import {
-  computeQuarterFcf,
-  computeTtmFcf,
-} from "../../../MarketCatalystUI/app/iq/types/financials";
+import { HAS_UI } from "../../test/support/sibling-repos";
+
+// The functions under test live in the UI repo (shared type helpers); CI checks
+// out this repo alone, so the suite skips there.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const ui = HAS_UI ? require("../../../MarketCatalystUI/app/iq/types/financials") : {};
+const computeQuarterFcf = ui.computeQuarterFcf as (q: Record<string, unknown>) => number | null;
+const computeTtmFcf = ui.computeTtmFcf as (qs: Array<Record<string, unknown>>) => number | null;
+const describe = HAS_UI ? global.describe : global.describe.skip;
 
 describe("computeQuarterFcf", () => {
   it("uses valid provider-sourced freeCashFlow when available", () => {

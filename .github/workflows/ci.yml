@@ -17,7 +17,8 @@ jobs:
       - run: npm ci
       - name: No placeholders in shipped code
         run: npm run check:placeholders
+      # Shipped source only: a few specs import the UI repo, which CI doesn't check out.
       - name: Type check
-        run: npx tsc --noEmit -p tsconfig.json
+        run: npx tsc --noEmit -p tsconfig.build.json
       - name: Tests
         run: npx jest

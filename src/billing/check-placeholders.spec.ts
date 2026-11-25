@@ -2,6 +2,7 @@ import { execFileSync } from "child_process";
 import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { describeWithSiblings } from "../../test/support/sibling-repos";
 
 const SCRIPT = join(__dirname, "../../scripts/check-placeholders.mjs");
 
@@ -22,7 +23,7 @@ function run(
   }
 }
 
-describe("scripts/check-placeholders.mjs", () => {
+describeWithSiblings("scripts/check-placeholders.mjs", () => {
   it("lists the remaining placeholders and exits 0 without --production", () => {
     const r = run([]);
     expect(r.code).toBe(0);

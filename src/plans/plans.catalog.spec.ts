@@ -19,6 +19,7 @@ import {
   planRank,
 } from "./plans.registry";
 import { PlansService } from "./plans.service";
+import { describeWithSiblings } from "../../test/support/sibling-repos";
 import { applyCatalog } from "./catalog-apply";
 import {
   uiCatalogSource,
@@ -330,7 +331,7 @@ describe("catalog apply (scripts/apply-catalog.ts)", () => {
   });
 });
 
-describe("catalog copies in other repos", () => {
+describeWithSiblings("catalog copies in other repos", () => {
   const root = join(__dirname, "../../..");
   it("the UI entitlement mirror is the generated one", () => {
     expect(

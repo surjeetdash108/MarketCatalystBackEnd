@@ -1,6 +1,7 @@
 import { readFileSync } from "fs";
 import { join } from "path";
 import { billingHarness, priceRef } from "../../test/support/billing-harness";
+import { describeWithSiblings, HAS_WEBSITE } from "../../test/support/sibling-repos";
 import {
   PLAN_DEFINITIONS,
   catalogPrice,
@@ -13,11 +14,9 @@ import { stripeSeedPlan } from "./provider/stripe/stripe-seed-plan";
  * charges and the Stripe seed (Products/Prices to create) must all agree.
  * Change one price anywhere but the registry and this fails.
  */
+const WEBSITE_CATALOG = join(__dirname, "../../../MarketCatalystWebsite/lib/pricing/catalog.json");
 const website = JSON.parse(
-  readFileSync(
-    join(__dirname, "../../../MarketCatalystWebsite/lib/pricing/catalog.json"),
-    "utf8",
-  ),
+  HAS_WEBSITE ? readFileSync(WEBSITE_CATALOG, "utf8") : '{"plans":[]}',
 ) as {
   plans: Array<{
     id: string;
@@ -25,7 +24,7 @@ const website = JSON.parse(
   }>;
 };
 
-describe("catalog contract: website = GET /plans = provider = Stripe seed", () => {
+describeWithSiblings("catalog contract: website = GET /plans = provider = Stripe seed", () => {
   const paid = PLAN_DEFINITIONS.filter((p) => isPaidPlanId(p.id));
   const rows = paid.flatMap((p) =>
     (["monthly", "annual"] as const).map((i) => [p.id, i] as const),

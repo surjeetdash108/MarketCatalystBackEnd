@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { ENTITLEMENTS, PLAN_DEFINITIONS } from "./plans.registry";
+import { describeWithSiblings } from "../../test/support/sibling-repos";
 
 /**
  * Guards the entitlement catalog against the failure that reached production:
@@ -86,7 +87,7 @@ describe("entitlement catalog", () => {
   });
 });
 
-describe("frontend catalog mirror", () => {
+describeWithSiblings("frontend catalog mirror", () => {
   it("matches the backend key set exactly", () => {
     const ui = catalogKeysInUi();
     const backend = new Set(ENTITLEMENTS.map((e) => e.key));
@@ -95,7 +96,7 @@ describe("frontend catalog mirror", () => {
   });
 });
 
-describe("SCREEN_FEATURES", () => {
+describeWithSiblings("SCREEN_FEATURES", () => {
   it("the UI gate uses the generated map and does not define a hand-kept SLUG_ENTITLEMENT", () => {
     const src = readFileSync(UI_GATE_FILE, "utf8");
     expect(src.includes("SLUG_ENTITLEMENT")).toBe(false);
