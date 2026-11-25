@@ -372,6 +372,7 @@ const VIA_PREMARKET: string[] = [
   "tech-rating",
   "financials",
   "fundamentals-growth",
+  "forward-estimates",
   "corporate-actions",
   "beta",
   "recaps",
