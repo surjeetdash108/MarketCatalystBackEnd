@@ -157,9 +157,12 @@ export function cleanSubmission(body: unknown): Submission {
   return { blog, pulse, feed };
 }
 
-/** Pulse has no separate header field: the post is the header, a blank line, then the body. */
+/**
+ * Pulse has no separate header field: the post is the header in bold
+ * (Pulse rich text, "**…**"), a blank line, then the body.
+ */
 export function pulseText(header: string, body: string): string {
-  return `${header}\n\n${body}`;
+  return `**${header}**\n\n${body}`;
 }
 
 export interface FeedBullet {

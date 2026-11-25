@@ -120,8 +120,8 @@ export class PulseService {
   }
 
   /**
-   * Posts matching every word of `q` in the text, ticker ("$NVDA" or "nvda"),
-   * name or handle ("@macro"), newest first, from the last PULSE_SEARCH_SCAN
+   * Posts matching every word of `q` in the text or ticker ("$NVDA" or
+   * "nvda"), newest first (cards no longer show the name or handle), from the last PULSE_SEARCH_SCAN
    * posts. Firestore has no text search and the collection is small, so this
    * filters in memory. An empty query is the plain list.
    */
@@ -137,7 +137,7 @@ export class PulseService {
     return posts
       .filter((p) => {
         const hay =
-          `${p.text} ${p.ticker ?? ""} ${p.name} ${p.handle}`.toLowerCase();
+          `${p.text} ${p.ticker ?? ""}`.toLowerCase();
         return words.every((w) => hay.includes(w));
       })
       .slice(0, limit);

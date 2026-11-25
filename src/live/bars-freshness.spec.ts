@@ -52,10 +52,12 @@ describe("isBarsDocFresh: daily candles", () => {
   it("at the open, a doc saved before 09:30 no longer counts: today's candle is missing", () => {
     const open10 = at("2026-11-24T10:00:00-05:00");
     expect(isBarsDocFresh("2026-11-24T05:00:00-05:00", D, open10)).toBe(false);
-    expect(isBarsDocFresh("2026-11-24T09:45:00-05:00", D, open10)).toBe(true);
+    expect(isBarsDocFresh("2026-11-24T09:50:00-05:00", D, open10)).toBe(true);
   });
-  it("during the session a doc saved after the open stays fresh (the live price covers the candle)", () => {
-    expect(isBarsDocFresh("2026-11-24T09:45:00-05:00", D, at("2026-11-24T16:10:00-05:00"))).toBe(true);
+  it("during the session a daily doc is refetched every 15 minutes (today's candle keeps forming)", () => {
+    expect(isBarsDocFresh("2026-11-24T09:31:00-05:00", D, at("2026-11-24T09:50:00-05:00"))).toBe(false);
+    expect(isBarsDocFresh("2026-11-24T16:00:00-05:00", D, at("2026-11-24T16:10:00-05:00"))).toBe(true);
+    expect(isBarsDocFresh("2026-11-24T09:45:00-05:00", D, at("2026-11-24T16:10:00-05:00"))).toBe(false);
   });
   it("the same doc goes stale once the close settles, so the final candle is fetched", () => {
     expect(isBarsDocFresh("2026-11-24T09:45:00-05:00", D, at("2026-11-24T16:35:00-05:00"))).toBe(false);

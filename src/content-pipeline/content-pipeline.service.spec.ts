@@ -137,7 +137,7 @@ describe("ContentPipelineService", () => {
       ["blog", "queued"],
     ]);
     expect(pulse.create).toHaveBeenCalledWith(
-      { text: "NVDA up\n\nAfter hours.", ticker: "NVDA" },
+      { text: "**NVDA up**\n\nAfter hours.", ticker: "NVDA" },
       undefined,
       { unlimited: true },
     );
