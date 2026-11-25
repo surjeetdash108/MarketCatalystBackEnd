@@ -1226,6 +1226,14 @@ export const API_CATALOG = {
       "Sends a blog draft back to the AI writer with the editor's note; it is rewritten.",
     params: "body: note",
   },
+  "PATCH /api/admin/content/:id": {
+    summary:
+      "Edits a content pipeline item: a Pulse / Live Feed post's text in place, or a blog item's notes before it is written (re-queued).",
+    params: "body: header?, body?, ticker? / tickers?, or blog section?, headline?, notes?, links?",
+  },
+  "DELETE /api/admin/content/:id": {
+    summary: "Deletes a content pipeline item and what it posted (Pulse post, Live Feed post or blog post).",
+  },
   "POST /api/admin/content/:id/retry": {
     summary:
       "Re-queues a failed or waiting blog item, or re-posts a failed Pulse / Live Feed item.",
@@ -1957,6 +1965,8 @@ export const SCREENS = [
       "GET /api/admin/content/:id",
       "POST /api/admin/content/:id/approve",
       "POST /api/admin/content/:id/send-back",
+      "PATCH /api/admin/content/:id",
+      "DELETE /api/admin/content/:id",
       "POST /api/admin/content/:id/retry",
       "GET /api/admin/ticker-search",
     ],

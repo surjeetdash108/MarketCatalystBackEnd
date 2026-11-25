@@ -7,6 +7,8 @@ import {
   Query,
   Req,
   UseGuards,
+  Patch,
+  Delete,
 } from "@nestjs/common";
 import { AdminGuard } from "../common/admin.guard";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
@@ -47,6 +49,16 @@ export class ContentPipelineAdminController {
   @Post(":id/send-back")
   async sendBack(@Param("id") id: string, @Body() body: { note?: unknown }) {
     return { item: await this.pipeline.sendBack(id, body?.note) };
+  }
+
+  @Patch(":id")
+  async edit(@Param("id") id: string, @Body() body: unknown) {
+    return this.pipeline.edit(id, body);
+  }
+
+  @Delete(":id")
+  async remove(@Param("id") id: string) {
+    return this.pipeline.remove(id);
   }
 
   @Post(":id/retry")

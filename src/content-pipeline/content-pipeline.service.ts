@@ -66,6 +66,13 @@ interface ItemDoc {
   feedPostId?: string | null;
   postedAt?: string | null;
   error?: string | null;
+  /**
+   * "generator": a post a publishing job wrote but held for review because it
+   * failed a publish gate (blog-publish-gate.ts). Its draft is already
+   * rendered, so approving publishes it as is.
+   */
+  source?: "generator";
+  heldReasons?: string[];
 }
 
 /** What the admin screens get for each row. */
@@ -83,6 +90,10 @@ export interface ContentItemView {
   postedAt: string | null;
   error: string | null;
   blogPostId: string | null;
+  /** Why a generated post was held for review (empty otherwise). */
+  heldReasons: string[];
+  /** Whether Edit applies (Pulse / Live Feed always; a blog item before it is written up). */
+  canEdit: boolean;
 }
 
 /** A Live Feed post, as Intraday commentary reads it. */
@@ -127,6 +138,12 @@ function view(id: string, d: ItemDoc): ContentItemView {
     postedAt: d.postedAt ?? null,
     error: d.error ?? null,
     blogPostId: d.blogPostId ?? null,
+    heldReasons: d.heldReasons ?? [],
+    canEdit:
+      d.kind !== "blog" ||
+      (d.source !== "generator" &&
+        d.status !== "posted" &&
+        d.status !== "writing"),
   };
 }
 
@@ -384,6 +401,24 @@ export class ContentPipelineService {
   async approve(id: string): Promise<ContentItemView> {
     const d = await this.load(id);
     if (
+      d.kind === "blog" &&
+      d.source === "generator" &&
+      d.status === "review" &&
+      d.blogPostId
+    ) {
+      // A held generated post is already rendered: publishing is the whole step.
+      const at = new Date();
+      await this.blogs.update(d.blogPostId, { status: "published" });
+      const patch: Partial<ItemDoc> = {
+        status: "posted",
+        postedAt: at.toISOString(),
+        note: "Approved and published",
+        error: null,
+      };
+      await this.patch(id, patch);
+      return view(id, { ...d, ...patch });
+    }
+    if (
       d.kind !== "blog" ||
       d.status !== "review" ||
       !d.article ||
@@ -491,6 +526,133 @@ export class ContentPipelineService {
   }
 
   // ── Writer (worker: content-blog-writer job) ──────────────────────────────
+
+  /**
+   * Edits an item from Pipeline status. Pulse and Live Feed: the posted text
+   * (header, body, ticker/tickers) is changed in place, keeping its publish
+   * time. Blog: the notes / headline / section of an item not yet written up
+   * (queued, failed or in review) — saved, and the item goes back to the writer.
+   */
+  async edit(id: string, raw: unknown): Promise<ContentItemView> {
+    const d = await this.load(id);
+    const b = (raw && typeof raw === "object" ? raw : {}) as Record<
+      string,
+      unknown
+    >;
+    if (d.kind === "pulse") {
+      const c = cleanSubmission({
+        pulse: {
+          header: b.header ?? d.header,
+          body: b.body ?? d.body,
+          ticker: b.ticker ?? d.tickers[0] ?? "",
+        },
+      }).pulse!;
+      if (d.pulsePostId) {
+        await this.pulse.update(
+          d.pulsePostId,
+          { text: pulseText(c.header, c.body), ticker: c.ticker ?? "" },
+          undefined,
+          { unlimited: true },
+        );
+      }
+      const patch: Partial<ItemDoc> = {
+        header: c.header,
+        body: c.body,
+        tickers: c.ticker ? [c.ticker] : [],
+        note: "Edited",
+      };
+      await this.patch(id, patch);
+      return view(id, { ...d, ...patch });
+    }
+    if (d.kind === "feed") {
+      const c = cleanSubmission({
+        feed: {
+          header: b.header ?? d.header,
+          body: b.body ?? d.body,
+          tickers: b.tickers ?? d.tickers,
+        },
+      }).feed!;
+      if (d.feedPostId) {
+        const { summary, bullets } = parseFeedBody(c.body);
+        await this.feedPosts
+          .doc(d.feedPostId)
+          .set(
+            {
+              header: c.header,
+              summary,
+              bullets,
+              body: c.body,
+              tickers: c.tickers,
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true },
+          );
+      }
+      const patch: Partial<ItemDoc> = {
+        header: c.header,
+        body: c.body,
+        tickers: c.tickers,
+        note: "Edited",
+      };
+      await this.patch(id, patch);
+      return view(id, { ...d, ...patch });
+    }
+    if (
+      d.source === "generator" ||
+      d.status === "posted" ||
+      d.status === "writing"
+    )
+      throw new BadRequestException(
+        "This blog post is already written; edit it in Blogs, or delete it here.",
+      );
+    const c = cleanSubmission({
+      blog: {
+        section: b.section ?? d.section,
+        headline: b.headline ?? d.headline ?? "",
+        tickers: b.tickers ?? d.tickers,
+        notes: b.notes ?? d.notes,
+        links: b.links ?? d.links,
+      },
+    }).blog!;
+    const patch: Partial<ItemDoc> = {
+      section: c.section,
+      headline: c.headline,
+      tickers: c.tickers,
+      notes: c.notes,
+      links: c.links,
+      status: "queued",
+      attempts: 0,
+      error: null,
+      note: this.writer.enabled
+        ? "Edited — back in the queue"
+        : "Edited. AI key not set (ANTHROPIC_API_KEY).",
+    };
+    await this.patch(id, patch);
+    if (this.writer.enabled) await this.queue.wake(id, "sent-back");
+    return view(id, { ...d, ...patch });
+  }
+
+  /**
+   * Deletes an item and what it posted: the Pulse post, the Live Feed post, or
+   * the blog post (draft or published). Gone from every surface at once.
+   */
+  async remove(id: string): Promise<{ id: string; deleted: true }> {
+    const d = await this.load(id);
+    const gone = (e: unknown) =>
+      /not found/i.test(String((e as Error)?.message ?? e));
+    if (d.kind === "pulse" && d.pulsePostId)
+      await this.pulse.remove(d.pulsePostId).catch((e) => {
+        if (!gone(e)) throw e;
+      });
+    if (d.kind === "feed" && d.feedPostId)
+      await this.feedPosts.doc(d.feedPostId).delete();
+    if (d.kind === "blog" && d.blogPostId)
+      await this.blogs.remove(d.blogPostId).catch((e) => {
+        if (!gone(e)) throw e;
+      });
+    await this.items.doc(id).delete();
+    return { id, deleted: true };
+  }
 
   /**
    * Writes queued blog items one at a time, oldest first, until none are left
