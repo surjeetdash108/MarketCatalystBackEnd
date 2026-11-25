@@ -1,5 +1,6 @@
 import { StrategyLabDailyJob } from "./strategy-lab-daily.job";
 import { IndexMembersJob } from "./index-members.job";
+import { ForwardEstimatesJob } from "./forward-estimates.job";
 import { StrategyLabIntradayJob } from "./strategy-lab-intraday.job";
 import { Logger, Module, type OnApplicationBootstrap } from "@nestjs/common";
 import { manifestDrift } from "../common/job-manifest";
@@ -94,6 +95,7 @@ import { MarketDataModule } from "../market-data/market-data.module";
     LlmGatewayService,
     StrategyLabDailyJob,
     IndexMembersJob,
+    ForwardEstimatesJob,
     StrategyLabIntradayJob,
     RecapBlogJob,
     EarningsArticleJob,

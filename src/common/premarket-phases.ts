@@ -48,6 +48,8 @@ export const PER_TICKER: string[] = [
   "tech-rating",
   "financials",
   "fundamentals-growth",
+  // Next-FY consensus EPS for S&P 500 / NDX members (dashboard "Lowest forward P/E").
+  "forward-estimates",
   "corporate-actions",
   // After stock-history (the month-end bars it reads) AND corporate-actions: a
   // split detected this morning has already cleared the ticker's history range,
