@@ -18,6 +18,7 @@ import {
   type StatementRow,
 } from "./earnings-article.facts";
 import { fallbackCopy, type ArticleCopy } from "./earnings-article.writer";
+import { figureReasons, holdForReview, notCommonStock, textReasons } from "./blog-publish-gate";
 
 const JOB_NAME = "earnings-article";
 // Every minute through both reporting windows; see job-manifest.ts for the
@@ -132,6 +133,9 @@ export function universeReason(quote: FmpFullQuote | undefined, profile: Profile
   // Warrants, units, rights, preferreds and notes carry the issuer's figures in
   // FMP's calendar under their own symbols; only the common stock is written up.
   if (/\b(warrants?|units?|rights?|preferred|depositary|notes?|debentures?)\b/i.test(profile.companyName)) return "not-common-stock";
+  // The name alone missed DAVEW ("Dave"), VSECU ("VSE"), SCCF ("…7.125% Not"),
+  // DUKB ("…5.625%"): the symbol's suffix and a coupon in the name decide too (B-05).
+  if (notCommonStock(profile.symbol, profile.companyName)) return "not-common-stock";
   if (profile.isActivelyTrading === false) return "inactive";
   if (!US_EXCHANGES.has(String(profile.exchange ?? "").toUpperCase())) return "non-us-listing";
   return null;
@@ -386,6 +390,14 @@ export class EarningsArticleJob implements OnModuleInit {
         (result.previews ??= []).push({ symbol: row.symbol, title: built.article.title, documentHtml: built.article.documentHtml });
         return;
       }
+      // One post per company and fiscal quarter (B-06: Northwest Natural, NWE and
+      // Duke were each written up twice, a day or a symbol apart).
+      if (await this.alreadyCovered(row.symbol, c.profile.cik, built.facts.quarter, docId)) {
+        result.skipped.push({ symbol: row.symbol, reason: "duplicate-quarter" });
+        await this.db.collection(ARTICLES).doc(docId).set({ status: "skipped", reason: "duplicate-quarter", updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+        await this.mark([{ date: row.date, symbol: row.symbol, value: "skipped:duplicate-quarter" }]);
+        return;
+      }
       const posted = await this.publish(built, mode, recent, c);
       await this.db.collection(ARTICLES).doc(docId).set(
         {
@@ -395,6 +407,7 @@ export class EarningsArticleJob implements OnModuleInit {
           url: posted.url,
           title: built.article.title,
           quarter: built.facts.quarter,
+          symbol: row.symbol,
           mode,
           postedAt: FieldValue.serverTimestamp(),
           createdMs: posted.createdMs,
@@ -454,6 +467,17 @@ export class EarningsArticleJob implements OnModuleInit {
     return { facts, copy, article, related };
   }
 
+  /** True when this company's fiscal quarter already has a posted article (any symbol of the same CIK). */
+  private async alreadyCovered(symbol: string, cik: string | null | undefined, quarter: string, docId: string): Promise<boolean> {
+    const snap = await this.db.collection(ARTICLES).where("quarter", "==", quarter).get();
+    return snap.docs.some((d) => {
+      if (d.id === docId) return false;
+      const x = d.data() as { status?: string; symbol?: string; cik?: string };
+      if (x.status !== "posted") return false;
+      return d.id.endsWith(`_${symbol}`) || x.symbol === symbol || (!!cik && x.cik === cik);
+    });
+  }
+
   private async publish(
     built: Built,
     mode: Mode,
@@ -462,6 +486,18 @@ export class EarningsArticleJob implements OnModuleInit {
   ): Promise<{ id: string; slug: string; url: string; createdMs: number }> {
     const createdMs = Date.now();
     let article = composeArticle(built.facts, built.copy, { createdMs, related: built.related });
+    // Publish gate (B-19 / B-21): implausible figures or model notes hold the
+    // post as a draft for review in the admin Content pipeline.
+    const held = mode === "draft" ? [] : [
+      ...textReasons(article.documentHtml),
+      ...figureReasons({
+        revenueActual: built.facts.revenue.actual,
+        revenueEstimate: built.facts.revenue.estimate,
+        revenueYoyPct: built.facts.revenue.yoyPct,
+        epsActual: built.facts.eps.actual,
+        epsEstimate: built.facts.eps.estimate,
+      }),
+    ];
     const body = {
       zone: "earnings",
       title: article.title,
@@ -471,10 +507,13 @@ export class EarningsArticleJob implements OnModuleInit {
       read: article.read,
       format: "html",
       html: article.documentHtml,
-      status: mode === "draft" ? "draft" : "published",
+      status: mode === "draft" || held.length ? "draft" : "published",
       pdfName: `earnings_${c.row.symbol}_${c.row.date}`,
     };
     const { id } = await this.blogs.create(body);
+    if (held.length) {
+      await holdForReview(this.db, { postId: id, title: article.title, reasons: held, tickers: [c.row.symbol], source: JOB_NAME, section: "Earnings" });
+    }
     const snap = await this.db.collection("posts").doc(id).get();
     const slug = String(snap.data()?.slug ?? article.slug);
     if (slug !== article.slug) {
