@@ -8,6 +8,8 @@ RUN npm ci
 
 COPY tsconfig*.json nest-cli.json ./
 COPY src ./src
+# The release gate runs as npm's "prebuild" hook: a placeholder in src fails the image build.
+COPY scripts/no-placeholders.mjs ./scripts/no-placeholders.mjs
 RUN npm run build
 
 # Drop dev dependencies so we copy a slim node_modules into the runtime image.
