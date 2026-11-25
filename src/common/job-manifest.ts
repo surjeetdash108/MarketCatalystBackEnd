@@ -168,7 +168,7 @@ const SCHEDULER: JobManifestEntry[] = [
   {
     name: "eod-recap",
     trigger: "scheduler",
-    schedules: ["15 16 * * 1-5"],
+    schedules: ["45 16 * * 1-5"],
     note: "EOD Recap blog post: feeds 16 ETFs + indices/commodities/crypto into Claude skill and publishes to blog 15 min after market close at 4:15 PM ET (3:15 PM CT)",
   },
   {

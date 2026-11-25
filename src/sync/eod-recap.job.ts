@@ -11,7 +11,15 @@ import { TAPE_INDICES } from "../live/tape-universe";
 import { AnthropicService } from "../vendors/anthropic/anthropic.service";
 import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { etDate, etWeekday } from "../common/market-calendar.util";
-import { formatRecapIndices, nasdaqCompositeQuote } from "../common/recap-indices.util";
+import {
+  formatRecapIndices,
+  nasdaqCompositeQuote,
+} from "../common/recap-indices.util";
+import {
+  directionReasons,
+  holdForReview,
+  textReasons,
+} from "./blog-publish-gate";
 
 /**
  * Automated End-Of-Day (EOD) Market Recap Job.
@@ -35,7 +43,10 @@ import { formatRecapIndices, nasdaqCompositeQuote } from "../common/recap-indice
  */
 
 const JOB_NAME = "eod-recap";
-const CRON = "15 16 * * 1-5"; // 4:15 PM ET / 3:15 PM CT on weekdays (15 min after market close)
+// 4:45 PM ET on weekdays. The feed is ~15 min delayed, so at 4:15 the index
+// figures weren't the official closes yet (Nov 24: Dow 49,964 / +384 published
+// vs the official 50,018.70 / +423.39, B-20). By 4:45 the closes are final.
+const CRON = "45 16 * * 1-5";
 
 const POPULAR_16_ETFS = [
   "SPY",
@@ -62,7 +73,10 @@ const ETF_NAMES: Record<string, { name: string; category: string }> = {
   SPY: { name: "SPDR S&P 500 ETF Trust", category: "Broad Market" },
   QQQ: { name: "Invesco QQQ Trust (Nasdaq-100)", category: "Broad Market" },
   IWM: { name: "iShares Russell 2000 ETF", category: "Broad Market" },
-  DIA: { name: "SPDR Dow Jones Industrial Average ETF", category: "Broad Market" },
+  DIA: {
+    name: "SPDR Dow Jones Industrial Average ETF",
+    category: "Broad Market",
+  },
   XLF: { name: "Financial Select Sector SPDR", category: "Sectors" },
   XLK: { name: "Technology Select Sector SPDR", category: "Sectors" },
   XLE: { name: "Energy Select Sector SPDR", category: "Sectors" },
@@ -70,14 +84,26 @@ const ETF_NAMES: Record<string, { name: string; category: string }> = {
   XLI: { name: "Industrial Select Sector SPDR", category: "Sectors" },
   XLP: { name: "Consumer Staples Select Sector SPDR", category: "Sectors" },
   XLU: { name: "Utilities Select Sector SPDR", category: "Sectors" },
-  XLY: { name: "Consumer Discretionary Select Sector SPDR", category: "Sectors" },
+  XLY: {
+    name: "Consumer Discretionary Select Sector SPDR",
+    category: "Sectors",
+  },
   XLB: { name: "Materials Select Sector SPDR", category: "Sectors" },
   VNQ: { name: "Vanguard Real Estate ETF", category: "Sectors" },
   GLD: { name: "SPDR Gold Shares", category: "Commodities & Alternatives" },
-  TLT: { name: "iShares 20+ Year Treasury Bond ETF", category: "Rates & Credit" },
+  TLT: {
+    name: "iShares 20+ Year Treasury Bond ETF",
+    category: "Rates & Credit",
+  },
   SMH: { name: "VanEck Semiconductor ETF", category: "Sectors" },
-  HYG: { name: "iShares High Yield Corporate Bond ETF", category: "Rates & Credit" },
-  UUP: { name: "Invesco DB US Dollar Index Bullish Fund", category: "Dollar & Volatility" },
+  HYG: {
+    name: "iShares High Yield Corporate Bond ETF",
+    category: "Rates & Credit",
+  },
+  UUP: {
+    name: "Invesco DB US Dollar Index Bullish Fund",
+    category: "Dollar & Volatility",
+  },
 };
 
 @Injectable()
@@ -114,30 +140,39 @@ export class EodRecapJob implements OnModuleInit {
     try {
       // 1. Holiday & trading day gate (bypassed if FORCE_RUN=true)
       const postKey = `eod_recap_${today}`;
-      const force = process.env.FORCE_RUN === "true" || process.env.FORCE_RECAP === "true";
+      const force =
+        process.env.FORCE_RUN === "true" || process.env.FORCE_RECAP === "true";
       if (!force) {
         const weekday = etWeekday();
         if (weekday === 0 || weekday === 6) {
-          this.logger.log(`Today is a weekend (day ${weekday}) — skipping EOD recap`);
+          this.logger.log(
+            `Today is a weekend (day ${weekday}) — skipping EOD recap`,
+          );
           await this.meta.record(JOB_NAME, { ok: true, count: 0 });
           return { published: false, reason: "weekend" };
         }
 
         const isHoliday = await this.checkIfMarketHoliday(today);
         if (isHoliday) {
-          this.logger.log(`Market is closed today (${today}) for holiday — skipping EOD recap`);
+          this.logger.log(
+            `Market is closed today (${today}) for holiday — skipping EOD recap`,
+          );
           await this.meta.record(JOB_NAME, { ok: true, count: 0 });
           return { published: false, reason: "market-holiday" };
         }
 
         // 2. Idempotency check
         if (await this.alreadyPublished(postKey)) {
-          this.logger.log(`EOD recap for ${today} already published (${postKey}) — skipping`);
+          this.logger.log(
+            `EOD recap for ${today} already published (${postKey}) — skipping`,
+          );
           await this.meta.record(JOB_NAME, { ok: true, count: 0 });
           return { published: false, reason: "already-published" };
         }
       } else {
-        this.logger.log(`FORCE_RUN=true detected: bypassing weekend/holiday/idempotency gates for manual test run.`);
+        this.logger.log(
+          `FORCE_RUN=true detected: bypassing weekend/holiday/idempotency gates for manual test run.`,
+        );
       }
 
       // 3. Gather verified market data
@@ -155,6 +190,15 @@ export class EodRecapJob implements OnModuleInit {
         bodyHtml: postContent.bodyHtml,
       });
 
+      // Publish gate (B-21 / B-22): a model note, or a headline whose direction
+      // contradicts the S&P 500 in the same post, holds it for review.
+      const held = [
+        ...textReasons(fullDocument),
+        ...directionReasons(
+          `${postContent.title} ${postContent.dek}`,
+          marketData.spPct,
+        ),
+      ];
       const created = await this.blogs.create({
         zone: "recap",
         title: postContent.title,
@@ -164,9 +208,19 @@ export class EodRecapJob implements OnModuleInit {
         read: postContent.read,
         format: "html",
         html: fullDocument,
-        status: "published",
+        status: held.length ? "draft" : "published",
         pdfName: postKey,
       });
+      if (held.length) {
+        await holdForReview(this.firebase.firestore, {
+          postId: created.id,
+          title: postContent.title,
+          reasons: held,
+          tickers: [],
+          source: JOB_NAME,
+          section: "Recap",
+        });
+      }
 
       await this.meta.record(JOB_NAME, { ok: true, count: 1 });
       this.logger.log(
@@ -181,7 +235,10 @@ export class EodRecapJob implements OnModuleInit {
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.logger.error(`EOD recap job failed: ${msg}`, err instanceof Error ? err.stack : undefined);
+      this.logger.error(
+        `EOD recap job failed: ${msg}`,
+        err instanceof Error ? err.stack : undefined,
+      );
       await this.meta.record(JOB_NAME, { ok: false, error: msg });
       throw err;
     }
@@ -192,13 +249,16 @@ export class EodRecapJob implements OnModuleInit {
     try {
       const holidays = await this.polygon.getUpcomingMarketHolidays();
       const todayHoliday = holidays.find(
-        (h) => h.date === today && (h.status === "closed" || h.exchange === "NYSE"),
+        (h) =>
+          h.date === today && (h.status === "closed" || h.exchange === "NYSE"),
       );
       if (todayHoliday && todayHoliday.status === "closed") {
         return true;
       }
     } catch (err) {
-      this.logger.warn(`Failed checking upcoming market holidays: ${(err as Error).message}`);
+      this.logger.warn(
+        `Failed checking upcoming market holidays: ${(err as Error).message}`,
+      );
     }
     return false;
   }
@@ -239,18 +299,37 @@ export class EodRecapJob implements OnModuleInit {
         volume: s.volume,
       }));
     } catch (err) {
-      this.logger.warn(`Universal snapshot failed for ETFs: ${(err as Error).message}`);
+      this.logger.warn(
+        `Universal snapshot failed for ETFs: ${(err as Error).message}`,
+      );
     }
 
     // 2. Fetch market indices, movers, sectors from Firestore collections
     const db = this.firebase.firestore;
     const [indicesSnap, moversSnap, sectorsSnap, sentimentSnap, eventsSnap] =
       await Promise.all([
-        db.collection("market_indices").get().catch(() => null),
-        db.collection("market_movers").get().catch(() => null),
-        db.collection("sectors").get().catch(() => null),
-        db.collection("market_sentiment").doc("fear_greed").get().catch(() => null),
-        db.collection("macro_events").limit(8).get().catch(() => null),
+        db
+          .collection("market_indices")
+          .get()
+          .catch(() => null),
+        db
+          .collection("market_movers")
+          .get()
+          .catch(() => null),
+        db
+          .collection("sectors")
+          .get()
+          .catch(() => null),
+        db
+          .collection("market_sentiment")
+          .doc("fear_greed")
+          .get()
+          .catch(() => null),
+        db
+          .collection("macro_events")
+          .limit(8)
+          .get()
+          .catch(() => null),
       ]);
 
     // Format Indices
@@ -294,7 +373,9 @@ export class EodRecapJob implements OnModuleInit {
       };
       if (have) Object.assign(have, row);
       else indices.push(row);
-      this.logger.log(`${sym.id}: primary had no data, served by FMP (${sym.fmpSymbol})`);
+      this.logger.log(
+        `${sym.id}: primary had no data, served by FMP (${sym.fmpSymbol})`,
+      );
     }
 
     // Format 10Y Yield directly from Polygon Treasury Yields curve
@@ -313,7 +394,9 @@ export class EodRecapJob implements OnModuleInit {
         };
       }
     } catch (err) {
-      this.logger.warn(`Treasury yields fetch failed: ${(err as Error).message}`);
+      this.logger.warn(
+        `Treasury yields fetch failed: ${(err as Error).message}`,
+      );
     }
 
     // Format Movers
@@ -343,18 +426,21 @@ export class EodRecapJob implements OnModuleInit {
       }));
 
     // Format Sectors
-    const sectors = (sectorsSnap?.docs ?? []).map((d) => {
-      const data = d.data();
-      return {
-        sector: data.sector ?? data.name ?? d.id,
-        pctChange: typeof data.pctChange === "number" ? data.pctChange : null,
-      };
-    }).sort((a, b) => (b.pctChange ?? 0) - (a.pctChange ?? 0));
+    const sectors = (sectorsSnap?.docs ?? [])
+      .map((d) => {
+        const data = d.data();
+        return {
+          sector: data.sector ?? data.name ?? d.id,
+          pctChange: typeof data.pctChange === "number" ? data.pctChange : null,
+        };
+      })
+      .sort((a, b) => (b.pctChange ?? 0) - (a.pctChange ?? 0));
 
     // Format Sentiment
     const sentimentData = sentimentSnap?.exists ? sentimentSnap.data() : null;
     const sentiment = {
-      score: typeof sentimentData?.value === "number" ? sentimentData.value : 50,
+      score:
+        typeof sentimentData?.value === "number" ? sentimentData.value : 50,
       label: sentimentData?.label ?? "Neutral",
     };
 
@@ -402,7 +488,14 @@ export class EodRecapJob implements OnModuleInit {
       date: today,
       popular16Etfs: popularEtfs,
       otherEtfs,
-      indices: formatRecapIndices(indices, await nasdaqCompositeQuote(this.fmp)),
+      indices: formatRecapIndices(
+        indices,
+        await nasdaqCompositeQuote(this.fmp),
+      ),
+      // The S&P 500's move, so the published headline can be checked against the table (B-22).
+      spPct:
+        indices.find((i) => /S&P|SPX|GSPC/i.test(`${i.id} ${i.label}`))
+          ?.pctChange ?? null,
       yield10Y,
       gainers,
       losers,
@@ -515,7 +608,6 @@ Two analytical paragraphs framing the session, major indices, catalysts (Fed, yi
     ...
   </tbody>
 </table></div>
-<p style="font-size:13px;color:#5B6472;margin-top:-20px">[Optional note: VNQ, UUP, EFA, and EEM are not shown; their closes could not be independently verified for this session.]</p>
 
 5. <h2 id="sentiment">Market temperature and volatility</h2>
 <div class="callout">
@@ -654,11 +746,17 @@ Generate the complete, publish-ready EOD market recap article using the <<<TITLE
 
     // 1. Primary: Anthropic Claude API
     if (this.anthropic.enabled) {
-      this.logger.log("Invoking Claude (Anthropic API) for EOD recap generation...");
-      rawReply = await this.anthropic.generateMessage(systemPrompt, userPrompt, {
-        maxTokens: 8000,
-        timeoutMs: 120_000,
-      });
+      this.logger.log(
+        "Invoking Claude (Anthropic API) for EOD recap generation...",
+      );
+      rawReply = await this.anthropic.generateMessage(
+        systemPrompt,
+        userPrompt,
+        {
+          maxTokens: 8000,
+          timeoutMs: 120_000,
+        },
+      );
     }
 
     // 2. Fallback: LlmGatewayService (Groq / OpenRouter)
@@ -676,12 +774,17 @@ Generate the complete, publish-ready EOD market recap article using the <<<TITLE
     }
 
     if (!rawReply) {
-      throw new Error("Both Anthropic and fallback LLM failed to generate recap narrative.");
+      throw new Error(
+        "Both Anthropic and fallback LLM failed to generate recap narrative.",
+      );
     }
 
     // Parse delimited output
-    const titleMatch = /<<<TITLE>>>\s*([\s\S]*?)(?=<<<DEK>>>|<<<BODY_HTML>>>|$)/i.exec(rawReply);
-    const dekMatch = /<<<DEK>>>\s*([\s\S]*?)(?=<<<BODY_HTML>>>|$)/i.exec(rawReply);
+    const titleMatch =
+      /<<<TITLE>>>\s*([\s\S]*?)(?=<<<DEK>>>|<<<BODY_HTML>>>|$)/i.exec(rawReply);
+    const dekMatch = /<<<DEK>>>\s*([\s\S]*?)(?=<<<BODY_HTML>>>|$)/i.exec(
+      rawReply,
+    );
     const bodyMatch = /<<<BODY_HTML>>>\s*([\s\S]*?)$/i.exec(rawReply);
 
     let title = titleMatch ? titleMatch[1].trim() : "";
@@ -703,10 +806,13 @@ Generate the complete, publish-ready EOD market recap article using the <<<TITLE
         // regex match from json
         const jTitle = /"title"\s*:\s*"([^"]+)"/.exec(rawReply);
         const jDek = /"dek"\s*:\s*"([^"]+)"/.exec(rawReply);
-        const jBody = /"bodyHtml"\s*:\s*"([\s\S]*?)"\s*,?\s*"\w+"/.exec(rawReply);
+        const jBody = /"bodyHtml"\s*:\s*"([\s\S]*?)"\s*,?\s*"\w+"/.exec(
+          rawReply,
+        );
         if (jTitle) title = jTitle[1];
         if (jDek) dek = jDek[1];
-        if (jBody) bodyHtml = jBody[1].replace(/\\"/g, '"').replace(/\\n/g, "\n");
+        if (jBody)
+          bodyHtml = jBody[1].replace(/\\"/g, '"').replace(/\\n/g, "\n");
       }
     }
 
@@ -714,7 +820,8 @@ Generate the complete, publish-ready EOD market recap article using the <<<TITLE
       title = `Wall Street Closes Session: Key Market Movers and Catalysts for ${formattedDate}`;
     }
     if (!dek) {
-      dek = "Closing index levels, full 16-ETF performance scoreboard, macro yields and key session drivers.";
+      dek =
+        "Closing index levels, full 16-ETF performance scoreboard, macro yields and key session drivers.";
     }
     if (!bodyHtml) {
       bodyHtml = rawReply.includes("<h2") ? rawReply : `<p>${rawReply}</p>`;
@@ -723,10 +830,18 @@ Generate the complete, publish-ready EOD market recap article using the <<<TITLE
     const formattedBodyHtml = formatRecapBody(bodyHtml, title, dek, today);
 
     const cleanDek = (raw: string, max = 119) => {
-      const c = raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+      const c = raw
+        .replace(/<[^>]*>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
       if (c.length <= max) return c;
       const sMatches = c.match(/[^.!?]+[.!?]+(?:\s+|$)/g);
-      if (sMatches && sMatches[0] && sMatches[0].trim().length <= max && sMatches[0].trim().length >= 30) {
+      if (
+        sMatches &&
+        sMatches[0] &&
+        sMatches[0].trim().length <= max &&
+        sMatches[0].trim().length >= 30
+      ) {
         return sMatches[0].trim();
       }
       const slice = c.slice(0, max - 3);
@@ -1209,7 +1324,10 @@ export function formatRecapBody(
 
   // Strip duplicate/partial blocks if emitted by LLM
   b = b
-    .replace(/<script\s+type=["']application\/ld\+json["']>[\s\S]*?<\/script>/gi, "")
+    .replace(
+      /<script\s+type=["']application\/ld\+json["']>[\s\S]*?<\/script>/gi,
+      "",
+    )
     .replace(/<style>[\s\S]*?<\/style>/gi, "")
     .replace(/<section\s+class=["']mc-ra["'][\s\S]*?<\/section>/gi, "")
     .replace(/<div\s+class=["']disclaimer["'][\s\S]*?<\/div>/gi, "")
@@ -1217,7 +1335,10 @@ export function formatRecapBody(
 
   // Strip forbidden outer structural tags that break the container boundary
   b = b.replace(/<\/?(?:main|article|body|html|head)\b[^>]*>/gi, "");
-  b = b.replace(/<div class=["'](?:card|card-body|article|mc-recap-root)["'][^>]*>/gi, "");
+  b = b.replace(
+    /<div class=["'](?:card|card-body|article|mc-recap-root)["'][^>]*>/gi,
+    "",
+  );
 
   // Ensure canonical Table of Contents is present
   if (!/<div class=["']toc["']/i.test(b)) {
@@ -1234,11 +1355,15 @@ export function formatRecapBody(
   b = b.replace(/\s*id=["']idx-strip["']/gi, "");
 
   // Normalize stat-strip and stat-box: ensure negative numbers have class="stat-box neg"
-  b = b.replace(/<div class=["']stat-box[^"']*["']\s*>([\s\S]*?)<\/div>/gis, (match, inner) => {
-    const isDown = /class=["']num[^"']*["'][^>]*>[\s\n]*[-−\u2010-\u2015]/.test(inner);
-    const cleanedInner = inner.replace(/style=["'][^"']*["']/gi, "");
-    return `<div class="${isDown ? "stat-box neg" : "stat-box"}">${cleanedInner}</div>`;
-  });
+  b = b.replace(
+    /<div class=["']stat-box[^"']*["']\s*>([\s\S]*?)<\/div>/gis,
+    (match, inner) => {
+      const isDown =
+        /class=["']num[^"']*["'][^>]*>[\s\n]*[-−\u2010-\u2015]/.test(inner);
+      const cleanedInner = inner.replace(/style=["'][^"']*["']/gi, "");
+      return `<div class="${isDown ? "stat-box neg" : "stat-box"}">${cleanedInner}</div>`;
+    },
+  );
 
   // Ensure first data cell in table rows has class="metric"
   b = b.replace(/<tr>\s*<td>/gi, '<tr><td class="metric">');
@@ -1276,28 +1401,67 @@ export function formatRecapBody(
   }
 
   // Canonical H2 section headings normalization
-  b = b.replace(/<h2[^>]*>[\s\n]*(?:The numbers[,\s]*by the close|The Numbers[,\s]*by the close)[\s\S]*?<\/h2>/i, '<h2 id="numbers">The numbers, by the close</h2>');
-  b = b.replace(/<h2[^>]*>[\s\n]*(?:Sector and asset ETF scoreboard|ETF scoreboard)[\s\S]*?<\/h2>/i, '<h2 id="etf-scoreboard">ETF scoreboard</h2>');
-  b = b.replace(/<h2[^>]*>[\s\n]*(?:Market temperature and volatility|Sentiment and volatility)[\s\S]*?<\/h2>/i, '<h2 id="sentiment">Market temperature and volatility</h2>');
-  b = b.replace(/<h2[^>]*>[\s\n]*(?:Rates, dollar, gold[,\s]*and crypto|Rates, oil, gold and crypto|Rates, commodities and crypto)[\s\S]*?<\/h2>/i, '<h2 id="cross-asset">Rates, dollar, gold, and crypto</h2>');
-  b = b.replace(/<h2[^>]*>[\s\n]*(?:Sectors: leaders and laggards|Sector leaders and laggards)[\s\S]*?<\/h2>/i, '<h2 id="sectors">Sectors: leaders and laggards</h2>');
-  b = b.replace(/<h2[^>]*>[\s\n]*(?:The day['\u2018\u2019\u201B]s market[\u2010-\u2015\u002D]moving stories|Market[\u2010-\u2015\u002D]moving stories)[\s\S]*?<\/h2>/i, '<h2 id="drivers">The day\'s market-moving stories</h2>');
-  b = b.replace(/<h2[^>]*>[\s\n]*(?:Movers below the headlines|Single[\u2010-\u2015\u002D]stock movers)[\s\S]*?<\/h2>/i, '<h2 id="movers">Movers below the headlines</h2>');
-  b = b.replace(/<h2[^>]*>[\s\n]*(?:Key market &amp; macro risks to watch|Key market and macro risks to watch|Key risks to watch)[\s\S]*?<\/h2>/i, '<h2 id="risks">Key market &amp; macro risks to watch</h2>');
-  b = b.replace(/<h2[^>]*>[\s\n]*(?:What to watch next|Calendar)[\s\S]*?<\/h2>/i, '<h2 id="calendar">What to watch next</h2>');
-  b = b.replace(/<h2[^>]*>[\s\n]*(?:The takeaway|Takeaways?)[\s\S]*?<\/h2>/i, '<h2 id="takeaway">The takeaway</h2>');
+  b = b.replace(
+    /<h2[^>]*>[\s\n]*(?:The numbers[,\s]*by the close|The Numbers[,\s]*by the close)[\s\S]*?<\/h2>/i,
+    '<h2 id="numbers">The numbers, by the close</h2>',
+  );
+  b = b.replace(
+    /<h2[^>]*>[\s\n]*(?:Sector and asset ETF scoreboard|ETF scoreboard)[\s\S]*?<\/h2>/i,
+    '<h2 id="etf-scoreboard">ETF scoreboard</h2>',
+  );
+  b = b.replace(
+    /<h2[^>]*>[\s\n]*(?:Market temperature and volatility|Sentiment and volatility)[\s\S]*?<\/h2>/i,
+    '<h2 id="sentiment">Market temperature and volatility</h2>',
+  );
+  b = b.replace(
+    /<h2[^>]*>[\s\n]*(?:Rates, dollar, gold[,\s]*and crypto|Rates, oil, gold and crypto|Rates, commodities and crypto)[\s\S]*?<\/h2>/i,
+    '<h2 id="cross-asset">Rates, dollar, gold, and crypto</h2>',
+  );
+  b = b.replace(
+    /<h2[^>]*>[\s\n]*(?:Sectors: leaders and laggards|Sector leaders and laggards)[\s\S]*?<\/h2>/i,
+    '<h2 id="sectors">Sectors: leaders and laggards</h2>',
+  );
+  b = b.replace(
+    /<h2[^>]*>[\s\n]*(?:The day['\u2018\u2019\u201B]s market[\u2010-\u2015\u002D]moving stories|Market[\u2010-\u2015\u002D]moving stories)[\s\S]*?<\/h2>/i,
+    '<h2 id="drivers">The day\'s market-moving stories</h2>',
+  );
+  b = b.replace(
+    /<h2[^>]*>[\s\n]*(?:Movers below the headlines|Single[\u2010-\u2015\u002D]stock movers)[\s\S]*?<\/h2>/i,
+    '<h2 id="movers">Movers below the headlines</h2>',
+  );
+  b = b.replace(
+    /<h2[^>]*>[\s\n]*(?:Key market &amp; macro risks to watch|Key market and macro risks to watch|Key risks to watch)[\s\S]*?<\/h2>/i,
+    '<h2 id="risks">Key market &amp; macro risks to watch</h2>',
+  );
+  b = b.replace(
+    /<h2[^>]*>[\s\n]*(?:What to watch next|Calendar)[\s\S]*?<\/h2>/i,
+    '<h2 id="calendar">What to watch next</h2>',
+  );
+  b = b.replace(
+    /<h2[^>]*>[\s\n]*(?:The takeaway|Takeaways?)[\s\S]*?<\/h2>/i,
+    '<h2 id="takeaway">The takeaway</h2>',
+  );
 
   // Normalize H3 story headings to <h3>N. Title</h3>
-  b = b.replace(/<h3>(?:<strong>|<b>)?\s*(\d+\.[\s\S]*?)(?:<\/strong>|<\/b>)?\s*<\/h3>/gi, '<h3>$1</h3>');
+  b = b.replace(
+    /<h3>(?:<strong>|<b>)?\s*(\d+\.[\s\S]*?)(?:<\/strong>|<\/b>)?\s*<\/h3>/gi,
+    "<h3>$1</h3>",
+  );
 
   // Convert any legacy "dn" class to "neg"
-  b = b.replace(/\bclass=["']([^"']*\s)?dn(\s[^"']*)?["']/gi, 'class="$1neg$2"');
+  b = b.replace(
+    /\bclass=["']([^"']*\s)?dn(\s[^"']*)?["']/gi,
+    'class="$1neg$2"',
+  );
 
   // Ensure negative numbers in tables have class="neg", positive have class="pos"
   b = b.replace(/<td([^>]*)>(.*?)<\/td>/gis, (match, attrs, content) => {
     const text = content.replace(/<[^>]+>/g, "").trim();
     // Negative number like -0.45%, -$2.50, -123.45, −0.45%, ‑0.45%
-    if (/^[-−\u2010-\u2015]\$?\d[\d.,]*%?$/.test(text) && !attrs.includes("neg")) {
+    if (
+      /^[-−\u2010-\u2015]\$?\d[\d.,]*%?$/.test(text) &&
+      !attrs.includes("neg")
+    ) {
       if (/class="[^"]*"/.test(attrs)) {
         return `<td${attrs.replace(/class="([^"]*)"/, 'class="$1 neg"')}>${content}</td>`;
       }
@@ -1332,4 +1496,3 @@ export function formatRecapBody(
 
   return b;
 }
-

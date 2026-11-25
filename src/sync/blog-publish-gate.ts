@@ -27,6 +27,35 @@ export function textReasons(html: string): string[] {
   return MARKERS.filter(([re]) => re.test(text)).map(([, why]) => why);
 }
 
+const UP_WORDS =
+  /\b(climb|climbs|rises|rise|rally|rallies|gains|surges|jumps|advances|higher)\b/i;
+const DOWN_WORDS =
+  /\b(falls|fall|slides|slide|drops|sinks|tumbles|retreats|lower|sell-?off|slumps)\b/i;
+
+/**
+ * A recap headline/dek whose direction contradicts the S&P 500 in the same
+ * post (B-22: "Broad market climbs…" with the S&P 500 at −0.48%). Only clear
+ * moves (±0.25%) count, and mixed wording ("Dow climbs while the Nasdaq
+ * tumbles") is not flagged.
+ */
+export function directionReasons(
+  headline: string,
+  spPct: number | null,
+): string[] {
+  if (spPct == null || Math.abs(spPct) < 0.25) return [];
+  const up = UP_WORDS.test(headline);
+  const down = DOWN_WORDS.test(headline);
+  if (up && !down && spPct < 0)
+    return [
+      `Headline says the market rose, but the S&P 500 fell ${spPct.toFixed(2)}%`,
+    ];
+  if (down && !up && spPct > 0)
+    return [
+      `Headline says the market fell, but the S&P 500 rose +${spPct.toFixed(2)}%`,
+    ];
+  return [];
+}
+
 /** Owner-approved limits (26 Nov 2026): figures past these are nearly always a data mismatch. */
 export const MAX_REVENUE_SURPRISE_PCT = 25;
 export const MAX_REVENUE_YOY_UP_PCT = 100;

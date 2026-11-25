@@ -23,3 +23,15 @@ describe("blog publish gate", () => {
     expect(notCommonStock("GOOGL", "Alphabet Inc.")).toBe(false);
   });
 });
+
+describe("recap direction check (B-22)", () => {
+  const { directionReasons } = jest.requireActual("./blog-publish-gate");
+  it("holds a 'market climbs' headline when the S&P 500 fell", () => {
+    expect(directionReasons("Broad market climbs on a strong Dow", -0.48)).toHaveLength(1);
+  });
+  it("lets mixed wording and small moves through", () => {
+    expect(directionReasons("Dow climbs while the Nasdaq tumbles", -0.48)).toEqual([]);
+    expect(directionReasons("Stocks edge higher", 0.1)).toEqual([]);
+    expect(directionReasons("Stocks rally into the close", 0.9)).toEqual([]);
+  });
+});
