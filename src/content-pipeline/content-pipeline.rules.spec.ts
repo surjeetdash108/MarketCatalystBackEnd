@@ -76,7 +76,7 @@ describe("content pipeline rules", () => {
       ticker: "NVDA",
     });
     expect(pulseText("NVDA up", "After hours.")).toBe(
-      "NVDA up\n\nAfter hours.",
+      "**NVDA up**\n\nAfter hours.",
     );
   });
 

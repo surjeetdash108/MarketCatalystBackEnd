@@ -81,13 +81,13 @@ describe("Market Catalyst Pulse search", () => {
     await s.create({ text: "AMD guides above consensus", ticker: "AMD" }, at(4));
     return s;
   }
-  it("matches ticker ($ optional), words in the text, name and handle — newest first", async () => {
+  it("matches ticker ($ optional) and words in the text — newest first; not the name or handle (cards no longer show them)", async () => {
     const s = await seeded();
     expect((await s.search("$nvda")).map((p) => p.ticker)).toEqual(["NVDA"]);
     expect((await s.search("amd")).map((p) => p.text)).toEqual(["AMD guides above consensus", "NVDA, AMD lead the chip bid"]);
     expect((await s.search("fed minutes")).map((p) => p.handle)).toEqual(["macro"]);
-    expect((await s.search("macro desk")).length).toBe(1);
-    expect((await s.search("@macro")).length).toBe(1);
+    expect(await s.search("macro desk")).toEqual([]);
+    expect(await s.search("@macro")).toEqual([]);
   });
   it("every word must match; an empty query is the plain list", async () => {
     const s = await seeded();
