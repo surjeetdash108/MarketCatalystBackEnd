@@ -223,6 +223,8 @@ export function websiteCatalogJson(): string {
         plans,
         everyPlanIncludes: EVERY_PLAN_INCLUDES,
         refundPolicy: refundPolicy(),
+        // Free days for a new account, counted from sign-up (TRIAL_DAYS; 0 = none).
+        trialDays: TRIAL_DAYS,
       },
       null,
       2,
