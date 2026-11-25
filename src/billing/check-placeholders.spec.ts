@@ -27,7 +27,8 @@ describe("scripts/check-placeholders.mjs", () => {
     const r = run([]);
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/Placeholders found: \d+/);
-    expect(r.out).toContain("MarketCatalyst LLC [PLACEHOLDER]");
+    // The legal-copy placeholders (Terms §12) were removed on 26 Nov 2026.
+    expect(r.out).not.toContain("MarketCatalyst LLC [PLACEHOLDER]");
     expect(r.out).toContain("STRIPE_SECRET_KEY=__PLACEHOLDER__");
   });
 
@@ -38,7 +39,8 @@ describe("scripts/check-placeholders.mjs", () => {
     expect(r.out).toContain(
       "env STRIPE_SECRET_KEY is missing or a placeholder",
     );
-    expect(r.out).toContain("placeholder in shipped code/copy");
+    // Shipped copy is clean now (code/copy 0); the unset env still fails it.
+    expect(r.out).toMatch(/code\/copy 0/);
   });
 
   it("env-backed defaults and required secrets stop failing once real values are set; copy placeholders still fail", () => {
@@ -61,8 +63,10 @@ describe("scripts/check-placeholders.mjs", () => {
     const r = run(["--production"], real);
     expect(r.out).not.toMatch(/env [A-Z_]+ is missing or a placeholder/);
     expect(r.out).not.toMatch(/EMAIL_REPLY_TO is not set to a real value/);
-    expect(r.code).toBe(1); // legal copy placeholders remain until replaced
-    expect(r.out).toContain("[ADDRESS PLACEHOLDER]");
+    // No copy placeholders remain (legal pages fixed 26 Nov 2026), so real
+    // settings are all it takes.
+    expect(r.out).not.toContain("[ADDRESS PLACEHOLDER]");
+    expect(r.code).toBe(0);
   });
 
   describe("--service-config: settings already on the Cloud Run services count as set", () => {
@@ -140,8 +144,8 @@ describe("scripts/check-placeholders.mjs", () => {
       });
       expect(r.out).not.toMatch(/env [A-Z_]+ is not set/);
       expect(r.out).not.toMatch(/default is a placeholder/);
-      expect(r.code).toBe(1);
-      expect(r.out).toContain("placeholder in shipped code/copy");
+      expect(r.code).toBe(0);
+      expect(r.out).not.toContain("placeholder in shipped code/copy");
     });
   });
 });

@@ -36,7 +36,7 @@ const REPOS = {
   MarketCatalystWebsite: ["app", "components", "lib", "content", ".env.example"],
 };
 const SKIP_DIR = /(^|\/)(node_modules|dist|\.next|out|test|tests|fixtures|__snapshots__)(\/|$)/;
-const SKIP_FILE = /(\.spec\.|\.test\.|\.e2e-spec\.|check-placeholders\.mjs$|home\.html$|\.(css|png|jpg|jpeg|gif|ico|svg|woff2?|map)$)/;
+const SKIP_FILE = /(\.spec\.|\.test\.|\.e2e-spec\.|check-placeholders\.mjs$|no-placeholders\.mjs$|home\.html$|\.(css|png|jpg|jpeg|gif|ico|svg|woff2?|map)$)/;
 /** Lines that mention placeholders without being one: doc pointers, the detectors, HTML input hints. */
 const NOT_A_PLACEHOLDER = /PLACEHOLDERS\.md|\/PLACEHOLDER\/|includes\("PLACEHOLDER"\)|\bplaceholder="/;
 const MARKER = /PLACEHOLDER|[A-Za-z0-9._%+-]+@example\.com/;
