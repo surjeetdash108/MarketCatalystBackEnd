@@ -64,6 +64,14 @@ export function lastBoundary(nowMs: number, minutesOfDay: number[]): number {
   return 0;
 }
 
+/** True from the 09:30 open until the 16:30 settle on a weekday, while today's daily candle is still forming. */
+function inDailyFormingWindow(nowMs: number): boolean {
+  const p = etParts(nowMs);
+  const weekday = new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay();
+  const mod = p.h * 60 + p.mi;
+  return weekday >= 1 && weekday <= 5 && mod >= OPEN_MIN && mod < DAILY_SETTLED_MIN;
+}
+
 /** True while US extended trading (04:00-20:00 ET weekdays) can still move intraday bars. */
 function inExtendedSession(nowMs: number): boolean {
   const p = etParts(nowMs);
@@ -79,6 +87,14 @@ export function isBarsDocFresh(createdAtIso: string | undefined, daily: boolean,
   if (!Number.isFinite(age) || age < 0) return false;
 
   if (daily) {
+    // While today's candle is forming, refetch every 15 minutes like intraday
+    // docs. Once a day was not enough: a doc saved at 09:31 ET could hold no
+    // candle for today yet (the feed is ~15 min delayed), and it then counted
+    // as fresh until 16:30, so the 1D/1W chart ended on the previous session
+    // all day (NVDA, 25 Nov 2026). Each refresh is one incremental fetch.
+    if (inDailyFormingWindow(nowMs)) {
+      return age < INTRADAY_SESSION_TTL_MS && created >= lastBoundary(nowMs, [OPEN_MIN]);
+    }
     return age < DAILY_TTL_MS && created >= lastBoundary(nowMs, [OPEN_MIN, DAILY_SETTLED_MIN]);
   }
   // Intraday: refetch every 15 min while a session is running; outside it, a doc
