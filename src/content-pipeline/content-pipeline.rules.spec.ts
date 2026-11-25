@@ -51,12 +51,22 @@ describe("content pipeline rules", () => {
     );
   });
 
-  it("keeps a Pulse post within the 500-character limit", () => {
-    expect(() =>
-      cleanSubmission({
-        pulse: { header: "h".repeat(200), body: "b".repeat(400) },
-      }),
-    ).toThrow(/together/);
+  it("puts no length limit on header, body or notes", () => {
+    const long = cleanSubmission({
+      blog: {
+        section: "News",
+        headline: "t".repeat(1000),
+        notes: "n".repeat(100_000),
+      },
+      pulse: { header: "h".repeat(1000), body: "b".repeat(10_000) },
+      feed: { header: "h".repeat(1000), body: "b".repeat(50_000) },
+    });
+    expect(long.pulse?.body).toHaveLength(10_000);
+    expect(long.feed?.body).toHaveLength(50_000);
+    expect(long.blog?.notes).toHaveLength(100_000);
+  });
+
+  it("builds a Pulse post from header and body", () => {
     const ok = cleanSubmission({
       pulse: { header: "NVDA up", body: "After hours.", ticker: "$nvda" },
     });

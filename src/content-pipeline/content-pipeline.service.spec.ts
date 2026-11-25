@@ -136,10 +136,11 @@ describe("ContentPipelineService", () => {
       ["feed", "posted"],
       ["blog", "queued"],
     ]);
-    expect(pulse.create).toHaveBeenCalledWith({
-      text: "NVDA up\n\nAfter hours.",
-      ticker: "NVDA",
-    });
+    expect(pulse.create).toHaveBeenCalledWith(
+      { text: "NVDA up\n\nAfter hours.", ticker: "NVDA" },
+      undefined,
+      { unlimited: true },
+    );
     const feedPost = [...fs.data.get("live_feed_posts").values()][0];
     expect(feedPost).toMatchObject({
       header: "Lucid",
