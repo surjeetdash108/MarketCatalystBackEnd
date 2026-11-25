@@ -203,10 +203,14 @@ export class ContentPipelineService {
         body: sub.pulse.body,
       };
       try {
-        const post = await this.pulse.create({
-          text: pulseText(sub.pulse.header, sub.pulse.body),
-          ticker: sub.pulse.ticker ?? "",
-        });
+        const post = await this.pulse.create(
+          {
+            text: pulseText(sub.pulse.header, sub.pulse.body),
+            ticker: sub.pulse.ticker ?? "",
+          },
+          undefined,
+          { unlimited: true },
+        );
         doc = {
           ...doc,
           pulsePostId: post.id,
@@ -449,10 +453,14 @@ export class ContentPipelineService {
     let patch: Partial<ItemDoc>;
     try {
       if (d.kind === "pulse") {
-        const post = await this.pulse.create({
-          text: pulseText(d.header ?? "", d.body ?? ""),
-          ticker: d.tickers[0] ?? "",
-        });
+        const post = await this.pulse.create(
+          {
+            text: pulseText(d.header ?? "", d.body ?? ""),
+            ticker: d.tickers[0] ?? "",
+          },
+          undefined,
+          { unlimited: true },
+        );
         patch = {
           status: "posted",
           pulsePostId: post.id,

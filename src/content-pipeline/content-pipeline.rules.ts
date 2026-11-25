@@ -25,11 +25,7 @@ export const BLOG_SECTIONS = {
 } as const;
 export type BlogSection = keyof typeof BLOG_SECTIONS;
 
-export const NOTES_MAX = 20_000;
-export const HEADER_MAX = 200;
-export const FEED_BODY_MAX = 4_000;
-/** Pulse posts are one text field of at most 500 characters (PulseService). */
-export const PULSE_TEXT_MAX = 500;
+// Header, body and notes have no length limit (the admin asked for none).
 export const REVIEW_NOTE_MAX = 2_000;
 export const MAX_TICKERS = 10;
 /** After this many failed writing attempts a blog item is marked failed. */
@@ -105,13 +101,9 @@ function cleanLinks(v: unknown): string[] {
     .slice(0, 20);
 }
 
-function required(v: unknown, what: string, max: number): string {
+function required(v: unknown, what: string): string {
   const s = text(v);
   if (!s) throw new BadRequestException(`${what} is required.`);
-  if (s.length > max)
-    throw new BadRequestException(
-      `${what} is limited to ${max.toLocaleString()} characters.`,
-    );
   return s;
 }
 
@@ -137,27 +129,19 @@ export function cleanSubmission(body: unknown): Submission {
         `Section must be one of ${Object.keys(BLOG_SECTIONS).join(", ")}.`,
       );
     const headline = text(blogRaw.headline);
-    if (headline.length > HEADER_MAX)
-      throw new BadRequestException(
-        `Working headline is limited to ${HEADER_MAX} characters.`,
-      );
     blog = {
       section,
       headline: headline || null,
       tickers: cleanTickers(blogRaw.tickers),
-      notes: required(blogRaw.notes, "Notes for the blog article", NOTES_MAX),
+      notes: required(blogRaw.notes, "Notes for the blog article"),
       links: cleanLinks(blogRaw.links),
     };
   }
 
   let pulse: PulseInput | null = null;
   if (pulseRaw) {
-    const header = required(pulseRaw.header, "Pulse header", HEADER_MAX);
-    const bodyText = required(pulseRaw.body, "Pulse body", PULSE_TEXT_MAX);
-    if (pulseText(header, bodyText).length > PULSE_TEXT_MAX)
-      throw new BadRequestException(
-        `Pulse header and body together are limited to ${PULSE_TEXT_MAX} characters.`,
-      );
+    const header = required(pulseRaw.header, "Pulse header");
+    const bodyText = required(pulseRaw.body, "Pulse body");
     const tickers = cleanTickers(pulseRaw.ticker ?? pulseRaw.tickers);
     pulse = { header, body: bodyText, ticker: tickers[0] ?? null };
   }
@@ -165,8 +149,8 @@ export function cleanSubmission(body: unknown): Submission {
   let feed: FeedInput | null = null;
   if (feedRaw) {
     feed = {
-      header: required(feedRaw.header, "Live Feed header", HEADER_MAX),
-      body: required(feedRaw.body, "Live Feed body", FEED_BODY_MAX),
+      header: required(feedRaw.header, "Live Feed header"),
+      body: required(feedRaw.body, "Live Feed body"),
       tickers: cleanTickers(feedRaw.tickers ?? feedRaw.ticker),
     };
   }

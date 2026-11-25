@@ -48,14 +48,15 @@ const HANDLE_RE = /^[A-Za-z0-9_]{1,30}$/;
 export function cleanPulseBody(
   body: PulseBody,
   partial: boolean,
+  maxText: number = PULSE_TEXT_MAX,
 ): Partial<Omit<PulsePost, "id" | "createdAt" | "updatedAt">> {
   const out: Partial<Omit<PulsePost, "id" | "createdAt" | "updatedAt">> = {};
   if (body.text !== undefined || !partial) {
     const text = typeof body.text === "string" ? body.text.trim() : "";
     if (!text) throw new BadRequestException("Write something to post.");
-    if (text.length > PULSE_TEXT_MAX)
+    if (text.length > maxText)
       throw new BadRequestException(
-        `Posts are limited to ${PULSE_TEXT_MAX} characters.`,
+        `Posts are limited to ${maxText} characters.`,
       );
     out.text = text;
   }
@@ -135,14 +136,24 @@ export class PulseService {
     const posts = await this.list(PULSE_SEARCH_SCAN);
     return posts
       .filter((p) => {
-        const hay = `${p.text} ${p.ticker ?? ""} ${p.name} ${p.handle}`.toLowerCase();
+        const hay =
+          `${p.text} ${p.ticker ?? ""} ${p.name} ${p.handle}`.toLowerCase();
         return words.every((w) => hay.includes(w));
       })
       .slice(0, limit);
   }
 
-  async create(body: PulseBody, now = new Date()): Promise<PulsePost> {
-    const clean = cleanPulseBody(body, false);
+  /** `unlimited` drops the 500-character cap (admin Content pipeline posts). */
+  async create(
+    body: PulseBody,
+    now = new Date(),
+    opts: { unlimited?: boolean } = {},
+  ): Promise<PulsePost> {
+    const clean = cleanPulseBody(
+      body,
+      false,
+      opts.unlimited ? Infinity : PULSE_TEXT_MAX,
+    );
     const id = randomUUID();
     const at = now.toISOString();
     const doc = { ...clean, createdAt: at, updatedAt: at };
