@@ -171,3 +171,8 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
   - 143 posts corrected (32 EOD recaps re-rendered from official closes; links rewritten/removed in 88 posts; earnings corrections incl. Deere, AECOM, Shift4, Cronos, Roivant, Freedom, NHI, Agilent, Duke, Kohl's, Americold, Ingles, KMB; B-05 tickers; Nvidia note; pending home sales) — originals in posts-before-corrections.json (full documents, with updateTime).
   - faqs/faq-01: "options data" removed — original in faqs-before.json.
 - Roll back: `gcloud run services update-traffic market-catalyst-backend --to-revisions=market-catalyst-backend-00338-rnl=100` and `… market-catalyst-live --to-revisions=market-catalyst-live-00287-wdd=100`; jobs `--image …@sha256:243543848bcf…`; UI/website via the Firebase console; restore posts/FAQ by PATCHing title, excerpt, content, documentHtml (answer) from the backup JSON.
+
+## 2026-11-27 ET — Pulse search covers every post
+- Before: worker `market-catalyst-backend-00339-b4h`, live `market-catalyst-live-00288-mph`, jobs on `…@sha256:b31d48514a4b…`.
+- After (backend prod 73da618): worker `market-catalyst-backend-00340-lk7`, live `market-catalyst-live-00289-682`, jobs on `…@sha256:dd99286f0b24…`.
+- Roll back: `gcloud run services update-traffic market-catalyst-backend --to-revisions=market-catalyst-backend-00339-b4h=100` and `… market-catalyst-live --to-revisions=market-catalyst-live-00288-mph=100`; jobs `--image …@sha256:b31d48514a4b…`.
