@@ -410,7 +410,8 @@ export function weekdayReasons(
 }
 
 const HISTORY =
-  /\b(first time|for the first time|all[- ]time (high|low)|record (high|low|close|closing)|highest (close |level )?since|lowest (close |level )?since|\d+[- ](year|month|week) (high|low)|never before|unprecedented)\b/i;
+  // Hyphens as the model writes them, including the non-breaking U+2011 ("Near‑14‑Year High").
+  /\b(first time|for the first time|all[-‑ ]time (high|low)|record (high|low|close|closing)|highest (close |level )?since|lowest (close |level )?since|\d+[-‑ ](year|month|week) (high|low)|never before|unprecedented)\b/i;
 
 /**
  * Claims about history ("the first time the Dow closed above 50,000") cannot

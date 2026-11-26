@@ -183,6 +183,9 @@ describe("eod-recap facts", () => {
       /14-Year High/i,
     );
     expect(
+      historyReasons("Dow Hits Near\u201114\u2011Year High", "", ""),
+    ).toHaveLength(1);
+    expect(
       historyReasons("Stocks close mixed", "", "<p>The Dow rose 0.3%.</p>"),
     ).toEqual([]);
   });
