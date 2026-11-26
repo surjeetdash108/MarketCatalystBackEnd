@@ -157,3 +157,8 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
   - sync_watermarks/stock-history__{SXTC,SCCO,SOXX,AIIO,STKH,SNDK} deleted so the next stock-history run re-fetches split-adjusted history.
 - NOT done (blocked by the auto-mode check): Cloud Scheduler `sync-eod-recap` is still `15 16 * * 1-5`; to move it: `gcloud scheduler jobs update http sync-eod-recap --location us-central1 --project market-catalyst-502415 --schedule="45 16 * * 1-5"`.
 - Roll back: `gcloud run services update-traffic market-catalyst-backend --to-revisions=market-catalyst-backend-00336-m7m=100` and `… market-catalyst-live --to-revisions=market-catalyst-live-00285-5g4=100`; jobs `--image …@sha256:d5f479707bc1…`; UI/website via the Firebase console; restore posts/FAQs from the backup JSON (PATCH the saved fields).
+
+## 2026-11-26 ET — Pulse: no length limit
+- Before: worker `market-catalyst-backend-00337-r2k`, live `market-catalyst-live-00286-wzv`, jobs on `…@sha256:3a6d6ee4edbb…`.
+- After (backend prod e28c0ef): worker `market-catalyst-backend-00338-rnl`, live `market-catalyst-live-00287-wdd`, jobs on `…@sha256:243543848bcf…`. UI prod 44f0805.
+- Roll back: `gcloud run services update-traffic market-catalyst-backend --to-revisions=market-catalyst-backend-00337-r2k=100` and `… market-catalyst-live --to-revisions=market-catalyst-live-00286-wzv=100`; jobs `--image …@sha256:3a6d6ee4edbb…`; UI via the Firebase console.
