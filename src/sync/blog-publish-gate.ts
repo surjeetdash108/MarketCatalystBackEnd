@@ -27,6 +27,16 @@ export function textReasons(html: string): string[] {
   return MARKERS.filter(([re]) => re.test(text)).map(([, why]) => why);
 }
 
+/**
+ * Whether a new post goes live (B-21): every post created through the blog
+ * service, by any writer, is checked; one carrying a marker is saved as a
+ * draft and `held` names why.
+ */
+export function createDecision(html: string, wantsPublished: boolean): { published: boolean; held: string[] } {
+  const held = wantsPublished ? textReasons(html) : [];
+  return { published: wantsPublished && held.length === 0, held };
+}
+
 const UP_WORDS =
   /\b(climb|climbs|rises|rise|rally|rallies|gains|surges|jumps|advances|higher)\b/i;
 const DOWN_WORDS =

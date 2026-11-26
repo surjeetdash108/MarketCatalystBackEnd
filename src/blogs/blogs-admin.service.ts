@@ -226,6 +226,7 @@ export function stripSiteChrome(html: string): string {
 export { blogSlug, MAX_SLUG_LENGTH } from "./blog-slug";
 import { blogSlug } from "./blog-slug";
 import { resolvePostLinks, type SlugIndex } from "./post-links";
+import { createDecision, holdForReview } from "../sync/blog-publish-gate";
 
 export function composeDocument(body: string, theme: BlogTheme): string {
   const head = [
@@ -1023,7 +1024,12 @@ export class BlogsAdminService {
 
     const type = ZONE_TO_TYPE[zone];
     const kick = typeof body.kick === "string" ? body.kick : "";
-    const published = String(body.status ?? "").toLowerCase() === "published";
+    const wantsPublished = String(body.status ?? "").toLowerCase() === "published";
+    // Every writer (daily jobs, recaps, the MCP connector, the console) goes
+    // through here, so the banned-text check runs on every post (B-21): a post
+    // carrying a model note or placeholder is saved as a draft and held in the
+    // Content pipeline for review instead of going live.
+    const { published, held } = createDecision(typeof body.html === "string" ? body.html : "", wantsPublished);
     const now = FieldValue.serverTimestamp();
 
     this.requireAuthoredFields(body);
@@ -1131,6 +1137,18 @@ export class BlogsAdminService {
     );
 
     if (editorsChoice) await this.markEditorsChoice(ref.id);
+
+    if (held.length) {
+      this.logger.warn(`blog ${ref.id} held for review: ${held.join("; ")}`);
+      await holdForReview(this.firebase.firestore, {
+        postId: ref.id,
+        title,
+        reasons: held,
+        tickers: [],
+        source: "blog-create",
+        section: kick || type,
+      });
+    }
 
     return { id: ref.id };
   }

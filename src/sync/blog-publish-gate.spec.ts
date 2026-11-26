@@ -1,4 +1,4 @@
-import { figureReasons, notCommonStock, textReasons } from "./blog-publish-gate";
+import { createDecision, figureReasons, notCommonStock, textReasons } from "./blog-publish-gate";
 
 describe("blog publish gate", () => {
   it("B-21: placeholders and model notes hold a post", () => {
@@ -47,5 +47,15 @@ describe("recap direction check (B-22)", () => {
   it("holds revenue up more than 80% year over year", () => {
     expect(figureReasons({ revenueActual: 1.9e8, revenueEstimate: 1.9e8, revenueYoyPct: 85, epsActual: null, epsEstimate: null })).toHaveLength(1);
     expect(figureReasons({ revenueActual: 1.9e8, revenueEstimate: 1.9e8, revenueYoyPct: 75, epsActual: null, epsEstimate: null })).toEqual([]);
+  });
+
+  it("every new post is checked for model notes, whoever writes it (B-21)", () => {
+    expect(createDecision("<p>Optional note: VNQ could not be independently verified.</p>", true)).toEqual({
+      published: false,
+      held: ["Contains a model note ('Optional note')", "Contains a model note ('could not be independently verified')"],
+    });
+    expect(createDecision("<p>Clean copy.</p>", true)).toEqual({ published: true, held: [] });
+    // A draft is never held: there is nothing to stop.
+    expect(createDecision("<p>Optional note: x</p>", false)).toEqual({ published: false, held: [] });
   });
 });
