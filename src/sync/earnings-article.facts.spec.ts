@@ -1,6 +1,7 @@
 import {
   buildFacts,
   changeCell,
+  epsName,
   epsVerdict,
   etIso,
   etTime,
@@ -66,6 +67,8 @@ function figInput(over: Partial<FactsInput> = {}): FactsInput {
     ...over,
   };
 }
+
+const daysFrom = (a: string, b: string) => (Date.parse(a) - Date.parse(b)) / 86_400_000;
 
 const facts = (input: FactsInput): ArticleFacts => {
   const f = buildFacts(input);
@@ -145,6 +148,7 @@ describe("formats (skill §6)", () => {
   it("short names", () => {
     expect(shortCompanyName("Figma, Inc.")).toBe("Figma");
     expect(shortCompanyName("CVS Health Corporation")).toBe("CVS Health");
+    expect(shortCompanyName("Deere & Company")).toBe("Deere");
     expect(shortCompanyName("The Walt Disney Company")).toBe("Walt Disney");
   });
 });
@@ -232,6 +236,24 @@ describe("buildFacts", () => {
     const statements = [{ ...FIG_STATEMENTS[0], epsDiluted: 0.1, netIncome: 50_000_000 }, ...FIG_STATEMENTS.slice(1)];
     expect(facts(figInput({ statements })).epsBasis).toBe("gaap");
     expect(facts(figInput()).epsBasis).toBe("adjusted");
+  });
+
+  it("does not call EPS adjusted before the statement shows it is (B-12)", () => {
+    // The morning of the release there is no statement for the quarter yet:
+    // Deere's GAAP $3.89 was labelled "adjusted EPS".
+    const f = facts(figInput({ statements: FIG_STATEMENTS.slice(1) }));
+    expect(f.epsBasis).toBe("reported");
+    expect(epsName(f)).toBe("EPS");
+  });
+
+  it("takes the year-ago and prior-quarter revenue from the filed statement (B-04)", () => {
+    // The calendar's year-ago revenue row disagrees with the 10-Q; the filing wins.
+    const yearAgoRow = FIG_HISTORY.find((r) => daysFrom(FIG_HISTORY[0].date, r.date) >= 300 && r.revenueActual != null)!;
+    const history = FIG_HISTORY.map((r) => (r === yearAgoRow ? { ...r, revenueActual: Number(r.revenueActual) * 0.5 } : r));
+    const filed = facts(figInput());
+    const skewed = facts(figInput({ history }));
+    expect(skewed.revenue.yearAgo).toBe(filed.revenue.yearAgo);
+    expect(skewed.revenue.yoyPct).toBe(filed.revenue.yoyPct);
   });
 
   it("drops a share-class suffix from the issuer name", () => {
