@@ -513,6 +513,8 @@ export interface CalendarEvent {
  * is how "What to watch next" came to print raw codes on impossible dates
  * (B-26).
  */
+const NOT_A_RELEASE = /\bCFTC\b|speculative net positions/i;
+
 export function upcomingEvents(
   docs: Array<{ id: string; data: Record<string, unknown> }>,
   sessionDay: string,
@@ -523,30 +525,34 @@ export function upcomingEvents(
   end.setUTCDate(end.getUTCDate() + days);
   const last = end.toISOString().slice(0, 10);
   const rank = (s: string) => (s === "high" ? 0 : 1);
-  return docs
-    .filter((d) => d.data.source === "fmp")
-    .map((d) => ({
-      name: String(d.data.name ?? "").trim(),
-      day: String(d.data.eventDate ?? "").slice(0, 10),
-      importance: String(d.data.importance ?? "medium").toLowerCase(),
-      estimate: d.data.estimate ?? null,
-      previous: d.data.previous ?? null,
-    }))
-    .filter(
-      (e) =>
-        e.name &&
-        /^\d{4}-\d{2}-\d{2}$/.test(e.day) &&
-        e.day > sessionDay &&
-        e.day <= last,
-    )
-    .sort((a, b) =>
-      a.day === b.day
-        ? rank(a.importance) - rank(b.importance)
-        : a.day < b.day
-          ? -1
-          : 1,
-    )
-    .slice(0, max);
+  return (
+    docs
+      .filter((d) => d.data.source === "fmp")
+      .map((d) => ({
+        name: String(d.data.name ?? "").trim(),
+        day: String(d.data.eventDate ?? "").slice(0, 10),
+        importance: String(d.data.importance ?? "medium").toLowerCase(),
+        estimate: d.data.estimate ?? null,
+        previous: d.data.previous ?? null,
+      }))
+      // Weekly positioning reports are not releases a reader watches for.
+      .filter((e) => !NOT_A_RELEASE.test(e.name))
+      .filter(
+        (e) =>
+          e.name &&
+          /^\d{4}-\d{2}-\d{2}$/.test(e.day) &&
+          e.day > sessionDay &&
+          e.day <= last,
+      )
+      .sort((a, b) =>
+        a.day === b.day
+          ? rank(a.importance) - rank(b.importance)
+          : a.day < b.day
+            ? -1
+            : 1,
+      )
+      .slice(0, max)
+  );
 }
 
 function dayLabel(day: string): string {

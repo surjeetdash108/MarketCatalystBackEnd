@@ -204,6 +204,15 @@ describe("eod-recap facts", () => {
         data: { source: "fmp", name: "Same-day item", eventDate: "2026-11-25" },
       },
       {
+        id: "fmp_cftc_2026-11-27",
+        data: {
+          source: "fmp",
+          name: "CFTC Gold speculative net positions",
+          eventDate: "2026-11-27",
+          importance: "medium",
+        },
+      },
+      {
         id: "fmp_far_2026-12-31",
         data: { source: "fmp", name: "Too far", eventDate: "2026-12-31" },
       },
