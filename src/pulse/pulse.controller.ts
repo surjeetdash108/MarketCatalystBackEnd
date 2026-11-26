@@ -19,7 +19,7 @@ import { PulseService, type PulseBody } from "./pulse.service";
 export class PulseController {
   constructor(private readonly pulse: PulseService) {}
 
-  /** `?q=` searches text, ticker, name and handle (see PulseService.search). */
+  /** `?q=` searches the text and ticker of every post (see PulseService.search). */
   @Get("pulse")
   async list(@Query("q") q?: string) {
     const query = typeof q === "string" ? q.slice(0, 100) : "";
