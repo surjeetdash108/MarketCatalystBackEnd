@@ -484,10 +484,13 @@ export function figureReasons(html: string, rows: RecapRow[]): string[] {
               (Number.isInteger(v) && v % 1000 === 0))
           )
             continue;
-          const okClose = Math.abs(v - r.close) / r.close <= 0.0005;
+          // As precise as printed: "VIX at 25.5" matches a 25.46 close.
+          const half = 0.5 * 10 ** -(raw.split(".")[1] ?? "").length;
+          const okClose =
+            Math.abs(v - r.close) <= Math.max(half, r.close * 0.0005);
           const okChange =
             Math.abs(Math.abs(v) - Math.abs(r.change)) <=
-            Math.max(0.01, Math.abs(r.change) * 0.0005);
+            Math.max(half, 0.01, Math.abs(r.change) * 0.0005);
           if (!okClose && !okChange)
             out.add(
               `${r.label}: prose says ${raw} but the close was ${fmtClose(r)}`,

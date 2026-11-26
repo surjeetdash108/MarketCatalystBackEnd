@@ -132,6 +132,11 @@ describe("eod-recap facts", () => {
     expect(reasons.some((r) => /S&P 500.*0\.27%/.test(r))).toBe(true);
   });
 
+  it("reads a level as precisely as it is printed", () => {
+    expect(figureReasons("<p>The VIX rose to 23.3.</p>", rows)).toEqual([]);
+    expect(figureReasons("<p>The VIX rose to 24.3.</p>", rows)).toHaveLength(1);
+  });
+
   it("an ETF named as such is not read as the commodity", () => {
     expect(
       figureReasons(
