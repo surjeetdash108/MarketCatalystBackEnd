@@ -220,14 +220,10 @@ export class ContentPipelineService {
         body: sub.pulse.body,
       };
       try {
-        const post = await this.pulse.create(
-          {
-            text: pulseText(sub.pulse.header, sub.pulse.body),
-            ticker: sub.pulse.ticker ?? "",
-          },
-          undefined,
-          { unlimited: true },
-        );
+        const post = await this.pulse.create({
+          text: pulseText(sub.pulse.header, sub.pulse.body),
+          ticker: sub.pulse.ticker ?? "",
+        });
         doc = {
           ...doc,
           pulsePostId: post.id,
@@ -488,14 +484,10 @@ export class ContentPipelineService {
     let patch: Partial<ItemDoc>;
     try {
       if (d.kind === "pulse") {
-        const post = await this.pulse.create(
-          {
-            text: pulseText(d.header ?? "", d.body ?? ""),
-            ticker: d.tickers[0] ?? "",
-          },
-          undefined,
-          { unlimited: true },
-        );
+        const post = await this.pulse.create({
+          text: pulseText(d.header ?? "", d.body ?? ""),
+          ticker: d.tickers[0] ?? "",
+        });
         patch = {
           status: "posted",
           pulsePostId: post.id,
@@ -548,12 +540,10 @@ export class ContentPipelineService {
         },
       }).pulse!;
       if (d.pulsePostId) {
-        await this.pulse.update(
-          d.pulsePostId,
-          { text: pulseText(c.header, c.body), ticker: c.ticker ?? "" },
-          undefined,
-          { unlimited: true },
-        );
+        await this.pulse.update(d.pulsePostId, {
+          text: pulseText(c.header, c.body),
+          ticker: c.ticker ?? "",
+        });
       }
       const patch: Partial<ItemDoc> = {
         header: c.header,
@@ -574,19 +564,17 @@ export class ContentPipelineService {
       }).feed!;
       if (d.feedPostId) {
         const { summary, bullets } = parseFeedBody(c.body);
-        await this.feedPosts
-          .doc(d.feedPostId)
-          .set(
-            {
-              header: c.header,
-              summary,
-              bullets,
-              body: c.body,
-              tickers: c.tickers,
-              updatedAt: new Date().toISOString(),
-            },
-            { merge: true },
-          );
+        await this.feedPosts.doc(d.feedPostId).set(
+          {
+            header: c.header,
+            summary,
+            bullets,
+            body: c.body,
+            tickers: c.tickers,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true },
+        );
       }
       const patch: Partial<ItemDoc> = {
         header: c.header,

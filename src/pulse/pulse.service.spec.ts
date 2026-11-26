@@ -26,9 +26,8 @@ describe("Market Catalyst Pulse", () => {
     expect(() => cleanPulseBody({ text: "  " }, false)).toThrow(
       BadRequestException,
     );
-    expect(() => cleanPulseBody({ text: "x".repeat(501) }, false)).toThrow(
-      BadRequestException,
-    );
+    // No length limit any more (26 Nov 2026): 501 characters is fine.
+    expect(cleanPulseBody({ text: "x".repeat(501) }, false).text).toHaveLength(501);
     expect(() =>
       cleanPulseBody({ text: "ok", ticker: "BAD TICKER" }, false),
     ).toThrow(BadRequestException);
@@ -93,5 +92,19 @@ describe("Market Catalyst Pulse search", () => {
     const s = await seeded();
     expect(await s.search("oil fed")).toEqual([]);
     expect((await s.search("   ")).length).toBe(4);
+  });
+});
+
+describe("Pulse post length (owner decision, 26 Nov 2026)", () => {
+  it("has no limit: a long post is accepted in full", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { cleanPulseBody } = require("./pulse.service");
+    const long = "x".repeat(20_000);
+    expect(cleanPulseBody({ text: long }, false).text).toHaveLength(20_000);
+  });
+  it("still needs some text", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { cleanPulseBody } = require("./pulse.service");
+    expect(() => cleanPulseBody({ text: "  " }, false)).toThrow(/Write something/);
   });
 });

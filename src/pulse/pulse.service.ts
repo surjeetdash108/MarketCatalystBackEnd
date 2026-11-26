@@ -16,7 +16,8 @@ import { FirebaseAdminService } from "../common/firebase-admin.provider";
 export const PULSE_COLLECTION = "pulse_posts";
 /** How many posts the dashboard card shows (newest first). */
 export const PULSE_LIMIT = 50;
-export const PULSE_TEXT_MAX = 500;
+// No length limit on a post (owner decision, 26 Nov 2026): long posts collapse
+// to a few lines with an expand control on the card.
 /** How far back a search looks (newest first). */
 export const PULSE_SEARCH_SCAN = 500;
 export const DEFAULT_NAME = "MarketCatalyst";
@@ -48,16 +49,11 @@ const HANDLE_RE = /^[A-Za-z0-9_]{1,30}$/;
 export function cleanPulseBody(
   body: PulseBody,
   partial: boolean,
-  maxText: number = PULSE_TEXT_MAX,
 ): Partial<Omit<PulsePost, "id" | "createdAt" | "updatedAt">> {
   const out: Partial<Omit<PulsePost, "id" | "createdAt" | "updatedAt">> = {};
   if (body.text !== undefined || !partial) {
     const text = typeof body.text === "string" ? body.text.trim() : "";
     if (!text) throw new BadRequestException("Write something to post.");
-    if (text.length > maxText)
-      throw new BadRequestException(
-        `Posts are limited to ${maxText} characters.`,
-      );
     out.text = text;
   }
   if (body.ticker !== undefined || !partial) {
@@ -136,24 +132,14 @@ export class PulseService {
     const posts = await this.list(PULSE_SEARCH_SCAN);
     return posts
       .filter((p) => {
-        const hay =
-          `${p.text} ${p.ticker ?? ""}`.toLowerCase();
+        const hay = `${p.text} ${p.ticker ?? ""}`.toLowerCase();
         return words.every((w) => hay.includes(w));
       })
       .slice(0, limit);
   }
 
-  /** `unlimited` drops the 500-character cap (admin Content pipeline posts). */
-  async create(
-    body: PulseBody,
-    now = new Date(),
-    opts: { unlimited?: boolean } = {},
-  ): Promise<PulsePost> {
-    const clean = cleanPulseBody(
-      body,
-      false,
-      opts.unlimited ? Infinity : PULSE_TEXT_MAX,
-    );
+  async create(body: PulseBody, now = new Date()): Promise<PulsePost> {
+    const clean = cleanPulseBody(body, false);
     const id = randomUUID();
     const at = now.toISOString();
     const doc = { ...clean, createdAt: at, updatedAt: at };
@@ -166,12 +152,11 @@ export class PulseService {
     id: string,
     body: PulseBody,
     now = new Date(),
-    opts: { unlimited?: boolean } = {},
   ): Promise<PulsePost> {
     const ref = this.col.doc(id);
     const snap = await ref.get();
     if (!snap.exists) throw new NotFoundException("Post not found.");
-    const clean = cleanPulseBody(body, true, opts.unlimited ? Infinity : PULSE_TEXT_MAX);
+    const clean = cleanPulseBody(body, true);
     const patch = { ...clean, updatedAt: now.toISOString() };
     await ref.update(patch);
     return toPost(id, { ...snap.data(), ...patch });
