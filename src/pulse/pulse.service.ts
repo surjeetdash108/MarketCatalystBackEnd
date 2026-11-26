@@ -18,8 +18,6 @@ export const PULSE_COLLECTION = "pulse_posts";
 export const PULSE_LIMIT = 50;
 // No length limit on a post (owner decision, 26 Nov 2026): long posts collapse
 // to a few lines with an expand control on the card.
-/** How far back a search looks (newest first). */
-export const PULSE_SEARCH_SCAN = 500;
 export const DEFAULT_NAME = "MarketCatalyst";
 export const DEFAULT_HANDLE = "MarketCatalyst";
 
@@ -116,26 +114,26 @@ export class PulseService {
   }
 
   /**
-   * Posts matching every word of `q` in the text or ticker ("$NVDA" or
-   * "nvda"), newest first (cards no longer show the name or handle), from the last PULSE_SEARCH_SCAN
-   * posts. Firestore has no text search and the collection is small, so this
-   * filters in memory. An empty query is the plain list.
+   * Every post matching every word of `q` in the text or ticker ("$NVDA" or
+   * "nvda"), newest first, across ALL posts (it used to look at the newest 500
+   * and return 50). Firestore has no text search and the collection is small,
+   * so this filters in memory. An empty query is the plain list.
    */
-  async search(q: string, limit = PULSE_LIMIT): Promise<PulsePost[]> {
+  async search(q: string): Promise<PulsePost[]> {
     const words = q
       .toLowerCase()
       .split(/\s+/)
       .map((w) => w.replace(/^[$@#]+/, "").trim())
       .filter(Boolean)
       .slice(0, 8);
-    if (words.length === 0) return this.list(limit);
-    const posts = await this.list(PULSE_SEARCH_SCAN);
-    return posts
+    if (words.length === 0) return this.list();
+    const snap = await this.col.orderBy("createdAt", "desc").get();
+    return snap.docs
+      .map((d) => toPost(d.id, d.data()))
       .filter((p) => {
         const hay = `${p.text} ${p.ticker ?? ""}`.toLowerCase();
         return words.every((w) => hay.includes(w));
-      })
-      .slice(0, limit);
+      });
   }
 
   async create(body: PulseBody, now = new Date()): Promise<PulsePost> {

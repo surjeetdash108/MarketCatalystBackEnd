@@ -93,6 +93,14 @@ describe("Market Catalyst Pulse search", () => {
     expect(await s.search("oil fed")).toEqual([]);
     expect((await s.search("   ")).length).toBe(4);
   });
+  it("searches every post, not just the newest ones, and returns every match", async () => {
+    const s = svc();
+    await s.create({ text: "Oldest note on ZZZQ", ticker: "ZZZQ" }, at(-100000));
+    for (let i = 0; i < 520; i++) await s.create({ text: `Filler post ${i}` }, at(i));
+    for (let i = 0; i < 60; i++) await s.create({ text: `Chip note ${i}` }, at(1000 + i));
+    expect((await s.search("zzzq")).map((p) => p.ticker)).toEqual(["ZZZQ"]);
+    expect((await s.search("chip note")).length).toBe(60);
+  });
 });
 
 describe("Pulse post length (owner decision, 26 Nov 2026)", () => {
