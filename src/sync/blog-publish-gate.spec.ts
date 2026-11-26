@@ -1,4 +1,4 @@
-import { createDecision, figureReasons, notCommonStock, textReasons } from "./blog-publish-gate";
+import { createDecision, directionReasons, figureReasons, notCommonStock, textReasons } from "./blog-publish-gate";
 
 describe("blog publish gate", () => {
   it("B-21: placeholders and model notes hold a post", () => {
@@ -57,5 +57,10 @@ describe("recap direction check (B-22)", () => {
     expect(createDecision("<p>Clean copy.</p>", true)).toEqual({ published: true, held: [] });
     // A draft is never held: there is nothing to stop.
     expect(createDecision("<p>Optional note: x</p>", false)).toEqual({ published: false, held: [] });
+  });
+
+  it("reads past-tense moves, so a mixed headline is not called a rise", () => {
+    expect(directionReasons("The Dow rose 0.85% while the S&P 500 fell 0.50%", -0.5)).toEqual([]);
+    expect(directionReasons("Stocks rallied as tech surged", -0.5)).toHaveLength(1);
   });
 });
