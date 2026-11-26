@@ -132,6 +132,15 @@ describe("eod-recap facts", () => {
     expect(reasons.some((r) => /S&P 500.*0\.27%/.test(r))).toBe(true);
   });
 
+  it("an ETF named as such is not read as the commodity", () => {
+    expect(
+      figureReasons(
+        "<p>The gold ETF (GLD) rose 0.6% to $327.51, and gold miners rallied.</p>",
+        rows,
+      ),
+    ).toEqual([]);
+  });
+
   it("passes prose that matches the data", () => {
     const ok = `<p>The Dow rose 0.33% to 50,182.95 and the S&amp;P 500 slipped 0.25%, while gold rose to $3,529.10.</p>`;
     expect(figureReasons(ok, rows)).toEqual([]);

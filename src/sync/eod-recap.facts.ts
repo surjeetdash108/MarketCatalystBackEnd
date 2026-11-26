@@ -20,7 +20,7 @@ export interface RecapInstrument {
   /** The name printed in the tables. */
   label: string;
   kind: RecapKind;
-  /** Words that name it in prose (for the figure check). */
+  /** Words that name it in prose (for the figure check); "the gold ETF (GLD)" is the ETF, not gold. */
   words: RegExp;
   /** "$" for commodities/crypto, "" for index points. */
   unit: "" | "$";
@@ -73,7 +73,8 @@ export const RECAP_INSTRUMENTS: RecapInstrument[] = [
     symbol: "CLUSD",
     label: "WTI crude ($/bbl)",
     kind: "commodity",
-    words: /\b(WTI|crude|oil)\b/i,
+    words:
+      /\b(WTI|crude|oil)\b(?!\s+(?:ETF|ETFs|ETN|fund|miners|stocks|Trust|Shares|producers)\b)/i,
     unit: "$",
   },
   {
@@ -81,7 +82,8 @@ export const RECAP_INSTRUMENTS: RecapInstrument[] = [
     symbol: "BZUSD",
     label: "Brent crude ($/bbl)",
     kind: "commodity",
-    words: /\bBrent\b/i,
+    words:
+      /\bBrent\b(?!\s+(?:ETF|ETFs|ETN|fund|miners|stocks|Trust|Shares|producers)\b)/i,
     unit: "$",
   },
   {
@@ -89,7 +91,8 @@ export const RECAP_INSTRUMENTS: RecapInstrument[] = [
     symbol: "XAUUSD",
     label: "Gold, spot ($/oz)",
     kind: "commodity",
-    words: /\bgold\b/i,
+    words:
+      /\bgold\b(?!\s+(?:ETF|ETFs|ETN|fund|miners|stocks|Trust|Shares|producers)\b)/i,
     unit: "$",
   },
   {
@@ -97,7 +100,8 @@ export const RECAP_INSTRUMENTS: RecapInstrument[] = [
     symbol: "BTCUSD",
     label: "Bitcoin (BTC/USD)",
     kind: "crypto",
-    words: /\bbitcoin\b/i,
+    words:
+      /\bbitcoin\b(?!\s+(?:ETF|ETFs|ETN|fund|miners|stocks|Trust|Shares|producers)\b)/i,
     unit: "$",
   },
   {
@@ -105,7 +109,8 @@ export const RECAP_INSTRUMENTS: RecapInstrument[] = [
     symbol: "ETHUSD",
     label: "Ethereum (ETH/USD)",
     kind: "crypto",
-    words: /\b(ether|ethereum)\b/i,
+    words:
+      /\b(ether|ethereum)\b(?!\s+(?:ETF|ETFs|ETN|fund|miners|stocks|Trust|Shares|producers)\b)/i,
     unit: "$",
   },
 ];
