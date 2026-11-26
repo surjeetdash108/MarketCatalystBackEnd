@@ -142,11 +142,10 @@ describe("ContentPipelineService", () => {
       ["feed", "posted"],
       ["blog", "queued"],
     ]);
-    expect(pulse.create).toHaveBeenCalledWith(
-      { text: "**NVDA up**\n\nAfter hours.", ticker: "NVDA" },
-      undefined,
-      { unlimited: true },
-    );
+    expect(pulse.create).toHaveBeenCalledWith({
+      text: "**NVDA up**\n\nAfter hours.",
+      ticker: "NVDA",
+    });
     const feedPost = [...fs.data.get("live_feed_posts").values()][0];
     expect(feedPost).toMatchObject({
       header: "Lucid",
@@ -241,15 +240,28 @@ describe("ContentPipelineService", () => {
   it("edits a posted Pulse and Live Feed item in place, and deletes items with what they posted", async () => {
     const { svc, fs, pulse, blogs } = setup();
     const { items } = await svc.submit(
-      { ...blogBody, pulse: { header: "NVDA up", body: "After hours." }, feed: { header: "Lucid", body: "Summary" } },
+      {
+        ...blogBody,
+        pulse: { header: "NVDA up", body: "After hours." },
+        feed: { header: "Lucid", body: "Summary" },
+      },
       "admin@marketcatalyst.ai",
     );
     const [p, f, b] = items;
     await svc.edit(p.id, { body: "After hours, +3%." });
-    expect(pulse.update).toHaveBeenCalledWith("p1", { text: "**NVDA up**\n\nAfter hours, +3%.", ticker: "" }, undefined, { unlimited: true });
-    await svc.edit(f.id, { header: "Lucid robotaxi", body: "New summary\n* Step: driverless" });
+    expect(pulse.update).toHaveBeenCalledWith("p1", {
+      text: "**NVDA up**\n\nAfter hours, +3%.",
+      ticker: "",
+    });
+    await svc.edit(f.id, {
+      header: "Lucid robotaxi",
+      body: "New summary\n* Step: driverless",
+    });
     const feedPost = [...fs.data.get("live_feed_posts").values()][0];
-    expect(feedPost).toMatchObject({ header: "Lucid robotaxi", summary: "New summary" });
+    expect(feedPost).toMatchObject({
+      header: "Lucid robotaxi",
+      summary: "New summary",
+    });
 
     await svc.remove(p.id);
     expect(pulse.remove).toHaveBeenCalledWith("p1");
@@ -262,14 +274,32 @@ describe("ContentPipelineService", () => {
 
   it("a generated post held for review is published as is on approve", async () => {
     const { svc, fs, blogs } = setup();
-    fs.data.set("content_items", new Map([["h1", {
-      kind: "blog", status: "review", source: "generator", blogPostId: "post9", heldReasons: ["Revenue surprise over 25%"],
-      tickers: ["AECOM"], note: "Held for review", createdAt: "x", updatedAt: "x", batchId: "b", submittedBy: "earnings-article",
-    }]]));
+    fs.data.set(
+      "content_items",
+      new Map([
+        [
+          "h1",
+          {
+            kind: "blog",
+            status: "review",
+            source: "generator",
+            blogPostId: "post9",
+            heldReasons: ["Revenue surprise over 25%"],
+            tickers: ["AECOM"],
+            note: "Held for review",
+            createdAt: "x",
+            updatedAt: "x",
+            batchId: "b",
+            submittedBy: "earnings-article",
+          },
+        ],
+      ]),
+    );
     const v = await svc.approve("h1");
     expect(blogs.update).toHaveBeenCalledWith("post9", { status: "published" });
     expect(v.status).toBe("posted");
-    await expect(svc.edit("h1", { notes: "x" })).rejects.toThrow(/already written/);
+    await expect(svc.edit("h1", { notes: "x" })).rejects.toThrow(
+      /already written/,
+    );
   });
 });
-
