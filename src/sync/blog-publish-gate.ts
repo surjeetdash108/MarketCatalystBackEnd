@@ -40,7 +40,7 @@ export function createDecision(html: string, wantsPublished: boolean): { publish
 const UP_WORDS =
   /\b(climb|climbs|climbed|rises|rise|rose|rally|rallies|rallied|gains|gained|surges|surged|jumps|jumped|advances|advanced|higher)\b/i;
 const DOWN_WORDS =
-  /\b(falls|fall|fell|slides|slide|slid|drops|dropped|sinks|sank|tumbles|tumbled|retreats|retreated|declines|declined|slips|slipped|lower|sell-?off|slumps|slumped)\b/i;
+  /\b(falls|fall|fell|slides|slide|slid|drops|dropped|sinks|sank|tumbles|tumbled|retreats|retreated|slip|plummets|plunges|dive|dives|declines|declined|slips|slipped|lower|sell-?off|slumps|slumped)\b/i;
 
 /**
  * A recap headline/dek whose direction contradicts the S&P 500 in the same

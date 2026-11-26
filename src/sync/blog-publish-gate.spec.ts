@@ -62,5 +62,7 @@ describe("recap direction check (B-22)", () => {
   it("reads past-tense moves, so a mixed headline is not called a rise", () => {
     expect(directionReasons("The Dow rose 0.85% while the S&P 500 fell 0.50%", -0.5)).toEqual([]);
     expect(directionReasons("Stocks rallied as tech surged", -0.5)).toHaveLength(1);
+    expect(directionReasons("Dow, S&P Slip While Small-Caps Rally", -0.3)).toEqual([]);
+    expect(directionReasons("Energy Surge Propels Markets Higher", -0.35)).toHaveLength(1);
   });
 });
