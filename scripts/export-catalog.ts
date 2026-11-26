@@ -38,6 +38,7 @@ import {
   lowestPlanFor,
 } from "../src/plans/plans.registry";
 import { refundPolicy } from "../src/billing/refund/refund-policy";
+import { subscriptionTerms } from "../src/billing/refund/subscription-terms";
 
 const ROOT = join(__dirname, "..", "..");
 const UI_CATALOG = join(
@@ -173,6 +174,9 @@ export function uiRefundPolicySource(): string {
 // by hand; change that one line and re-run the script.
 
 export const REFUND_POLICY = ${JSON.stringify(refundPolicy(), null, 2)} as const;
+
+/** Home, checkout and Terms §12 print these (src/billing/refund/subscription-terms.ts). */
+export const SUBSCRIPTION_TERMS = ${JSON.stringify(subscriptionTerms(TRIAL_DAYS), null, 2)} as const;
 `;
 }
 
@@ -225,6 +229,8 @@ export function websiteCatalogJson(): string {
         refundPolicy: refundPolicy(),
         // Free days for a new account, counted from sign-up (TRIAL_DAYS; 0 = none).
         trialDays: TRIAL_DAYS,
+        // Home's purchase line and Terms §12 (src/billing/refund/subscription-terms.ts).
+        subscriptionTerms: subscriptionTerms(TRIAL_DAYS),
       },
       null,
       2,
