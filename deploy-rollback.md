@@ -162,3 +162,12 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - Before: worker `market-catalyst-backend-00337-r2k`, live `market-catalyst-live-00286-wzv`, jobs on `…@sha256:3a6d6ee4edbb…`.
 - After (backend prod e28c0ef): worker `market-catalyst-backend-00338-rnl`, live `market-catalyst-live-00287-wdd`, jobs on `…@sha256:243543848bcf…`. UI prod 44f0805.
 - Roll back: `gcloud run services update-traffic market-catalyst-backend --to-revisions=market-catalyst-backend-00337-r2k=100` and `… market-catalyst-live --to-revisions=market-catalyst-live-00286-wzv=100`; jobs `--image …@sha256:3a6d6ee4edbb…`; UI via the Firebase console.
+
+## 2026-11-27 ET — 26 Nov audit (errors only): recap real closes + checks, earnings basis, live-slug links, §12 terms
+- Before: worker `market-catalyst-backend-00338-rnl`, live `market-catalyst-live-00287-wdd`, jobs on `…@sha256:243543848bcf…`. UI prod 44f0805. Website prod bdadcd2.
+- After (backend prod 4eefc8b): worker `market-catalyst-backend-00339-b4h`, live `market-catalyst-live-00288-mph`, premarket-job / history-backfill-job on `…@sha256:b31d48514a4b…`. UI prod 3265318 (Firebase Hosting). Website prod ea3d0a5 (App Hosting rollout).
+- Behaviour changes: the closing recap reads the instruments themselves (FMP ^DJI, ^GSPC, ^IXIC, ^RUT, ^VIX, CLUSD, BZUSD, XAUUSD, BTCUSD, ETHUSD), rewrites its tables and calendar from data, and is held as a draft for review on a check failure; every new post (any writer) is held on banned text; publishing with a dead internal /posts/ link is refused (400); list_blog_posts returns slug + url.
+- Production data changed (backups in ~/Downloads/MarketCatalyst-backups-2026-11-27):
+  - 143 posts corrected (32 EOD recaps re-rendered from official closes; links rewritten/removed in 88 posts; earnings corrections incl. Deere, AECOM, Shift4, Cronos, Roivant, Freedom, NHI, Agilent, Duke, Kohl's, Americold, Ingles, KMB; B-05 tickers; Nvidia note; pending home sales) — originals in posts-before-corrections.json (full documents, with updateTime).
+  - faqs/faq-01: "options data" removed — original in faqs-before.json.
+- Roll back: `gcloud run services update-traffic market-catalyst-backend --to-revisions=market-catalyst-backend-00338-rnl=100` and `… market-catalyst-live --to-revisions=market-catalyst-live-00287-wdd=100`; jobs `--image …@sha256:243543848bcf…`; UI/website via the Firebase console; restore posts/FAQ by PATCHing title, excerpt, content, documentHtml (answer) from the backup JSON.
