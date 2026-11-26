@@ -22,6 +22,10 @@ export function summarizePosts(
     posts: filtered.slice(offset, offset + limit).map((p) => ({
       id: p.id,
       title: p.title,
+      // B-01: link to a post by the slug it is served at, never one rebuilt
+      // from its title (titles are cut to the slug limit; duplicates get -2).
+      slug: p.slug,
+      url: p.slug ? `https://marketcatalyst.ai/posts/${p.slug}` : null,
       status: p.status,
       zone: p.zone,
       author: p.author,

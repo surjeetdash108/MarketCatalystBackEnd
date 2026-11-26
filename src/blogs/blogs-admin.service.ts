@@ -223,38 +223,9 @@ export function stripSiteChrome(html: string): string {
  * gaining an empty shell — that is what the editor sent, and what it expects
  * to get back.
  */
-/**
- * Longest slug. "https://marketcatalyst.ai/posts/" is 32 characters and the SEO
- * audit flags URLs over 115, so this leaves room for a "-2" duplicate suffix.
- * Keep in step with MAX_SLUG_CHARS in the website's lib/seo/shorten.ts.
- */
-const MAX_SLUG_LENGTH = 80;
-
-/** A post's base slug from its title (before any "-2" duplicate suffix). Exported
- *  so a job can print the post's own URL in the article before creating it. */
-export function blogSlug(input: string): string {
-  const slug = String(input)
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (slug.length <= MAX_SLUG_LENGTH) return slug;
-
-  // Cut between words, and never leave a phrase hanging on "...-revenue-to".
-  const words = slug.split("-");
-  while (
-    words.length > 1 &&
-    (words.join("-").length > MAX_SLUG_LENGTH ||
-      /^(a|an|the|of|to|in|on|at|for|with|and|or|as|by|from|than|over|amid|after|while|but|s)$/.test(
-        words[words.length - 1]!,
-      ))
-  ) {
-    words.pop();
-  }
-  return words.join("-");
-}
+export { blogSlug, MAX_SLUG_LENGTH } from "./blog-slug";
+import { blogSlug } from "./blog-slug";
+import { resolvePostLinks, type SlugIndex } from "./post-links";
 
 export function composeDocument(body: string, theme: BlogTheme): string {
   const head = [
@@ -323,6 +294,8 @@ const SOURCE_KINDS: Record<string, { id: SourceKind; ext: string; mime: string }
 /** The shape the console's editor consumes. */
 export interface BlogAdminView {
   id: string;
+  /** The slug the post is served at (/posts/{slug}). */
+  slug: string;
   zone: Zone;
   rank: number;
   kick: string;
@@ -827,6 +800,33 @@ export class BlogsAdminService {
   }
 
   /**
+   * Internal /posts/ links (B-01 / B-16): a full-length slug built from a
+   * title is rewritten to the slug its post is served at; a post that is
+   * being published with a link to no live post is refused, naming the links,
+   * so the writer can fix them. Drafts may keep them until they go live.
+   */
+  private async checkPostLinks(html: string, ownSlug: string, publishing: boolean): Promise<string> {
+    if (!/\/posts\//.test(html)) return html;
+    const snap = await this.col.select("slug", "status").get();
+    const index: SlugIndex = new Map();
+    for (const d of snap.docs) {
+      const s = d.get("slug");
+      if (typeof s === "string" && s) index.set(s, { published: d.get("status") === "published" });
+    }
+    if (ownSlug) index.set(ownSlug, { published: true });
+    const r = resolvePostLinks(html, index, blogSlug);
+    if (r.rewritten.length)
+      this.logger.log(`post links rewritten to live slugs: ${r.rewritten.map((x) => `${x.from} -> ${x.to}`).join("; ")}`);
+    if (publishing && r.dead.length) {
+      throw new BadRequestException(
+        `These internal links point at no published post (fix or remove them, then publish): ${r.dead.join(", ")}. ` +
+          "Use the slug or url from list_blog_posts.",
+      );
+    }
+    return r.html;
+  }
+
+  /**
    * Firestore has no unique-field constraint. Slugify the title, and if that
    * slug is already used by a different `blogs` doc, append -2, -3, … until a
    * free one is found. A `slugs/{slug}` index doc is claimed on create (and
@@ -960,6 +960,7 @@ export class BlogsAdminService {
       rank: typeof data.rank === "number" ? data.rank : 999,
       kick: categories[0] ?? "",
       title: data.title ?? "",
+      slug: typeof data.slug === "string" ? data.slug : "",
       dek: data.excerpt ?? "",
       author: data.author ?? "",
       read: data.read ?? "",
@@ -1029,6 +1030,7 @@ export class BlogsAdminService {
 
     const ref = this.col.doc();
     const slug = await this.generateUniqueSlug(title);
+    if (typeof body.html === "string") body.html = await this.checkPostLinks(body.html, slug, published);
 
     // An html post stores its markup AS WRITTEN. Running it through turndown —
     // which is right for every other format, because `content` is Markdown —
@@ -1154,6 +1156,17 @@ export class BlogsAdminService {
     if (zone !== undefined) update.type = ZONE_TO_TYPE[zone];
     if (rank !== undefined) update.rank = rank;
     if (body.dek !== undefined) update.excerpt = String(body.dek ?? "");
+    const publishing =
+      body.status !== undefined
+        ? String(body.status).toLowerCase() === "published"
+        : existing.status === "published";
+    if (typeof body.html === "string") {
+      body.html = await this.checkPostLinks(body.html, String(existing.slug ?? ""), publishing);
+    } else if (publishing && existing.status !== "published") {
+      // Going live without a new body: the stored one must not carry dead links either.
+      const stored = String(existing.documentHtml ?? existing.content ?? "");
+      await this.checkPostLinks(stored, String(existing.slug ?? ""), true);
+    }
     if (body.html !== undefined || body.format !== undefined) {
       // Same rule as create: html keeps its markup, everything else becomes
       // Markdown. Resolved together because the format decides both.
