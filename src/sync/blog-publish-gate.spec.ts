@@ -1,4 +1,4 @@
-import { figureReasons, notCommonStock, textReasons } from "./blog-publish-gate";
+import { createDecision, directionReasons, figureReasons, notCommonStock, textReasons } from "./blog-publish-gate";
 
 describe("blog publish gate", () => {
   it("B-21: placeholders and model notes hold a post", () => {
@@ -33,5 +33,36 @@ describe("recap direction check (B-22)", () => {
     expect(directionReasons("Dow climbs while the Nasdaq tumbles", -0.48)).toEqual([]);
     expect(directionReasons("Stocks edge higher", 0.1)).toEqual([]);
     expect(directionReasons("Stocks rally into the close", 0.9)).toEqual([]);
+  });
+
+  it("holds a large company's double-digit revenue surprise as a likely basis mismatch (Deere)", () => {
+    const r = figureReasons({ revenueActual: 12.115e9, revenueEstimate: 10.38e9, revenueYoyPct: 0.2, epsActual: 3.89, epsEstimate: 4.03 });
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatch(/another basis/);
+    expect(figureReasons({ revenueActual: 12.115e9, revenueEstimate: 11.5e9, revenueYoyPct: 0.2, epsActual: 3.89, epsEstimate: 4.03 })).toEqual([]);
+    // A small company's 17% beat is not flagged by this rule.
+    expect(figureReasons({ revenueActual: 117e6, revenueEstimate: 100e6, revenueYoyPct: 5, epsActual: 0.1, epsEstimate: 0.09 })).toEqual([]);
+  });
+
+  it("holds revenue up more than 80% year over year", () => {
+    expect(figureReasons({ revenueActual: 1.9e8, revenueEstimate: 1.9e8, revenueYoyPct: 85, epsActual: null, epsEstimate: null })).toHaveLength(1);
+    expect(figureReasons({ revenueActual: 1.9e8, revenueEstimate: 1.9e8, revenueYoyPct: 75, epsActual: null, epsEstimate: null })).toEqual([]);
+  });
+
+  it("every new post is checked for model notes, whoever writes it (B-21)", () => {
+    expect(createDecision("<p>Optional note: VNQ could not be independently verified.</p>", true)).toEqual({
+      published: false,
+      held: ["Contains a model note ('Optional note')", "Contains a model note ('could not be independently verified')"],
+    });
+    expect(createDecision("<p>Clean copy.</p>", true)).toEqual({ published: true, held: [] });
+    // A draft is never held: there is nothing to stop.
+    expect(createDecision("<p>Optional note: x</p>", false)).toEqual({ published: false, held: [] });
+  });
+
+  it("reads past-tense moves, so a mixed headline is not called a rise", () => {
+    expect(directionReasons("The Dow rose 0.85% while the S&P 500 fell 0.50%", -0.5)).toEqual([]);
+    expect(directionReasons("Stocks rallied as tech surged", -0.5)).toHaveLength(1);
+    expect(directionReasons("Dow, S&P Slip While Small-Caps Rally", -0.3)).toEqual([]);
+    expect(directionReasons("Energy Surge Propels Markets Higher", -0.35)).toHaveLength(1);
   });
 });

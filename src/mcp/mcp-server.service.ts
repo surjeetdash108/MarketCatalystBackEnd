@@ -80,7 +80,7 @@ export class McpServerService {
       "list_blog_posts",
       {
         description:
-          "List blog posts (Draft and Published), newest first, as summaries (id, title, status, dates — no body). Paged: 25 by default, up to 100; filter by status or a title search. Use it to find a post's id, then get_blog_post for its content, or update/delete/publish by id.",
+          "List blog posts (Draft and Published), newest first, as summaries (id, title, slug, url, status, dates — no body). To link to a post, use its url exactly: never build a link from a title (slugs are shortened, and links to anything but a published post are refused on publish). Paged: 25 by default, up to 100; filter by status or a title search. Use it to find a post's id, then get_blog_post for its content, or update/delete/publish by id.",
         inputSchema: {
           limit: z.number().int().min(1).max(100).optional(),
           offset: z.number().int().min(0).optional(),

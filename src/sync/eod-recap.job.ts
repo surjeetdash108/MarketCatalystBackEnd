@@ -7,14 +7,24 @@ import { SyncRegistry } from "../common/sync-registry.service";
 import { BlogsAdminService } from "../blogs/blogs-admin.service";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 import { FmpService } from "../vendors/fmp/fmp.service";
-import { TAPE_INDICES } from "../live/tape-universe";
 import { AnthropicService } from "../vendors/anthropic/anthropic.service";
 import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { etDate, etWeekday } from "../common/market-calendar.util";
 import {
-  formatRecapIndices,
-  nasdaqCompositeQuote,
-} from "../common/recap-indices.util";
+  RECAP_INSTRUMENTS,
+  applyCalendar,
+  applyRecapRows,
+  calendarReasons,
+  closeReasons,
+  figureReasons,
+  historyReasons,
+  readLine,
+  recapRows,
+  upcomingEvents,
+  weekdayOf,
+  weekdayReasons,
+  type RecapRow,
+} from "./eod-recap.facts";
 import {
   directionReasons,
   holdForReview,
@@ -181,23 +191,40 @@ export class EodRecapJob implements OnModuleInit {
       // 4. Generate post content using Claude skill prompt
       const postContent = await this.generateRecapPost(marketData, today);
 
+      // The tables and the calendar are written from the data, not by the
+      // model (B-20 / B-25 / B-26), and the read line carries the real time.
+      const bodyHtml = applyCalendar(
+        applyRecapRows(postContent.bodyHtml, marketData.rows, marketData.yield10Y),
+        marketData.events,
+      );
+      const words = bodyHtml.replace(/<[^>]+>/g, " ").split(/\s+/).filter(Boolean).length;
+      postContent.read = readLine(new Date(), Math.max(1, Math.round(words / 230)));
+
       // 5. Post to Blog Engine
       // Compose full HTML document matching exact gold standard template
       const fullDocument = composeRecapDocument({
         title: postContent.title,
         dek: postContent.dek,
         read: postContent.read,
-        bodyHtml: postContent.bodyHtml,
+        bodyHtml,
       });
 
-      // Publish gate (B-21 / B-22): a model note, or a headline whose direction
-      // contradicts the S&P 500 in the same post, holds it for review.
+      // Publish gate: a recap is held as a draft for review when it carries a
+      // model note (B-21), a headline against the S&P 500's direction or the
+      // wrong weekday (B-22), closes that are not final yet, prose figures
+      // that disagree with the data (B-20), a historical claim, or raw series
+      // codes in the calendar (B-26).
       const held = [
         ...textReasons(fullDocument),
         ...directionReasons(
           `${postContent.title} ${postContent.dek}`,
           marketData.spPct,
         ),
+        ...closeReasons(marketData.rows, today),
+        ...weekdayReasons(postContent.title, postContent.dek, bodyHtml, today),
+        ...historyReasons(postContent.title, postContent.dek, bodyHtml),
+        ...figureReasons(bodyHtml, marketData.rows),
+        ...calendarReasons(bodyHtml, marketData.seriesIds, today),
       ];
       const created = await this.blogs.create({
         zone: "recap",
@@ -306,12 +333,13 @@ export class EodRecapJob implements OnModuleInit {
 
     // 2. Fetch market indices, movers, sectors from Firestore collections
     const db = this.firebase.firestore;
-    const [indicesSnap, moversSnap, sectorsSnap, sentimentSnap, eventsSnap] =
+    const windowEnd = new Date(`${today}T12:00:00Z`);
+    windowEnd.setUTCDate(windowEnd.getUTCDate() + 10);
+    const [quotes, moversSnap, sectorsSnap, sentimentSnap, eventsSnap, fredSnap] =
       await Promise.all([
-        db
-          .collection("market_indices")
-          .get()
-          .catch(() => null),
+        // B-20 / B-25: the instruments themselves (^DJI, XAUUSD, BTCUSD, ...),
+        // never the ETF stand-ins in market_indices (DIA x100, GLD, IBIT, USO).
+        this.fmp.getQuotes(RECAP_INSTRUMENTS.map((i) => i.symbol)).catch(() => []),
         db
           .collection("market_movers")
           .get()
@@ -325,58 +353,23 @@ export class EodRecapJob implements OnModuleInit {
           .doc("fear_greed")
           .get()
           .catch(() => null),
+        // B-26: scheduled releases after the session, not FRED observations.
         db
           .collection("macro_events")
-          .limit(8)
+          .where("eventDate", ">", today)
+          .where("eventDate", "<=", windowEnd.toISOString().slice(0, 10))
+          .get()
+          .catch(() => null),
+        db
+          .collection("macro_events")
+          .where("source", "==", "fred")
           .get()
           .catch(() => null),
       ]);
 
-    // Format Indices
-    const indices = (indicesSnap?.docs ?? []).map((d) => {
-      const data = d.data();
-      return {
-        id: d.id,
-        label: data.label ?? d.id,
-        value: typeof data.value === "number" ? data.value : null,
-        change: typeof data.change === "number" ? data.change : null,
-        pctChange: typeof data.pctChange === "number" ? data.pctChange : null,
-        isProxy: !!data.isProxy,
-        proxyTicker: data.proxyTicker ?? null,
-        source: String(data.source ?? "polygon"),
-      };
-    });
-
-    // FMP fallback: any index / commodity / crypto the primary collection has
-    // no usable row for (doc missing, or value / % change not a number) is
-    // fetched from FMP as the instrument itself (ETHUSD, GCUSD, ^GSPC, ...).
-    for (const sym of TAPE_INDICES) {
-      if (!sym.fmpSymbol) continue;
-      const have = indices.find((i) => i.id === sym.id);
-      if (have && have.value != null && have.pctChange != null) continue;
-      const q = await this.fmp.getQuote(sym.fmpSymbol);
-      if (!q) {
-        this.logger.warn(
-          `No primary data for ${sym.id} and FMP fallback (${sym.fmpSymbol}) returned nothing`,
-        );
-        continue;
-      }
-      const row = {
-        id: sym.id,
-        label: sym.label,
-        value: q.price,
-        change: q.previousClose != null ? q.price - q.previousClose : null,
-        pctChange: q.changePercentage,
-        isProxy: false,
-        proxyTicker: null,
-        source: "fmp",
-      };
-      if (have) Object.assign(have, row);
-      else indices.push(row);
-      this.logger.log(
-        `${sym.id}: primary had no data, served by FMP (${sym.fmpSymbol})`,
-      );
-    }
+    const rows: RecapRow[] = recapRows(quotes);
+    const missing = RECAP_INSTRUMENTS.filter((i) => !rows.some((r) => r.id === i.id)).map((i) => i.symbol);
+    if (missing.length) this.logger.warn(`EOD recap: no usable quote for ${missing.join(", ")} (left out)`);
 
     // Format 10Y Yield directly from Polygon Treasury Yields curve
     let yield10Y: { value: number | null; changeBps: number | null } = {
@@ -444,16 +437,13 @@ export class EodRecapJob implements OnModuleInit {
       label: sentimentData?.label ?? "Neutral",
     };
 
-    // Format Macro Events
-    const events = (eventsSnap?.docs ?? []).map((d) => {
-      const data = d.data();
-      return {
-        event: data.event ?? data.title ?? d.id,
-        date: data.date ?? data.reportDate ?? "",
-        time: data.time ?? "",
-        impact: data.impact ?? "Medium",
-      };
-    });
+    // Upcoming releases (real names and release dates) + the FRED series codes
+    // that must never be printed as calendar items.
+    const events = upcomingEvents(
+      (eventsSnap?.docs ?? []).map((d) => ({ id: d.id, data: d.data() })),
+      today,
+    );
+    const seriesIds = (fredSnap?.docs ?? []).map((d) => d.id);
 
     // Compile 16 Popular ETFs with full labels
     const popularEtfs = POPULAR_16_ETFS.map((sym) => {
@@ -488,20 +478,16 @@ export class EodRecapJob implements OnModuleInit {
       date: today,
       popular16Etfs: popularEtfs,
       otherEtfs,
-      indices: formatRecapIndices(
-        indices,
-        await nasdaqCompositeQuote(this.fmp),
-      ),
+      rows,
       // The S&P 500's move, so the published headline can be checked against the table (B-22).
-      spPct:
-        indices.find((i) => /S&P|SPX|GSPC/i.test(`${i.id} ${i.label}`))
-          ?.pctChange ?? null,
+      spPct: rows.find((r) => r.id === "SPX")?.pctChange ?? null,
       yield10Y,
       gainers,
       losers,
       sectors,
       sentiment,
       events,
+      seriesIds,
     };
   }
 
@@ -526,7 +512,7 @@ export class EodRecapJob implements OnModuleInit {
       year: "numeric",
     }).format(new Date());
 
-    const readLine = `Published ${formattedDate} · 4:15 PM ET · 10 min read`;
+    const sessionWeekday = weekdayOf(today);
 
     const systemPrompt = `You are the chief market editor at MarketCatalyst executing the official market-eod-recap skill to generate the publish-ready End-of-Day U.S. Stock Market Recap blog article.
 
@@ -539,6 +525,10 @@ CRITICAL OPERATIONAL & EDITORIAL RULES:
 6. Absolutely DO NOT add any logos, images, or image embeds.
 7. Driver stories: Exactly 10 numbered stories (<h3>1. Title</h3><p>3-5 sentences</p> up to 10).
 8. Disclaimer: Appended automatically by the publisher. Do NOT generate it.
+9. Facts: use ONLY the figures in the data. "indices" holds the official closes of the indices, the VIX, WTI and Brent crude, spot gold, bitcoin and ether themselves (not ETFs). "Oil" means WTI unless you say Brent. Never write an ETF's share price as the price of gold, oil, bitcoin or an index. The tables in "The numbers, by the close" and "Rates, dollar, gold, and crypto" are rewritten from the data by the publisher, so their figures must match it.
+10. The session is ${sessionWeekday}, ${formattedDate}. Call it "${sessionWeekday}" (or "today"); never name another weekday for this session.
+11. No historical claims: do not write "first time", "record", "all-time high", "highest since", "N-year high" or similar. The data covers one session and cannot support them.
+12. "What to watch next": the timeline is rebuilt by the publisher from "upcomingEvents" (real release names and dates). Never print a series code (CPIAUCSL, PAYEMS, ...) or invent a date.
 
 CRITICAL SECTION STRUCTURE & HEADINGS (MATCH THE OFFICIAL TEMPLATE VERBATIM):
 Order of sections is FIXED:
@@ -623,7 +613,9 @@ Two analytical paragraphs framing the session, major indices, catalysts (Fed, yi
   </thead>
   <tbody>
     <tr><td class="metric">10Y Treasury Yield</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
-    <tr><td class="metric">Gold (XAU/USD)</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
+    <tr><td class="metric">WTI crude ($/bbl)</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
+    <tr><td class="metric">Brent crude ($/bbl)</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
+    <tr><td class="metric">Gold, spot ($/oz)</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
     <tr><td class="metric">Bitcoin (BTC/USD)</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
     <tr><td class="metric">Ethereum (ETH/USD)</td><td>...</td><td class="[pos/neg]">...</td><td class="[pos/neg]">...</td><td>...</td></tr>
   </tbody>
@@ -726,9 +718,10 @@ Do NOT output a JSON object! Do NOT output preamble or conversational text. Star
     const userPayload = {
       sessionDate: today,
       dateFormatted: formattedDate,
+      sessionWeekday,
       etfs16: data.popular16Etfs,
       otherEtfs: data.otherEtfs,
-      indices: data.indices,
+      indices: data.rows.map((r) => ({ name: r.label, close: r.close, change: Number(r.change.toFixed(2)), pctChange: Number(r.pctChange.toFixed(2)) })),
       treasury10Y: data.yield10Y,
       topGainers: data.gainers,
       topLosers: data.losers,
@@ -851,9 +844,10 @@ Generate the complete, publish-ready EOD market recap article using the <<<TITLE
     };
 
     return {
-      title: title.slice(0, 110).trim(),
+      // Never cut mid-phrase (B-14); the prompt asks for <= 110 characters.
+      title: title.trim(),
       dek: cleanDek(dek, 119),
-      read: readLine,
+      read: "",
       bodyHtml: formattedBodyHtml,
       tags: ["Daily Recap", "Markets", "EOD"],
     };

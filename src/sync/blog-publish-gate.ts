@@ -27,10 +27,20 @@ export function textReasons(html: string): string[] {
   return MARKERS.filter(([re]) => re.test(text)).map(([, why]) => why);
 }
 
+/**
+ * Whether a new post goes live (B-21): every post created through the blog
+ * service, by any writer, is checked; one carrying a marker is saved as a
+ * draft and `held` names why.
+ */
+export function createDecision(html: string, wantsPublished: boolean): { published: boolean; held: string[] } {
+  const held = wantsPublished ? textReasons(html) : [];
+  return { published: wantsPublished && held.length === 0, held };
+}
+
 const UP_WORDS =
-  /\b(climb|climbs|rises|rise|rally|rallies|gains|surges|jumps|advances|higher)\b/i;
+  /\b(climb|climbs|climbed|rises|rise|rose|rally|rallies|rallied|gains|gained|surges|surged|jumps|jumped|advances|advanced|higher)\b/i;
 const DOWN_WORDS =
-  /\b(falls|fall|slides|slide|drops|sinks|tumbles|retreats|lower|sell-?off|slumps)\b/i;
+  /\b(falls|fall|fell|slides|slide|slid|drops|dropped|sinks|sank|tumbles|tumbled|retreats|retreated|slip|plummets|plunges|dive|dives|declines|declined|slips|slipped|lower|sell-?off|slumps|slumped)\b/i;
 
 /**
  * A recap headline/dek whose direction contradicts the S&P 500 in the same
@@ -56,10 +66,22 @@ export function directionReasons(
   return [];
 }
 
-/** Owner-approved limits (26 Nov 2026): figures past these are nearly always a data mismatch. */
+/**
+ * Owner-approved limits (26 Nov 2026, tightened 27 Nov): figures past these
+ * are nearly always a data mismatch. The owner's request was |surprise| > 50%
+ * and |YoY| > 80%; where the existing limit was already stricter (25% surprise,
+ * -50% YoY) it is kept.
+ */
 export const MAX_REVENUE_SURPRISE_PCT = 25;
-export const MAX_REVENUE_YOY_UP_PCT = 100;
+export const MAX_REVENUE_YOY_UP_PCT = 80;
 export const MAX_REVENUE_YOY_DOWN_PCT = -50;
+/**
+ * A company this size rarely beats or misses revenue by more than this; when
+ * it "does", the estimate is usually on another basis (B-19, Deere: a $10.38B
+ * equipment-sales estimate against $12.12B total revenue, a "17% beat").
+ */
+export const LARGE_REVENUE = 1e9;
+export const MAX_LARGE_REVENUE_SURPRISE_PCT = 10;
 export const EPS_GAP_HOLD_DOLLARS = 0.5;
 export const EPS_GAP_HOLD_PCT = 100;
 
@@ -83,6 +105,13 @@ export function figureReasons(f: ScorecardFigures): string[] {
     if (Math.abs(s) > MAX_REVENUE_SURPRISE_PCT)
       out.push(
         `Revenue ${s > 0 ? "beat" : "miss"} of ${Math.round(Math.abs(s))}% vs the estimate (over ${MAX_REVENUE_SURPRISE_PCT}%)`,
+      );
+    else if (
+      f.revenueActual >= LARGE_REVENUE &&
+      Math.abs(s) > MAX_LARGE_REVENUE_SURPRISE_PCT
+    )
+      out.push(
+        `Revenue ${s > 0 ? "beat" : "miss"} of ${Math.round(Math.abs(s))}% for a company with over $${LARGE_REVENUE / 1e9}B in revenue: the estimate may be on another basis`,
       );
   }
   if (

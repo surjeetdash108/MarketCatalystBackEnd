@@ -92,8 +92,14 @@ export interface ArticleFacts {
   eps: MetricFacts;
   revenue: MetricFacts;
   overall: Overall;
-  /** "gaap" when FMP's EPS actual is the GAAP diluted figure (no adjustment to name). */
-  epsBasis: "adjusted" | "gaap";
+  /**
+   * "adjusted" only when the filed statement shows GAAP diluted EPS differs
+   * from the reported figure; "gaap" when they match; "reported" when there is
+   * no statement yet to tell (the morning of the release). Only "adjusted" is
+   * printed as "adjusted EPS" (B-12: Deere, Ingles and Americold reported GAAP
+   * EPS that the old default labelled "adjusted").
+   */
+  epsBasis: "adjusted" | "gaap" | "reported";
   hasQoq: boolean;
   hasYoy: boolean;
   /** Up to 8 reports, newest first, that had both an actual and an estimate. */
@@ -128,8 +134,8 @@ export function formatGapPct(pct: number): string {
 }
 
 /** "Adjusted EPS" / "adjusted EPS", or plain "EPS" when the figure is GAAP. */
-export function epsName(f: { epsBasis: "adjusted" | "gaap" }, capital = false): string {
-  if (f.epsBasis === "gaap") return "EPS";
+export function epsName(f: { epsBasis: "adjusted" | "gaap" | "reported" }, capital = false): string {
+  if (f.epsBasis !== "adjusted") return "EPS";
   return capital ? "Adjusted EPS" : "adjusted EPS";
 }
 
@@ -365,6 +371,8 @@ export function shortCompanyName(name: string): string {
     if (next === s || next.length < 2) break;
     s = next;
   }
+  // "Deere & Company" → "Deere", not "Deere &" (B-14 / B-20).
+  s = s.replace(/[\s,]*(?:&|\band)$/i, "").trim();
   return s.replace(/^The\s+/i, "") || name.trim();
 }
 
@@ -412,13 +420,27 @@ export function buildFacts(input: FactsInput): ArticleFacts | { skip: SkipReason
   const prior = at(1, 45, 140);
   const yearAgo = at(4, 300, 430);
 
+  // The statement for the quarter a calendar row announced: period end 0-120
+  // days before the announcement.
+  const filedRevenue = (r: ReportRow | null): number | null => {
+    if (!r) return null;
+    const s = input.statements.find((x) => {
+      const lag = daysBetween(r.date, x.date);
+      return lag >= 0 && lag <= 120;
+    });
+    return s ? numOrNull(s.revenue) : null;
+  };
   const epsEst = numOrNull(report.epsEstimated);
   const revEst = numOrNull(report.revenueEstimated);
   const metric = (kind: "eps" | "revenue", actual: number, estimate: number | null): MetricFacts => {
     const pick = (r: ReportRow | null) =>
       r ? numOrNull(kind === "eps" ? r.epsActual : r.revenueActual) : null;
-    const p = pick(prior);
-    const y = pick(yearAgo);
+    // Revenue comparisons use the company's filed statement for that quarter
+    // when there is one (B-04 / B-19 / B-20: the calendar's revenue row can be
+    // on a different basis than the filing); EPS stays on the calendar's basis,
+    // the same basis as the estimate.
+    const p = kind === "revenue" ? (filedRevenue(prior) ?? pick(prior)) : pick(prior);
+    const y = kind === "revenue" ? (filedRevenue(yearAgo) ?? pick(yearAgo)) : pick(yearAgo);
     return {
       actual,
       estimate,
@@ -454,7 +476,7 @@ export function buildFacts(input: FactsInput): ArticleFacts | { skip: SkipReason
     .reverse();
 
   let gaap: ArticleFacts["gaap"] = null;
-  let epsBasis: ArticleFacts["epsBasis"] = "adjusted";
+  let epsBasis: ArticleFacts["epsBasis"] = "reported";
   const cur = label.current;
   // A statement fresh off the filing can be partial on FMP (net income 0, or
   // signs that disagree): such a statement is not printed.
@@ -469,7 +491,7 @@ export function buildFacts(input: FactsInput): ArticleFacts | { skip: SkipReason
     // must agree with the reported revenue within 2%.
     const sRev = numOrNull(cur.revenue);
     if (sRev != null && Math.abs(sRev - revA) / Math.abs(revA) <= 0.02) {
-      if (Math.abs(cur.epsDiluted! - epsA) < 0.005) epsBasis = "gaap";
+      epsBasis = Math.abs(cur.epsDiluted! - epsA) < 0.005 ? "gaap" : "adjusted";
       const curEnd = label.current.date;
       const ya =
         input.statements.find((s) => {
