@@ -34,4 +34,18 @@ describe("recap direction check (B-22)", () => {
     expect(directionReasons("Stocks edge higher", 0.1)).toEqual([]);
     expect(directionReasons("Stocks rally into the close", 0.9)).toEqual([]);
   });
+
+  it("holds a large company's double-digit revenue surprise as a likely basis mismatch (Deere)", () => {
+    const r = figureReasons({ revenueActual: 12.115e9, revenueEstimate: 10.38e9, revenueYoyPct: 0.2, epsActual: 3.89, epsEstimate: 4.03 });
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatch(/another basis/);
+    expect(figureReasons({ revenueActual: 12.115e9, revenueEstimate: 11.5e9, revenueYoyPct: 0.2, epsActual: 3.89, epsEstimate: 4.03 })).toEqual([]);
+    // A small company's 17% beat is not flagged by this rule.
+    expect(figureReasons({ revenueActual: 117e6, revenueEstimate: 100e6, revenueYoyPct: 5, epsActual: 0.1, epsEstimate: 0.09 })).toEqual([]);
+  });
+
+  it("holds revenue up more than 80% year over year", () => {
+    expect(figureReasons({ revenueActual: 1.9e8, revenueEstimate: 1.9e8, revenueYoyPct: 85, epsActual: null, epsEstimate: null })).toHaveLength(1);
+    expect(figureReasons({ revenueActual: 1.9e8, revenueEstimate: 1.9e8, revenueYoyPct: 75, epsActual: null, epsEstimate: null })).toEqual([]);
+  });
 });
