@@ -8,6 +8,7 @@ import {
 import { SyncMetaService } from "../common/sync-meta.service";
 import { activeUniverse } from "../common/ticker-universe";
 import { SyncRegistry } from "../common/sync-registry.service";
+import { fetchYtdBase, ytdFields } from "../common/ytd-base.util";
 import { PolygonService } from "../vendors/polygon/polygon.service";
 
 const JOB_NAME = "technical-indicators";
@@ -972,7 +973,14 @@ export class TechnicalIndicatorsJob implements OnModuleInit {
     // the stored bar close (no regression). Not fetched for historical bars.
     const officialBarByDate = await officialBarsFor(this.polygon, ticker, bars);
     const officialCloseByDate = new Map([...officialBarByDate].map(([d, b]) => [d, b.close]));
-    return computeIndicators(bars, mktByDate, undefined, officialCloseByDate, officialBarByDate);
+    const ind = computeIndicators(bars, mktByDate, undefined, officialCloseByDate, officialBarByDate);
+    if (!ind) return null;
+    // The Heatmap's YTD frame: the price YTD is measured from, from the vendor's
+    // split-ADJUSTED bars (the stored series can go stale across a split; see
+    // common/ytd-base.util). The reader measures it to the live price it shows.
+    // Written only when found, so a vendor hiccup leaves last night's value.
+    const ytd = ytdFields(await fetchYtdBase(this.polygon, ticker));
+    return ytd ? { ...ind, ...ytd } : ind;
   }
 
   async run() {

@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { fyDilutedEpsGrowth } from "../common/eps-growth.util";
+import { fetchYtdBase } from "../common/ytd-base.util";
 import { FieldValue } from "firebase-admin/firestore";
 import { articlesSince, isMissingIndexError } from "./news-since.util";
 import { isBarsDocFresh } from "./bars-freshness";
@@ -1990,29 +1991,15 @@ export class OnDemandService implements OnModuleDestroy {
     const now = Date.now();
     const year = Number(etIso(now).slice(0, 4));
     const target = `${year - 1}-12-31`;
-    const from = `${year - 1}-12-15`;
 
     const baseClose = async (sym: string): Promise<{ close: number | null; since: string | null }> => {
       const key = `${sym}|${target}`;
       const hit = this.memYtdBase.get(key);
       if (hit && now - hit.at < 6 * 3_600_000) return hit;
-      const bars = await this.polygon.getAggsRange(sym, from, target).catch(() => [] as PolygonAggBar[]);
-      const base = bars
-        .filter((b) => b.c != null && b.c > 0 && etIso(b.t) <= target)
-        .sort((a, b) => a.t - b.t)
-        .at(-1);
-      let close = base?.c ?? null;
-      let since: string | null = null;
-      if (close == null) {
-        // No close before this year: it was listed this year. Measure from its first close.
-        const thisYear = await this.polygon.getAggsRange(sym, `${year}-01-01`, etIso(now)).catch(() => [] as PolygonAggBar[]);
-        const first = thisYear.filter((b) => b.c != null && b.c > 0).sort((a, b) => a.t - b.t)[0];
-        if (first) {
-          close = first.c;
-          since = etIso(first.t);
-        }
-      }
-      const entry = { close, since, at: now };
+      // The lookup itself is shared with the technicals job (common/ytd-base.util),
+      // so the Heatmap's YTD frame and this column are measured from the same close.
+      const b = await fetchYtdBase(this.polygon, sym, now);
+      const entry = { close: b.close, since: b.since, at: now };
       this.memYtdBase.set(key, entry);
       return entry;
     };
