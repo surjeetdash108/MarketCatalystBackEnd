@@ -1165,6 +1165,11 @@ export const API_CATALOG = {
     summary:
       "Market Catalyst Pulse posts for the dashboard card, newest first; ?q= searches text, ticker, name and handle.",
   },
+  "GET /api/stock-in-focus": {
+    summary:
+      "Stock in Focus archive: the desk's one editorial note a day, newest day first; ?limit= (default 30, max 400) is the newest N.",
+    params: "limit?",
+  },
   "GET /api/email/unsubscribe": {
     summary:
       "One-click unsubscribe from promotional email (signed link); returns a small page.",
@@ -1203,6 +1208,20 @@ export const API_CATALOG = {
   },
   "DELETE /api/admin/pulse/:id": {
     summary: "Deletes a Market Catalyst Pulse post.",
+  },
+  "GET /api/admin/stock-in-focus": {
+    summary: "Stock in Focus entries for the console's Stock in Focus board.",
+  },
+  "POST /api/admin/stock-in-focus": {
+    summary:
+      "Posts the Stock in Focus for a day (default today, New York); one per day, a second is a conflict.",
+    params: "body: ticker, headline, note?, day?",
+  },
+  "PATCH /api/admin/stock-in-focus/:day": {
+    summary: "Edits a Stock in Focus entry (the day is fixed; keeps its post time).",
+  },
+  "DELETE /api/admin/stock-in-focus/:day": {
+    summary: "Deletes a Stock in Focus entry.",
   },
   "POST /api/admin/content": {
     summary:
@@ -1433,6 +1452,7 @@ export const SCREENS = [
       "Indices, What Matters Now, movers, news, Fear & Greed, recaps, the user's watchlist and portfolio.",
     apis: [
       "GET /api/pulse",
+      "GET /api/stock-in-focus",
       "GET /live/tape/stream",
       "GET /live/tape",
       "GET /live/snapshot",
@@ -1945,6 +1965,10 @@ export const SCREENS = [
       "POST /api/admin/pulse",
       "PATCH /api/admin/pulse/:id",
       "DELETE /api/admin/pulse/:id",
+      "GET /api/admin/stock-in-focus",
+      "POST /api/admin/stock-in-focus",
+      "PATCH /api/admin/stock-in-focus/:day",
+      "DELETE /api/admin/stock-in-focus/:day",
       "GET /api/admin/ticker-search",
       "GET /api/admin/media",
       "POST /api/admin/media",

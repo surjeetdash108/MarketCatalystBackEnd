@@ -19,6 +19,7 @@ import { parseSince } from "./news-since.util";
 import { AiAnalysisService } from "./ai-analysis.service";
 import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
 import { WhatMattersNowService } from "./what-matters-now.service";
+import { WmnSlidesService } from "./wmn-slides.service";
 import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { MarketScanService } from "./market-scan.service";
 import { MarketGlanceService } from "./market-glance.service";
@@ -105,6 +106,7 @@ export class OnDemandController {
   constructor(
     private readonly tickerAi: TickerAiAnalysisService,
     private readonly wmn: WhatMattersNowService,
+    private readonly wmnSlides: WmnSlidesService,
     private readonly ondemand: OnDemandService,
     private readonly aiAnalysis: AiAnalysisService,
     private readonly search: TickerSearchService,
@@ -143,8 +145,17 @@ export class OnDemandController {
   @UseGuards(FirebaseAuthGuard)
   @Header("Cache-Control", "private, max-age=300")
   async whatMattersNow(@Req() req: Request, @Res() res: Response) {
-    const doc = await this.wmn.getOrGenerate();
-    sendWithEtag(req, res, doc ?? { empty: true });
+    // The digest (model-written, hourly) and the data-backed slides (built from
+    // cached collections, read-only) are independent: the slides still go out
+    // when there is no digest yet, and the digest goes out if a slide fails.
+    const [doc, slides] = await Promise.all([
+      this.wmn.getOrGenerate(),
+      this.wmnSlides.get().catch((err: Error) => {
+        this.logger.warn(`what-matters-now slides failed: ${err.message}`);
+        return null;
+      }),
+    ]);
+    sendWithEtag(req, res, { ...(doc ?? { empty: true }), slides });
   }
 
   @Get("ticker-analysis")

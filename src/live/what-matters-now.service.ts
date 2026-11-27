@@ -26,21 +26,40 @@ import { ANALYSIS_VERSION, type AnalysisBody } from "./ticker-ai-analysis.types"
 
 export const WMN_COLLECTION = "what_matters_now";
 export const WMN_TTL_MS = 60 * 60 * 1000;
+/**
+ * Bumped when the sources or shape of a digest change. A stored digest from an
+ * older version is treated as stale even inside its hour, so a deploy replaces
+ * it on the next view instead of serving the old shape for up to an hour.
+ *   2 — Pulse and Live Feed posts added as sources (Breaking News slide).
+ */
+export const WMN_DIGEST_VERSION = 2;
 /** Model budget. Reached through the Hosting rewrite, which cuts at 60s. */
 const TIMEOUT_MS = 24_000;
 const MAX_NEWS = 14;
 const MAX_ANALYSES = 10;
+/**
+ * Desk posts are few and high-signal; a handful is enough, and the cap (with the
+ * per-post slice below) keeps the prompt well inside the provider's per-minute
+ * token limit.
+ */
+const MAX_DESK_POSTS = 6;
+
+/** Our own desk's writing (collections the admin console fills). */
+const PULSE_POSTS = "pulse_posts";
+const LIVE_FEED_POSTS = "live_feed_posts";
 
 export interface WhatMattersNowDoc extends AnalysisBody {
   windowStart: string;
   windowEnd: string;
   generatedAt: string;
   analysisVersion: number;
+  /** See WMN_DIGEST_VERSION. Absent on digests written before it existed. */
+  digestVersion?: number;
   sourceNewsIds: string[];
   sourceAnalysisIds: string[];
   /** Tickers the read actually discusses, for linking out of the card. */
   tickers: string[];
-  sourceCounts: { news: number; analyses: number; earnings: number };
+  sourceCounts: { news: number; analyses: number; earnings: number; pulse?: number; liveFeed?: number };
 }
 
 @Injectable()
@@ -65,6 +84,7 @@ export class WhatMattersNowService {
 
   static isFresh(doc: WhatMattersNowDoc | null): boolean {
     if (!doc?.generatedAt) return false;
+    if ((doc.digestVersion ?? 1) < WMN_DIGEST_VERSION) return false;
     const age = Date.now() - Date.parse(doc.generatedAt);
     return Number.isFinite(age) && age < WMN_TTL_MS;
   }
@@ -96,7 +116,22 @@ export class WhatMattersNowService {
     const start = new Date(end.getTime() - 3 * 60 * 60 * 1000);
     const startIso = start.toISOString();
 
-    const [newsSnap, analysisSnap] = await Promise.all([
+    // The desk's own posts are a bonus source: if either read fails, the digest
+    // is still written from news and analyses, exactly as before.
+    const deskRead = (collection: string) =>
+      this.firebase.firestore
+        .collection(collection)
+        .where("createdAt", ">=", startIso)
+        .get()
+        .then((s) => s.docs.map((d): Record<string, unknown> => ({ ...d.data(), id: d.id })))
+        .catch((err: Error) => {
+          this.logger.warn(`what-matters-now: reading ${collection} failed: ${err.message}`);
+          return [] as Record<string, unknown>[];
+        });
+    const newestFirst = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+      String(b.createdAt).localeCompare(String(a.createdAt));
+
+    const [newsSnap, analysisSnap, pulseAll, feedAll] = await Promise.all([
       this.firebase.firestore
         .collection("news")
         .where("publishedAt", ">=", startIso)
@@ -105,7 +140,11 @@ export class WhatMattersNowService {
         .collection("ticker_ai_analysis")
         .where("lastUpdatedAt", ">=", startIso)
         .get(),
+      deskRead(PULSE_POSTS),
+      deskRead(LIVE_FEED_POSTS),
     ]);
+    const pulse = pulseAll.sort(newestFirst).slice(0, MAX_DESK_POSTS);
+    const feed = feedAll.sort(newestFirst).slice(0, MAX_DESK_POSTS);
 
     const news = newsSnap.docs
       .map((d): Record<string, unknown> => ({ ...d.data(), id: d.id }))
@@ -122,10 +161,15 @@ export class WhatMattersNowService {
 
     const earnings = analyses.filter((a) => a.analysisType === "announcement");
 
-    if (!news.length && !analyses.length) {
+    if (!news.length && !analyses.length && !pulse.length && !feed.length) {
       this.logger.log("what-matters-now: nothing material in the window");
       return null;
     }
+
+    // One line per post, clipped: a long Pulse post must not crowd the news out
+    // of the prompt, and the provider's per-minute token limit is small.
+    const clip = (v: unknown, n: number) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+    const tag = (t: unknown) => (t ? `[${String(t)}] ` : "");
 
     const lines = [
       `Market window: ${startIso.slice(0, 16)} to ${end.toISOString().slice(0, 16)} UTC.`,
@@ -147,8 +191,22 @@ export class WhatMattersNowService {
             .join("\n")
         : "(none)",
       "",
+      "MARKETCATALYST PULSE (short posts from our own desk):",
+      pulse.length ? pulse.map((p) => `- ${tag(p.ticker)}${clip(p.text, 240)}`).join("\n") : "(none)",
+      "",
+      "LIVE FEED (our intraday commentary):",
+      feed.length
+        ? feed
+            .map((f) => {
+              const t = Array.isArray(f.tickers) ? (f.tickers as unknown[]).slice(0, 3).join(", ") : "";
+              return `- ${tag(t)}${clip(f.header, 140)}${f.summary ? `: ${clip(f.summary, 160)}` : ""}`;
+            })
+            .join("\n")
+        : "(none)",
+      "",
       `Write a MARKET-WIDE read of what matters right now. Lead with what a
-reader must know first. Name the tickers involved. Where several stories
+reader must know first. Name the tickers involved. Where our own desk (Pulse
+or Live Feed) has covered a story, lead with that. Where several stories
 share a driver, say so rather than listing them separately. If the window is
 genuinely quiet, say that plainly instead of inflating minor items.`,
     ];
@@ -177,6 +235,7 @@ genuinely quiet, say that plainly instead of inflating minor items.`,
       windowEnd: generatedAt,
       generatedAt,
       analysisVersion: ANALYSIS_VERSION,
+      digestVersion: WMN_DIGEST_VERSION,
       sourceNewsIds: news.map((n) => String(n.id)),
       sourceAnalysisIds: analyses.map((a) => String(a.id)),
       tickers: [
@@ -188,6 +247,8 @@ genuinely quiet, say that plainly instead of inflating minor items.`,
         news: news.length,
         analyses: analyses.length,
         earnings: earnings.length,
+        pulse: pulse.length,
+        liveFeed: feed.length,
       },
     };
     // Append-only: one record per generation, so the hourly sequence is kept.
