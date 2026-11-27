@@ -1146,6 +1146,10 @@ export const API_CATALOG = {
       "This catalogue joined with live status: which screen calls which API, and whether it is healthy.",
     params: "fresh?",
   },
+  "GET /api/admin/whoami": {
+    summary:
+      "Which console the signed-in account gets: the full admin, or a content editor's Blogs and Content pipeline.",
+  },
   "GET /api/admin/posts": {
     summary: "Blog posts for the console's board.",
   },

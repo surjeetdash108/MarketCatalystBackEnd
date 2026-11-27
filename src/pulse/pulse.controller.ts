@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { AdminGuard } from "../common/admin.guard";
+import { AllowEditor } from "../common/editor-access.decorator";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 import { PulseService, type PulseBody } from "./pulse.service";
 
@@ -28,6 +29,7 @@ export class PulseController {
 }
 
 /** Admin writes, from the console's Market Catalyst Pulse section (AdminGuard). */
+@AllowEditor()
 @UseGuards(AdminGuard)
 @Controller("api/admin")
 export class PulseAdminController {

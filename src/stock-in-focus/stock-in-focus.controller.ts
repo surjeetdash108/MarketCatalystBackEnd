@@ -11,6 +11,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { AdminGuard } from "../common/admin.guard";
+import { AllowEditor } from "../common/editor-access.decorator";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 import {
   ARCHIVE_DEFAULT,
@@ -38,6 +39,7 @@ export class StockInFocusController {
 }
 
 /** Admin writes, from the console's Stock in Focus board (AdminGuard). */
+@AllowEditor()
 @UseGuards(AdminGuard)
 @Controller("api/admin")
 export class StockInFocusAdminController {

@@ -4,9 +4,12 @@ import {
   ForbiddenException,
   Injectable,
   Logger,
+  Optional,
   UnauthorizedException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { Reflector } from "@nestjs/core";
+import { EDITOR_ACCESS } from "./editor-access.decorator";
 import { FirebaseAdminService } from "./firebase-admin.provider";
 
 /**
@@ -34,6 +37,11 @@ import { FirebaseAdminService } from "./firebase-admin.provider";
  *     ADMIN_GUARD_TRUST_IAM unset/false so ONLY a verified Firebase admin token
  *     is accepted.
  *
+ * Content editors (ADMIN_EDITOR_EMAILS, comma-separated) are a narrower kind
+ * of browser caller: the same Firebase token checks as the admin, admitted
+ * ONLY on routes marked @AllowEditor() (blogs, Pulse, content pipeline) and
+ * refused everywhere else. `req.adminRole` says which one passed.
+ *
  * Guarding /sync/:job/run without path 2 would silently break every scheduled
  * sync — which is why this guard exists in this shape rather than a plain
  * "verify Firebase token" check.
@@ -45,7 +53,28 @@ export class AdminGuard implements CanActivate {
   constructor(
     private readonly firebase: FirebaseAdminService,
     private readonly config: ConfigService,
+    @Optional() private readonly reflector: Reflector = new Reflector(),
   ) {}
+
+  /** Content editors: the Blogs and Content pipeline sections only. */
+  private get editorEmails(): Set<string> {
+    return new Set(
+      String(this.config.get("ADMIN_EDITOR_EMAILS", ""))
+        .split(",")
+        .map((e) => e.trim().toLowerCase())
+        .filter((e) => e && e !== this.adminEmail),
+    );
+  }
+
+  /** Whether the route being called is marked @AllowEditor(). */
+  private editorAllowed(ctx: ExecutionContext): boolean {
+    const targets = [ctx.getHandler?.(), ctx.getClass?.()].filter(
+      (t): t is NonNullable<typeof t> => !!t,
+    );
+    return (
+      this.reflector.getAllAndOverride<boolean>(EDITOR_ACCESS, targets) === true
+    );
+  }
 
   private get adminEmail(): string {
     return this.config
@@ -123,12 +152,22 @@ export class AdminGuard implements CanActivate {
     try {
       const decoded = await this.firebase.auth.verifyIdToken(token);
       const email = (decoded.email ?? "").toLowerCase();
-      if (email === this.adminEmail) {
+      const isAdmin = email === this.adminEmail;
+      const isEditor = !isAdmin && !!email && this.editorEmails.has(email);
+      if (isEditor && !this.editorAllowed(ctx)) {
+        this.logger.warn(`admin endpoint refused for editor: ${email}`);
+        throw new ForbiddenException({
+          statusCode: 403,
+          code: "editor_not_allowed",
+          message: "Your account can use Blogs and Content pipeline only.",
+        });
+      }
+      if (isAdmin || isEditor) {
         if (this.requireVerified && decoded.email_verified !== true) {
           throw new ForbiddenException({
             statusCode: 403,
             code: "admin_email_unverified",
-            message: "Verify the admin account's email address first.",
+            message: "Verify this account's email address first.",
           });
         }
         const secondFactor = (
@@ -146,6 +185,7 @@ export class AdminGuard implements CanActivate {
         // admin Jobs tab's audit trail and admin_audit). Only ever set from a verified token.
         req.adminEmail = email;
         req.adminActor = email;
+        req.adminRole = isAdmin ? "admin" : "editor";
         return true;
       }
       // A real, valid Firebase user who is NOT the admin — always refuse,

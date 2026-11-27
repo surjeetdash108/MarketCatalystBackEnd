@@ -11,6 +11,7 @@ import {
   PATH_METADATA,
 } from "@nestjs/common/constants";
 import { PUBLIC_ROUTE } from "./public.decorator";
+import { EDITOR_ACCESS } from "./editor-access.decorator";
 
 /**
  * Every HTTP route must authenticate its caller, or be explicitly marked
@@ -46,6 +47,7 @@ interface Route {
   key: string;
   guards: string[];
   publicReason: string | undefined;
+  editor: boolean;
   file: string;
 }
 
@@ -80,10 +82,14 @@ function routes(): Route[] {
         PUBLIC_ROUTE,
         C,
       );
+      const classEditor = Reflect.getMetadata(EDITOR_ACCESS, C) === true;
       const proto = (C as { prototype: Record<string, unknown> }).prototype;
       for (const name of Object.getOwnPropertyNames(proto)) {
         // Descriptor, not proto[name]: reading a getter would run it.
-        const handler: unknown = Object.getOwnPropertyDescriptor(proto, name)?.value;
+        const handler: unknown = Object.getOwnPropertyDescriptor(
+          proto,
+          name,
+        )?.value;
         if (typeof handler !== "function") continue;
         const method = Reflect.getMetadata(METHOD_METADATA, handler);
         if (method === undefined) continue;
@@ -98,6 +104,8 @@ function routes(): Route[] {
           ],
           publicReason:
             Reflect.getMetadata(PUBLIC_ROUTE, handler) ?? classPublic,
+          editor:
+            classEditor || Reflect.getMetadata(EDITOR_ACCESS, handler) === true,
           file: relative(SRC, file),
         });
       }
@@ -152,5 +160,45 @@ describe("route authentication", () => {
     const r = all.find((x) => x.key === key);
     expect(r).toBeDefined();
     expect(r.guards).toContain(guard);
+  });
+
+  // A content editor (ADMIN_EDITOR_EMAILS) runs the console's Blogs and
+  // Content pipeline sections and nothing else. Any route added to this list
+  // is a decision to show editors more of the admin console.
+  it("editors reach exactly the Blogs and Content pipeline routes", () => {
+    const editor = all.filter((r) => r.editor).map((r) => r.key);
+    expect(new Set(editor)).toEqual(
+      new Set([
+        "GET /api/admin/whoami",
+        "GET /api/admin/posts",
+        "GET /api/admin/posts/theme",
+        "POST /api/admin/posts",
+        "PATCH /api/admin/posts/:id",
+        "DELETE /api/admin/posts/:id",
+        "GET /api/admin/media",
+        "POST /api/admin/media",
+        "DELETE /api/admin/media/:id",
+        "GET /api/admin/pulse",
+        "POST /api/admin/pulse",
+        "PATCH /api/admin/pulse/:id",
+        "DELETE /api/admin/pulse/:id",
+        "GET /api/admin/stock-in-focus",
+        "POST /api/admin/stock-in-focus",
+        "PATCH /api/admin/stock-in-focus/:day",
+        "DELETE /api/admin/stock-in-focus/:day",
+        "GET /api/admin/ticker-search",
+        "POST /api/admin/content",
+        "GET /api/admin/content",
+        "GET /api/admin/content/:id",
+        "POST /api/admin/content/:id/approve",
+        "POST /api/admin/content/:id/send-back",
+        "PATCH /api/admin/content/:id",
+        "DELETE /api/admin/content/:id",
+        "POST /api/admin/content/:id/retry",
+      ]),
+    );
+    expect(
+      all.filter((r) => r.editor && !r.guards.includes("AdminGuard")),
+    ).toEqual([]);
   });
 });

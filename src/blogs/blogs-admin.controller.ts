@@ -9,6 +9,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { AdminGuard } from "../common/admin.guard";
+import { AllowEditor } from "../common/editor-access.decorator";
 import { BlogsAdminService } from "./blogs-admin.service";
 import type { BlogAdminBody } from "./blogs-admin.service";
 import { MediaAdminService } from "./media-admin.service";
@@ -20,6 +21,7 @@ import { MediaAdminService } from "./media-admin.service";
  * blog board drives these; every write lands in the same collection the public
  * site (marketcatalyst.ai/posts) renders from.
  */
+@AllowEditor()
 @UseGuards(AdminGuard)
 @Controller("api/admin")
 export class BlogsAdminController {
