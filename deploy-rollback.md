@@ -176,3 +176,9 @@ secrets from Secret Manager; worker has BILLING_PROVIDER=stripe.
 - Before: worker `market-catalyst-backend-00339-b4h`, live `market-catalyst-live-00288-mph`, jobs on `…@sha256:b31d48514a4b…`.
 - After (backend prod 73da618): worker `market-catalyst-backend-00340-lk7`, live `market-catalyst-live-00289-682`, jobs on `…@sha256:dd99286f0b24…`.
 - Roll back: `gcloud run services update-traffic market-catalyst-backend --to-revisions=market-catalyst-backend-00339-b4h=100` and `… market-catalyst-live --to-revisions=market-catalyst-live-00288-mph=100`; jobs `--image …@sha256:b31d48514a4b…`.
+
+## 2026-11-27 ET — Content-editor admin role (Pradeep: Blogs + Content pipeline)
+- Before: worker `market-catalyst-backend-00342-5hv`, live `market-catalyst-live-00292-b5k`, premarket-job on `…@sha256:1ec0580e1cb1…`, history-backfill-job on `…@sha256:dd99286f0b24…`.
+- After (backend prod f9c93dc, UI prod a617ec8): worker `market-catalyst-backend-00343-5vq`, live `market-catalyst-live-00293-lr8`, both jobs on `…@sha256:86c25c1302d5…`. `ADMIN_EDITOR_EMAILS=pradeep@conyxit.com` set on both services.
+- Firebase user `pradeep@conyxit.com` created (uid f0GUr676VufHiYbAzBxsYODOve92, email verified).
+- Roll back: `gcloud run services update-traffic market-catalyst-backend --to-revisions=market-catalyst-backend-00342-5hv=100` and `… market-catalyst-live --to-revisions=market-catalyst-live-00292-b5k=100`; UI via the Firebase Hosting console. To revoke only Pradeep: `--remove-env-vars ADMIN_EDITOR_EMAILS` on both services, or disable the Firebase user.
