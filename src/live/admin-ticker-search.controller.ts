@@ -6,6 +6,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { AdminGuard } from "../common/admin.guard";
+import { AllowEditor } from "../common/editor-access.decorator";
 import { DelistedTickersService } from "../common/delisted-tickers.service";
 import { CachedCollectionsService } from "./cached-collections.service";
 import { OnDemandService } from "./ondemand.service";
@@ -118,6 +119,7 @@ export function rankMatches(
   return [...exact, ...tickerPrefix, ...namePrefix, ...substring];
 }
 
+@AllowEditor()
 @UseGuards(AdminGuard)
 @Controller("api/admin")
 export class AdminTickerSearchController {

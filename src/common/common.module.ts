@@ -1,6 +1,7 @@
 import { Global, Module } from "@nestjs/common";
 import { APP_INTERCEPTOR } from "@nestjs/core";
 import { AdminGuard } from "./admin.guard";
+import { AdminWhoamiController } from "./admin-whoami.controller";
 import { DelistedTickersService } from "./delisted-tickers.service";
 import { DelistedTickerGuard } from "./delisted-ticker.guard";
 import { ApiUsageInterceptor } from "./api-usage.interceptor";
@@ -18,6 +19,7 @@ import { StreamTicketGuard } from "./stream-ticket.guard";
 
 @Global()
 @Module({
+  controllers: [AdminWhoamiController],
   providers: [
     AdminGuard,
     DelistedTickersService,

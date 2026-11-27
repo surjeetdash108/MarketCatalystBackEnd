@@ -11,10 +11,12 @@ import {
   Delete,
 } from "@nestjs/common";
 import { AdminGuard } from "../common/admin.guard";
+import { AllowEditor } from "../common/editor-access.decorator";
 import { FirebaseAuthGuard } from "../common/firebase-auth.guard";
 import { ContentPipelineService } from "./content-pipeline.service";
 
 /** Admin console → Content pipeline: submit, track, preview, approve, send back, retry. */
+@AllowEditor()
 @UseGuards(AdminGuard)
 @Controller("api/admin/content")
 export class ContentPipelineAdminController {
