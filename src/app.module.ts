@@ -17,6 +17,7 @@ import { SyncModule } from "./sync/sync.module";
 import { ApiHealthModule } from "./api-health/api-health.module";
 import { BlogsModule } from "./blogs/blogs.module";
 import { PulseModule } from "./pulse/pulse.module";
+import { StockInFocusModule } from "./stock-in-focus/stock-in-focus.module";
 import { ContentPipelineModule } from "./content-pipeline/content-pipeline.module";
 import { FeedbackModule } from "./feedback/feedback.module";
 import { McpModule } from "./mcp/mcp.module";
@@ -103,6 +104,10 @@ const workerModules = isLiveRole
     // Market Catalyst Pulse: admin posts (AdminGuard) shown on every dashboard
     // (GET /api/pulse). Both roles so the live service serves it.
     PulseModule,
+    // Stock in Focus: the desk's one editorial note a day (admin posts, AdminGuard),
+    // the last What Matters Now slide and its archive (GET /api/stock-in-focus).
+    // Both roles, like Pulse: the console is served by the live service.
+    StockInFocusModule,
     ContentPipelineModule,
     FeedbackModule,
     // POST /mcp (McpApiKeyGuard) + /api/admin/mcp-keys (AdminGuard). Both roles,

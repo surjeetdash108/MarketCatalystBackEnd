@@ -9,6 +9,8 @@ import { AiAnalysisService } from "./ai-analysis.service";
 import { TickerAiAnalysisService } from "./ticker-ai-analysis.service";
 import { TickerPeriodAnalysisService } from "./ticker-period-analysis.service";
 import { WhatMattersNowService } from "./what-matters-now.service";
+import { WmnSlidesService } from "./wmn-slides.service";
+import { StockInFocusModule } from "../stock-in-focus/stock-in-focus.module";
 import { GroqModule } from "../vendors/groq/groq.module";
 import { LlmGatewayService } from "../vendors/llm-gateway.service";
 import { LiveController } from "./live.controller";
@@ -59,6 +61,10 @@ import { MoneyFlowService } from "./money-flow/money-flow.service";
  */
 @Module({
   imports: [
+    // The last What Matters Now slide reads the latest entry. The module, not the
+    // service, so there is ONE service instance and a write's cache invalidation
+    // reaches the slide's reader.
+    StockInFocusModule,
     GroqModule,
     PolygonModule,
     AdaptersModule,
@@ -81,6 +87,7 @@ import { MoneyFlowService } from "./money-flow/money-flow.service";
   ],
   providers: [
     WhatMattersNowService,
+    WmnSlidesService,
     LlmGatewayService,
     TickerAiAnalysisService,
     TickerPeriodAnalysisService,

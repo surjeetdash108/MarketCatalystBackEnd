@@ -698,6 +698,8 @@ export const ROUTE_FEATURES: Record<string, RouteRequirement> = {
   "GET /live/search": ["marketCatalyst", "stockIntelligence"],
   // Market Catalyst Pulse (dashboard card): admin posts, for every plan.
   "GET /api/pulse": ["marketCatalyst"],
+  // Stock in Focus archive (What Matters Now, last slide): editorial notes, for every plan.
+  "GET /api/stock-in-focus": ["marketCatalyst"],
   "POST /live/searched-ticker": ["marketCatalyst", "stockIntelligence"],
   "GET /live/news-wire": ["news"],
   "GET /api/live-feed": ["news"],

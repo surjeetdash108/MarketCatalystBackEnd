@@ -9,7 +9,7 @@ import { SyncMetaService } from "../common/sync-meta.service";
 import { FredService } from "../vendors/fred/fred.service";
 import { FmpService } from "../vendors/fmp/fmp.service";
 import { SyncRegistry } from "../common/sync-registry.service";
-import { addDays, isoDate } from "../common/date.util";
+import { addDays, fmpEasternToUtcIso, isoDate } from "../common/date.util";
 
 const JOB_NAME = "macro-events";
 // FMP economic-calendar window: a little history so just-released prints show,
@@ -192,6 +192,11 @@ export class MacroEventsJob implements OnModuleInit {
                 unit: e.unit ?? null,
                 importance: impact,
                 eventDate: day,
+                // Release time of day (UTC ISO), or null when the feed gave only a
+                // date. FMP sends it in New York time with no offset, so it goes
+                // through the same converter every other FMP timestamp uses. The
+                // What Matters Now countdown reads it; null falls back to the day.
+                eventTime: /\d{2}:\d{2}/.test(e.date) ? fmpEasternToUtcIso(e.date) : null,
                 actual: e.actual,
                 previous: e.previous,
                 estimate: e.estimate,
