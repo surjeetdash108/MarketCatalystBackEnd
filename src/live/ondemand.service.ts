@@ -1602,8 +1602,16 @@ export class OnDemandService implements OnModuleDestroy {
       // a session or more newer. Measure the 52w figures from `price`.
       const anchored = anchor52wToPrice(doc);
       await ref.set(anchored, { merge: true });
-      this.memCompany.set(ticker, { data: anchored, at: Date.now() });
-      return anchored;
+      // Serve and cache what Firestore holds AFTER that merge, not just what this
+      // rebuild produced. A step that failed (technicals, profile) leaves its
+      // fields out of `doc`; the merge keeps the stored ones, but the thin doc
+      // went to the caller and into memory for 5 minutes, so the 52-week range
+      // and every indicator read "—" until the memory copy expired and the full
+      // stored doc came back (27 Nov, NVDA). The write above is unchanged: only
+      // the copy handed out is merged, and re-anchored to the new price.
+      const served = anchor52wToPrice({ ...prevCo, ...anchored });
+      this.memCompany.set(ticker, { data: served, at: Date.now() });
+      return served;
     })().finally(() => this.inflight.delete(key));
 
     this.inflight.set(key, p);
