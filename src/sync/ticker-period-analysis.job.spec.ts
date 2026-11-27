@@ -42,7 +42,11 @@ describe("monthly cleanup safety", () => {
   afterEach(() => { global.Date = realDate; });
   /** Pin "now" to the last Friday of Aug 2026 so the gate is open. */
   function onLastFriday() {
-    const fixed = new realDate("2026-08-28T20:30:00Z");
+    pinNow("2026-08-28T20:30:00Z");
+  }
+  /** Pin "now" to a fixed instant. */
+  function pinNow(iso: string) {
+    const fixed = new realDate(iso);
     global.Date = class extends realDate {
       constructor(...a: unknown[]) { super(...(a as [])); return a.length ? new realDate(...(a as [])) : fixed; }
       static now() { return fixed.getTime(); }
@@ -74,9 +78,12 @@ describe("monthly cleanup safety", () => {
   });
 
   it("does NOT run at all on a non-last Friday", async () => {
-    const { job, deleted } = makeJob(COMPLETE);   // real clock, almost never the last Friday
+    // A Friday that is not the month's last (Aug 21; Aug 28 is the last). The
+    // real clock made this fail on every last Friday, e.g. 27 Nov 2026.
+    pinNow("2026-08-21T20:30:00Z");
+    const { job, deleted } = makeJob(COMPLETE);
     const res = await job.runCleanup();
-    if ("skipped" in res) expect(res.skipped).toBe(true);
+    expect(res).toMatchObject({ skipped: true });
     expect(deleted).toEqual([]);
   });
 
